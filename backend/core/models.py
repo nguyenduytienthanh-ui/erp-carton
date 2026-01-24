@@ -88,6 +88,12 @@ class Role(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    permissions = models.ManyToManyField(
+        'Permission',
+        related_name='roles',
+        blank=True,
+        help_text="Permissions assigned to this role"
+    )
 
     class Meta:
         db_table = 'roles'
@@ -98,3 +104,42 @@ class Role(models.Model):
     def __str__(self):
         """Return role name as string representation"""
         return self.name
+
+
+class Permission(models.Model):
+    """
+    Permission for RBAC - defines what actions can be performed on resources.
+    """
+    name = models.CharField(
+        max_length=100,
+        help_text="Permission name"
+    )
+    code = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="Permission code (e.g., USER_CREATE)"
+    )
+    resource = models.CharField(
+        max_length=50,
+        help_text="Resource name (e.g., USER, INVOICE)"
+    )
+    action = models.CharField(
+        max_length=50,
+        help_text="Action name (e.g., CREATE, VIEW, EDIT, DELETE)"
+    )
+    description = models.TextField(
+        blank=True,
+        help_text="Permission description"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'permissions'
+        ordering = ['resource', 'action']
+        verbose_name = 'Permission'
+        verbose_name_plural = 'Permissions'
+        unique_together = [['resource', 'action']]
+
+    def __str__(self):
+        """Return permission code as string representation"""
+        return self.code
