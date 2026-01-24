@@ -23,7 +23,12 @@ class User(AbstractUser):
         blank=True,
         related_name='locked_users'
     )
-
+roles = models.ManyToManyField(
+        'Role',
+        related_name='users',
+        blank=True,
+        help_text="Roles assigned to this user"
+    )
     class Meta:
         db_table = 'users'
         ordering = ['username']
