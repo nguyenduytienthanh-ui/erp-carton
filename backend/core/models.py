@@ -62,3 +62,39 @@ class User(AbstractUser):
             bool: Always returns False (placeholder implementation)
         """
         return False
+
+
+class Role(models.Model):
+    """
+    Role for RBAC (Role-Based Access Control)
+    """
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="Role name"
+    )
+    code = models.CharField(
+        max_length=50,
+        unique=True,
+        help_text="Role code (e.g., ADMIN, MANAGER)"
+    )
+    description = models.TextField(
+        blank=True,
+        help_text="Role description"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Is this role active?"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'roles'
+        ordering = ['name']
+        verbose_name = 'Role'
+        verbose_name_plural = 'Roles'
+
+    def __str__(self):
+        """Return role name as string representation"""
+        return self.name
