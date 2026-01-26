@@ -189,3 +189,41 @@ class Permission(models.Model):
     
     def __str__(self):
         return self.code
+
+
+class Team(models.Model):
+    """Team for Data Scope - users can only see data within their team"""
+    
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="Team name"
+    )
+    
+    code = models.CharField(
+        max_length=50,
+        unique=True,
+        help_text="Team code"
+    )
+    
+    description = models.TextField(
+        blank=True,
+        help_text="Team description"
+    )
+    
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Is this team active?"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'teams'
+        ordering = ['name']
+        verbose_name = 'Team'
+        verbose_name_plural = 'Teams'
+    
+    def __str__(self):
+        return self.name
