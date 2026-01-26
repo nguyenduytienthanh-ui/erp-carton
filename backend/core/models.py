@@ -84,17 +84,14 @@ class User(AbstractUser):
         self.locked_by = None
         self.save()
     
-    def has_perm(self, permission_code):
+    def has_perm(self, perm, obj=None):
         """
-        Check if user has permission (placeholder).
-        
-        Args:
-            permission_code: Permission code to check
-            
-        Returns:
-            bool: Always returns False (placeholder implementation)
+        Check if user has permission.
+        Superusers have all permissions.
         """
-        return False
+        if self.is_active and self.is_superuser:
+            return True
+        return super().has_perm(perm, obj)
 
 
 class Role(models.Model):
