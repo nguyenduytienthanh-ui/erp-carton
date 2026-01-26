@@ -6,6 +6,7 @@ from .serializers import (
     TeamSerializer, SettingSerializer, CustomTokenObtainPairSerializer,
     CustomerSerializer
 )
+from .filters import CustomerFilter
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -36,6 +37,10 @@ class SettingViewSet(viewsets.ModelViewSet):
 class CustomerViewSet(viewsets.ModelViewSet):
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
+    filterset_class = CustomerFilter
+    search_fields = ['code', 'name', 'company_name', 'phone', 'email']
+    ordering_fields = ['code', 'name', 'created_at', 'credit_limit']
+    ordering = ['-created_at']
     
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
