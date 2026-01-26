@@ -234,3 +234,51 @@ class Team(models.Model):
     
     def __str__(self):
         return self.name
+
+
+class Setting(models.Model):
+    """System settings for Configuration-Driven Design"""
+    
+    key = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="Setting key (e.g., MAX_LOGIN_ATTEMPTS)"
+    )
+    
+    value = models.TextField(
+        help_text="Setting value (stored as text)"
+    )
+    
+    data_type = models.CharField(
+        max_length=20,
+        choices=[
+            ('string', 'String'),
+            ('integer', 'Integer'),
+            ('boolean', 'Boolean'),
+            ('json', 'JSON'),
+        ],
+        default='string',
+        help_text="Data type of the value"
+    )
+    
+    description = models.TextField(
+        blank=True,
+        help_text="Setting description"
+    )
+    
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Is this setting active?"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'settings'
+        ordering = ['key']
+        verbose_name = 'Setting'
+        verbose_name_plural = 'Settings'
+    
+    def __str__(self):
+        return f"{self.key} = {self.value}"
