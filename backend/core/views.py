@@ -1,9 +1,10 @@
 from rest_framework import viewsets
 from rest_framework_simplejwt.views import TokenObtainPairView
-from .models import User, Role, Permission, Team, Setting
+from .models import User, Role, Permission, Team, Setting, Customer
 from .serializers import (
     UserSerializer, RoleSerializer, PermissionSerializer,
-    TeamSerializer, SettingSerializer, CustomTokenObtainPairSerializer
+    TeamSerializer, SettingSerializer, CustomTokenObtainPairSerializer,
+    CustomerSerializer
 )
 
 
@@ -30,6 +31,17 @@ class TeamViewSet(viewsets.ModelViewSet):
 class SettingViewSet(viewsets.ModelViewSet):
     queryset = Setting.objects.all()
     serializer_class = SettingSerializer
+
+
+class CustomerViewSet(viewsets.ModelViewSet):
+    queryset = Customer.objects.all()
+    serializer_class = CustomerSerializer
+    
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+    
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):

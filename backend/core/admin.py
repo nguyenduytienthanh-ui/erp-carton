@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Role, Permission, Team, Setting
+from .models import User, Role, Permission, Team, Setting, Customer
 
 
 @admin.register(User)
@@ -47,3 +47,12 @@ class SettingAdmin(admin.ModelAdmin):
     list_display = ['key', 'value', 'data_type', 'is_active', 'updated_at']
     list_filter = ['data_type', 'is_active', 'created_at']
     search_fields = ['key', 'value', 'description']
+
+
+@admin.register(Customer)
+class CustomerAdmin(admin.ModelAdmin):
+    """Customer Admin"""
+    list_display = ['code', 'name', 'company_name', 'phone', 'email', 'is_active', 'created_at']
+    list_filter = ['is_active', 'payment_terms', 'created_at']
+    search_fields = ['code', 'name', 'company_name', 'tax_code', 'phone', 'email']
+    readonly_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']

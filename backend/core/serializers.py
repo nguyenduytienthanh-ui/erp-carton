@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import User, Role, Permission, Team, Setting
+from .models import User, Role, Permission, Team, Setting, Customer
 
 
 class PermissionSerializer(serializers.ModelSerializer):
@@ -52,3 +52,13 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['is_staff'] = user.is_staff
         
         return token
+
+
+class CustomerSerializer(serializers.ModelSerializer):
+    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    updated_by_username = serializers.CharField(source='updated_by.username', read_only=True)
+    
+    class Meta:
+        model = Customer
+        fields = '__all__'
+        read_only_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']

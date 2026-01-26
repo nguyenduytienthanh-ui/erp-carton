@@ -279,3 +279,44 @@ class Setting(models.Model):
     
     def __str__(self):
         return f"{self.key} = {self.value}"
+
+
+class Customer(models.Model):
+    """Customer model for managing clients"""
+    
+    # Basic Info
+    code = models.CharField(max_length=50, unique=True, help_text="Customer code")
+    name = models.CharField(max_length=200, help_text="Customer name")
+    company_name = models.CharField(max_length=200, blank=True, help_text="Company name")
+    tax_code = models.CharField(max_length=50, blank=True, help_text="Tax identification number")
+    
+    # Contact Info
+    phone = models.CharField(max_length=20, blank=True, help_text="Phone number")
+    email = models.EmailField(blank=True, help_text="Email address")
+    address = models.TextField(blank=True, help_text="Address")
+    
+    # Contact Person
+    contact_person = models.CharField(max_length=100, blank=True, help_text="Contact person name")
+    contact_phone = models.CharField(max_length=20, blank=True, help_text="Contact person phone")
+    
+    # Business Info
+    payment_terms = models.IntegerField(default=30, help_text="Payment terms in days")
+    credit_limit = models.DecimalField(max_digits=15, decimal_places=2, default=0, help_text="Credit limit")
+    
+    # Status
+    is_active = models.BooleanField(default=True, help_text="Is customer active?")
+    
+    # Audit fields
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='customers_created', help_text="Created by user")
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='customers_updated', help_text="Updated by user")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'customers'
+        ordering = ['code']
+        verbose_name = 'Customer'
+        verbose_name_plural = 'Customers'
+    
+    def __str__(self):
+        return f"{self.code} - {self.name}"
