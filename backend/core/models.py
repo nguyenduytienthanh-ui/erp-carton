@@ -50,6 +50,13 @@ class User(AbstractUser):
         help_text="Roles assigned to this user"
     )
     
+    teams = models.ManyToManyField(
+        'Team',
+        related_name='users',
+        blank=True,
+        help_text="Teams this user belongs to"
+    )
+    
     class Meta:
         db_table = 'users'
         ordering = ['username']
