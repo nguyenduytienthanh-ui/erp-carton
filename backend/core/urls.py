@@ -7,7 +7,7 @@ from rest_framework_simplejwt.views import (
 from .views import (
     UserViewSet, RoleViewSet, PermissionViewSet,
     TeamViewSet, SettingViewSet, CustomTokenObtainPairView,
-    CustomerViewSet
+    CustomerViewSet, ExportTemplateViewSet
 )
 
 router = DefaultRouter()
@@ -17,6 +17,7 @@ router.register('permissions', PermissionViewSet)
 router.register('teams', TeamViewSet)
 router.register('settings', SettingViewSet)
 router.register('customers', CustomerViewSet)
+router.register('export-templates', ExportTemplateViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),

@@ -320,3 +320,56 @@ class Customer(models.Model):
     
     def __str__(self):
         return f"{self.code} - {self.name}"
+
+
+class ExportTemplate(models.Model):
+    """Export template for configuration-driven export"""
+    
+    name = models.CharField(
+        max_length=100,
+        help_text="Template name (e.g., Customer - Full)"
+    )
+    
+    entity_type = models.CharField(
+        max_length=50,
+        help_text="Entity type (e.g., Customer, SalesOrder)"
+    )
+    
+    columns = models.JSONField(
+        help_text="List of field names ['code', 'name', 'phone']"
+    )
+    
+    headers = models.JSONField(
+        help_text="List of header names ['Mã KH', 'Tên KH', 'SĐT']"
+    )
+    
+    is_default = models.BooleanField(
+        default=False,
+        help_text="Is this the default template for this entity?"
+    )
+    
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Is template active?"
+    )
+    
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='export_templates_created',
+        help_text="Created by user"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'export_templates'
+        ordering = ['entity_type', 'name']
+        verbose_name = 'Export Template'
+        verbose_name_plural = 'Export Templates'
+        unique_together = [['entity_type', 'name']]
+    
+    def __str__(self):
+        return f"{self.entity_type} - {self.name}"

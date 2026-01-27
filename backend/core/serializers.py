@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import User, Role, Permission, Team, Setting, Customer
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate
 
 
 class PermissionSerializer(serializers.ModelSerializer):
@@ -62,3 +62,9 @@ class CustomerSerializer(serializers.ModelSerializer):
         model = Customer
         fields = '__all__'
         read_only_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']
+
+
+class ExportTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExportTemplate
+        fields = ['id', 'name', 'entity_type', 'is_default', 'columns', 'headers']

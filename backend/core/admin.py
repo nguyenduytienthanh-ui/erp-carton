@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Role, Permission, Team, Setting, Customer
+from datetime import datetime
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate
+from .utils import export_to_excel
 
 
 @admin.register(User)
@@ -55,4 +57,40 @@ class CustomerAdmin(admin.ModelAdmin):
     list_display = ['code', 'name', 'company_name', 'phone', 'email', 'is_active', 'created_at']
     list_filter = ['is_active', 'payment_terms', 'created_at']
     search_fields = ['code', 'name', 'company_name', 'tax_code', 'phone', 'email']
+    actions = ['export_to_excel']
     readonly_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']
+    
+    def export_to_excel(self, request, queryset):
+        fields = ['code', 'name', 'company_name', 'phone', 'email', 'is_active']
+        headers = ['Mã KH', 'Tên KH', 'Công ty', 'SĐT', 'Email', 'Trạng thái']
+        filename = f'customers_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+        return export_to_excel(queryset, fields, headers, filename)
+    
+    export_to_excel.short_description = "Export sang Excel"
+
+
+@admin.register(ExportTemplate)
+class ExportTemplateAdmin(admin.ModelAdmin):
+    """Export Template Admin"""
+    list_display = ['name', 'entity_type', 'is_default', 'is_active', 'created_by', 'created_at']
+    list_filter = ['entity_type', 'is_default', 'is_active', 'created_at']
+    search_fields = ['name', 'entity_type']
+    readonly_fields = ['created_by', 'created_at', 'updated_at']
+    
+    fieldsets = [
+        ('Basic Info', {
+            'fields': ['name', 'entity_type', 'is_default', 'is_active']
+        }),
+        ('Configuration', {
+            'fields': ['columns', 'headers'],
+            'description': 'Use JSON format. Example: ["code", "name", "phone"]'
+        }),
+        ('Audit', {
+            'fields': ['created_by', 'created_at', 'updated_at']
+        })
+    ]
+    
+    def save_model(self, request, obj, form, change):
+        if not change:  # Creating new
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
