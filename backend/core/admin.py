@@ -61,12 +61,37 @@ class CustomerAdmin(admin.ModelAdmin):
     readonly_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']
     
     def export_to_excel(self, request, queryset):
-        fields = ['code', 'name', 'company_name', 'phone', 'email', 'is_active']
-        headers = ['Mã KH', 'Tên KH', 'Công ty', 'SĐT', 'Email', 'Trạng thái']
+        """Export using template"""
+        from .models import ExportTemplate
+        from datetime import datetime
+        
+        # Get default template for Customer
+        template = ExportTemplate.objects.filter(
+            entity_type='Customer',
+            is_default=True,
+            is_active=True
+        ).first()
+        
+        if not template:
+            self.message_user(
+                request,
+                "Không tìm thấy template mặc định. Vui lòng tạo ExportTemplate.",
+                level='ERROR'
+            )
+            return
+        
+        # Use template columns and headers
+        from .utils import export_to_excel as export_func
         filename = f'customers_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
-        return export_to_excel(queryset, fields, headers, filename)
+        
+        return export_func(
+            queryset,
+            template.columns,
+            template.headers,
+            filename
+        )
     
-    export_to_excel.short_description = "Export sang Excel"
+    export_to_excel.short_description = "Export sang Excel (dùng template mặc định)"
 
 
 @admin.register(ExportTemplate)
