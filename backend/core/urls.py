@@ -4,7 +4,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     UserViewSet, RoleViewSet, PermissionViewSet,
     TeamViewSet, SettingViewSet, CustomTokenObtainPairView,
-    CustomerViewSet, ExportTemplateViewSet
+    CustomerViewSet, ExportTemplateViewSet, SavedViewViewSet
 )
 
 router = DefaultRouter()
@@ -15,6 +15,7 @@ router.register(r'teams', TeamViewSet)
 router.register(r'settings', SettingViewSet)
 router.register(r'customers', CustomerViewSet, basename='customer')
 router.register(r'export-templates', ExportTemplateViewSet)
+router.register(r'saved-views', SavedViewViewSet, basename='savedview')
 
 urlpatterns = [
     path('', include(router.urls)),

@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from datetime import datetime
-from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView
 from .utils import export_to_excel
 
 
@@ -117,5 +117,34 @@ class ExportTemplateAdmin(admin.ModelAdmin):
     
     def save_model(self, request, obj, form, change):
         if not change:  # Creating new
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(SavedView)
+class SavedViewAdmin(admin.ModelAdmin):
+    list_display = ['name', 'entity_type', 'user', 'is_default', 'is_public', 'created_at']
+    list_filter = ['entity_type', 'is_default', 'is_public', 'created_at']
+    search_fields = ['name', 'entity_type', 'user__username']
+    readonly_fields = ['created_by', 'created_at', 'updated_at']
+    
+    fieldsets = [
+        ('Basic Info', {
+            'fields': ['user', 'name', 'entity_type']
+        }),
+        ('Configuration', {
+            'fields': ['filters', 'sorting', 'columns'],
+            'description': 'Use JSON format'
+        }),
+        ('Options', {
+            'fields': ['is_default', 'is_public']
+        }),
+        ('Audit', {
+            'fields': ['created_by', 'created_at', 'updated_at']
+        })
+    ]
+    
+    def save_model(self, request, obj, form, change):
+        if not change:
             obj.created_by = request.user
         super().save_model(request, obj, form, change)

@@ -373,3 +373,70 @@ class ExportTemplate(models.Model):
     
     def __str__(self):
         return f"{self.entity_type} - {self.name}"
+
+
+class SavedView(models.Model):
+    """Saved view/filter for any entity"""
+    
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='saved_views',
+        help_text="Owner of this view. Null = shared/public view"
+    )
+    
+    name = models.CharField(max_length=100, help_text="View name")
+    
+    entity_type = models.CharField(
+        max_length=50,
+        help_text="Entity type (e.g., Customer, SalesOrder)"
+    )
+    
+    filters = models.JSONField(
+        default=dict,
+        help_text="Filter parameters {'status': 'APPROVED', 'total__gte': 1000000}"
+    )
+    
+    sorting = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Sorting parameter (e.g., -created_at)"
+    )
+    
+    columns = models.JSONField(
+        default=list,
+        help_text="Visible columns ['code', 'customer__name', 'total']"
+    )
+    
+    is_default = models.BooleanField(
+        default=False,
+        help_text="Is this the default view for this user/entity?"
+    )
+    
+    is_public = models.BooleanField(
+        default=False,
+        help_text="Is this view public (shared with all users)?"
+    )
+    
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_saved_views'
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'saved_views'
+        ordering = ['entity_type', 'name']
+        verbose_name = 'Saved View'
+        verbose_name_plural = 'Saved Views'
+        unique_together = [['user', 'entity_type', 'name']]
+    
+    def __str__(self):
+        owner = self.user.username if self.user else 'Public'
+        return f"{self.entity_type} - {self.name} ({owner})"
