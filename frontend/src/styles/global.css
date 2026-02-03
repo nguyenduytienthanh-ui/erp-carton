@@ -1,0 +1,171 @@
+/* Global styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f5f5f5;
+}
+
+/* Smooth transitions */
+* {
+  transition: all 0.2s ease-in-out;
+}
+
+/* Better scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Card hover effect */
+.ant-card {
+  transition: all 0.3s ease;
+}
+
+.ant-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+
+/* Table row hover */
+.ant-table-tbody > tr:hover > td {
+  background-color: #fafafa !important;
+}
+
+/* Button loading state */
+.ant-btn-loading {
+  opacity: 0.7;
+}
+
+/* ==================== MODERN TABLE STYLES 2026 ==================== */
+
+/* Modern row height - 44px is the sweet spot */
+.ant-table-middle .ant-table-tbody > tr > td {
+  padding: 10px 12px !important;
+  height: 44px;
+  font-size: 14px;
+}
+
+.ant-table-middle .ant-table-thead > tr > th {
+  padding: 10px 12px !important;
+  height: 44px;
+  font-weight: 600;
+  font-size: 13px;
+  color: #6b7280;
+  background: #f9fafb !important;
+  border-bottom: 1px solid #e5e7eb !important;
+}
+
+/* Subtle borders like Notion */
+.ant-table-bordered .ant-table-container {
+  border: 1px solid #e5e7eb !important;
+}
+
+.ant-table-tbody > tr > td {
+  border-bottom: 1px solid #f3f4f6 !important;
+}
+
+/* Hover effect like Linear */
+.ant-table-tbody > tr:hover > td {
+  background-color: #f9fafb !important;
+  transition: background-color 0.2s ease;
+}
+
+/* Selected row */
+.ant-table-tbody > tr.ant-table-row-selected > td {
+  background-color: #eff6ff !important;
+}
+
+/* Remove default padding from table container */
+.ant-table-wrapper {
+  padding: 0 !important;
+}
+
+/* Modern checkbox */
+.ant-checkbox-wrapper {
+  align-items: center;
+}
+
+.ant-checkbox-inner {
+  border-radius: 4px !important;
+  border-color: #d1d5db !important;
+}
+
+/* Ellipsis for long text */
+.ant-table-cell-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Action column centered */
+.ant-table-tbody > tr > td:last-child {
+  text-align: center !important;
+}
+
+/* Dropdown trigger button */
+.ant-table-tbody .ant-btn-text {
+  width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  border-radius: 6px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ant-table-tbody .ant-btn-text:hover {
+  background-color: #f3f4f6 !important;
+}
+
+/* Fixed column shadow - subtle */
+.ant-table-cell-fix-right {
+  background-color: #ffffff !important;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.03) !important;
+}
+
+/* Pagination modern style */
+.ant-pagination {
+  margin: 16px 0 0 0 !important;
+}
+
+.ant-pagination-item {
+  border-radius: 6px !important;
+  border-color: #e5e7eb !important;
+}
+
+.ant-pagination-item-active {
+  border-color: #3b82f6 !important;
+  background-color: #eff6ff !important;
+}
+
+/* Empty state */
+.ant-empty {
+  padding: 48px 24px !important;
+}
+
+/* Select dropdown above Modal (fix dropdown not opening in modal) */
+.ant-select-dropdown {
+  z-index: 9999 !important;
+}
