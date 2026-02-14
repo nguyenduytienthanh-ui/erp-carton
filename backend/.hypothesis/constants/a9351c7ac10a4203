@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0006_alter_user_options_user_roles_alter_role_created_at_and_more.py
+# hypothesis_version: 6.151.5
+
+[100, 'Phone number', 'User avatar', 'avatar', 'avatars/', 'core', 'core.role', 'created_at', 'locked_at', 'locked_by', 'locked_users', 'name', 'ordering', 'phone', 'role', 'roles', 'updated_at', 'user', 'username', 'users']

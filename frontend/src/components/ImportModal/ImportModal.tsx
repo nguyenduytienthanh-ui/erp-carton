@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Modal, Upload, Button, message, Alert } from 'antd';
+import { Modal, Upload, Button, message, Alert, Checkbox } from 'antd';
 import { InboxOutlined, DownloadOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { theme } from '../../styles/theme';
@@ -9,9 +9,10 @@ interface ImportModalProps {
   onClose: () => void;
   onSuccess: () => void;
   onDownloadTemplate: () => void;
-  onImport: (file: File) => Promise<any>;
+  onImport: (file: File, options?: { updateIfExists?: boolean }) => Promise<any>;
   entityName?: string;
 }
+
 
 const ImportModal = ({
   visible,
@@ -24,6 +25,7 @@ const ImportModal = ({
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [updateIfExists, setUpdateIfExists] = useState(false);
 
   const uploadProps: UploadProps = {
     accept: '.xlsx,.xls',
@@ -52,6 +54,12 @@ const ImportModal = ({
     fileList: file ? [file as any] : [],
   };
 
+  const handleClose = () => {
+    setFile(null);
+    setResult(null);
+    onClose();
+  };
+
   const handleImport = async () => {
     if (!file) {
       message.warning('Vui lòng chọn file!');
@@ -60,7 +68,7 @@ const ImportModal = ({
 
     setUploading(true);
     try {
-      const result = await onImport(file);
+      const result = await onImport(file, { updateIfExists });
       setResult(result);
 
       if (result.error_count === 0) {
@@ -70,19 +78,28 @@ const ImportModal = ({
           handleClose();
         }, 1500);
       } else {
-        message.warning(`Import hoàn tất với ${result.error_count} lỗi!`);
+        message.warning({
+          content: `Import hoàn tất: ${result.success_count} thành công, ${result.error_count} lỗi. Xem chi tiết bên dưới.`,
+          duration: 5,
+        });
+        onSuccess();
       }
     } catch (error: any) {
-      message.error(error.response?.data?.detail || 'Import thất bại!');
+      const data = error.response?.data;
+      let errMsg = 'Import thất bại!';
+      if (data) {
+        if (typeof data.error === 'string') errMsg = data.error;
+        else if (typeof data.detail === 'string') errMsg = data.detail;
+        else if (Array.isArray(data.errors) && data.errors.length > 0) {
+          errMsg = data.errors.map((e: { row?: number; error?: string }) =>
+            e.row ? `Dòng ${e.row}: ${e.error || ''}` : e.error
+          ).slice(0, 5).join('; ') + (data.errors.length > 5 ? ` ... (+${data.errors.length - 5} lỗi)` : '');
+        }
+      }
+      message.error(errMsg);
     } finally {
       setUploading(false);
     }
-  };
-
-  const handleClose = () => {
-    setFile(null);
-    setResult(null);
-    onClose();
   };
 
   return (
@@ -114,14 +131,24 @@ const ImportModal = ({
         description={
           <div>
             <p>1. <strong>Tải xuống</strong> file mẫu (nút &quot;Tải Template&quot;) rồi điền dữ liệu vào Excel.</p>
-            <p>2. <strong>Tải lên</strong>: kéo thả file vào vùng bên dưới hoặc bấm để chọn file.</p>
-            <p>3. Sau khi chọn file, bấm nút <strong>&quot;Import&quot;</strong> để nhập dữ liệu (không dùng nút Tải Template để import).</p>
+            <p>2. <strong>Bắt buộc</strong>: Tên hàng, Mã đơn vị (phải tồn tại trong hệ thống). Mã hàng trùng: báo lỗi hoặc cập nhật (nếu chọn bên dưới).</p>
+            <p>3. <strong>Tải lên</strong>: kéo thả file vào vùng bên dưới hoặc bấm để chọn file.</p>
+            <p>4. Sau khi chọn file, bấm nút <strong>&quot;Import&quot;</strong> để nhập dữ liệu.</p>
           </div>
         }
         type="info"
         showIcon
         style={{ marginBottom: theme.spacing.md }}
       />
+
+      <div style={{ marginBottom: theme.spacing.md }}>
+        <Checkbox
+          checked={updateIfExists}
+          onChange={(e) => setUpdateIfExists(e.target.checked)}
+        >
+          Cập nhật sản phẩm nếu mã đã tồn tại (nếu không chọn: báo lỗi khi mã trùng)
+        </Checkbox>
+      </div>
 
       <Upload.Dragger {...uploadProps}>
         <p className="ant-upload-drag-icon">
@@ -144,10 +171,13 @@ const ImportModal = ({
                     <p>
                       <strong>Chi tiết lỗi:</strong>
                     </p>
-                    <ul style={{ maxHeight: '200px', overflow: 'auto' }}>
-                      {result.errors.map((error: string, index: number) => (
-                        <li key={index}>{error}</li>
-                      ))}
+                    <ul style={{ maxHeight: '200px', overflow: 'auto', paddingLeft: 20 }}>
+                      {result.errors.map((err: { row?: number; error?: string } | string, index: number) => {
+                        const msg = typeof err === 'object' && err !== null
+                          ? (err.row ? `Dòng ${err.row}: ${err.error || ''}` : String(err.error || ''))
+                          : String(err);
+                        return <li key={index}>{msg}</li>;
+                      })}
                     </ul>
                   </div>
                 )}

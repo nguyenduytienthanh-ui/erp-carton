@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\signals.py
+# hypothesis_version: 6.151.5
+
+[500, ',', 'CREATE', 'Customer', 'DELETE', 'HTTP_USER_AGENT', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR', 'UPDATE', 'code', 'company_name', 'email', 'is_active', 'mention', 'name', 'phone', 'request', 'user']

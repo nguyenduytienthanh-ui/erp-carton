@@ -1,12 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, startTransition } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Table,
   Button,
-  Select,
   message,
-  Popconfirm,
   Modal,
-  Tooltip,
+  Pagination,
+  Space,
+  Input,
+  InputNumber,
+  Card,
+  Checkbox,
+  Radio,
 } from 'antd';
 import {
   PlusOutlined,
@@ -16,102 +21,844 @@ import {
   CopyOutlined,
   ExportOutlined,
   UploadOutlined,
+  FilterOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { productsApi } from '../../api/products';
 import type { Product } from '../../types/product';
 import { theme } from '../../styles/theme';
 import {
-  PageHeader,
-  CompactFilters,
-  StatusTag,
   FormattedPrice,
   EmptyState,
   ImportModal,
   ColumnChooser,
+  QuickClearIcon,
+  FilterSelect,
+  ListSearchInput,
 } from '../../components';
 import ProductForm from './ProductForm';
+import {
+  useProductsListFilter,
+  type FilterKey,
+  type FilterValues,
+  type ProductStatus,
+  EMPTY_FILTER_VALUES,
+} from '../../contexts/ProductsListFilterContext';
+import { useUserPreferences } from '../../hooks/useUserPreferences';
+import { useColumnSettings } from '../../hooks/useColumnSettings';
+import { useColumnPermissions } from '../../hooks/useColumnPermissions';
+import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
+import { useQuickEntryKeys } from '../../hooks/useQuickEntryKeys';
+import {
+  normalizeSearchParamsToOrderedString,
+  normalizeParamsToOrderedString,
+} from '../../utils/urlSearchParamsSync';
+import type { PreferencesConfig } from '../../types/preferences';
+import { useRowSelection } from '../../hooks/useRowSelection';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { useBulkDelete } from '../../hooks/useBulkDelete';
+import { TOAST } from '../../shared/toast';
+import { PRODUCT_STATUS_LABELS } from '../../utils/constants';
 
-const DEBOUNCE_MS = 500;
-const DEFAULT_PAGE_SIZE = 20;
+const PRODUCT_LIST_SIZE_SEPARATED = ['size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao'];
+const PRODUCT_LIST_SIZE_MERGED = ['size_po_merged', 'size_sx_merged'];
+const DEFAULT_PRODUCT_VISIBLE_COLUMNS: string[] = [
+  'code', 'name', 'category_name', 'cost_price', 'sale_price', 'commission_per_unit', 'commission_percent',
+  ...PRODUCT_LIST_SIZE_SEPARATED,
+  'wave_code', 'box_type_code', 'unit_name', 'delivery_tolerance',
+  'process_xa', 'process_in', 'film_code', 'color_count', 'waterproof', 'co_cm', 'process_can_mang',
+  'process_boi', 'process_be', 'mold_code', 'process_chap', 'process_dong', 'process_dan', 'process_khac',
+  'note_other', 'note', 'status', 'actions',
+];
 
-type ProductStatus = 'DRAFT' | 'ACTIVE' | 'DISCONTINUED';
-
-interface FiltersState {
-  category?: number;
-  unit?: number;
-  status?: ProductStatus;
-  min_price?: string;
-  max_price?: string;
+/** Ô lọc số: input HTML thuần + QuickClearIcon khi có giá trị. Key cố định → tránh remount/focus mất khi re-render. */
+function FilterNumberInput(
+  props: {
+    'data-field': string;
+    value: string;
+    onChange: (value: string) => void;
+    placeholder?: string;
+    inputMode?: 'numeric' | 'decimal';
+    style?: React.CSSProperties;
+    className?: string;
+    onClear?: () => void;
+    showClear?: boolean;
+  }
+) {
+  const { 'data-field': dataField, value, onChange, placeholder, inputMode = 'numeric', style, className, onClear, showClear: showClearProp } = props;
+  const showClear = showClearProp ?? ((value ?? '') !== '');
+  return (
+    <div style={{ position: 'relative', width: '100%', display: 'inline-block' }}>
+      <input
+        key={dataField}
+        data-field={dataField}
+        type="text"
+        inputMode={inputMode}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        autoComplete="off"
+        style={{
+          width: '100%',
+          height: 22,
+          boxSizing: 'border-box',
+          padding: '0 8px',
+          paddingRight: showClear && onClear ? 22 : 8,
+          fontSize: 14,
+          border: '1px solid #d9d9d9',
+          borderRadius: 6,
+          outline: 'none',
+          height: 22,
+        }}
+      />
+      {showClear && onClear && (
+        <QuickClearIcon
+          onClear={onClear}
+          title="Xóa nhanh"
+          style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', zIndex: 1 }}
+        />
+      )}
+    </div>
+  );
 }
 
-interface PaginationState {
-  current: number;
+/** Ô lọc text (Ghi chú chung): input HTML thuần + QuickClearIcon, key cố định → tránh remount/focus mất khi re-render. */
+function FilterTextInput(
+  props: {
+    'data-field': string;
+    value: string;
+    onChange: (value: string) => void;
+    placeholder?: string;
+    style?: React.CSSProperties;
+    className?: string;
+    onClear?: () => void;
+    showClear?: boolean;
+  }
+) {
+  const { 'data-field': dataField, value, onChange, placeholder, style, className, onClear, showClear } = props;
+  const showClearIcon = showClear ?? ((value ?? '').trim() !== '');
+  const wrapperWidth = style?.width ?? '100%';
+  return (
+    <div style={{ position: 'relative', width: wrapperWidth, display: 'inline-block', minWidth: 0 }}>
+      <input
+        key={dataField}
+        data-field={dataField}
+        type="text"
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        autoComplete="off"
+        style={{
+          width: '100%',
+          height: 22,
+          boxSizing: 'border-box',
+          padding: '0 8px',
+          paddingRight: showClearIcon && onClear ? 22 : 8,
+          fontSize: 14,
+          border: '1px solid #d9d9d9',
+          borderRadius: 6,
+          outline: 'none',
+          ...style,
+        }}
+        className={className}
+      />
+      {showClearIcon && onClear && (
+        <QuickClearIcon
+          onClear={onClear}
+          title="Xóa nhanh"
+          style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', zIndex: 1 }}
+        />
+      )}
+    </div>
+  );
+}
+
+const FILTER_OPTIONS = [
+  { key: 'code' as const, label: 'Mã hàng' },
+  { key: 'name' as const, label: 'Tên hàng' },
+  { key: 'category' as const, label: 'Danh mục' },
+  { key: 'unit' as const, label: 'Đơn vị' },
+  { key: 'status' as const, label: 'Trạng thái' },
+  { key: 'wave' as const, label: 'Sóng' },
+  { key: 'box_type' as const, label: 'Kiểu' },
+  { key: 'cost_price' as const, label: 'Giá vốn (từ – đến)' },
+  { key: 'sale_price' as const, label: 'Đơn giá (từ – đến)' },
+  { key: 'size_po_dai' as const, label: 'Dài PO' },
+  { key: 'size_po_rong' as const, label: 'Rộng PO' },
+  { key: 'size_po_cao' as const, label: 'Cao PO' },
+  { key: 'size_sx_dai' as const, label: 'Dài SX' },
+  { key: 'size_sx_rong' as const, label: 'Rộng SX' },
+  { key: 'size_sx_cao' as const, label: 'Cao SX' },
+  { key: 'waterproof' as const, label: 'C. thấm' },
+  { key: 'co_cm' as const, label: 'Có CM' },
+  { key: 'note' as const, label: 'Ghi chú chung' },
+];
+
+/** Input → Intent: debounce tìm kiếm 650ms (chỉ intent mới gọi API). */
+const SEARCH_INTENT_DEBOUNCE_MS = 650;
+/** Input → Intent: debounce bộ lọc 300ms (số Dài/Rộng/Cao nhập mượt, intent tách riêng). */
+const FILTER_INTENT_DEBOUNCE_MS = 300;
+/** Debounce ghi URL sau khi intent ổn định. */
+const URL_WRITE_DEBOUNCE_MS = 500;
+const DEFAULT_PAGE_SIZE = 20;
+const PRODUCTS_LIST_STORAGE_KEY = 'erp_products_list_state';
+
+/** Ô lọc số (Dài/Rộng/Cao, giá): input layer lưu string thuần, không parse sớm → nhập liên tục. */
+const NUMERIC_FILTER_KEYS = [
+  'min_cost_price', 'max_cost_price', 'min_sale_price', 'max_sale_price',
+  'size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao',
+] as const;
+type NumericFilterKey = (typeof NUMERIC_FILTER_KEYS)[number];
+
+/** Input state: số nhập tay là string | null; chỉ parse khi build intent. */
+type LocalFilterInput = Omit<FilterValues, NumericFilterKey> & {
+  [K in NumericFilterKey]: string | null;
+};
+
+const EMPTY_LOCAL_FILTER_INPUT: LocalFilterInput = {
+  ...EMPTY_FILTER_VALUES,
+  min_cost_price: null,
+  max_cost_price: null,
+  min_sale_price: null,
+  max_sale_price: null,
+  size_po_dai: null,
+  size_po_rong: null,
+  size_po_cao: null,
+  size_sx_dai: null,
+  size_sx_rong: null,
+  size_sx_cao: null,
+};
+
+/** Text filter keys: trim chỉ khi build intent (API/URL), không trim trong onChange → nhập liên tục. */
+const TEXT_FILTER_KEYS: (keyof FilterValues)[] = ['code', 'name', 'note'];
+
+function localInputToFilterValues(local: LocalFilterInput): FilterValues {
+  const fv: FilterValues = { ...EMPTY_FILTER_VALUES };
+  for (const k of Object.keys(EMPTY_FILTER_VALUES) as (keyof FilterValues)[]) {
+    const v = local[k as keyof LocalFilterInput];
+    if (NUMERIC_FILTER_KEYS.includes(k as NumericFilterKey)) {
+      const s = v == null ? '' : String(v).trim();
+      (fv as Record<string, unknown>)[k] = s === '' ? null : (k.includes('price') ? parseFloat(s) : parseInt(s, 10));
+      if (Number.isNaN((fv as Record<string, unknown>)[k])) (fv as Record<string, unknown>)[k] = null;
+    } else if (TEXT_FILTER_KEYS.includes(k)) {
+      const s = v != null && typeof v === 'string' ? v.trim() : '';
+      (fv as Record<string, unknown>)[k] = s === '' ? null : s;
+    } else {
+      (fv as Record<string, unknown>)[k] = v ?? null;
+    }
+  }
+  return fv;
+}
+
+function filterValuesToLocalInput(fv: FilterValues): LocalFilterInput {
+  const local: LocalFilterInput = { ...EMPTY_LOCAL_FILTER_INPUT };
+  for (const k of Object.keys(EMPTY_FILTER_VALUES) as (keyof FilterValues)[]) {
+    const v = fv[k];
+    if (NUMERIC_FILTER_KEYS.includes(k as NumericFilterKey)) {
+      (local as Record<string, unknown>)[k] = v == null ? null : String(v);
+    } else {
+      (local as Record<string, unknown>)[k] = v ?? null;
+    }
+  }
+  return local;
+}
+
+const FILTER_KEYS_ORDER = Object.keys(EMPTY_FILTER_VALUES).sort() as (keyof FilterValues)[];
+function filterValuesToStableString(fv: FilterValues): string {
+  const o: Record<string, unknown> = {};
+  for (const k of FILTER_KEYS_ORDER) o[k] = fv[k];
+  return JSON.stringify(o);
+}
+function parseStableFilterString(s: string | undefined): FilterValues {
+  if (!s || typeof s !== 'string') return { ...EMPTY_FILTER_VALUES };
+  try {
+    const o = JSON.parse(s) as Record<string, unknown>;
+    const out = { ...EMPTY_FILTER_VALUES };
+    for (const k of FILTER_KEYS_ORDER) {
+      if (o[k] !== undefined && o[k] !== null) (out as Record<string, unknown>)[k] = o[k];
+    }
+    return out;
+  } catch {
+    return { ...EMPTY_FILTER_VALUES };
+  }
+}
+
+/** True nếu có ít nhất một ô lọc đã có giá trị (user đã tương tác) — tránh ghi đè khi đang gõ. */
+function hasAnyFilterValue(fv: FilterValues): boolean {
+  if (fv.code?.trim()) return true;
+  if (fv.name?.trim()) return true;
+  if (fv.note?.trim()) return true;
+  if (fv.category != null || fv.unit != null || fv.status != null || fv.wave != null || fv.box_type != null) return true;
+  if (fv.min_cost_price != null || fv.max_cost_price != null || fv.min_sale_price != null || fv.max_sale_price != null) return true;
+  if (fv.size_po_dai != null || fv.size_po_rong != null || fv.size_po_cao != null) return true;
+  if (fv.size_sx_dai != null || fv.size_sx_rong != null || fv.size_sx_cao != null) return true;
+  if (fv.waterproof != null || fv.co_cm != null) return true;
+  return false;
+}
+
+/** Parse "DàixRộngxCao" (vd: 50x40x30) thành [dài, rộng, cao] */
+function parseSizeDRC(s: string | undefined): [string, string, string] {
+  if (!s || typeof s !== 'string') return ['', '', ''];
+  const parts = s.trim().split(/[xX*×]/).map((p) => p.trim());
+  return [parts[0] ?? '', parts[1] ?? '', parts[2] ?? ''];
+}
+
+const WATERPROOF_LABELS: Record<string, string> = {
+  '': 'Không',
+  INSIDE: 'Trong',
+  OUTSIDE: 'Ngoài',
+  BOTH: '2 mặt',
+};
+
+const FILTER_KEYS: FilterKey[] = [
+  'code', 'name', 'category', 'unit', 'status', 'wave', 'box_type', 'cost_price', 'sale_price',
+  'size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao',
+  'waterproof', 'co_cm', 'note',
+];
+
+/** Persist localFilterInput qua remount (StrictMode mount→unmount→remount) để không mất chữ khi gõ ký tự đầu. */
+let persistedLocalFilterInput: LocalFilterInput = { ...EMPTY_LOCAL_FILTER_INPUT };
+
+/** Đọc bộ lọc + tìm kiếm + phân trang từ URL */
+function parseProductListParams(searchParams: URLSearchParams): {
+  searchInput: string;
+  search: string;
+  filterValues: FilterValues;
+  activeFilters: FilterKey[];
+  page: number;
   pageSize: number;
-  total: number;
+  exactSearch: boolean;
+} {
+  const q = searchParams.get('q') ?? '';
+  const category = searchParams.get('category');
+  const unit = searchParams.get('unit');
+  const status = searchParams.get('status') as ProductStatus | null;
+  const wave = searchParams.get('wave');
+  const box_type = searchParams.get('box_type');
+  const code = searchParams.get('code') ?? '';
+  const name = searchParams.get('name') ?? '';
+  const min_cost_price = searchParams.get('min_cost_price');
+  const max_cost_price = searchParams.get('max_cost_price');
+  const min_sale_price = searchParams.get('min_sale_price');
+  const max_sale_price = searchParams.get('max_sale_price');
+  const size_po_dai = searchParams.get('size_po_dai');
+  const size_po_rong = searchParams.get('size_po_rong');
+  const size_po_cao = searchParams.get('size_po_cao');
+  const size_sx_dai = searchParams.get('size_sx_dai');
+  const size_sx_rong = searchParams.get('size_sx_rong');
+  const size_sx_cao = searchParams.get('size_sx_cao');
+  const waterproof = searchParams.get('waterproof') ?? '';
+  const co_cm = searchParams.get('co_cm');
+  const note = searchParams.get('note') ?? '';
+  const activeFiltersRaw = searchParams.get('activeFilters') ?? '';
+  const page = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10));
+  const pageSize = Math.max(1, Math.min(500, parseInt(searchParams.get('pageSize') ?? String(DEFAULT_PAGE_SIZE), 10)));
+  const exactSearch = searchParams.get('exact_search') === '1' || searchParams.get('exact_search') === 'true';
+
+  const filterValues: FilterValues = {
+    category: category ? parseInt(category, 10) : null,
+    unit: unit ? parseInt(unit, 10) : null,
+    status: status && ['DRAFT', 'ACTIVE', 'DISCONTINUED'].includes(status) ? status : null,
+    wave: wave ? parseInt(wave, 10) : null,
+    box_type: box_type ? parseInt(box_type, 10) : null,
+    code: code.trim() || null,
+    name: name.trim() || null,
+    min_cost_price: min_cost_price != null && min_cost_price !== '' ? parseFloat(min_cost_price) : null,
+    max_cost_price: max_cost_price != null && max_cost_price !== '' ? parseFloat(max_cost_price) : null,
+    min_sale_price: min_sale_price != null && min_sale_price !== '' ? parseFloat(min_sale_price) : null,
+    max_sale_price: max_sale_price != null && max_sale_price !== '' ? parseFloat(max_sale_price) : null,
+    size_po_dai: size_po_dai != null && size_po_dai !== '' ? parseInt(size_po_dai, 10) : null,
+    size_po_rong: size_po_rong != null && size_po_rong !== '' ? parseInt(size_po_rong, 10) : null,
+    size_po_cao: size_po_cao != null && size_po_cao !== '' ? parseInt(size_po_cao, 10) : null,
+    size_sx_dai: size_sx_dai != null && size_sx_dai !== '' ? parseInt(size_sx_dai, 10) : null,
+    size_sx_rong: size_sx_rong != null && size_sx_rong !== '' ? parseInt(size_sx_rong, 10) : null,
+    size_sx_cao: size_sx_cao != null && size_sx_cao !== '' ? parseInt(size_sx_cao, 10) : null,
+    waterproof: waterproof.trim() || null,
+    co_cm: co_cm === 'true' ? true : co_cm === 'false' ? false : null,
+    note: note.trim() || null,
+  };
+  const activeFromUrl = activeFiltersRaw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((k): k is FilterKey => (FILTER_KEYS as string[]).includes(k));
+  const activeFromValues = FILTER_KEYS.filter((k) => {
+    if (k === 'cost_price') return filterValues.min_cost_price != null || filterValues.max_cost_price != null;
+    if (k === 'sale_price') return filterValues.min_sale_price != null || filterValues.max_sale_price != null;
+    return filterValues[k as keyof FilterValues] != null && filterValues[k as keyof FilterValues] !== '';
+  });
+  const activeFilters = activeFromUrl.length > 0 ? activeFromUrl : activeFromValues;
+
+  return {
+    searchInput: q,
+    search: q,
+    filterValues,
+    activeFilters,
+    page,
+    pageSize,
+    exactSearch,
+  };
+}
+
+/** Ghi state hiện tại ra URL (chỉ params có giá trị) */
+function productListParamsToSearch(
+  search: string,
+  filterValues: FilterValues,
+  activeFilters: FilterKey[],
+  current: number,
+  pageSize: number,
+  exactSearch?: boolean
+): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (search.trim()) params.q = search.trim();
+  if (filterValues.code?.trim()) params.code = filterValues.code.trim();
+  if (filterValues.name?.trim()) params.name = filterValues.name.trim();
+  if (filterValues.category != null) params.category = String(filterValues.category);
+  if (filterValues.unit != null) params.unit = String(filterValues.unit);
+  if (filterValues.status != null) params.status = filterValues.status;
+  if (filterValues.wave != null) params.wave = String(filterValues.wave);
+  if (filterValues.box_type != null) params.box_type = String(filterValues.box_type);
+  if (filterValues.min_cost_price != null) params.min_cost_price = String(filterValues.min_cost_price);
+  if (filterValues.max_cost_price != null) params.max_cost_price = String(filterValues.max_cost_price);
+  if (filterValues.min_sale_price != null) params.min_sale_price = String(filterValues.min_sale_price);
+  if (filterValues.max_sale_price != null) params.max_sale_price = String(filterValues.max_sale_price);
+  if (filterValues.size_po_dai != null) params.size_po_dai = String(filterValues.size_po_dai);
+  if (filterValues.size_po_rong != null) params.size_po_rong = String(filterValues.size_po_rong);
+  if (filterValues.size_po_cao != null) params.size_po_cao = String(filterValues.size_po_cao);
+  if (filterValues.size_sx_dai != null) params.size_sx_dai = String(filterValues.size_sx_dai);
+  if (filterValues.size_sx_rong != null) params.size_sx_rong = String(filterValues.size_sx_rong);
+  if (filterValues.size_sx_cao != null) params.size_sx_cao = String(filterValues.size_sx_cao);
+  if (filterValues.waterproof != null) params.waterproof = String(filterValues.waterproof);
+  if (filterValues.co_cm === true) params.co_cm = 'true';
+  if (filterValues.co_cm === false) params.co_cm = 'false';
+  if (filterValues.note?.trim()) params.note = filterValues.note.trim();
+  if (activeFilters.length > 0) params.activeFilters = activeFilters.join(',');
+  if (current > 1) params.page = String(current);
+  if (pageSize !== DEFAULT_PAGE_SIZE) params.pageSize = String(pageSize);
+  if (exactSearch) params.exact_search = '1';
+  return params;
+}
+
+/** Ghi state ra localStorage */
+function saveProductListStateToStorage(
+  search: string,
+  filterValues: FilterValues,
+  current: number,
+  pageSize: number
+) {
+  try {
+    localStorage.setItem(
+      PRODUCTS_LIST_STORAGE_KEY,
+      JSON.stringify({
+        search: search.trim() || undefined,
+        filterValues:
+          filterValues.category != null ||
+          filterValues.unit != null ||
+          filterValues.status != null ||
+          filterValues.wave != null ||
+          filterValues.box_type != null ||
+          (filterValues.code?.trim()?.length ?? 0) > 0 ||
+          (filterValues.name?.trim()?.length ?? 0) > 0 ||
+          filterValues.min_cost_price != null ||
+          filterValues.max_cost_price != null ||
+          filterValues.min_sale_price != null ||
+          filterValues.max_sale_price != null ||
+          filterValues.size_po_dai != null ||
+          filterValues.size_po_rong != null ||
+          filterValues.size_po_cao != null ||
+          filterValues.size_sx_dai != null ||
+          filterValues.size_sx_rong != null ||
+          filterValues.size_sx_cao != null ||
+          (filterValues.waterproof?.trim()?.length ?? 0) > 0 ||
+          filterValues.co_cm != null ||
+          (filterValues.note?.trim()?.length ?? 0) > 0
+            ? filterValues
+            : undefined,
+        page: current > 1 ? current : undefined,
+        pageSize: pageSize !== DEFAULT_PAGE_SIZE ? pageSize : undefined,
+      })
+    );
+  } catch {
+    // ignore
+  }
 }
 
 const ProductList = () => {
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState<FiltersState>({});
-  const [filtersApplied, setFiltersApplied] = useState<FiltersState>({});
-  const [pagination, setPagination] = useState<PaginationState>({
-    current: 1,
-    pageSize: DEFAULT_PAGE_SIZE,
-    total: 0,
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isFirstMount = useRef(true);
+  const {
+    state: { searchInput, search, activeFilters, filterValues, pagination },
+    setSearchInput,
+    setSearch,
+    setActiveFilters,
+    setFilterValues,
+    setPagination,
+  } = useProductsListFilter();
+
+  const {
+    visibleColumns,
+    sizeDisplayMode,
+    handleVisibleColumnsChange,
+    handleSizeDisplayModeChange,
+  } = useColumnSettings('products-list', {
+    defaultVisibleColumns: DEFAULT_PRODUCT_VISIBLE_COLUMNS,
+    sizeColumns: { separated: PRODUCT_LIST_SIZE_SEPARATED, merged: PRODUCT_LIST_SIZE_MERGED },
   });
-  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+
+  // Ô lọc: state cục bộ (số = string thuần). Khởi tạo từ persisted để sống qua StrictMode remount.
+  const [localFilterInput, setLocalFilterInput] = useState<LocalFilterInput>(() => ({ ...persistedLocalFilterInput }));
+
+  // Persist sau mỗi thay đổi → remount (StrictMode) vẫn giữ được giá trị đang gõ.
+  useEffect(() => {
+    persistedLocalFilterInput = { ...localFilterInput };
+  }, [localFilterInput]);
+
+  // ——— Input → Intent → Query ———
+  // Search & Filter Guideline: Input (searchInput, localFilterInput) chỉ nhập, KHÔNG debounce.
+  // Intent (useSearchFilterIntent) debounce → API/URL/export chỉ đọc intent. Query không đọc input.
+  const parsedForIntent = useMemo(() => localInputToFilterValues(localFilterInput), [localFilterInput]);
+  const {
+    intentSearch,
+    intentFilters,
+    intentFilterStableString,
+    setIntentImmediate,
+  } = useSearchFilterIntent({
+    searchInput: searchInput ?? '',
+    filterValues: parsedForIntent,
+    searchDebounceMs: SEARCH_INTENT_DEBOUNCE_MS,
+    filterDebounceMs: FILTER_INTENT_DEBOUNCE_MS,
+    serializeFilters: filterValuesToStableString,
+    parseFilters: parseStableFilterString,
+  });
+
+  // Ref để đọc localFilterInput mới nhất trong blur handler (tránh closure cũ).
+  const localFilterInputRef = useRef<LocalFilterInput>(localFilterInput);
+  useEffect(() => {
+    localFilterInputRef.current = localFilterInput;
+  }, [localFilterInput]);
+
+  /** Đẩy local → context + intent; gọi khi blur khỏi filter hoặc sau debounce khi không focus trong filter. */
+  const syncLocalToContext = useCallback(() => {
+    const local = localFilterInputRef.current;
+    const fv = localInputToFilterValues(local);
+    setFilterValues(fv);
+    setIntentImmediate(searchInput ?? '', fv);
+  }, [searchInput, setFilterValues, setIntentImmediate]);
+
+  // Sync effect: bỏ qua lần đầu; sau đó chỉ sync khi user KHÔNG đang focus trong ô lọc → tránh re-render gây mất focus/đơ.
+  const isFirstSyncRunRef = useRef(true);
+  useEffect(() => {
+    if (isFirstSyncRunRef.current) {
+      isFirstSyncRunRef.current = false;
+      return;
+    }
+    if (!userHasInteractedWithFiltersRef.current) return;
+    const t = setTimeout(() => {
+      // Đang focus trong vùng filter thì không sync (chỉ sync khi blur hoặc lần sau).
+      if (document.activeElement?.closest('[data-filter-panel]')) return;
+      startTransition(() => syncLocalToContext());
+    }, FILTER_INTENT_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [localFilterInput, searchInput, syncLocalToContext]);
+
+  const {
+    rowSelection,
+    clearSelection,
+    removeFromSelection,
+    selectedIds,
+    selectedCount,
+  } = useRowSelection<Product>();
   const [importModalVisible, setImportModalVisible] = useState(false);
-  const [visibleColumns, setVisibleColumns] = useState([
-    'code',
-    'name',
-    'category_name',
-    'unit_name',
-    'cost_price',
-    'sale_price',
-    'min_stock',
-    'status',
-  ]);
   const [formVisible, setFormVisible] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [filterModalOpen, setFilterModalOpen] = useState(false);
+  const [customPageSize, setCustomPageSize] = useState('');
+  const [sortField, setSortField] = useState<string | null>(null);
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | null>(null);
+  const [pageSizeDraft, setPageSizeDraft] = useState<number | null>(null);
+  const [isEditingPageSize, setIsEditingPageSize] = useState(false);
+  const pageSizeInputRef = useRef<any>(null);
+  const filterPanelRef = useRef<HTMLDivElement>(null);
+  const inlineFilterPanelRef = useRef<HTMLDivElement>(null);
+
+  /* Bộ nhập nhanh trong modal Lọc: Enter chuyển ô, ô cuối → áp dụng lọc và đóng modal */
+  useQuickEntryKeys(filterPanelRef, {
+    onLastFieldEnter: () => {
+      startTransition(() => syncLocalToContext());
+      setFilterModalOpen(false);
+    },
+    enabled: filterModalOpen,
+  });
+
+  /* Bộ nhập nhanh hàng lọc inline (trên trang): Enter chuyển ô, ô cuối → áp dụng lọc */
+  useQuickEntryKeys(inlineFilterPanelRef, {
+    onLastFieldEnter: () => startTransition(() => syncLocalToContext()),
+    enabled: activeFilters.length > 0,
+  });
 
   const queryClient = useQueryClient();
 
-  // Debounce search
+  const setPage = useCallback((page: number) => {
+    setPagination((p) => ({ ...p, current: page }));
+  }, [setPagination]);
+
+  const setPageSize = useCallback((pageSize: number) => {
+    setPagination((p) => ({ ...p, pageSize }));
+  }, [setPagination]);
+
+  // User preferences: columns, filters, pageSize
+  const { config, saveConfig } = useUserPreferences('products-list');
+  const configRef = useRef<PreferencesConfig>({});
+
+  // Keep latest config in a ref to avoid debounce starvation
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setSearch(searchInput);
+    configRef.current = (config || {}) as PreferencesConfig;
+  }, [config]);
+
+  const savePreferences = useCallback(
+    async (partial: PreferencesConfig) => {
+      const merged = { ...(configRef.current || {}), ...(partial || {}) } as PreferencesConfig;
+      configRef.current = merged; // optimistic to prevent overwriting other keys
+      await saveConfig(merged);
+    },
+    [saveConfig]
+  );
+
+  const applyPageSize = useCallback(
+    async (size: number) => {
+      if (!Number.isFinite(size) || size < 1 || size > 500) {
+        message.error('Nhập số từ 1-500');
+        return;
+      }
+      setPageSize(size);
+      setPage(1);
+      await savePreferences({ pageSize: size });
+      setPageSizeDraft(null);
+      setIsEditingPageSize(false);
+      message.success(`Đã đổi: ${size} dòng/trang`);
+    },
+    [savePreferences, setPage, setPageSize]
+  );
+
+  // Ref set đồng bộ trong onChange — tránh config load đúng lúc gõ ghi đè (ô lọc nhập liên tục).
+  const userHasInteractedWithFiltersRef = useRef(false);
+  const mountTimeRef = useRef(Date.now());
+  /** Chỉ áp dụng filters từ config trong 800ms đầu; sau đó không ghi đè (tránh config load trễ). */
+  const INITIAL_APPLY_WINDOW_MS = 800;
+
+  // Áp dụng filters từ preferences: chỉ một lần, khi user chưa tương tác và config load sớm (trong 800ms).
+  const appliedInitialPreferencesRef = useRef(false);
+  useEffect(() => {
+    if (!config || Object.keys(config).length === 0) return;
+    if (config.filters && typeof config.filters === 'object') {
+      appliedInitialPreferencesRef.current = true;
+      const withinWindow = Date.now() - mountTimeRef.current <= INITIAL_APPLY_WINDOW_MS;
+      if (withinWindow && !userHasInteractedWithFiltersRef.current) {
+        const f = config.filters as { filterValues?: FilterValues; activeFilters?: FilterKey[] };
+        if (f.filterValues && typeof f.filterValues === 'object') {
+          setFilterValues(f.filterValues);
+          setLocalFilterInput(filterValuesToLocalInput(f.filterValues));
+          setIntentImmediate(searchInput ?? '', f.filterValues);
+        }
+        if (Array.isArray(f.activeFilters)) {
+          setActiveFilters(f.activeFilters);
+        }
+      }
+    }
+    if (config.pageSize != null) {
+      const n = Number(config.pageSize);
+      if (n >= 1 && n <= 1000) {
+        setPagination((p) => ({ ...p, pageSize: n }));
+      }
+    }
+    if (config.sort && typeof config.sort === 'object' && config.sort.field && config.sort.order) {
+      const s = config.sort as { field: string; order: 'asc' | 'desc' };
+      setSortField(s.field);
+      setSortOrder(s.order);
+    }
+  }, [config, searchInput, setIntentImmediate]);
+
+  /** Cập nhật ô lọc: chỉ đổi local (merge prev), không parse/validate trong onChange. */
+  const applyFilterChange = useCallback((update: (prev: LocalFilterInput) => LocalFilterInput) => {
+    userHasInteractedWithFiltersRef.current = true;
+    setLocalFilterInput(update);
+  }, []);
+
+  // Persist filter changes to preferences (debounced)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void savePreferences({
+        filters: { filterValues, activeFilters } as any,
+      });
+    }, 600);
+    return () => clearTimeout(t);
+  }, [filterValues, activeFilters, savePreferences]);
+
+  const handleSort = useCallback(
+    async (orderingParam: string) => {
+      let newOrder: 'asc' | 'desc' | null = null;
+      if (sortField === orderingParam) {
+        if (sortOrder === 'asc') newOrder = 'desc';
+        else if (sortOrder === 'desc') newOrder = null;
+      } else {
+        newOrder = 'asc';
+      }
+      if (newOrder === null) {
+        setSortField(null);
+        setSortOrder(null);
+        await savePreferences({ sort: undefined });
+      } else {
+        setSortField(orderingParam);
+        setSortOrder(newOrder);
+        await savePreferences({ sort: { field: orderingParam, order: newOrder } });
+      }
       setPagination((p) => ({ ...p, current: 1 }));
-    }, DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [searchInput]);
+    },
+    [sortField, sortOrder, savePreferences]
+  );
 
-  // Debug: log filters
+  // Column permissions: chỉ hiện cột user được phép xem
+  const { canViewColumn } = useColumnPermissions('products-list');
+
+  const lastWrittenParams = useRef<string>('');
+  const hasWrittenUrlOnce = useRef(false);
+  /** Tránh effect ghi URL chạy với giá trị cũ khi vừa áp từ URL. */
+  const skipNextUrlWrite = useRef(false);
+  /** Thứ tự key cố định để chuẩn hóa URL khi so sánh — tránh nhảy chữ khi gõ nhanh (phải trùng với params ghi ra). */
+  const ORDERED_URL_KEYS = [
+    'q', 'code', 'name', 'category', 'unit', 'status', 'wave', 'box_type',
+    'min_cost_price', 'max_cost_price', 'min_sale_price', 'max_sale_price',
+    'size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao',
+    'waterproof', 'co_cm', 'note',
+    'activeFilters', 'page', 'pageSize', 'exact_search',
+  ];
+  const [exactSearch, setExactSearch] = useState(false);
+
+  // Nếu URL có params thì ưu tiên URL (vd: bookmark, chia sẻ link) — trừ khi URL vừa do mình ghi (tránh nhảy chữ khi gõ nhanh)
+  useLayoutEffect(() => {
+    const currentUrlStr = normalizeSearchParamsToOrderedString(searchParams, ORDERED_URL_KEYS);
+    if (currentUrlStr === lastWrittenParams.current) return;
+
+    const hasUrlParams = ORDERED_URL_KEYS.some((key) => searchParams.get(key) != null);
+    if (!hasUrlParams) return;
+    isFirstMount.current = false;
+    const parsed = parseProductListParams(searchParams);
+    const writtenParams = productListParamsToSearch(parsed.search, parsed.filterValues, parsed.activeFilters, parsed.page, parsed.pageSize, parsed.exactSearch);
+    lastWrittenParams.current = normalizeParamsToOrderedString(writtenParams, ORDERED_URL_KEYS);
+    setSearchInput(parsed.searchInput);
+    setSearch(parsed.search);
+    setExactSearch(parsed.exactSearch);
+    setFilterValues(parsed.filterValues);
+    setLocalFilterInput(filterValuesToLocalInput(parsed.filterValues));
+    setIntentImmediate(parsed.search, parsed.filterValues);
+    setActiveFilters(parsed.activeFilters);
+    skipNextUrlWrite.current = true;
+    setPagination((p) => ({
+      ...p,
+      current: parsed.page,
+      pageSize: parsed.pageSize,
+    }));
+  }, [searchParams]);
+
+  // Query layer: chỉ intent (đã debounce) ghi ra URL + localStorage; không đụng input.
   useEffect(() => {
-    console.log('Current filters:', filters);
-  }, [filters]);
-
-  const { data: productsData, isLoading, isError, error } = useQuery({
-    queryKey: [
-      'products',
-      search,
-      filtersApplied,
+    if (skipNextUrlWrite.current) {
+      skipNextUrlWrite.current = false;
+      return;
+    }
+    const params = productListParamsToSearch(
+      intentSearch,
+      intentFilters,
+      activeFilters,
       pagination.current,
       pagination.pageSize,
-    ],
-    queryFn: () =>
-      productsApi.getProducts({
-        search: search || undefined,
-        category: filtersApplied.category,
-        unit: filtersApplied.unit,
-        status: filtersApplied.status,
-        min_price: filtersApplied.min_price,
-        max_price: filtersApplied.max_price,
+      exactSearch
+    );
+    const str = normalizeParamsToOrderedString(params, ORDERED_URL_KEYS);
+    if (str === lastWrittenParams.current) return;
+
+    const doWrite = () => {
+      lastWrittenParams.current = str;
+      saveProductListStateToStorage(intentSearch, intentFilters, pagination.current, pagination.pageSize);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          ORDERED_URL_KEYS.forEach((k) => next.delete(k));
+          Object.entries(params).forEach(([k, v]) => next.set(k, v));
+          return next;
+        },
+        { replace: true }
+      );
+    };
+
+    if (!hasWrittenUrlOnce.current) {
+      hasWrittenUrlOnce.current = true;
+      doWrite();
+      return;
+    }
+    const timer = setTimeout(doWrite, URL_WRITE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [intentSearch, intentFilterStableString, activeFilters, pagination.current, pagination.pageSize, exactSearch, setSearchParams]);
+
+  // Reset về trang 1 khi intent (tìm kiếm / lọc) thay đổi — bỏ qua lần đầu.
+  const isFirstIntentRun = useRef(true);
+  useEffect(() => {
+    if (isFirstIntentRun.current) {
+      isFirstIntentRun.current = false;
+      return;
+    }
+    setPagination((p) => ({ ...p, current: 1 }));
+  }, [intentSearch, intentFilterStableString]);
+
+  // Query layer: queryKey chỉ phụ thuộc intent → API không gọi dư, không race với input.
+  const productsQueryParamsKey = useMemo(() => {
+    const params = productListParamsToSearch(
+      intentSearch,
+      intentFilters,
+      activeFilters,
+      pagination.current,
+      pagination.pageSize,
+      exactSearch
+    );
+    return normalizeParamsToOrderedString(params, ORDERED_URL_KEYS);
+  }, [intentSearch, intentFilterStableString, activeFilters, pagination.current, pagination.pageSize, exactSearch]);
+
+  const { data: productsData, isLoading, isError, error } = useQuery({
+    queryKey: ['products', productsQueryParamsKey, sortField, sortOrder],
+    queryFn: () => {
+      const params: Record<string, unknown> = {
+        search: intentSearch?.trim() || undefined,
+        q: intentSearch?.trim() || undefined,
+        exact_search: exactSearch ? '1' : undefined,
+        code: intentFilters.code?.trim() || undefined,
+        name: intentFilters.name?.trim() || undefined,
+        category: intentFilters.category ?? undefined,
+        unit: intentFilters.unit ?? undefined,
+        status: intentFilters.status ?? undefined,
+        wave: intentFilters.wave ?? undefined,
+        box_type: intentFilters.box_type ?? undefined,
+        min_cost_price: intentFilters.min_cost_price ?? undefined,
+        max_cost_price: intentFilters.max_cost_price ?? undefined,
+        min_sale_price: intentFilters.min_sale_price ?? undefined,
+        max_sale_price: intentFilters.max_sale_price ?? undefined,
+        size_po_dai: intentFilters.size_po_dai ?? undefined,
+        size_po_rong: intentFilters.size_po_rong ?? undefined,
+        size_po_cao: intentFilters.size_po_cao ?? undefined,
+        size_sx_dai: intentFilters.size_sx_dai ?? undefined,
+        size_sx_rong: intentFilters.size_sx_rong ?? undefined,
+        size_sx_cao: intentFilters.size_sx_cao ?? undefined,
+        waterproof: intentFilters.waterproof != null ? String(intentFilters.waterproof) : undefined,
+        co_cm: intentFilters.co_cm === true ? 'true' : intentFilters.co_cm === false ? 'false' : undefined,
+        note: intentFilters.note?.trim() || undefined,
         page: pagination.current,
         page_size: pagination.pageSize,
-      }),
+      };
+      if (sortField && sortOrder) {
+        params.ordering = sortOrder === 'desc' ? `-${sortField}` : sortField;
+      }
+      return productsApi.getProducts(params);
+    },
   });
 
   useEffect(() => {
@@ -130,66 +877,63 @@ const ProductList = () => {
     queryFn: () => productsApi.getUnits({ page_size: 100 }),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: number) => productsApi.deleteProduct(id),
-    onSuccess: (_, id) => {
-      message.success('Xóa sản phẩm thành công!');
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      setSelectedRowKeys((keys) => keys.filter((k) => k !== id));
-    },
-    onError: (err: any) => {
-      message.error(err.response?.data?.detail || 'Xóa thất bại!');
-    },
+  const { data: wavesData } = useQuery({
+    queryKey: ['waves', 'list'],
+    queryFn: () => productsApi.getWaves({ page_size: 100 }),
   });
 
-  const bulkDeleteMutation = useMutation({
-    mutationFn: async (ids: number[]) => {
-      await Promise.all(ids.map((id) => productsApi.deleteProduct(id)));
-    },
-    onSuccess: () => {
-      message.success('Đã xóa các sản phẩm đã chọn!');
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      setSelectedRowKeys([]);
-    },
-    onError: (err: any) => {
-      message.error(err.response?.data?.detail || 'Xóa thất bại!');
-    },
+  const { data: boxTypesData } = useQuery({
+    queryKey: ['boxTypes', 'list'],
+    queryFn: () => productsApi.getBoxTypes({ page_size: 100 }),
   });
 
-  if (isError) {
-    message.error((error as any)?.message || 'Tải danh sách thất bại!');
-  }
+  const { confirmDeleteOne, confirmBulkDelete } = useConfirmDelete();
+  const { deleteOneMutation, bulkDeleteMutation } = useBulkDelete({
+    queryKey: ['products'],
+    deleteFn: (id) => productsApi.deleteProduct(id),
+    onClearSelection: clearSelection,
+    onRemoveFromSelection: removeFromSelection,
+  });
 
   const categories = categoriesData?.results ?? [];
   const units = unitsData?.results ?? [];
+  const waves = wavesData?.results ?? [];
+  const boxTypes = boxTypesData?.results ?? [];
   const products = productsData?.results ?? [];
 
-  const handleApplyFilters = useCallback(() => {
-    setFiltersApplied(filters);
-    setPagination((p) => ({ ...p, current: 1 }));
-  }, [filters]);
+  const refetchProducts = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['products'] });
+  }, [queryClient]);
 
-  const handleClearFilters = useCallback(() => {
-    setFilters({});
-    setFiltersApplied({});
+  const handleClearAllFilters = useCallback(() => {
+    setActiveFilters([]);
+    userHasInteractedWithFiltersRef.current = true;
+    setLocalFilterInput({ ...EMPTY_LOCAL_FILTER_INPUT });
+    setFilterValues(EMPTY_FILTER_VALUES);
+    setIntentImmediate(searchInput ?? '', EMPTY_FILTER_VALUES);
     setPagination((p) => ({ ...p, current: 1 }));
-  }, []);
+  }, [searchInput, setFilterValues, setIntentImmediate]);
+
+  const handleToggleFilter = useCallback((key: FilterKey) => {
+    if (activeFilters.includes(key)) {
+      setActiveFilters((prev) => prev.filter((k) => k !== key));
+      userHasInteractedWithFiltersRef.current = true;
+      if (key === 'cost_price') {
+        setLocalFilterInput((v) => ({ ...v, min_cost_price: null, max_cost_price: null }));
+      } else if (key === 'sale_price') {
+        setLocalFilterInput((v) => ({ ...v, min_sale_price: null, max_sale_price: null }));
+      } else {
+        setLocalFilterInput((v) => ({ ...v, [key]: null } as LocalFilterInput));
+      }
+    } else {
+      setActiveFilters((prev) => [...prev, key]);
+    }
+  }, [activeFilters]);
 
   const handleDelete = useCallback(
-    (id: number) => {
-      deleteMutation.mutate(id);
-    },
-    [deleteMutation]
+    (id: number) => deleteOneMutation.mutateAsync(id),
+    [deleteOneMutation]
   );
-
-  const handleBulkDelete = useCallback(() => {
-    const ids = selectedRowKeys.map(Number).filter(Boolean);
-    if (ids.length === 0) {
-      message.warning('Chọn ít nhất một sản phẩm để xóa.');
-      return;
-    }
-    bulkDeleteMutation.mutate(ids);
-  }, [selectedRowKeys, bulkDeleteMutation]);
 
   const handleDownloadTemplate = useCallback(async () => {
     try {
@@ -212,21 +956,39 @@ const ProductList = () => {
     }
   }, []);
 
-  const handleImport = useCallback(async (file: File) => {
-    return await productsApi.importProducts(file);
+  const handleImport = useCallback(async (file: File, options?: { updateIfExists?: boolean }) => {
+    return await productsApi.importProducts(file, options);
   }, []);
 
-  const handleExport = useCallback(async () => {
+  const handleExport = useCallback(async (format: 'excel' | 'pdf' = 'excel') => {
     try {
-      message.loading({ content: 'Đang xuất dữ liệu...', key: 'export' });
+      message.loading({ content: format === 'pdf' ? 'Đang xuất PDF...' : 'Đang xuất dữ liệu...', key: 'export' });
 
       const params: Record<string, unknown> = {};
-      if (search) params.search = search;
-      if (filtersApplied.category) params.category = filtersApplied.category;
-      if (filtersApplied.unit) params.unit = filtersApplied.unit;
-      if (filtersApplied.status) params.status = filtersApplied.status;
+      if (intentSearch) params.search = intentSearch;
+      if (intentFilters.code?.trim()) params.code = intentFilters.code.trim();
+      if (intentFilters.name?.trim()) params.name = intentFilters.name.trim();
+      if (intentFilters.category != null) params.category = intentFilters.category;
+      if (intentFilters.unit != null) params.unit = intentFilters.unit;
+      if (intentFilters.status != null) params.status = intentFilters.status;
+      if (intentFilters.wave != null) params.wave = intentFilters.wave;
+      if (intentFilters.box_type != null) params.box_type = intentFilters.box_type;
+      if (intentFilters.min_cost_price != null) params.min_cost_price = intentFilters.min_cost_price;
+      if (intentFilters.max_cost_price != null) params.max_cost_price = intentFilters.max_cost_price;
+      if (intentFilters.min_sale_price != null) params.min_sale_price = intentFilters.min_sale_price;
+      if (intentFilters.max_sale_price != null) params.max_sale_price = intentFilters.max_sale_price;
+      if (intentFilters.size_po_dai != null) params.size_po_dai = intentFilters.size_po_dai;
+      if (intentFilters.size_po_rong != null) params.size_po_rong = intentFilters.size_po_rong;
+      if (intentFilters.size_po_cao != null) params.size_po_cao = intentFilters.size_po_cao;
+      if (intentFilters.size_sx_dai != null) params.size_sx_dai = intentFilters.size_sx_dai;
+      if (intentFilters.size_sx_rong != null) params.size_sx_rong = intentFilters.size_sx_rong;
+      if (intentFilters.size_sx_cao != null) params.size_sx_cao = intentFilters.size_sx_cao;
+      if (intentFilters.waterproof != null) params.waterproof = String(intentFilters.waterproof);
+      if (intentFilters.co_cm === true) params.co_cm = true;
+      if (intentFilters.co_cm === false) params.co_cm = false;
+      if (intentFilters.note?.trim()) params.note = intentFilters.note.trim();
 
-      const blob = await productsApi.exportProducts('excel', params);
+      const blob = await productsApi.exportProducts(format, params);
 
       if (!(blob instanceof Blob) || blob.size === 0) {
         message.error({ content: 'Dữ liệu xuất rỗng hoặc không hợp lệ.', key: 'export' });
@@ -236,10 +998,11 @@ const ProductList = () => {
         blob.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
         blob.type === 'application/vnd.ms-excel' ||
         blob.type.includes('spreadsheet') ||
-        (blob.type === '' && blob.size > 0); // CORS đôi khi làm blob.type rỗng
-      if (!isExcel) {
+        (blob.type === '' && blob.size > 0 && format === 'excel'); // CORS đôi khi làm blob.type rỗng
+      const isPdf = blob.type === 'application/pdf' || (blob.type === '' && format === 'pdf');
+      if (!isExcel && !isPdf) {
         message.error({
-          content: 'Phản hồi không phải file Excel. Kiểm tra API export và khởi động lại Django nếu cần.',
+          content: 'Phản hồi không phải file Excel/PDF. Kiểm tra API export và khởi động lại Django nếu cần.',
           key: 'export',
         });
         return;
@@ -248,7 +1011,9 @@ const ProductList = () => {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `san_pham_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.download = format === 'pdf'
+        ? `san_pham_${new Date().toISOString().slice(0, 10)}.pdf`
+        : `san_pham_${new Date().toISOString().slice(0, 10)}.xlsx`;
       a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
@@ -257,7 +1022,7 @@ const ProductList = () => {
         window.URL.revokeObjectURL(url);
       }, 200);
 
-      message.success({ content: 'Xuất Excel thành công!', key: 'export' });
+      message.success({ content: format === 'pdf' ? 'Xuất PDF thành công!' : 'Xuất Excel thành công!', key: 'export' });
     } catch (err: any) {
       console.error('Export error:', err);
       const msg =
@@ -267,16 +1032,7 @@ const ProductList = () => {
         'Xuất Excel thất bại!';
       message.error({ content: msg, key: 'export' });
     }
-  }, [search, filtersApplied]);
-
-  const applyFilter = useCallback(
-    (key: keyof FiltersState, value: number | ProductStatus | undefined) => {
-      setFilters((f) => ({ ...f, [key]: value }));
-      setFiltersApplied((f) => ({ ...f, [key]: value }));
-      setPagination((p) => ({ ...p, current: 1 }));
-    },
-    []
-  );
+  }, [intentSearch, intentFilterStableString]);
 
   const handleAdd = useCallback(() => {
     setEditingProduct(null);
@@ -293,12 +1049,42 @@ const ProductList = () => {
     setEditingProduct(null);
   }, []);
 
-  const allColumns: ColumnsType<Product> = [
+  const SortIcon = ({ orderingParam }: { orderingParam: string }) => {
+    if (sortField !== orderingParam) {
+      return <span style={{ color: '#bfbfbf', fontSize: 10, marginLeft: 2 }}>⇅</span>;
+    }
+    return (
+      <span style={{ color: '#1890ff', fontSize: 10, fontWeight: 'bold', marginLeft: 2 }}>
+        {sortOrder === 'asc' ? '▲' : '▼'}
+      </span>
+    );
+  };
+
+  const addSortToColumn = <T extends Record<string, unknown>>(col: T & { key?: string; title?: React.ReactNode; sortField?: string }): T => {
+    if (col.key === 'actions' || !col.sortField) return col;
+    const label = typeof col.title === 'string' ? col.title : col.title;
+    const orderingParam = col.sortField;
+    return {
+      ...col,
+      title: (
+        <div
+          onClick={(e) => { e.stopPropagation(); handleSort(orderingParam); }}
+          style={{ cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: 2 }}
+        >
+          {label}
+          <SortIcon orderingParam={orderingParam} />
+        </div>
+      ),
+    } as T;
+  };
+
+  const allColumnsBase: (ColumnsType<Product>[number] & { sortField?: string })[] = [
     {
       title: 'Mã hàng',
       dataIndex: 'code',
       key: 'code',
-      width: 120,
+      sortField: 'code',
+      width: 100,
       fixed: 'left' as const,
       render: (code: string, record: Product) => (
         <span
@@ -306,327 +1092,879 @@ const ProductList = () => {
           tabIndex={0}
           onClick={() => handleEdit(record)}
           onKeyDown={(e) => e.key === 'Enter' && handleEdit(record)}
-          style={{
-            fontWeight: 500,
-            color: theme.colors.primary,
-            cursor: 'pointer',
-          }}
+          style={{ fontWeight: 500, color: theme.colors.primary, cursor: 'pointer' }}
         >
-          {code}
+          {code ?? '-'}
         </span>
       ),
     },
-    {
-      title: 'Tên sản phẩm',
-      dataIndex: 'name',
-      key: 'name',
-      width: 280,
-      ellipsis: { showTitle: false },
-      render: (name: string) => (
-        <Tooltip title={name ?? '-'} placement="topLeft">
-          <span style={{ fontWeight: 500 }}>{name ?? '-'}</span>
-        </Tooltip>
-      ),
-    },
-    {
-      title: 'Danh mục',
-      dataIndex: 'category_name',
-      key: 'category_name',
-      width: 180,
-      ellipsis: { showTitle: false },
-      render: (text: string) => (
-        <Tooltip title={text ?? ''} placement="topLeft">
-          <span>{text ?? '-'}</span>
-        </Tooltip>
-      ),
-    },
-    {
-      title: 'ĐV',
-      dataIndex: 'unit_name',
-      key: 'unit_name',
-      width: 80,
-      align: 'center' as const,
-      render: (name: string) => name?.split(' - ')[0],
-    },
+    { title: 'Tên hàng', dataIndex: 'name', key: 'name', sortField: 'name', width: 200, ellipsis: true, render: (n: string) => n ?? '-' },
+    { title: 'Danh mục', dataIndex: 'category_name', key: 'category_name', sortField: 'category__name', width: 140, ellipsis: true, render: (t: string) => t ?? '-' },
     {
       title: 'Giá vốn',
       dataIndex: 'cost_price',
       key: 'cost_price',
-      width: 110,
+      sortField: 'cost_price',
+      width: 95,
       align: 'right' as const,
-      render: (price: string) => (
-        <FormattedPrice value={price} color="#6b7280" bold={false} />
-      ),
+      render: (p: string) => <FormattedPrice value={p} color="#6b7280" bold={false} />,
     },
     {
-      title: 'Giá bán',
+      title: 'Đơn giá',
       dataIndex: 'sale_price',
       key: 'sale_price',
-      width: 120,
+      sortField: 'sale_price',
+      width: 95,
       align: 'right' as const,
-      render: (price: string) => <FormattedPrice value={price} />,
+      render: (p: string) => <FormattedPrice value={p} />,
     },
-    {
-      title: 'Tồn TT',
-      dataIndex: 'min_stock',
-      key: 'min_stock',
-      width: 90,
-      align: 'right' as const,
-      render: (stock: string) => (
-        <span style={{ color: '#6b7280' }}>
-          {parseFloat(stock || '0').toLocaleString('vi-VN')}
-        </span>
-      ),
-    },
+    { title: 'HHCĐ', dataIndex: 'commission_per_unit', key: 'commission_per_unit', sortField: 'commission_per_unit', width: 75, align: 'right' as const, render: (v: string) => parseFloat(v || '0').toLocaleString('vi-VN') },
+    { title: 'HH%', dataIndex: 'commission_percent', key: 'commission_percent', sortField: 'commission_percent', width: 60, align: 'right' as const, render: (v: string) => parseFloat(v || '0').toLocaleString('vi-VN') },
+    ...(sizeDisplayMode === 'separated'
+      ? [
+          { title: 'Dài PO', key: 'size_po_dai', sortField: 'size_order', width: 72, align: 'center' as const, render: (_: unknown, r: Product) => parseSizeDRC(r.size_order)[0] || '-' },
+          { title: 'Rộng PO', key: 'size_po_rong', sortField: 'size_order', width: 72, align: 'center' as const, render: (_: unknown, r: Product) => parseSizeDRC(r.size_order)[1] || '-' },
+          { title: 'Cao PO', key: 'size_po_cao', sortField: 'size_order', width: 72, align: 'center' as const, render: (_: unknown, r: Product) => parseSizeDRC(r.size_order)[2] || '-' },
+          { title: 'Dài SX', key: 'size_sx_dai', sortField: 'size_production', width: 72, align: 'center' as const, render: (_: unknown, r: Product) => parseSizeDRC(r.size_production)[0] || '-' },
+          { title: 'Rộng SX', key: 'size_sx_rong', sortField: 'size_production', width: 72, align: 'center' as const, render: (_: unknown, r: Product) => parseSizeDRC(r.size_production)[1] || '-' },
+          { title: 'Cao SX', key: 'size_sx_cao', sortField: 'size_production', width: 72, align: 'center' as const, render: (_: unknown, r: Product) => parseSizeDRC(r.size_production)[2] || '-' },
+        ]
+      : [
+          {
+            title: 'Kích thước ĐH',
+            key: 'size_po_merged',
+            width: 140,
+            align: 'center' as const,
+            render: (_: unknown, r: Product) => {
+              const [d, w, h] = parseSizeDRC(r.size_order);
+              if (!d && !w && !h) return '-';
+              return `${d || 0} x ${w || 0} x ${h || 0}`;
+            },
+          },
+          {
+            title: 'KTSX',
+            key: 'size_sx_merged',
+            width: 140,
+            align: 'center' as const,
+            render: (_: unknown, r: Product) => {
+              const [d, w, h] = parseSizeDRC(r.size_production);
+              if (!d && !w && !h) return '-';
+              return `${d || 0} x ${w || 0} x ${h || 0}`;
+            },
+          },
+        ]),
+    { title: 'Sóng', dataIndex: 'wave_code', key: 'wave_code', sortField: 'wave__code', width: 56, align: 'center' as const, render: (t: string) => t ?? '-' },
+    { title: 'Kiểu', dataIndex: 'box_type_code', key: 'box_type_code', sortField: 'box_type__code', width: 56, align: 'center' as const, render: (t: string) => t ?? '-' },
+    { title: 'ĐVT', dataIndex: 'unit_name', key: 'unit_name', sortField: 'unit__code', width: 56, align: 'center' as const, render: (n: string) => (n && n.split(' - ')[0]) || '-' },
+    { title: '+/-', dataIndex: 'delivery_tolerance', key: 'delivery_tolerance', sortField: 'delivery_tolerance', width: 80, ellipsis: true, render: (t: string) => t ?? '-' },
+    { title: 'Xả', dataIndex: 'process_xa', key: 'process_xa', sortField: 'process_xa', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
+    { title: 'In', dataIndex: 'process_in', key: 'process_in', sortField: 'process_in', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
+    { title: 'Mã phim', dataIndex: 'film_code', key: 'film_code', sortField: 'film_code', width: 90, ellipsis: true, render: (t: string) => (t && t.replace(/\.pdf$/i, '')) || '-' },
+    { title: 'Số màu', dataIndex: 'color_count', key: 'color_count', sortField: 'color_count', width: 68, align: 'center' as const, render: (v: number) => v != null ? v : '-' },
+    { title: 'C. thấm', dataIndex: 'waterproof', key: 'waterproof', sortField: 'waterproof', width: 72, align: 'center' as const, render: (v: string) => WATERPROOF_LABELS[v as string] ?? (v || '-') },
+    { title: 'Có CM', key: 'co_cm', sortField: 'process_can_mang', width: 60, align: 'center' as const, render: (_: unknown, r: Product) => (r.process_can_mang != null && Number(r.process_can_mang) > 0 ? 'Có' : '—') },
+    { title: 'C. Màng', dataIndex: 'process_can_mang', key: 'process_can_mang', sortField: 'process_can_mang', width: 72, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
+    { title: 'Bồi', dataIndex: 'process_boi', key: 'process_boi', sortField: 'process_boi', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
+    { title: 'Bế', dataIndex: 'process_be', key: 'process_be', sortField: 'process_be', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
+    { title: 'Mã khuôn', dataIndex: 'mold_code', key: 'mold_code', sortField: 'mold_code', width: 90, ellipsis: true, render: (t: string) => (t && t.replace(/\.pdf$/i, '')) || '-' },
+    { title: 'Chạp', dataIndex: 'process_chap', key: 'process_chap', sortField: 'process_chap', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
+    { title: 'Đóng', dataIndex: 'process_dong', key: 'process_dong', sortField: 'process_dong', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
+    { title: 'Dán', dataIndex: 'process_dan', key: 'process_dan', sortField: 'process_dan', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
+    { title: 'Khác', dataIndex: 'process_khac', key: 'process_khac', sortField: 'process_khac', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
+    { title: 'Ghi chú công đoạn khác', dataIndex: 'note_other', key: 'note_other', sortField: 'note_other', width: 140, ellipsis: true, render: (t: string) => t ?? '-' },
+    { title: 'Ghi chú chung', dataIndex: 'note', key: 'note', sortField: 'note', width: 140, ellipsis: true, render: (t: string) => t ?? '-' },
     {
       title: 'Trạng thái',
       dataIndex: 'status',
       key: 'status',
-      width: 120,
+      sortField: 'status',
+      width: 100,
       align: 'center' as const,
-      render: (status: string) => <StatusTag status={status} />,
+      render: (v: string) => {
+        const label = (PRODUCT_STATUS_LABELS as Record<string, string>)[v] ?? v ?? '-';
+        return v === 'DISCONTINUED' ? <span style={{ fontWeight: 700 }}>{label}</span> : label;
+      },
     },
     {
       title: 'Thao tác',
       key: 'actions',
       fixed: 'right' as const,
-      width: 140,
+      width: 130,
       align: 'center' as const,
       render: (_: unknown, record: Product) => (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-          <Tooltip title="Xem chi tiết" placement="top">
-            <Button
-              type="text"
-              size="small"
-              icon={<EyeOutlined style={{ fontSize: 18, color: '#722ed1' }} />}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleEdit(record);
-              }}
-            />
-          </Tooltip>
-          <Tooltip title="Nhân bản" placement="top">
-            <Button
-              type="text"
-              size="small"
-              icon={<CopyOutlined style={{ fontSize: 18, color: '#52c41a' }} />}
-              onClick={(e) => {
-                e.stopPropagation();
-                const cloned = { ...record };
-                delete (cloned as Record<string, unknown>).id;
-                delete (cloned as Record<string, unknown>).code;
-                cloned.name = `${record.name} (Copy)`;
-                setEditingProduct(cloned);
-                setFormVisible(true);
-              }}
-            />
-          </Tooltip>
-          <Tooltip title="Chỉnh sửa" placement="top">
-            <Button
-              type="text"
-              size="small"
-              icon={<EditOutlined style={{ fontSize: 18, color: '#1890ff' }} />}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleEdit(record);
-              }}
-            />
-          </Tooltip>
-          <Tooltip title="Xóa" placement="top">
-            <Button
-              type="text"
-              size="small"
-              danger
-              icon={<DeleteOutlined style={{ fontSize: 18 }} />}
-              onClick={(e) => {
-                e.stopPropagation();
-                Modal.confirm({
-                  title: 'Xác nhận xóa',
-                  content: `Bạn có chắc muốn xóa sản phẩm "${record.name}"?`,
-                  okText: 'Xóa',
-                  okType: 'danger',
-                  cancelText: 'Hủy',
-                  onOk: () => handleDelete(record.id),
-                });
-              }}
-            />
-          </Tooltip>
+          <Button type="text" size="small" icon={<EyeOutlined style={{ fontSize: 18, color: '#722ed1' }} />} onClick={(e) => { e.stopPropagation(); handleEdit(record); }} title="Xem chi tiết" />
+          <Button type="text" size="small" icon={<CopyOutlined style={{ fontSize: 18, color: '#52c41a' }} />} onClick={(e) => { e.stopPropagation(); const cloned = { ...record }; delete (cloned as Record<string, unknown>).id; delete (cloned as Record<string, unknown>).code; cloned.name = `${record.name} (Copy)`; setEditingProduct(cloned); setFormVisible(true); }} title="Nhân bản" />
+          <Button type="text" size="small" icon={<EditOutlined style={{ fontSize: 18, color: '#1890ff' }} />} onClick={(e) => { e.stopPropagation(); handleEdit(record); }} title="Chỉnh sửa" />
+          <Button type="text" size="small" danger icon={<DeleteOutlined style={{ fontSize: 18 }} />} onClick={(e) => { e.stopPropagation(); confirmDeleteOne(record.name || record.code || String(record.id), () => handleDelete(record.id)); }} title="Xóa" />
         </div>
       ),
     },
   ];
 
-  // Filter columns: luôn hiện cột thao tác; các cột khác theo visibleColumns
-  const displayColumns = allColumns.filter((col) => {
-    if (col.key === 'actions') return true;
-    return visibleColumns.includes(col.key as string);
-  });
+  const allColumns: ColumnsType<Product> = allColumnsBase.map((col) => addSortToColumn(col));
+
+  // Chỉ giữ cột user được phép xem (column permissions)
+  const allowedColumnDefs = allColumns.filter(
+    (col) => col.key === 'actions' || canViewColumn(col.key as string)
+  );
+
+  // Filter columns: theo visibleColumns (bao gồm cột Thao tác)
+  const displayColumns = allowedColumnDefs.filter((col) =>
+    (visibleColumns ?? []).includes(col.key as string)
+  );
   const columns = displayColumns;
 
-  return (
-    <PageHeader
-      title="Quản lý sản phẩm"
-      subtitle={`Tổng ${productsData?.count || 0} sản phẩm`}
-      icon="📦"
-      extra={
-        <>
-          <ColumnChooser
-            columns={[
-              { key: 'code', title: 'Mã SP', required: true },
-              { key: 'name', title: 'Tên sản phẩm', required: true },
-              { key: 'category_name', title: 'Danh mục' },
-              { key: 'unit_name', title: 'Đơn vị' },
-              { key: 'cost_price', title: 'Giá vốn' },
-              { key: 'sale_price', title: 'Giá bán' },
-              { key: 'min_stock', title: 'Tồn TT' },
-              { key: 'status', title: 'Trạng thái' },
-            ]}
-            visibleColumns={visibleColumns}
-            onChange={setVisibleColumns}
-          />
-          <Button
-            icon={<UploadOutlined />}
-            onClick={() => setImportModalVisible(true)}
-          >
-            Nhập Excel
-          </Button>
-          <Button icon={<ExportOutlined />} onClick={handleExport}>
-            Xuất Excel
-          </Button>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={handleAdd}
-          >
-            Thêm mới
-          </Button>
-        </>
-      }
+  // Bản đồ key → tên cột tiếng Việt (đúng với tiêu đề bảng)
+  const columnKeyToTitle: Record<string, string> = {};
+  allColumnsBase.forEach((col) => {
+    if (typeof col.title === 'string') columnKeyToTitle[col.key as string] = col.title;
+  });
+  // Danh sách cột cho modal "Hiển thị cột" — hiển thị tiếng Việt đúng tên cột (bao gồm Thao tác)
+  const columnChooserList = allowedColumnDefs.map((col) => ({
+      key: col.key as string,
+      title: columnKeyToTitle[col.key as string] ?? (col.key as string),
+      required: col.key === 'code' || col.key === 'name',
+    }));
+
+  const allFiltersSelected = FILTER_KEYS.length > 0 && activeFilters.length === FILTER_KEYS.length;
+  const someFiltersSelected = activeFilters.length > 0;
+
+  const handleSelectAllFilters = useCallback((checked: boolean) => {
+    if (checked) {
+      setActiveFilters([...FILTER_KEYS]);
+    } else {
+      handleClearAllFilters();
+    }
+  }, [handleClearAllFilters]);
+
+  const filterModalContent = (
+    <div
+      ref={filterPanelRef}
+      data-filter-panel
+      style={{ padding: '4px 0' }}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) startTransition(() => syncLocalToContext());
+      }}
     >
-      <CompactFilters
-        searchPlaceholder="Tìm theo mã, tên sản phẩm..."
-        searchValue={searchInput}
-        onSearchChange={(v) => setSearchInput(v)}
-        onReset={() => {
-          setSearchInput('');
-          setSearch('');
-          setFilters({});
-          setFiltersApplied({});
-          setPagination((p) => ({ ...p, current: 1 }));
-        }}
-        filters={
-          <>
-            <Select
-              placeholder="Danh mục"
-              allowClear
-              style={{ width: 160, borderRadius: '8px' }}
-              value={filters.category}
-              onChange={(value) => applyFilter('category', value)}
-              options={(categoriesData?.results ?? []).map((c) => ({
-                label: c.name,
-                value: c.id,
-              }))}
-            />
-            <Select
-              placeholder="Đơn vị"
-              allowClear
-              style={{ width: 120, borderRadius: '8px' }}
-              value={filters.unit}
-              onChange={(value) => applyFilter('unit', value)}
-              options={(unitsData?.results ?? []).map((u) => ({
-                label: u.name,
-                value: u.id,
-              }))}
-            />
-            <Select
-              placeholder="Trạng thái"
-              allowClear
-              style={{ width: 140, borderRadius: '8px' }}
-              value={filters.status}
-              onChange={(value) => applyFilter('status', value)}
-              options={[
-                { label: 'Đang bán', value: 'ACTIVE' },
-                { label: 'Nháp', value: 'DRAFT' },
-                { label: 'Ngừng SX', value: 'DISCONTINUED' },
-              ]}
-            />
-            {selectedRowKeys.length > 0 && (
-              <Popconfirm
-                title="Xóa các sản phẩm đã chọn?"
-                description={`Bạn có chắc muốn xóa ${selectedRowKeys.length} sản phẩm?`}
-                onConfirm={handleBulkDelete}
-                okText="Xóa"
-                cancelText="Hủy"
-                okButtonProps={{ danger: true }}
+      <div style={{ marginBottom: 6, fontWeight: 600, fontSize: 14 }}>
+        Chọn bộ lọc — tick để bật và chọn giá trị bên dưới
+      </div>
+      <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid #f0f0f0' }}>
+        <Checkbox
+          checked={allFiltersSelected}
+          indeterminate={someFiltersSelected && !allFiltersSelected}
+          onChange={(e) => handleSelectAllFilters(e.target.checked)}
+          style={{ fontWeight: 600 }}
+        >
+          Chọn tất cả / Bỏ chọn tất cả
+        </Checkbox>
+      </div>
+      {FILTER_OPTIONS.map((opt) => (
+        <div key={opt.key} style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <Checkbox
+            checked={activeFilters.includes(opt.key)}
+            onChange={() => handleToggleFilter(opt.key)}
+          >
+            {opt.label}
+          </Checkbox>
+          {activeFilters.includes(opt.key) && (
+            <>
+              {opt.key === 'code' && (
+                <div data-quick-entry>
+                <FilterTextInput
+                  data-field="code_filter_modal"
+                  value={localFilterInput.code ?? ''}
+                  onChange={(v) => applyFilterChange((prev) => ({ ...prev, code: v === '' ? null : v }))}
+                  placeholder="Mã hàng chứa..."
+                  style={{ width: 220 }}
+                  showClear={((localFilterInput.code ?? '').trim()) !== ''}
+                  onClear={() => applyFilterChange((prev) => ({ ...prev, code: null }))}
+                />
+                </div>
+              )}
+              {opt.key === 'name' && (
+                <div data-quick-entry>
+                <FilterTextInput
+                  data-field="name_filter_modal"
+                  value={localFilterInput.name ?? ''}
+                  onChange={(v) => applyFilterChange((prev) => ({ ...prev, name: v === '' ? null : v }))}
+                  placeholder="Tên hàng chứa..."
+                  style={{ width: 220 }}
+                  showClear={((localFilterInput.name ?? '').trim()) !== ''}
+                  onClear={() => applyFilterChange((prev) => ({ ...prev, name: null }))}
+                />
+                </div>
+              )}
+              {opt.key === 'category' && (
+                <div data-quick-entry style={{ width: 220 }}>
+                  <FilterSelect
+                    placeholder="Chọn danh mục"
+                    style={{ width: 220 }}
+                    value={localFilterInput.category}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, category: v }))}
+                    options={categories.map((c) => ({ label: c.name, value: c.id }))}
+                    showClear
+                    hasValue={localFilterInput.category != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, category: undefined }))}
+                  />
+                </div>
+              )}
+              {opt.key === 'unit' && (
+                <div data-quick-entry style={{ width: 220 }}>
+                  <FilterSelect
+                    placeholder="Chọn đơn vị"
+                    style={{ width: 220 }}
+                    value={localFilterInput.unit}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, unit: v }))}
+                    options={units.map((u) => ({ label: u.name, value: u.id }))}
+                    showClear
+                    hasValue={localFilterInput.unit != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, unit: undefined }))}
+                  />
+                </div>
+              )}
+              {opt.key === 'status' && (
+                <div data-quick-entry style={{ width: 220 }}>
+                  <FilterSelect
+                    placeholder="Chọn trạng thái"
+                    style={{ width: 220 }}
+                    value={localFilterInput.status}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, status: v }))}
+                    options={[
+                      { label: 'Nháp', value: 'DRAFT' },
+                      { label: 'Đang bán', value: 'ACTIVE' },
+                      { label: 'Ngừng SX', value: 'DISCONTINUED' },
+                    ]}
+                    showClear
+                    hasValue={localFilterInput.status != null && localFilterInput.status !== ''}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, status: undefined }))}
+                  />
+                </div>
+              )}
+              {opt.key === 'wave' && (
+                <div data-quick-entry style={{ width: 220 }}>
+                  <FilterSelect
+                    placeholder="Chọn sóng"
+                    style={{ width: 220 }}
+                    value={localFilterInput.wave}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, wave: v }))}
+                    options={waves.map((w: { id: number; code: string }) => ({ label: w.code, value: w.id }))}
+                    showClear
+                    hasValue={localFilterInput.wave != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, wave: undefined }))}
+                  />
+                </div>
+              )}
+              {opt.key === 'box_type' && (
+                <div data-quick-entry style={{ width: 220 }}>
+                  <FilterSelect
+                    placeholder="Chọn kiểu"
+                    style={{ width: 220 }}
+                    value={localFilterInput.box_type}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, box_type: v }))}
+                    options={boxTypes.map((b: { id: number; code: string }) => ({ label: b.code, value: b.id }))}
+                    showClear
+                    hasValue={localFilterInput.box_type != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, box_type: undefined }))}
+                  />
+                </div>
+              )}
+              {opt.key === 'cost_price' && (
+                <Space size={8}>
+                  <div data-quick-entry style={{ width: 100 }}>
+                    <FilterNumberInput data-field="min_cost_price" value={localFilterInput.min_cost_price ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, min_cost_price: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, min_cost_price: null }))} placeholder="Từ" inputMode="decimal" />
+                  </div>
+                  <span>–</span>
+                  <div data-quick-entry style={{ width: 100 }}>
+                    <FilterNumberInput data-field="max_cost_price" value={localFilterInput.max_cost_price ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, max_cost_price: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, max_cost_price: null }))} placeholder="Đến" inputMode="decimal" />
+                  </div>
+                </Space>
+              )}
+              {opt.key === 'sale_price' && (
+                <Space size={8}>
+                  <div data-quick-entry style={{ width: 100 }}>
+                    <FilterNumberInput data-field="min_sale_price" value={localFilterInput.min_sale_price ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, min_sale_price: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, min_sale_price: null }))} placeholder="Từ" inputMode="decimal" />
+                  </div>
+                  <span>–</span>
+                  <div data-quick-entry style={{ width: 100 }}>
+                    <FilterNumberInput data-field="max_sale_price" value={localFilterInput.max_sale_price ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, max_sale_price: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, max_sale_price: null }))} placeholder="Đến" inputMode="decimal" />
+                  </div>
+                </Space>
+              )}
+              {opt.key === 'size_po_dai' && (
+                <div data-quick-entry style={{ width: 120 }}>
+                  <FilterNumberInput data-field="size_po_dai" value={localFilterInput.size_po_dai ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_po_dai: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_po_dai: null }))} placeholder="Dài PO (mm)" inputMode="numeric" />
+                </div>
+              )}
+              {opt.key === 'size_po_rong' && (
+                <div data-quick-entry style={{ width: 120 }}>
+                  <FilterNumberInput data-field="size_po_rong" value={localFilterInput.size_po_rong ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_po_rong: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_po_rong: null }))} placeholder="Rộng PO (mm)" inputMode="numeric" />
+                </div>
+              )}
+              {opt.key === 'size_po_cao' && (
+                <div data-quick-entry style={{ width: 120 }}>
+                  <FilterNumberInput data-field="size_po_cao" value={localFilterInput.size_po_cao ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_po_cao: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_po_cao: null }))} placeholder="Cao PO (mm)" inputMode="numeric" />
+                </div>
+              )}
+              {opt.key === 'size_sx_dai' && (
+                <div data-quick-entry style={{ width: 120 }}>
+                  <FilterNumberInput data-field="size_sx_dai" value={localFilterInput.size_sx_dai ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_sx_dai: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_sx_dai: null }))} placeholder="Dài SX (mm)" inputMode="numeric" />
+                </div>
+              )}
+              {opt.key === 'size_sx_rong' && (
+                <div data-quick-entry style={{ width: 120 }}>
+                  <FilterNumberInput data-field="size_sx_rong" value={localFilterInput.size_sx_rong ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_sx_rong: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_sx_rong: null }))} placeholder="Rộng SX (mm)" inputMode="numeric" />
+                </div>
+              )}
+              {opt.key === 'size_sx_cao' && (
+                <div data-quick-entry style={{ width: 120 }}>
+                  <FilterNumberInput data-field="size_sx_cao" value={localFilterInput.size_sx_cao ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_sx_cao: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_sx_cao: null }))} placeholder="Cao SX (mm)" inputMode="numeric" />
+                </div>
+              )}
+              {opt.key === 'waterproof' && (
+                <div data-quick-entry style={{ width: 140 }}>
+                  <FilterSelect
+                    placeholder="C. thấm"
+                    style={{ width: 140 }}
+                    value={localFilterInput.waterproof ?? undefined}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, waterproof: v ?? null }))}
+                    options={Object.entries(WATERPROOF_LABELS).map(([val, label]) => ({ label, value: val }))}
+                    showClear
+                    hasValue={(localFilterInput.waterproof ?? '') !== ''}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, waterproof: null }))}
+                  />
+                </div>
+              )}
+              {opt.key === 'co_cm' && (
+                <div data-quick-entry style={{ width: 120 }}>
+                  <FilterSelect
+                    placeholder="Có CM"
+                    style={{ width: 120 }}
+                    value={localFilterInput.co_cm === null ? undefined : localFilterInput.co_cm ? 'true' : 'false'}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, co_cm: v === undefined ? null : v === 'true' }))}
+                    options={[
+                      { label: 'Có', value: 'true' },
+                      { label: 'Không', value: 'false' },
+                    ]}
+                    showClear
+                    hasValue={localFilterInput.co_cm !== null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, co_cm: null }))}
+                  />
+                </div>
+              )}
+              {opt.key === 'note' && (
+                <div data-quick-entry>
+                <FilterTextInput
+                  data-field="note_filter_modal"
+                  value={localFilterInput.note ?? ''}
+                  onChange={(v) => applyFilterChange((prev) => ({ ...prev, note: v === '' ? null : v }))}
+                  placeholder="Ghi chú chung chứa..."
+                  style={{ width: 220 }}
+                  showClear={((localFilterInput.note ?? '').trim()) !== ''}
+                  onClear={() => applyFilterChange((prev) => ({ ...prev, note: null }))}
+                />
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+
+  return (
+    <>
+      <Card variant="borderless" style={{ margin: 0, background: 'transparent', padding: 0 }}>
+        {/* HEADER: Row 1 = Title (trái) + Nút chính (phải); Row 2 = Bộ lọc đang bật (trái) */}
+        <div
+          style={{
+            background: 'white',
+            padding: '16px 24px',
+            borderRadius: '8px 8px 0 0',
+            marginBottom: 0,
+          }}
+        >
+          {/* Row 1: Title bên trái, Tìm kiếm + Lọc + Cột + Nhập/Xuất + Thêm mới bên phải */}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
+                📦 Quản lý sản phẩm
+              </h2>
+            </div>
+
+            <Space size={12}>
+              <Checkbox
+                checked={exactSearch}
+                onChange={(e) => setExactSearch(e.target.checked)}
+                style={{ whiteSpace: 'nowrap' }}
               >
-                <Button danger icon={<DeleteOutlined />}>
-                  Xóa ({selectedRowKeys.length})
-                </Button>
-              </Popconfirm>
+                Tìm chính xác
+              </Checkbox>
+              <ListSearchInput
+                placeholder="Tìm theo mã, tên hàng..."
+                value={searchInput}
+                onChange={(v) => {
+                  setSearchInput(v);
+                  if (v.trim() === '') setSearch('');
+                }}
+                onClear={() => {
+                  setSearch('');
+                  setPagination((p) => ({ ...p, current: 1 }));
+                }}
+              />
+              <Button
+                icon={<FilterOutlined />}
+                onClick={() => setFilterModalOpen(true)}
+              >
+                Lọc {activeFilters.length > 0 ? `(${activeFilters.length})` : ''}
+              </Button>
+              <Modal
+                title="Bộ lọc sản phẩm"
+                open={filterModalOpen}
+                onCancel={() => setFilterModalOpen(false)}
+                footer={[
+                  <Button key="clear" size="small" onClick={handleClearAllFilters}>
+                    Xóa hết bộ lọc
+                  </Button>,
+                  <Button key="close" type="primary" onClick={() => setFilterModalOpen(false)}>
+                    Xong
+                  </Button>,
+                ]}
+                width={400}
+                destroyOnHidden={false}
+                forceRender
+              >
+                {filterModalContent}
+              </Modal>
+              <ColumnChooser
+                columns={columnChooserList}
+                visibleColumns={visibleColumns}
+                onChange={handleVisibleColumnsChange}
+                sizeDisplayMode={sizeDisplayMode}
+                onSizeDisplayModeChange={handleSizeDisplayModeChange}
+              />
+              <Button icon={<UploadOutlined />} onClick={() => setImportModalVisible(true)}>
+              Nhập Excel
+            </Button>
+            <Button icon={<ExportOutlined />} onClick={() => handleExport('excel')}>
+              Xuất Excel
+            </Button>
+            <Button icon={<ExportOutlined />} onClick={() => handleExport('pdf')}>
+              Xuất PDF
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+              Thêm mới
+            </Button>
+            {selectedCount > 0 && (
+              <Button
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => {
+                  if (selectedIds.length === 0) {
+                    message.warning(TOAST.SELECT_AT_LEAST_ONE);
+                    return;
+                  }
+                  confirmBulkDelete(selectedIds.length, () => bulkDeleteMutation.mutateAsync(selectedIds));
+                }}
+              >
+                Xóa ({selectedCount})
+              </Button>
             )}
-          </>
-        }
-      />
+            </Space>
+          </div>
 
-      <Table<Product>
-        rowKey="id"
-        columns={columns}
-        dataSource={products}
-        loading={isLoading}
-        size="middle"
-        rowSelection={{
-          selectedRowKeys,
-          onChange: (keys) => setSelectedRowKeys(keys),
-        }}
-        scroll={{ x: 1300 }}
-        style={{
-          background: '#ffffff',
-          borderRadius: '8px',
-          overflow: 'hidden',
-        }}
-        locale={{
-          emptyText: (
-            <EmptyState
-              description="Chưa có sản phẩm nào"
-              actionText="Thêm sản phẩm đầu tiên"
-              onAction={handleAdd}
-            />
-          ),
-        }}
-        pagination={{
-          current: pagination.current,
-          pageSize: pagination.pageSize,
-          total: productsData?.count ?? 0,
-          showSizeChanger: true,
-          showTotal: (total) => `Tổng ${total} sản phẩm`,
-          pageSizeOptions: ['10', '20', '50', '100'],
-          onChange: (page, pageSize) => {
-            setPagination((p) => ({
-              ...p,
-              current: page,
-              pageSize: pageSize || DEFAULT_PAGE_SIZE,
-            }));
-          },
-        }}
-      />
+          {/* Row 2: Bộ lọc đang bật — nhãn trên phải, ô dưới (gọn) */}
+          {activeFilters.length > 0 && (
+            <div
+              ref={inlineFilterPanelRef}
+              data-filter-panel
+              style={{ marginTop: 12, display: 'flex', alignItems: 'flex-end', flexWrap: 'wrap', gap: 10 }}
+              onBlur={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) startTransition(() => syncLocalToContext());
+              }}
+            >
+              {/* Nhãn nhỏ trên-phải: style chung cho mỗi ô lọc */}
+              {activeFilters.includes('code') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 120 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Mã hàng</span>
+                  <FilterTextInput
+                    data-field="code_filter_inline"
+                    value={localFilterInput.code ?? ''}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, code: v === '' ? null : v }))}
+                    placeholder=""
+                    style={{ width: '100%' }}
+                    showClear={((localFilterInput.code ?? '').trim()) !== ''}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, code: null }))}
+                  />
+                </div>
+              )}
+              {activeFilters.includes('name') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 140 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Tên hàng</span>
+                  <FilterTextInput
+                    data-field="name_filter_inline"
+                    value={localFilterInput.name ?? ''}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, name: v === '' ? null : v }))}
+                    placeholder=""
+                    style={{ width: '100%' }}
+                    showClear={((localFilterInput.name ?? '').trim()) !== ''}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, name: null }))}
+                  />
+                </div>
+              )}
+              {activeFilters.includes('category') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 150 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Danh mục</span>
+                  <FilterSelect
+                    value={localFilterInput.category}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, category: v }))}
+                    options={categories.map((c) => ({ label: c.name, value: c.id }))}
+                    showClear
+                    hasValue={localFilterInput.category != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, category: undefined }))}
+                  />
+                </div>
+              )}
+              {activeFilters.includes('unit') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 120 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Đơn vị</span>
+                  <FilterSelect
+                    value={localFilterInput.unit}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, unit: v }))}
+                    options={units.map((u) => ({ label: u.name, value: u.id }))}
+                    showClear
+                    hasValue={localFilterInput.unit != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, unit: undefined }))}
+                  />
+                </div>
+              )}
+              {activeFilters.includes('wave') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 120 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Sóng</span>
+                  <FilterSelect
+                    value={localFilterInput.wave}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, wave: v }))}
+                    options={waves.map((w: { id: number; code: string }) => ({ label: w.code, value: w.id }))}
+                    showClear
+                    hasValue={localFilterInput.wave != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, wave: undefined }))}
+                  />
+                </div>
+              )}
+              {activeFilters.includes('box_type') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 120 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Kiểu</span>
+                  <FilterSelect
+                    value={localFilterInput.box_type}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, box_type: v }))}
+                    options={boxTypes.map((b: { id: number; code: string }) => ({ label: b.code, value: b.id }))}
+                    showClear
+                    hasValue={localFilterInput.box_type != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, box_type: undefined }))}
+                  />
+                </div>
+              )}
+              {activeFilters.includes('status') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 150 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Trạng thái</span>
+                  <FilterSelect
+                    value={localFilterInput.status}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, status: v }))}
+                    options={[
+                      { label: 'Nháp', value: 'DRAFT' },
+                      { label: 'Đang bán', value: 'ACTIVE' },
+                      { label: 'Ngừng SX', value: 'DISCONTINUED' },
+                    ]}
+                    showClear
+                    hasValue={localFilterInput.status != null && localFilterInput.status !== ''}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, status: undefined }))}
+                  />
+                </div>
+              )}
+              {activeFilters.includes('cost_price') && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Giá vốn</span>
+                  <Space size={4} style={{ alignItems: 'center' }}>
+                    <div data-quick-entry style={{ width: 90 }}>
+                      <FilterNumberInput data-field="min_cost_price_inline" value={localFilterInput.min_cost_price ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, min_cost_price: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, min_cost_price: null }))} placeholder="Từ" inputMode="decimal" />
+                    </div>
+                    <span style={{ fontSize: 12, color: '#8c8c8c' }}>–</span>
+                    <div data-quick-entry style={{ width: 90 }}>
+                      <FilterNumberInput data-field="max_cost_price_inline" value={localFilterInput.max_cost_price ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, max_cost_price: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, max_cost_price: null }))} placeholder="Đến" inputMode="decimal" />
+                    </div>
+                  </Space>
+                </div>
+              )}
+              {activeFilters.includes('sale_price') && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Đơn giá</span>
+                  <Space size={4} style={{ alignItems: 'center' }}>
+                    <div data-quick-entry style={{ width: 90 }}>
+                      <FilterNumberInput data-field="min_sale_price_inline" value={localFilterInput.min_sale_price ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, min_sale_price: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, min_sale_price: null }))} placeholder="Từ" inputMode="decimal" />
+                    </div>
+                    <span style={{ fontSize: 12, color: '#8c8c8c' }}>–</span>
+                    <div data-quick-entry style={{ width: 90 }}>
+                      <FilterNumberInput data-field="max_sale_price_inline" value={localFilterInput.max_sale_price ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, max_sale_price: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, max_sale_price: null }))} placeholder="Đến" inputMode="decimal" />
+                    </div>
+                  </Space>
+                </div>
+              )}
+              {activeFilters.includes('size_po_dai') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 80 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Dài PO</span>
+                  <FilterNumberInput data-field="size_po_dai_inline" value={localFilterInput.size_po_dai ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_po_dai: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_po_dai: null }))} placeholder="" inputMode="numeric" />
+                </div>
+              )}
+              {activeFilters.includes('size_po_rong') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 80 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Rộng PO</span>
+                  <FilterNumberInput data-field="size_po_rong_inline" value={localFilterInput.size_po_rong ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_po_rong: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_po_rong: null }))} placeholder="" inputMode="numeric" />
+                </div>
+              )}
+              {activeFilters.includes('size_po_cao') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 80 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Cao PO</span>
+                  <FilterNumberInput data-field="size_po_cao_inline" value={localFilterInput.size_po_cao ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_po_cao: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_po_cao: null }))} placeholder="" inputMode="numeric" />
+                </div>
+              )}
+              {activeFilters.includes('size_sx_dai') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 80 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Dài SX</span>
+                  <FilterNumberInput data-field="size_sx_dai_inline" value={localFilterInput.size_sx_dai ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_sx_dai: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_sx_dai: null }))} placeholder="" inputMode="numeric" />
+                </div>
+              )}
+              {activeFilters.includes('size_sx_rong') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 80 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Rộng SX</span>
+                  <FilterNumberInput data-field="size_sx_rong_inline" value={localFilterInput.size_sx_rong ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_sx_rong: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_sx_rong: null }))} placeholder="" inputMode="numeric" />
+                </div>
+              )}
+              {activeFilters.includes('size_sx_cao') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 80 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Cao SX</span>
+                  <FilterNumberInput data-field="size_sx_cao_inline" value={localFilterInput.size_sx_cao ?? ''} onChange={(v) => applyFilterChange((prev) => ({ ...prev, size_sx_cao: v === '' ? null : v }))} onClear={() => applyFilterChange((prev) => ({ ...prev, size_sx_cao: null }))} placeholder="" inputMode="numeric" />
+                </div>
+              )}
+              {activeFilters.includes('waterproof') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 100 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>C. thấm</span>
+                  <FilterSelect
+                    value={localFilterInput.waterproof ?? undefined}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, waterproof: v ?? null }))}
+                    options={Object.entries(WATERPROOF_LABELS).map(([val, label]) => ({ label, value: val }))}
+                    showClear
+                    hasValue={(localFilterInput.waterproof ?? '') !== ''}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, waterproof: null }))}
+                  />
+                </div>
+              )}
+              {activeFilters.includes('co_cm') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 90 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Có CM</span>
+                  <FilterSelect
+                    value={localFilterInput.co_cm === null ? undefined : localFilterInput.co_cm ? 'true' : 'false'}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, co_cm: v === undefined ? null : v === 'true' }))}
+                    options={[{ label: 'Có', value: 'true' }, { label: 'Không', value: 'false' }]}
+                    showClear
+                    hasValue={localFilterInput.co_cm !== null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, co_cm: null }))}
+                  />
+                </div>
+              )}
+              {activeFilters.includes('note') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 140 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Ghi chú</span>
+                  <FilterTextInput
+                    data-field="note_filter_inline"
+                    value={localFilterInput.note ?? ''}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, note: v === '' ? null : v }))}
+                    placeholder=""
+                    style={{ width: '100%' }}
+                    showClear={((localFilterInput.note ?? '').trim()) !== ''}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, note: null }))}
+                  />
+                </div>
+              )}
+              <div data-quick-entry>
+                <Button size="small" danger onClick={handleClearAllFilters} style={{ height: 22 }}>
+                  Xóa bộ lọc
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
 
-      <ImportModal
-        visible={importModalVisible}
-        onClose={() => setImportModalVisible(false)}
-        onSuccess={() => {
-          queryClient.invalidateQueries({ queryKey: ['products'] });
-        }}
-        onDownloadTemplate={handleDownloadTemplate}
-        onImport={handleImport}
-        entityName="sản phẩm"
-      />
+        {/* Khi API lỗi: hiển thị rõ thay vì bảng trống */}
+        {isError && (
+          <div
+            style={{
+              padding: 16,
+              marginTop: 0,
+              background: '#fff2f0',
+              border: '1px solid #ffccc7',
+              borderRadius: '0 0 8px 8px',
+            }}
+          >
+            <div style={{ color: '#cf1322', marginBottom: 8 }}>
+              Không tải được danh sách sản phẩm.
+            </div>
+            <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
+              {(error as any)?.message || (error as any)?.response?.data?.detail || 'Kiểm tra backend đã chạy chưa (Django tại http://127.0.0.1:8000).'}
+            </div>
+            <Button type="primary" onClick={refetchProducts}>
+              Thử lại
+            </Button>
+          </div>
+        )}
 
-      <ProductForm
-        visible={formVisible}
-        onClose={handleFormClose}
-        editingProduct={editingProduct}
-      />
-    </PageHeader>
+        {/* TABLE - liền kề (ẩn khi đang lỗi để tránh nhầm "0 sản phẩm") */}
+        {!isError && (
+        <Table<Product>
+          rowKey="id"
+          columns={columns}
+          dataSource={products}
+          loading={isLoading}
+          size="middle"
+          bordered
+          rowSelection={rowSelection}
+          scroll={{ x: 'max-content' }}
+          style={{
+            background: 'white',
+            marginTop: 0,
+            borderRadius: '0 0 8px 8px',
+            overflow: 'hidden',
+          }}
+          locale={{
+            emptyText: (
+              <EmptyState
+                description="Chưa có sản phẩm nào"
+                actionText="Thêm sản phẩm đầu tiên"
+                onAction={handleAdd}
+              />
+            ),
+          }}
+          pagination={false}
+        />
+        )}
+
+        {/* Bottom bar: Page size + Pagination */}
+        <div
+          className="products-list-bottom-bar"
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            marginTop: 16,
+            padding: '8px 16px',
+            background: '#fafafa',
+            borderRadius: 6,
+          }}
+        >
+          {/* Wrapper: dịch như ảnh (1 hàng, sát nhau) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap', marginLeft: 'auto' }}>
+            {/* RIGHT SIDE: Total + Pagination + PageSize selector */}
+            <Space size={16} align="center" wrap>
+              <span style={{ fontSize: 13, color: '#595959' }}>
+                Tổng {productsData?.count ?? 0} sản phẩm
+              </span>
+              <Pagination
+                current={pagination.current}
+                pageSize={pagination.pageSize}
+                total={productsData?.count ?? 0}
+                showSizeChanger={false}
+                onChange={(newPage) => setPage(newPage)}
+                size="small"
+                simple={false}
+              />
+            <div className="input-number-with-clear-wrapper" style={{ width: 110, display: 'inline-block', position: 'relative' }}>
+              <InputNumber
+                ref={pageSizeInputRef}
+                size="small"
+                min={1}
+                max={500}
+                controls={false}
+                style={{ width: '100%' }}
+                className="input-number-with-clear"
+                value={isEditingPageSize ? pageSizeDraft : pagination.pageSize}
+                formatter={(v) => {
+                  // Khi đang nhập và đã xoá trắng, hiển thị trống hoàn toàn
+                  if (isEditingPageSize && (v == null || v === '')) return '';
+                  return `${v ?? ''} / trang`;
+                }}
+                parser={(v) => {
+                  const digits = String(v ?? '').replace(/[^\d]/g, '');
+                  if (!digits) return '';
+                  const n = parseInt(digits, 10);
+                  return Number.isNaN(n) ? '' : n;
+                }}
+                // Click vào để nhập: xoá hết dữ liệu (trống)
+                onFocus={() => {
+                  setIsEditingPageSize(true);
+                  setPageSizeDraft(null);
+                }}
+                onClick={() => {
+                  setIsEditingPageSize(true);
+                  setPageSizeDraft(null);
+                }}
+                onChange={(v) => setPageSizeDraft(typeof v === 'number' ? v : null)}
+                onBlur={() => {
+                  const v = pageSizeDraft;
+                  // Nếu user chưa nhập thì bỏ qua và revert về giá trị hiện tại
+                  if (v == null) {
+                    setPageSizeDraft(null);
+                    setIsEditingPageSize(false);
+                    return;
+                  }
+                  if (v !== pagination.pageSize) void applyPageSize(v);
+                  else {
+                    setPageSizeDraft(null);
+                    setIsEditingPageSize(false);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return;
+                  e.preventDefault();
+                  const v = pageSizeDraft;
+                if (v == null) return;
+                void applyPageSize(v).finally(() => {
+                  pageSizeInputRef.current?.blur?.();
+                });
+              }}
+              />
+              {(isEditingPageSize ? pageSizeDraft : pagination.pageSize) != null && (isEditingPageSize ? pageSizeDraft : pagination.pageSize) !== '' && (
+                <QuickClearIcon onClear={() => { setPageSizeDraft(null); setIsEditingPageSize(true); }} title="Xóa nhanh" style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', zIndex: 1 }} />
+              )}
+            </div>
+            </Space>
+          </div>
+        </div>
+
+        <ImportModal
+          visible={importModalVisible}
+          onClose={() => setImportModalVisible(false)}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ['products'] });
+          }}
+          onDownloadTemplate={handleDownloadTemplate}
+          onImport={handleImport}
+          entityName="sản phẩm"
+        />
+
+        {/* Form thêm/sửa sản phẩm – giao diện mới (Mẹ + Con), duy nhất dùng cho Thêm mới & Chỉnh sửa */}
+        <ProductForm
+          visible={formVisible}
+          onClose={handleFormClose}
+          editingProduct={editingProduct}
+        />
+      </Card>
+    </>
   );
 };
 

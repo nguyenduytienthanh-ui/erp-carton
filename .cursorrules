@@ -1,0 +1,184 @@
+# ERP CARTON - CURSOR RULES
+
+## Architecture Patterns
+
+### 1. User Preferences (CRITICAL ⚠️)
+**⚠️ GENERIC SYSTEM - Dùng cho BẤT KỲ trang/component nào cần lưu config**
+
+**Backend:**
+- Model: `UserPreferences` - CHUNG cho TẤT CẢ
+- Location: backend/core/models.py
+- Fields: user, page (string), config (JSON)
+- API: GET/POST/DELETE /api/preferences/{page}/
+
+**Frontend:**
+- Hook: `useUserPreferences(page)`
+- Location: frontend/src/hooks/useUserPreferences.ts
+- Import: `import { useUserPreferences } from '../../hooks/useUserPreferences'`
+
+**Sử dụng ở đâu:**
+- ✅ ProductList - lưu columns, filters, sort, pageSize
+- ✅ CustomerList - lưu columns, filters, sort, pageSize
+- ✅ ProductForm - lưu tab đang mở, field preferences
+- ✅ Dashboard - lưu widgets, layout
+- ✅ Settings - lưu theme, language, preferences
+- ✅ BẤT KỲ component nào cần lưu config
+
+**Page Names (ví dụ):**
+- `products-list` - Danh sách sản phẩm
+- `products-form` - Form sản phẩm
+- `customers-list` - Danh sách khách hàng
+- `dashboard` - Dashboard
+- `settings` - Cài đặt
+- `orders-calendar` - Lịch đơn hàng
+- ... BẤT KỲ tên nào bạn muốn
+
+**Config Structure (linh hoạt - tùy component):**
+```typescript
+// List components
+{
+  columns: string[];
+  filters: Record<string, any>;
+  sort: { field: string; order: 'asc' | 'desc' };
+  pageSize: number;
+}
+
+// Form components
+{
+  activeTab: number;
+  expandedSections: string[];
+  fieldVisibility: Record<string, boolean>;
+}
+
+// Dashboard
+{
+  widgets: string[];
+  layout: Array<{id: string, x: number, y: number}>;
+}
+
+// Settings
+{
+  theme: 'light' | 'dark';
+  language: 'vi' | 'en';
+  notifications: boolean;
+}
+```
+
+**⚠️ KHI CẦN LƯU CONFIG:**
+```typescript
+// ✅ ĐÚNG - Dùng chung hook
+const { config, saveConfig } = useUserPreferences('any-page-name');
+
+// ❌ SAI - Tạo hook riêng
+const { config } = useProductListPreferences();
+```
+
+**⚠️ KHÔNG BAO GIỜ:**
+- Tạo ProductListPreferences model
+- Tạo DashboardPreferences model
+- Tạo useProductPreferences hook
+- Tạo API riêng cho từng component
+
+**✅ LUÔN LUÔN:**
+- Dùng chung UserPreferences model
+- Dùng chung useUserPreferences hook
+- Chỉ thay đổi tên page
+- Config structure tùy biến theo nhu cầu
+
+**Example:**
+```typescript
+// ProductList
+const { config, saveConfig } = useUserPreferences('products-list');
+
+// ProductForm
+const { config, saveConfig } = useUserPreferences('products-form');
+
+// Dashboard
+const { config, saveConfig } = useUserPreferences('dashboard');
+
+// Settings
+const { config, saveConfig } = useUserPreferences('settings');
+```
+
+### 2. Search & Filter Guideline (BẮT BUỘC)
+
+## Tìm kiếm phải gồm TẤT CẢ các cột (BẮT BUỘC cho mọi danh mục/chức năng)
+- **Mọi chức năng tìm kiếm** (tìm chính xác, không chính xác, tiếng Việt có dấu/không dấu, v.v.) phải tìm trên **tất cả các cột** của bảng (danh sách đó).
+- Backend: dùng một trường tổng hợp (vd. `search_text`) được build từ **mọi cột hiển thị**: text, số, quan hệ (tên/mã), choice (value + label), nhãn cột khi có giá trị (vd. Đóng, Dán).
+- Chuẩn hóa: `unidecode(combined).lower()` để hỗ trợ tìm có dấu/không dấu; tìm chính xác khớp cả chuỗi có dấu và đã chuẩn hóa.
+- Khi thêm module/danh mục mới (Đơn hàng, Khách hàng, Công đoạn, …): áp dụng cùng pattern (build search_text từ tất cả cột, filter bằng search_text). Chi tiết: docs/SEARCH_FILTER_GUIDELINE.md.
+
+## Nguyên tắc cốt lõi
+- Input chỉ dùng để nhập, KHÔNG debounce
+- Intent dùng debounce, chỉ dùng cho API / URL / export
+- Query chỉ đọc intent, không bao giờ đọc input
+
+## Debounce rule
+- Search text: 650ms
+- Filter số (Dài/Rộng/Cao/Giá): 300ms
+- Filter click/select: không debounce
+
+## Tuyệt đối KHÔNG làm
+- Không bind input.value với intent/query
+- Không set lại input từ API response
+- Không debounce input
+- Không dùng key động cho filter panel
+
+## Hook chuẩn
+- useSearchFilterIntent là hook dùng chung
+- Mọi màn hình có search/filter đều PHẢI dùng hook này
+
+## Thứ tự luồng
+User gõ → input state đổi ngay → debounce → intent đổi → gọi API / sync URL
+
+### 3. List Filter Layout (BẮT BUỘC)
+**Màn hình chuẩn:** ProductList — chiều cao khu filter, sắp xếp bộ lọc, nhập/clear/reset.
+- Filter: 1 container (border rõ), hàng ngang + wrap, input cao đồng nhất, khoảng cách đều, nút "Xóa bộ lọc" cuối.
+- Hành vi: nhập mượt, filter số nhập liên tục, clear từng ô + "Xóa bộ lọc" tổng.
+- Kỹ thuật: useSearchFilterIntent, input không debounce, intent gọi API, QuickClearIcon (không allowClear).
+- MỌI màn danh sách (công đoạn, khuôn, danh mục, đơn hàng...) làm GIỐNG ProductList. Chi tiết: docs/LIST_FILTER_LAYOUT_GUIDELINE.md.
+
+### 4. QuickClearIcon — Xóa nhanh (BẮT BUỘC)
+**Trong toàn bộ phần mềm:**
+- **KHÔNG** dùng `allowClear` của Ant Design.
+- Mọi ô input / search / filter đều dùng component **QuickClearIcon**.
+- QuickClearIcon là **chuẩn UI dùng chung** để xóa nhanh.
+- Làm giống cách ô tìm kiếm Sản phẩm đã được chuẩn hóa (ProductList: `suffix={value ? <QuickClearIcon onClear={...} title="Xóa tìm kiếm" /> : undefined}`).
+- Import: `import { QuickClearIcon } from '../../components';`. Chi tiết: `docs/QUICK_CLEAR_ICON_USAGE.md`.
+
+### 5. Bộ quy tắc nhập nhanh (BẮT BUỘC)
+**Áp dụng GIỐNG NHAU cho mọi màn thêm mới, chỉnh sửa và bộ lọc.**
+
+- **Tab / Shift+Tab:** Di chuyển giữa các ô theo thứ tự logic, không chặn mặc định; dropdown được bỏ qua (focus ô tiếp).
+- **Enter (input):** Chưa phải ô cuối → focus ô kế tiếp. Ô cuối form → Lưu. Ô cuối bộ lọc → Áp dụng lọc. Không submit form ngầm khi đang nhập.
+- **Dropdown / Select:** Không auto-open khi focus. Enter/Tab khi đóng → bỏ qua, focus ô tiếp. Chỉ mở khi click hoặc Alt+↓. Khi mở: ↑↓ chọn, Enter xác nhận, Esc đóng, Tab đóng + đi tiếp.
+- **Esc:** Xóa giá trị ô đang focus (giống QuickClearIcon).
+- **Xóa nhanh:** Luôn dùng QuickClearIcon, không dùng allowClear của Ant Design.
+
+**Kỹ thuật:** Hook `useQuickEntryKeys`, component `SelectNoAutoOpen`, wrapper `data-quick-entry` / `data-quick-entry-skip-tab`. Chi tiết: `docs/QUICK_ENTRY_RULES.md`.
+
+### 6. Code Style
+- TypeScript strict mode
+- Ant Design components
+- React Query for data fetching
+- Native <select> for dropdowns (not Ant Select)
+
+### 7. File Structure
+- Backend: Django REST Framework
+- Frontend: React + TypeScript + Vite
+- State: React Query + useState
+- Styling: Ant Design + inline styles
+
+### 8. Naming Conventions
+- Components: PascalCase
+- Files: PascalCase for components, camelCase for utils
+- API endpoints: snake_case
+- Database tables: snake_case
+
+## References
+- **Search & Filter Guideline (BẮT BUỘC):** docs/SEARCH_FILTER_GUIDELINE.md
+- **List Filter Layout Guideline (BẮT BUỘC):** docs/LIST_FILTER_LAYOUT_GUIDELINE.md
+- **Bộ quy tắc nhập nhanh (BẮT BUỘC):** docs/QUICK_ENTRY_RULES.md
+- **QuickClearIcon:** docs/QUICK_CLEAR_ICON_USAGE.md
+- Pattern documentation: frontend/docs/PATTERNS.md
+- User preferences guide: frontend/docs/USER_PREFERENCES_GUIDE.md

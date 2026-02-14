@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0012_savedview.py
+# hypothesis_version: 6.151.5
+
+[100, '0011_exporttemplate', 'ID', 'Saved View', 'Saved Views', 'SavedView', 'View name', 'columns', 'core', 'created_at', 'created_by', 'created_saved_views', 'db_table', 'entity_type', 'filters', 'id', 'is_default', 'is_public', 'name', 'ordering', 'saved_views', 'sorting', 'unique_together', 'updated_at', 'user', 'verbose_name', 'verbose_name_plural']

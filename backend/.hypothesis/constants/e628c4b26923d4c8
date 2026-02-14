@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0011_exporttemplate.py
+# hypothesis_version: 6.151.5
+
+[100, '0010_customer', 'Created by user', 'Export Template', 'Export Templates', 'ExportTemplate', 'ID', 'Is template active?', 'columns', 'core', 'created_at', 'created_by', 'db_table', 'entity_type', 'export_templates', 'headers', 'id', 'is_active', 'is_default', 'name', 'ordering', 'unique_together', 'updated_at', 'verbose_name', 'verbose_name_plural']

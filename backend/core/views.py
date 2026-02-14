@@ -1,21 +1,24 @@
-from rest_framework import viewsets
+from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+import django_filters
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.http import HttpResponse
 from django.db import models
 from datetime import datetime
-from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, AuditLog, UserSession
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, AuditLog, UserSession, UserPreferences, ColumnPermission
 from .serializers import (
     UserSerializer, RoleSerializer, PermissionSerializer,
     TeamSerializer, SettingSerializer, CustomTokenObtainPairSerializer,
-    CustomerSerializer, ExportTemplateSerializer, SavedViewSerializer, AttachmentSerializer, CommentSerializer, NotificationSerializer, UserSessionSerializer
+    CustomerSerializer, ExportTemplateSerializer, SavedViewSerializer, AttachmentSerializer, CommentSerializer, NotificationSerializer, UserSessionSerializer, UserPreferencesSerializer, ColumnPermissionSerializer
 )
-from .filters import CustomerFilter
+from django.utils import timezone as django_timezone
+from .filters import CustomerFilter, TeamFilter, RoleFilter
 from .utils import export_to_excel
-from .mixins import AuditLogMixin
+from .mixins import AuditLogMixin, ExportExcelMixin
+from .permissions import check_action_permission
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -43,9 +46,146 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response({"success": True, "count": count})
 
 
-class RoleViewSet(viewsets.ModelViewSet):
+class UserPreferencesViewSet(viewsets.ViewSet):
+    """
+    API cho user preferences
+    GET/POST/DELETE /api/preferences/{page}/
+    """
+    serializer_class = UserPreferencesSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return UserPreferences.objects.filter(user=self.request.user)
+
+    def page_config(self, request, page=None):
+        """Get/Save/Delete config cho page"""
+        if request.method == 'GET':
+            try:
+                pref = UserPreferences.objects.get(user=request.user, page=page)
+                serializer = UserPreferencesSerializer(pref)
+                return Response(serializer.data)
+            except UserPreferences.DoesNotExist:
+                return Response({'config': {}}, status=status.HTTP_200_OK)
+
+        elif request.method == 'POST':
+            config = request.data.get('config', {})
+            pref, created = UserPreferences.objects.update_or_create(
+                user=request.user,
+                page=page,
+                defaults={'config': config}
+            )
+            serializer = UserPreferencesSerializer(pref)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        elif request.method == 'DELETE':
+            UserPreferences.objects.filter(user=request.user, page=page).delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ColumnPermissionViewSet(viewsets.ModelViewSet):
+    """
+    API quản lý phân quyền cột
+    GET /api/column-permissions/{page}/available/ → Lấy cột được phép
+    """
+    queryset = ColumnPermission.objects.all()
+    serializer_class = ColumnPermissionSerializer
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get'], url_path=r'(?P<page>[^/.]+)/available')
+    def available_columns(self, request, page=None):
+        """
+        Trả về danh sách cột user được phép xem
+        Response: {available_columns: [...], restricted_columns: [...]}
+        """
+        user = request.user
+        permissions = ColumnPermission.objects.filter(page=page, is_active=True)
+
+        # Debug log
+        # NOTE: Keep logs ASCII-safe for Windows consoles (avoid emoji -> UnicodeEncodeError)
+        print(f"\n[ColumnPermission] page={page}, user={user.username} (id={user.id})")
+        print(f"   user.roles: {list(user.roles.values_list('code', flat=True))}")
+        print(f"   permissions count: {permissions.count()}")
+
+        available = []
+        restricted = []
+        for perm in permissions:
+            if perm.user_has_permission(user):
+                available.append(perm.column)
+            else:
+                restricted.append(perm.column)
+
+        user_roles_list = list(user.roles.values_list('code', flat=True))
+        print(f"   Result: available={available}, restricted={restricted}, user_roles={user_roles_list}")
+        return Response({
+            'page': page,
+            'available_columns': available,
+            'restricted_columns': restricted,
+            'user_roles': user_roles_list,
+            'user_id': user.id,
+        })
+
+
+class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
+    """Master Data chuẩn: filterset + search + ordering + soft delete + bulk + export."""
     queryset = Role.objects.all()
     serializer_class = RoleSerializer
+    permission_classes = [IsAuthenticated]
+    export_template_entity_type = 'Role'
+    filter_backends = [
+        django_filters.rest_framework.DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
+    filterset_class = RoleFilter
+    search_fields = ['code', 'name', 'description']
+    ordering_fields = ['code', 'name', 'sort_order', 'created_at']
+    ordering = ['sort_order', 'name']
+
+    def get_queryset(self):
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        instance.deleted_at = django_timezone.now()
+        instance.deleted_by = self.request.user
+        instance.save()
+
+    @action(detail=False, methods=['post'])
+    def bulk_activate(self, request):
+        ids = request.data.get('ids', [])
+        Role.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=True)
+        return Response({'message': f'Đã kích hoạt {len(ids)} role'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_deactivate(self, request):
+        ids = request.data.get('ids', [])
+        Role.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=False)
+        return Response({'message': f'Đã vô hiệu hóa {len(ids)} role'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_delete(self, request):
+        ids = request.data.get('ids', [])
+        now = django_timezone.now()
+        Role.objects.filter(id__in=ids).update(deleted_at=now, deleted_by=request.user)
+        return Response({'message': f'Đã xóa (soft) {len(ids)} role'})
+
+    def get_export_sheet_title(self):
+        return 'Role'
+    def get_export_filename(self):
+        return 'roles.xlsx'
+    def get_export_headers(self):
+        return ['Mã', 'Tên', 'Mô tả', 'Đang dùng', 'Thứ tự', 'Ngày tạo']
+    def get_export_row(self, obj):
+        return [
+            obj.code or '', obj.name or '', (obj.description or '')[:200],
+            'Có' if obj.is_active else 'Không', obj.sort_order or 0,
+            obj.created_at.strftime('%Y-%m-%d') if obj.created_at else '',
+        ]
 
 
 class PermissionViewSet(viewsets.ModelViewSet):
@@ -53,9 +193,67 @@ class PermissionViewSet(viewsets.ModelViewSet):
     serializer_class = PermissionSerializer
 
 
-class TeamViewSet(viewsets.ModelViewSet):
+class TeamViewSet(ExportExcelMixin, viewsets.ModelViewSet):
+    """Master Data chuẩn: filterset + search + ordering + soft delete + bulk + export."""
     queryset = Team.objects.all()
     serializer_class = TeamSerializer
+    permission_classes = [IsAuthenticated]
+    export_template_entity_type = 'Team'
+    filter_backends = [
+        django_filters.rest_framework.DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
+    filterset_class = TeamFilter
+    search_fields = ['code', 'name', 'description']
+    ordering_fields = ['code', 'name', 'sort_order', 'created_at']
+    ordering = ['sort_order', 'name']
+
+    def get_queryset(self):
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        instance.deleted_at = django_timezone.now()
+        instance.deleted_by = self.request.user
+        instance.save()
+
+    @action(detail=False, methods=['post'])
+    def bulk_activate(self, request):
+        ids = request.data.get('ids', [])
+        Team.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=True)
+        return Response({'message': f'Đã kích hoạt {len(ids)} team'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_deactivate(self, request):
+        ids = request.data.get('ids', [])
+        Team.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=False)
+        return Response({'message': f'Đã vô hiệu hóa {len(ids)} team'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_delete(self, request):
+        ids = request.data.get('ids', [])
+        now = django_timezone.now()
+        Team.objects.filter(id__in=ids).update(deleted_at=now, deleted_by=request.user)
+        return Response({'message': f'Đã xóa (soft) {len(ids)} team'})
+
+    def get_export_sheet_title(self):
+        return 'Team'
+    def get_export_filename(self):
+        return 'teams.xlsx'
+    def get_export_headers(self):
+        return ['Mã', 'Tên', 'Mô tả', 'Đang dùng', 'Thứ tự', 'Ngày tạo']
+    def get_export_row(self, obj):
+        return [
+            obj.code or '', obj.name or '', (obj.description or '')[:200],
+            'Có' if obj.is_active else 'Không', obj.sort_order or 0,
+            obj.created_at.strftime('%Y-%m-%d') if obj.created_at else '',
+        ]
 
 
 class SettingViewSet(viewsets.ModelViewSet):
@@ -63,11 +261,13 @@ class SettingViewSet(viewsets.ModelViewSet):
     serializer_class = SettingSerializer
 
 
-class CustomerViewSet(AuditLogMixin, viewsets.ModelViewSet):
-    queryset = Customer.objects.all()
+class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
+    """CRUD Customer với ExportExcelMixin (export_data), Data Scope, Search tiếng Việt không dấu."""
+    export_template_entity_type = 'Customer'
+    queryset = Customer.objects.select_related('owner', 'team', 'created_by', 'updated_by').all()
     serializer_class = CustomerSerializer
     filterset_class = CustomerFilter
-    ordering_fields = ['code', 'name', 'created_at', 'credit_limit']
+    ordering_fields = ['code', 'name', 'created_at', 'updated_at', 'credit_limit']
     ordering = ['-created_at']
 
     def get_queryset(self):
@@ -96,14 +296,55 @@ class CustomerViewSet(AuditLogMixin, viewsets.ModelViewSet):
                     models.Q(owner__isnull=True, team__isnull=True)
                 )
 
-        # Fuzzy search (trigram + unidecode)
-        search = self.request.query_params.get('search', None)
+        # Search: exact_search=1 dùng get_search_query (icontains, không trigram); ngược lại fuzzy
+        search = (self.request.query_params.get('search') or self.request.query_params.get('q') or '').strip()
+        exact_search = self.request.query_params.get('exact_search') in ('1', 'true', 'True')
         if search:
-            from core.utils import get_fuzzy_search_queryset
-            search_fields = ['code', 'name', 'email', 'phone', 'address']
-            queryset = get_fuzzy_search_queryset(queryset, search, search_fields)
+            search_fields = ['code', 'name', 'company_name', 'email', 'phone', 'address']
+            if exact_search:
+                from core.utils import get_search_query
+                q = get_search_query(search, search_fields)
+                queryset = queryset.filter(q)
+            else:
+                from core.utils import get_fuzzy_search_queryset
+                # 1) Ưu tiên match chính xác code (vd: KH001 -> đúng 1 record)
+                exact_code = queryset.filter(code__iexact=search)
+                if exact_code.exists():
+                    return exact_code
+                # 2) Fuzzy search (trigram + unaccent)
+                queryset = get_fuzzy_search_queryset(queryset, search, search_fields)
 
         return queryset
+
+    def get_export_queryset(self):
+        return self.filter_queryset(self.get_queryset())
+
+    def get_export_sheet_title(self):
+        return 'Khách hàng'
+
+    def get_export_filename(self):
+        from datetime import datetime
+        return f'khach_hang_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+
+    def get_export_headers(self):
+        return ['Mã KH', 'Tên KH', 'Tên công ty', 'MST', 'Điện thoại', 'Email', 'Địa chỉ', 'Trạng thái', 'Owner', 'Team']
+
+    def get_export_row(self, obj):
+        return [
+            obj.code or '',
+            obj.name or '',
+            obj.company_name or '',
+            obj.tax_code or '',
+            obj.phone or '',
+            obj.email or '',
+            obj.address or '',
+            obj.get_status_display() if hasattr(obj, 'get_status_display') else (obj.status or ''),
+            obj.owner.username if obj.owner else '',
+            obj.team.name if obj.team else '',
+        ]
+
+    def get_export_pdf_fields(self):
+        return ['code', 'name', 'company_name', 'tax_code', 'phone', 'email', 'address', 'status', 'owner__username', 'team__name']
 
     @action(detail=False, methods=['post'])
     def bulk_delete(self, request):
@@ -245,10 +486,11 @@ class CustomerViewSet(AuditLogMixin, viewsets.ModelViewSet):
             
             return Response({
                 "success": True,
-                "total": result['total'],
-                "imported": result['success'],
+                "total_rows": result['total'],
+                "success_count": result['success'],
+                "error_count": len(result['errors']),
                 "errors": result['errors'],
-                "log_id": result['log_id']
+                "log_id": result.get('log_id'),
             })
             
         except Exception as e:
@@ -993,108 +1235,6 @@ def customer_export_view(request):
         # Excel Export (default)
         filename = f'customers_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
         return export_to_excel(customers, template.columns, template.headers, filename)
-
-
-def _export_products_excel_logic(request):
-    """
-    Logic xuất Excel (dùng chung). request phải có .user (đã auth) và .GET.
-    Trả về HttpResponse (file) hoặc HttpResponse (JSON lỗi).
-    """
-    from io import BytesIO
-    from django.db.models import Q
-    from openpyxl import Workbook
-    from products.models import Product
-    from core.filters import ProductFilter
-
-    if request.GET.get('format', 'excel') != 'excel':
-        return HttpResponse('{"error":"Only Excel format supported"}', status=400, content_type='application/json')
-    try:
-        base = Product.objects.select_related(
-            'category', 'unit', 'owner', 'team', 'created_by', 'updated_by'
-        ).all()
-        user = request.user
-        if user.is_superuser:
-            pass
-        elif user.groups.filter(name='Manager').exists():
-            base = base.filter(
-                Q(owner=user) | Q(team__in=user.teams.all()) | Q(owner__isnull=True)
-            )
-        else:
-            base = base.filter(Q(owner=user) | Q(owner__isnull=True))
-        search = request.GET.get('search')
-        if search:
-            from core.utils import get_fuzzy_search_queryset
-            base = get_fuzzy_search_queryset(base, search, ['code', 'name', 'description'])
-        queryset = ProductFilter(request.GET, queryset=base).qs
-
-        wb = Workbook()
-        ws = wb.active
-        ws.title = 'Sản phẩm'
-        headers = [
-            'Mã SP', 'Tên sản phẩm', 'Danh mục', 'Đơn vị',
-            'Kích thước ĐH', 'KTSX', 'Sóng', 'Kiểu',
-            'Giá vốn', 'Giá bán', 'Tồn TT', '+/-',
-            'HHCĐ (đ/cái)', 'HH%', 'Mô tả', 'Trạng thái', 'Ghi chú',
-        ]
-        ws.append(headers)
-        for product in queryset:
-            ws.append([
-                product.code or '',
-                product.name or '',
-                product.category.name if product.category else '',
-                product.unit.name if product.unit else '',
-                product.size_order or '',
-                product.size_production or '',
-                product.wave_type or '',
-                product.box_type or '',
-                float(product.cost_price) if product.cost_price is not None else 0,
-                float(product.sale_price) if product.sale_price is not None else 0,
-                float(product.min_stock) if product.min_stock is not None else 0,
-                product.delivery_tolerance or '',
-                float(product.commission_per_unit) if product.commission_per_unit is not None else 0,
-                float(product.commission_percent) if product.commission_percent is not None else 0,
-                (product.description or '')[:500],
-                product.get_status_display() if product.status else '',
-                (product.note or '')[:500],
-            ])
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        data = output.getvalue()
-        resp = HttpResponse(data, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        resp['Content-Disposition'] = 'attachment; filename="san_pham.xlsx"'
-        resp['Content-Length'] = str(len(data))
-        return resp
-    except Exception as e:
-        return HttpResponse(f'{{"error":"Xuất Excel thất bại","detail":"{str(e)}"}}', status=500, content_type='application/json')
-
-
-def export_products_excel_plain_view(request):
-    """
-    View thuần Django (không @api_view) dùng từ middleware: tự xác thực JWT rồi gọi _export_products_excel_logic.
-    Trả về HttpResponse, không qua DRF → tránh 404 khi gọi từ middleware.
-    """
-    from rest_framework_simplejwt.authentication import JWTAuthentication
-    from rest_framework.exceptions import AuthenticationFailed
-
-    if request.method != 'GET':
-        return HttpResponse('Method not allowed', status=405)
-    auth = JWTAuthentication()
-    try:
-        auth_result = auth.authenticate(request)
-        if auth_result is None:
-            return HttpResponse('{"detail":"Authentication credentials were not provided."}', status=401, content_type='application/json')
-        request.user = auth_result[0]
-    except Exception:
-        return HttpResponse('{"detail":"Invalid or expired token."}', status=401, content_type='application/json')
-    return _export_products_excel_logic(request)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def export_products_excel_view(request):
-    """Xuất Excel sản phẩm - GET (gọi từ URL hoặc app có Authorization header)."""
-    return _export_products_excel_logic(request)
 
 
 @api_view(['POST'])

@@ -1,10 +1,10 @@
 import os
 from django.contrib import admin
 from django.shortcuts import redirect
-from django.urls import path, include, re_path
+from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
-from core.views import customer_export_view, logout_view, export_products_excel_view
+from core.views import logout_view
 from core.health import health_check
 
 # In ra khi load: nếu thấy đường dẫn khác D:\ERP-Carton\... thì server đang chạy từ thư mục sai
@@ -16,15 +16,10 @@ def root_redirect(request):
     return redirect('admin:index')
 
 urlpatterns = [
-    # Xuất Excel: re_path ĐẦU TIÊN — bắt cả /export-excel/ và export-excel/ (path() có thể không match / đầu)
-    re_path(r'^/export-excel/?$', export_products_excel_view, name='product-export-data'),
-    re_path(r'^export-excel/?$', export_products_excel_view),
     path('', root_redirect),
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health-check'),
     path('api/auth/logout/', logout_view, name='logout'),
-    path('api/customers/export/', customer_export_view, name='customer-export-direct'),
-    path('api/products/', include('products.urls')),
     path('api/', include('core.urls')),
 ]
 

@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\filters.py
+# hypothesis_version: 6.151.5
+
+[500, '%Y-%m-%d', '(?=', 'Search', 'USE_TZ', '\\d+', '\\s*$', '\\s*[xX*×·]\\s*', '^\\s*', '^\\s*\\d+', 'box_type', 'box_type__id', 'category', 'category__id', 'co_cm', 'code', 'cost_price', 'created_at', 'created_at__gte', 'created_at__lte', 'created_from', 'created_to', 'date', 'description', 'filter_co_cm', 'filter_search', 'filter_size_po_cao', 'filter_size_po_dai', 'filter_size_po_rong', 'filter_size_sx_cao', 'filter_size_sx_dai', 'filter_size_sx_rong', 'gte', 'icontains', 'is_active', 'lte', 'max_cost_price', 'max_sale_price', 'min_cost_price', 'min_sale_price', 'name', 'note', 'owner', 'owner__id', 'parent__isnull', 'pk', 'sale_price', 'size_order', 'size_po_cao', 'size_po_dai', 'size_po_rong', 'size_production', 'size_sx_cao', 'size_sx_dai', 'size_sx_rong', 'status', 'team', 'team__id', 'unit', 'unit__id', 'waterproof', 'wave', 'wave__id', '|\\s*$)']

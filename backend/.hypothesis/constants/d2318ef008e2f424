@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\products\migrations\0003_add_productwave_productboxtype.py
+# hypothesis_version: 6.151.5
+
+['A', 'A1', 'A2', 'A3', 'A5', 'AA', 'B', 'B1', 'B2', 'BC', 'BE', 'C', 'C1', 'D1', 'E', 'EB', 'ID', 'Kiểu', 'Kiểu A1', 'Kiểu A2', 'Kiểu A3', 'Kiểu A5', 'Kiểu B1', 'Kiểu B2', 'Kiểu C1', 'Kiểu D1', 'Kiểu thùng', 'Loại sóng', 'Mã kiểu', 'Mã sóng', 'Mô tả', 'Product', 'ProductBoxType', 'ProductWave', 'Sóng', 'Sóng A', 'Sóng A - 1 lớp', 'Sóng AA', 'Sóng B', 'Sóng B - 1 lớp', 'Sóng BC', 'Sóng BE', 'Sóng C', 'Sóng C - 1 lớp', 'Sóng E', 'Sóng E - 1 lớp mỏng', 'Sóng EB', 'Tên kiểu', 'Tên sóng', 'box_type', 'box_type_old', 'code', 'created_at', 'db_table', 'description', 'id', 'is_active', 'name', 'ordering', 'product', 'product_box_types', 'product_waves', 'products', 'products.productwave', 'updated_at', 'verbose_name', 'verbose_name_plural', 'wave', 'wave_type', 'Đang sử dụng']

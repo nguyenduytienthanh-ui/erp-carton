@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0032_column_permission.py
+# hypothesis_version: 6.151.5
+
+[100, 'ColumnPermission', 'Có giới hạn quyền', 'ID', 'Nhãn hiển thị', 'Phân quyền cột', 'Roles được phép xem', 'Trang', 'Tên cột (key)', 'allowed_roles', 'allowed_users', 'column', 'column_label', 'column_permissions', 'columnpermission', 'core', 'created_at', 'db_table', 'id', 'is_active', 'is_restricted', 'page', 'updated_at', 'verbose_name', 'verbose_name_plural', 'Đang áp dụng']

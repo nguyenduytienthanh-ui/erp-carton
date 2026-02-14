@@ -257,6 +257,79 @@ def export_to_pdf(queryset, fields, headers, filename, title="Report"):
     return response
 
 
+def import_from_excel_with_processor(file, entity_type, row_processor, user=None, **options):
+    """
+    Engine chung import Excel: parse file, iterate rows, gọi row_processor cho từng dòng.
+    Entity chỉ cung cấp row_processor (map + validate + create/update).
+
+    Args:
+        file: Uploaded file object
+        entity_type: str (e.g. 'Product', 'Customer')
+        row_processor: callable(row_values, headers, row_idx, context) -> (success: bool, error_str: str|None)
+        user: User performing import
+        **options: Truyền vào context (e.g. update_if_exists=True, seq=...)
+
+    Returns:
+        dict: {total_rows, success_count, error_count, errors: [{row, error}], log_id}
+    """
+    from .models import ImportLog
+
+    import_log = ImportLog.objects.create(
+        entity_type=entity_type,
+        filename=file.name or 'upload.xlsx',
+        created_by=user,
+        status='PROCESSING',
+    )
+    errors = []
+    success_count = 0
+    total_rows = 0
+    context = {'user': user, **options}
+
+    try:
+        wb = openpyxl.load_workbook(file)
+        ws = wb.active
+        if not ws:
+            import_log.status = 'FAILED'
+            import_log.errors = [{'row': 0, 'error': 'File Excel không có sheet nào'}]
+            import_log.save()
+            raise ValueError('File Excel không có sheet nào')
+
+        headers = [cell.value for cell in ws[1]]
+
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            row_values = list(row) if row else []
+            # Skip empty rows (không đếm vào total_rows)
+            if not any(v is not None and str(v).strip() for v in row_values):
+                continue
+
+            total_rows += 1
+            success, error_str = row_processor(row_values, headers, row_idx, context)
+            if success:
+                success_count += 1
+            else:
+                errors.append({'row': row_idx, 'error': error_str or 'Lỗi không xác định'})
+
+        import_log.total_rows = total_rows
+        import_log.success_count = success_count
+        import_log.error_count = len(errors)
+        import_log.errors = errors
+        import_log.status = 'COMPLETED' if len(errors) == 0 else 'FAILED'
+        import_log.save()
+
+        return {
+            'total_rows': total_rows,
+            'success_count': success_count,
+            'error_count': len(errors),
+            'errors': errors,
+            'log_id': import_log.id,
+        }
+    except Exception as e:
+        import_log.status = 'FAILED'
+        import_log.errors = [{'row': 0, 'error': str(e)}]
+        import_log.save()
+        raise
+
+
 def import_from_excel(file, model_class, field_mapping, user=None):
     """
     Import data from Excel file

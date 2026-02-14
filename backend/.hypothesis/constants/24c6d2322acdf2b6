@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\config\settings.py
+# hypothesis_version: 6.151.5
+
+[120, 250, '/media/', ':memory:', 'APP_DIRS', 'BACKEND', 'CI', 'DB_HOST', 'DB_NAME', 'DB_PASSWORD', 'DB_PORT', 'DB_USER', 'DEBUG', 'DIRS', 'DjangORM', 'ENGINE', 'HOST', 'NAME', 'OPTIONS', 'PAGE_SIZE', 'PASSWORD', 'PORT', 'SECRET_KEY', 'USER', 'USE_SQLITE', 'UTC', 'ack_failures', 'bulk', 'config.urls', 'context_processors', 'core.User', 'core.apps.CoreConfig', 'corsheaders', 'default', 'django.contrib.admin', 'django.contrib.auth', 'django_filters', 'django_q', 'en-us', 'media', 'name', 'orm', 'products', 'queue_limit', 'rest_framework', 'retry', 'sales', 'save_limit', 'sent_emails', 'static/', 'timeout', 'workers']

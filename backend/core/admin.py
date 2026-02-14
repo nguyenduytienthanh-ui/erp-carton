@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from datetime import datetime
-from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, ImportLog, AuditLog, Attachment, Comment, CommentReaction, Notification, ApprovalHistory, NumberSequence, Tag, EntityTag, WorkflowDefinition, UserSession, PasswordPolicy, ApprovalLevel, EmailTemplate
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, ImportLog, AuditLog, Attachment, Comment, CommentReaction, Notification, ApprovalHistory, NumberSequence, Tag, EntityTag, WorkflowDefinition, UserSession, PasswordPolicy, ApprovalLevel, EmailTemplate, UserPreferences, ColumnPermission
 from .utils import export_to_excel, export_to_pdf
 
 
@@ -20,11 +20,30 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(Role)
 class RoleAdmin(admin.ModelAdmin):
-    """Role Admin"""
-    list_display = ['name', 'code', 'is_active', 'created_at']
+    """Role Admin (Master Data chuẩn)"""
+    list_display = ['code', 'name', 'is_active', 'sort_order', 'created_at']
     list_filter = ['is_active', 'created_at']
     search_fields = ['name', 'code', 'description']
+    readonly_fields = ['created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at', 'deleted_by']
+    date_hierarchy = 'created_at'
     filter_horizontal = ['permissions']
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(deleted_at__isnull=True)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
+
+    @admin.action(description='Kích hoạt')
+    def activate(self, request, queryset):
+        queryset.update(is_active=True)
+    @admin.action(description='Vô hiệu hóa')
+    def deactivate(self, request, queryset):
+        queryset.update(is_active=False)
+    actions = ['activate', 'deactivate']
 
 
 @admin.register(Permission)
@@ -37,10 +56,29 @@ class PermissionAdmin(admin.ModelAdmin):
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    """Team Admin"""
-    list_display = ['name', 'code', 'is_active', 'created_at']
+    """Team Admin (Master Data chuẩn)"""
+    list_display = ['code', 'name', 'is_active', 'sort_order', 'created_at']
     list_filter = ['is_active', 'created_at']
     search_fields = ['name', 'code', 'description']
+    readonly_fields = ['created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at', 'deleted_by']
+    date_hierarchy = 'created_at'
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(deleted_at__isnull=True)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
+
+    @admin.action(description='Kích hoạt')
+    def activate(self, request, queryset):
+        queryset.update(is_active=True)
+    @admin.action(description='Vô hiệu hóa')
+    def deactivate(self, request, queryset):
+        queryset.update(is_active=False)
+    actions = ['activate', 'deactivate']
 
 
 @admin.register(Setting)
@@ -554,3 +592,60 @@ class EmailTemplateAdmin(admin.ModelAdmin):
     ]
 
     readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(UserPreferences)
+class UserPreferencesAdmin(admin.ModelAdmin):
+    list_display = ['user', 'page', 'updated_at']
+    list_filter = ['page', 'updated_at']
+    search_fields = ['user__username', 'user__email', 'page']
+    readonly_fields = ['created_at', 'updated_at']
+
+    fieldsets = (
+        ('Thông tin', {
+            'fields': ('user', 'page')
+        }),
+        ('Cấu hình', {
+            'fields': ('config',),
+            'classes': ('wide',)
+        }),
+        ('Thời gian', {
+            'fields': ('created_at', 'updated_at')
+        }),
+    )
+
+
+@admin.register(ColumnPermission)
+class ColumnPermissionAdmin(admin.ModelAdmin):
+    list_display = [
+        'page', 'column_label', 'column',
+        'is_restricted', 'is_active',
+        'get_roles', 'get_users_count'
+    ]
+    list_filter = ['page', 'is_restricted', 'is_active']
+    search_fields = ['page', 'column', 'column_label']
+    filter_horizontal = ['allowed_users']
+
+    fieldsets = (
+        ('Thông tin cột', {
+            'fields': ('page', 'column', 'column_label')
+        }),
+        ('Phân quyền', {
+            'fields': ('is_restricted', 'allowed_roles', 'allowed_users'),
+            'description': 'Chọn roles hoặc users được phép xem cột này'
+        }),
+        ('Trạng thái', {
+            'fields': ('is_active',)
+        }),
+    )
+
+    def get_roles(self, obj):
+        return ', '.join(obj.allowed_roles) if obj.allowed_roles else 'Tất cả'
+
+    get_roles.short_description = 'Roles được phép'
+
+    def get_users_count(self, obj):
+        count = obj.allowed_users.count()
+        return f'{count} user(s)' if count > 0 else '-'
+
+    get_users_count.short_description = 'Users riêng'

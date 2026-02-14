@@ -89,31 +89,94 @@ class AuditLogMixin:
         instance.delete()
 
 
+def _get_attr_path(obj, path):
+    """
+    Lấy giá trị theo path 'field' hoặc 'field__nested__name'.
+    FK null / bất kỳ None nào trong chain → trả về ''.
+    Giá trị cuối convert sang str cho Excel (số, date, ...).
+    """
+    for part in path.split('__'):
+        obj = getattr(obj, part, None)
+        if obj is None:
+            return ''
+    return str(obj) if obj is not None else ''
+
+
 class ExportExcelMixin:
     """
     Mixin dùng chung cho xuất Excel. ViewSet kế thừa mixin này và chỉ cần
     khai báo: tiêu đề sheet, tên file, headers, và cách map mỗi dòng.
-    Dùng cho Sản phẩm, Nguyên liệu, Đơn hàng... không cần viết lại logic Excel.
+    Nếu có export_template_entity_type thì ưu tiên dùng ExportTemplate (columns/headers từ DB).
     """
+
+    export_template_entity_type = None  # e.g. 'ProductCategory', 'Product' -> dùng ExportTemplate nếu có
 
     @action(detail=False, methods=['get'], url_path='export_data')
     def export_data(self, request):
-        if request.query_params.get('format', 'excel') != 'excel':
-            return Response({'error': 'Only Excel format supported'}, status=400)
+        fmt = request.query_params.get('format', 'excel')
+        if fmt not in ('excel', 'pdf'):
+            return Response({'error': 'Chỉ hỗ trợ format=excel hoặc format=pdf'}, status=400)
 
         queryset = self.get_export_queryset()
         sheet_title = self.get_export_sheet_title()
         filename = self.get_export_filename()
         headers = self.get_export_headers()
 
+        # PDF: dùng export_to_pdf (chung)
+        if fmt == 'pdf':
+            from .utils import export_to_pdf
+            fields = self.get_export_pdf_fields()
+            # Nếu có ExportTemplate, dùng columns/headers từ template
+            if self.export_template_entity_type:
+                from .models import ExportTemplate
+                template = ExportTemplate.objects.filter(
+                    entity_type=self.export_template_entity_type,
+                    is_active=True,
+                ).order_by('-is_default', 'id').first()
+                if template and template.columns and template.headers:
+                    fields = template.columns
+                    headers = template.headers
+            return export_to_pdf(
+                queryset,
+                fields,
+                headers,
+                filename.replace('.xlsx', '.pdf'),
+                title=sheet_title,
+            )
+
+        # Chuẩn: dùng ExportTemplate nếu có (cấu hình columns/headers)
+        if self.export_template_entity_type:
+            from .models import ExportTemplate
+            template = ExportTemplate.objects.filter(
+                entity_type=self.export_template_entity_type,
+                is_active=True,
+            ).order_by('-is_default', 'id').first()
+            if template and template.columns and template.headers:
+                headers = template.headers
+                wb = Workbook()
+                ws = wb.active
+                ws.title = sheet_title[:31]
+                ws.append(headers)
+                for obj in queryset:
+                    row = [_get_attr_path(obj, col) for col in template.columns]
+                    ws.append(row)
+                output = BytesIO()
+                wb.save(output)
+                output.seek(0)
+                response = HttpResponse(
+                    output.read(),
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                )
+                response['Content-Disposition'] = f'attachment; filename="{filename}"'
+                return response
+
+        headers = self.get_export_headers()
         wb = Workbook()
         ws = wb.active
         ws.title = sheet_title[:31]
         ws.append(headers)
-
         for obj in queryset:
             ws.append(self.get_export_row(obj))
-
         output = BytesIO()
         wb.save(output)
         output.seek(0)
@@ -122,6 +185,22 @@ class ExportExcelMixin:
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         )
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        # Audit log cho export (nếu có entity_type)
+        if getattr(self, 'export_template_entity_type', None) and request.user.is_authenticated:
+            try:
+                from .models import AuditLog
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='EXPORT',
+                    entity_type=self.export_template_entity_type,
+                    entity_id=0,
+                    entity_code=filename,
+                    new_values={'filename': filename, 'rows': queryset.count()},
+                    ip_address=get_client_ip(request),
+                    user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+                )
+            except Exception:
+                pass
         return response
 
     def get_export_queryset(self):
@@ -137,9 +216,13 @@ class ExportExcelMixin:
         return 'export.xlsx'
 
     def get_export_headers(self):
-        """Override: list tiêu đề cột, ví dụ ['Mã SP', 'Tên sản phẩm', ...]."""
+        """Override: list tiêu đề cột, ví dụ ['Mã hàng', 'Tên hàng', ...]."""
         return []
 
     def get_export_row(self, obj):
         """Override: với mỗi bản ghi obj, trả về list giá trị tương ứng 1 dòng."""
         return []
+
+    def get_export_pdf_fields(self):
+        """Override: list field paths cho export PDF (VD: ['code', 'name', 'category__name'])."""
+        return getattr(self, 'export_pdf_fields', [])

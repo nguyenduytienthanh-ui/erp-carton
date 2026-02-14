@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, UserSession
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, UserSession, UserPreferences, ColumnPermission
 
 
 class PermissionSerializer(serializers.ModelSerializer):
@@ -11,16 +11,32 @@ class PermissionSerializer(serializers.ModelSerializer):
 
 class RoleSerializer(serializers.ModelSerializer):
     permissions = PermissionSerializer(many=True, read_only=True)
-    
+
     class Meta:
         model = Role
-        fields = '__all__'
+        fields = [
+            'id', 'code', 'name', 'description', 'is_active', 'sort_order',
+            'created_at', 'updated_at', 'created_by', 'updated_by',
+            'deleted_at', 'deleted_by', 'permissions',
+        ]
+        read_only_fields = [
+            'id', 'created_at', 'updated_at',
+            'created_by', 'updated_by', 'deleted_at', 'deleted_by',
+        ]
 
 
 class TeamSerializer(serializers.ModelSerializer):
     class Meta:
         model = Team
-        fields = '__all__'
+        fields = [
+            'id', 'code', 'name', 'description', 'is_active', 'sort_order',
+            'created_at', 'updated_at', 'created_by', 'updated_by',
+            'deleted_at', 'deleted_by',
+        ]
+        read_only_fields = [
+            'id', 'created_at', 'updated_at',
+            'created_by', 'updated_by', 'deleted_at', 'deleted_by',
+        ]
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -57,7 +73,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 class CustomerSerializer(serializers.ModelSerializer):
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
     updated_by_username = serializers.CharField(source='updated_by.username', read_only=True)
-    
+    owner_name = serializers.CharField(source='owner.username', read_only=True, allow_null=True)
+    team_name = serializers.CharField(source='team.name', read_only=True, allow_null=True)
+
     class Meta:
         model = Customer
         fields = '__all__'
@@ -148,3 +166,32 @@ class UserSessionSerializer(serializers.ModelSerializer):
         browser = obj.device_info.get('browser', 'Unknown')
         os = obj.device_info.get('os', 'Unknown')
         return f"{browser} on {os}"
+
+
+class UserPreferencesSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserPreferences
+        fields = ['id', 'page', 'config', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_config(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Config must be JSON object")
+        return value
+
+
+class ColumnPermissionSerializer(serializers.ModelSerializer):
+    allowed_users_list = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ColumnPermission
+        fields = [
+            'id', 'page', 'column', 'column_label',
+            'allowed_roles', 'allowed_users_list',
+            'is_restricted', 'is_active',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+    def get_allowed_users_list(self, obj):
+        return list(obj.allowed_users.values('id', 'username', 'email'))

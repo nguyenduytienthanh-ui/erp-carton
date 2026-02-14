@@ -6,6 +6,7 @@ import { authApi } from '../api/auth';
 import { storage } from '../utils/storage';
 
 const Login = () => {
+  const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
@@ -50,26 +51,27 @@ const Login = () => {
         style={{ width: 400, boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
       >
         <Form
+          form={form}
           name="login"
           onFinish={onFinish}
           autoComplete="off"
           size="large"
+          initialValues={{ username: 'admin', password: 'admin123' }}
         >
           <Form.Item
             name="username"
+            label="Tên đăng nhập"
             rules={[{ required: true, message: 'Vui lòng nhập tên đăng nhập!' }]}
           >
-            <Input prefix={<UserOutlined />} placeholder="Tên đăng nhập" />
+            <Input prefix={<UserOutlined />} placeholder="admin" allowClear />
           </Form.Item>
 
           <Form.Item
             name="password"
+            label="Mật khẩu"
             rules={[{ required: true, message: 'Vui lòng nhập mật khẩu!' }]}
           >
-            <Input.Password
-              prefix={<LockOutlined />}
-              placeholder="Mật khẩu"
-            />
+            <Input.Password prefix={<LockOutlined />} placeholder="admin123" allowClear />
           </Form.Item>
 
           <Form.Item>

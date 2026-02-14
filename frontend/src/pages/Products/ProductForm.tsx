@@ -1,609 +1,989 @@
-import { useState, useEffect } from 'react';
-import {
-  Drawer,
-  Form,
-  Input,
-  InputNumber,
-  Select,
-  Tabs,
-  Row,
-  Col,
-  Upload,
-  Button,
-  message,
-  Divider,
-  Card,
-} from 'antd';
-import { UploadOutlined, LinkOutlined } from '@ant-design/icons';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+/**
+ * Form thêm mới / chỉnh sửa sản phẩm – GIAO DIỆN MỚI (duy nhất).
+ * Grid Mẹ + Con (thành phần con Lót, Khay…), mã Con tự sinh Mã Mẹ-1, Mã Mẹ-2…
+ * Không còn giao diện cũ; toàn bộ thêm/sửa dùng form này.
+ */
+import { useState, useMemo, useRef, useEffect } from 'react';
+import { App, Modal, Button, Checkbox, Alert } from 'antd';
+import { DeleteOutlined } from '@ant-design/icons';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { productsApi } from '../../api/products';
-import type { Product, ProductFormData } from '../../types/product';
-import {
-  WATERPROOF_OPTIONS,
-  BOX_TYPES,
-  WAVE_TYPES,
-} from '../../types/product';
-import { theme } from '../../styles/theme';
-
-const selectStyle: React.CSSProperties = {
-  width: '100%',
-  height: 32,
-  padding: '0 11px',
-  border: '1px solid #d9d9d9',
-  borderRadius: 6,
-  fontSize: 14,
-  outline: 'none',
-};
-
-interface NativeSelectInputProps {
-  value?: number | string;
-  onChange?: (value: number | string | undefined) => void;
-  placeholder?: string;
-  parseNumber?: boolean;
-  children: React.ReactNode;
-}
-
-const NativeSelectInput = ({
-  value,
-  onChange,
-  placeholder,
-  parseNumber,
-  children,
-}: NativeSelectInputProps) => (
-  <select
-    style={selectStyle}
-    value={value ?? ''}
-    onChange={(e) => {
-      const v = e.target.value;
-      if (onChange) {
-        onChange(v === '' ? undefined : parseNumber ? Number(v) : v);
-      }
-    }}
-  >
-    <option value="">{placeholder}</option>
-    {children}
-  </select>
-);
+import { FormInputWithClear } from '../../components';
+import type { Product, ProductFormData, ProductChildFormData } from '../../types/product';
+import { WATERPROOF_OPTIONS } from '../../types/product';
+import { useQuickEntryKeys } from '../../hooks/useQuickEntryKeys';
+import { parseApiError } from '../../shared/apiError';
 
 interface ProductFormProps {
   visible: boolean;
   onClose: () => void;
-  editingProduct?: Product | null;
+  editingProduct?: { id: number } | null;
 }
 
-const ProductForm = ({
-  visible,
-  onClose,
-  editingProduct,
-}: ProductFormProps) => {
-  const [form] = Form.useForm();
-  const [activeTab, setActiveTab] = useState('basic');
-  const [filmFile, setFilmFile] = useState<File | null>(null);
-  const [moldFile, setMoldFile] = useState<File | null>(null);
+/** Spec lưới: span 1–10 cột (colW động theo contentRef), gap 8. data-quick-entry = bộ nhập nhanh (Enter chuyển ô). */
+function Field({
+  label,
+  required,
+  children,
+  span,
+}: {
+  label: string;
+  required?: boolean;
+  children: React.ReactNode;
+  span: 1 | 2 | 3 | 4 | 9 | 10;
+}) {
+  return (
+    <div className="pf-field" style={{ gridColumn: `span ${span}` }} data-quick-entry>
+      <label className="pf-label">
+        {label}
+        {required && <span className="pf-required">*</span>}
+      </label>
+      {children}
+    </div>
+  );
+}
 
+const defaultMother = (firstUnitId: number | undefined): ProductFormData => ({
+  code: '',
+  name: '',
+  category: undefined,
+  unit: firstUnitId ?? (0 as number),
+  cost_price: 0,
+  sale_price: 0,
+  min_stock: 0,
+  status: 'ACTIVE',
+  size_order: '',
+  size_production: '',
+  wave: undefined,
+  box_type: undefined,
+  delivery_tolerance: '',
+  commission_per_unit: undefined,
+  commission_percent: undefined,
+  process_xa: undefined,
+  process_in: undefined,
+  process_boi: undefined,
+  process_can_mang: undefined,
+  process_be: undefined,
+  process_chap: undefined,
+  process_dong: undefined,
+  process_dan: undefined,
+  process_khac: undefined,
+  film_code: '',
+  color_count: undefined,
+  mold_code: '',
+  waterproof: '',
+  note_other: '',
+  note: '',
+  is_active: true,
+});
+
+const defaultChild = (firstUnitId: number | undefined): ProductChildFormData => ({
+  name: '',
+  component_quantity: 1,
+  unit: firstUnitId ?? (0 as number),
+  category: undefined,
+  size_order: '',
+  size_production: '',
+  wave: undefined,
+  box_type: undefined,
+  delivery_tolerance: '',
+  process_xa: undefined,
+  process_in: undefined,
+  process_boi: undefined,
+  process_can_mang: undefined,
+  process_be: undefined,
+  process_chap: undefined,
+  process_dong: undefined,
+  process_dan: undefined,
+  process_khac: undefined,
+  film_code: '',
+  color_count: undefined,
+  mold_code: '',
+  waterproof: '',
+  note_other: '',
+  note: '',
+  is_active: true,
+  status: 'ACTIVE',
+});
+
+/** Validate khi bấm Cập nhật; không validate khi đang gõ. */
+function validateMother(m: ProductFormData): string | null {
+  if (!(m.code ?? '').trim()) return 'Vui lòng nhập Mã hàng (Mẹ).';
+  if (!(m.name ?? '').trim()) return 'Vui lòng nhập Tên hàng (Mẹ).';
+  const cost = Number(m.cost_price);
+  const sale = Number(m.sale_price);
+  if (Number.isNaN(cost) || cost < 0) return 'Giá vốn không hợp lệ.';
+  if (Number.isNaN(sale) || sale < 0) return 'Đơn giá không hợp lệ.';
+  if (cost > sale) return 'Đơn giá phải lớn hơn hoặc bằng giá vốn.';
+  if (!m.unit) return 'Vui lòng chọn ĐVT (bắt buộc).';
+  if (!m.wave) return 'Vui lòng chọn Sóng (bắt buộc).';
+  if (!m.box_type) return 'Vui lòng chọn Kiểu (bắt buộc).';
+  return null;
+}
+
+function validateChild(c: ProductChildFormData): string | null {
+  if (!(c.name ?? '').trim()) return 'Vui lòng nhập Tên hàng (Con).';
+  const q = Number(c.component_quantity);
+  if (Number.isNaN(q) || q < 1) return 'Số lượng / bộ phải lớn hơn 0.';
+  if (!c.unit) return 'Vui lòng chọn ĐVT (bắt buộc).';
+  if (!c.wave) return 'Vui lòng chọn Sóng (bắt buộc).';
+  if (!c.box_type) return 'Vui lòng chọn Kiểu (bắt buộc).';
+  return null;
+}
+
+/** Build payload Mẹ để gửi API. */
+function buildMotherPayload(m: ProductFormData, isSet: boolean): ProductFormData {
+  return {
+    ...m,
+    code: (m.code ?? '').trim(),
+    name: (m.name ?? '').trim(),
+    cost_price: Number(m.cost_price) || 0,
+    sale_price: Number(m.sale_price) || 0,
+    min_stock: Number(m.min_stock) || 0,
+    unit: m.unit,
+    is_set: isSet,
+    status: m.status || 'ACTIVE',
+    is_active: m.is_active ?? true,
+  };
+}
+
+/** Build payload Con (sau khi có mother.id). */
+function buildChildPayload(
+  c: ProductChildFormData,
+  parentId: number,
+  code: string
+): ProductFormData & { parent: number } {
+  return {
+    parent: parentId,
+    code,
+    name: (c.name ?? '').trim(),
+    component_quantity: Number(c.component_quantity) || 1,
+    unit: c.unit,
+    category: c.category,
+    cost_price: 0,
+    sale_price: 0,
+    min_stock: 0,
+    status: (c.status as 'DRAFT' | 'ACTIVE' | 'DISCONTINUED') ?? 'ACTIVE',
+    size_order: c.size_order ?? '',
+    size_production: c.size_production ?? '',
+    wave: c.wave,
+    box_type: c.box_type,
+    delivery_tolerance: c.delivery_tolerance ?? '',
+    process_xa: c.process_xa,
+    process_in: c.process_in,
+    process_boi: c.process_boi,
+    process_can_mang: c.process_can_mang,
+    process_be: c.process_be,
+    process_chap: c.process_chap,
+    process_dong: c.process_dong,
+    process_dan: c.process_dan,
+    process_khac: c.process_khac,
+    film_code: c.film_code ?? '',
+    color_count: c.color_count,
+    mold_code: c.mold_code ?? '',
+    waterproof: c.waterproof ?? '',
+    note_other: c.note_other ?? '',
+    note: c.note ?? '',
+    is_active: c.is_active ?? true,
+  };
+}
+
+interface ChildBlockProps {
+  index: number;
+  motherCode: string;
+  child: ProductChildFormData;
+  onChange: (field: keyof ProductChildFormData, value: unknown) => void;
+  onRemove: () => void;
+  canRemove: boolean;
+  categories: { id: number; name: string }[];
+  units: { id: number; name: string; code: string }[];
+  waves: { id: number; code: string; name: string }[];
+  boxTypes: { id: number; code: string; name: string }[];
+}
+
+function ChildBlock({
+  index,
+  motherCode,
+  child,
+  onChange,
+  onRemove,
+  canRemove,
+  categories,
+  units,
+  waves,
+  boxTypes,
+}: ChildBlockProps) {
+  const childCode = motherCode.trim() ? `${motherCode.trim()}-${index + 1}` : '—';
+
+  return (
+    <div className="pf-child-card">
+      <div className="pf-row pf-row-child1" style={{ alignItems: 'center' }}>
+        <Field label="Mã hàng (Con)" required span={2}>
+          <input type="text" className="pf-input" value={childCode} readOnly style={{ background: '#f5f5f5' }} />
+        </Field>
+        <Field label="Tên hàng" required span={2}>
+          <FormInputWithClear
+            type="text"
+            className="pf-input"
+            value={child.name ?? ''}
+            onChange={(e) => onChange('name', e.target.value)}
+            onClear={() => onChange('name', '')}
+          />
+        </Field>
+        <Field label="Danh mục" span={2}>
+          <select
+            className="pf-select"
+            value={child.category ?? ''}
+            onChange={(e) => onChange('category', e.target.value ? Number(e.target.value) : undefined)}
+          >
+            <option value="">Chọn</option>
+            {categories.map((cat) => (
+              <option key={cat.id} value={cat.id}>{cat.name}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Số lượng / bộ" required span={3}>
+          <FormInputWithClear
+            type="number"
+            className="pf-input"
+            min={1}
+            value={child.component_quantity ?? ''}
+            onChange={(e) => onChange('component_quantity', e.target.value === '' ? '' : Number(e.target.value))}
+            onClear={() => onChange('component_quantity', 1)}
+            hasValue={child.component_quantity != null && child.component_quantity !== 1}
+          />
+        </Field>
+        {canRemove && (
+          <div style={{ gridColumn: 'span 1', display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
+            <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={onRemove}>Xóa</Button>
+          </div>
+        )}
+      </div>
+      <div className="pf-row pf-row-size">
+        <Field label="Dài PO" span={1}>
+          <input type="text" placeholder="Khách" className="pf-input" value={(child.size_order ?? '').split(/x/)[0]?.trim() ?? ''} onChange={(e) => { const p = (child.size_order ?? '').split(/x/); p[0] = e.target.value; onChange('size_order', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+        </Field>
+        <Field label="Rộng PO" span={1}>
+          <input type="text" placeholder="Khách" className="pf-input" value={(child.size_order ?? '').split(/x/)[1]?.trim() ?? ''} onChange={(e) => { const p = (child.size_order ?? '').split(/x/); p[1] = e.target.value; onChange('size_order', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+        </Field>
+        <Field label="Cao PO" span={1}>
+          <input type="text" placeholder="Khách" className="pf-input" value={(child.size_order ?? '').split(/x/)[2]?.trim() ?? ''} onChange={(e) => { const p = (child.size_order ?? '').split(/x/); p[2] = e.target.value; onChange('size_order', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+        </Field>
+        <Field label="Dài SX" span={1}>
+          <input type="text" placeholder="Sản xuất" className="pf-input" value={(child.size_production ?? '').split(/x/)[0]?.trim() ?? ''} onChange={(e) => { const p = (child.size_production ?? '').split(/x/); p[0] = e.target.value; onChange('size_production', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+        </Field>
+        <Field label="Rộng SX" span={1}>
+          <input type="text" placeholder="Sản xuất" className="pf-input" value={(child.size_production ?? '').split(/x/)[1]?.trim() ?? ''} onChange={(e) => { const p = (child.size_production ?? '').split(/x/); p[1] = e.target.value; onChange('size_production', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+        </Field>
+        <Field label="Cao SX" span={1}>
+          <input type="text" placeholder="Sản xuất" className="pf-input" value={(child.size_production ?? '').split(/x/)[2]?.trim() ?? ''} onChange={(e) => { const p = (child.size_production ?? '').split(/x/); p[2] = e.target.value; onChange('size_production', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+        </Field>
+        <Field label="Sóng" required span={1}>
+          <select className="pf-select" value={child.wave ?? ''} onChange={(e) => onChange('wave', e.target.value ? Number(e.target.value) : undefined)}>
+            <option value="">Chọn</option>
+            {waves.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Kiểu" required span={1}>
+          <select className="pf-select" value={child.box_type ?? ''} onChange={(e) => onChange('box_type', e.target.value ? Number(e.target.value) : undefined)}>
+            <option value="">Chọn</option>
+            {boxTypes.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
+          </select>
+        </Field>
+        <Field label="ĐVT" required span={1}>
+          <select className="pf-select" value={child.unit ?? ''} onChange={(e) => onChange('unit', e.target.value ? Number(e.target.value) : undefined)}>
+            <option value="">Chọn</option>
+            {units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+        </Field>
+        <Field label="+/-" span={1}>
+          <FormInputWithClear type="text" className="pf-input" value={child.delivery_tolerance ?? ''} onChange={(e) => onChange('delivery_tolerance', e.target.value)} onClear={() => onChange('delivery_tolerance', '')} />
+        </Field>
+      </div>
+      <div className="pf-row pf-row-process1">
+        <Field label="Xả" span={1}>
+          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_xa ?? ''} onChange={(e) => onChange('process_xa', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_xa', undefined)} hasValue={child.process_xa != null} />
+        </Field>
+        <Field label="In" span={1}>
+          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_in ?? ''} onChange={(e) => onChange('process_in', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_in', undefined)} hasValue={child.process_in != null} />
+        </Field>
+        <Field label="Mã phim" span={2}>
+          <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={child.film_code ?? ''} onChange={(e) => onChange('film_code', e.target.value)} onClear={() => onChange('film_code', '')} />
+        </Field>
+        <Field label="Số màu" span={1}>
+          <FormInputWithClear type="number" className="pf-input" value={child.color_count ?? ''} onChange={(e) => onChange('color_count', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('color_count', undefined)} hasValue={child.color_count != null} />
+        </Field>
+        <Field label="C. thấm" span={1}>
+          <select className="pf-select" value={child.waterproof ?? ''} onChange={(e) => onChange('waterproof', e.target.value)}>
+            {WATERPROOF_OPTIONS.map((o) => <option key={o.value || 'x'} value={o.value}>{o.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Có CM" span={1}>
+          <select
+            className="pf-select"
+            value={child.process_can_mang != null ? (Number(child.process_can_mang) > 0 ? '1' : '0') : ''}
+            onChange={(e) => onChange('process_can_mang', e.target.value === '' ? undefined : e.target.value === '1' ? 1 : 0)}
+          >
+            <option value="">Chọn</option>
+            <option value="1">Có</option>
+            <option value="0">Không</option>
+          </select>
+        </Field>
+        <Field label="C. Màng" span={1}>
+          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_can_mang ?? ''} onChange={(e) => onChange('process_can_mang', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_can_mang', undefined)} hasValue={child.process_can_mang != null} />
+        </Field>
+        <Field label="Bồi" span={1}>
+          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_boi ?? ''} onChange={(e) => onChange('process_boi', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_boi', undefined)} hasValue={child.process_boi != null} />
+        </Field>
+        <Field label="Bế" span={1}>
+          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_be ?? ''} onChange={(e) => onChange('process_be', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_be', undefined)} hasValue={child.process_be != null} />
+        </Field>
+      </div>
+      <div className="pf-row pf-row-process2">
+        <Field label="Mã khuôn" span={2}>
+          <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={child.mold_code ?? ''} onChange={(e) => onChange('mold_code', e.target.value)} onClear={() => onChange('mold_code', '')} />
+        </Field>
+        <Field label="Chạp" span={1}>
+          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_chap ?? ''} onChange={(e) => onChange('process_chap', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_chap', undefined)} hasValue={child.process_chap != null} />
+        </Field>
+        <Field label="Đóng" span={1}>
+          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_dong ?? ''} onChange={(e) => onChange('process_dong', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_dong', undefined)} hasValue={child.process_dong != null} />
+        </Field>
+        <Field label="Dán" span={1}>
+          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_dan ?? ''} onChange={(e) => onChange('process_dan', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_dan', undefined)} hasValue={child.process_dan != null} />
+        </Field>
+        <Field label="Khác" span={1}>
+          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_khac ?? ''} onChange={(e) => onChange('process_khac', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_khac', undefined)} hasValue={child.process_khac != null} />
+        </Field>
+        <Field label="Ghi chú công đoạn khác" span={4}>
+          <FormInputWithClear type="text" className="pf-input" value={child.note_other ?? ''} onChange={(e) => onChange('note_other', e.target.value)} onClear={() => onChange('note_other', '')} />
+        </Field>
+      </div>
+      <div className="pf-row pf-row-note">
+        <Field label="Ghi chú chung (Con)" span={9}>
+          <FormInputWithClear type="text" className="pf-input" value={child.note ?? ''} onChange={(e) => onChange('note', e.target.value)} onClear={() => onChange('note', '')} />
+        </Field>
+        <Field label="Trạng thái" span={1}>
+          <select
+            className="pf-select"
+            value={child.status ?? 'ACTIVE'}
+            onChange={(e) => {
+              const v = e.target.value as 'DRAFT' | 'ACTIVE' | 'DISCONTINUED';
+              onChange('status', v);
+              onChange('is_active', v !== 'DISCONTINUED');
+            }}
+            style={{
+              backgroundColor:
+                (child.status ?? 'ACTIVE') === 'ACTIVE'
+                  ? 'rgba(34, 197, 94, 0.5)'
+                  : (child.status ?? 'ACTIVE') === 'DISCONTINUED'
+                    ? 'rgba(239, 68, 68, 0.5)'
+                    : 'rgba(234, 179, 8, 0.5)',
+            }}
+          >
+            <option value="ACTIVE">Đang bán</option>
+            <option value="DISCONTINUED">Ngừng SX</option>
+            <option value="DRAFT">Nháp</option>
+          </select>
+        </Field>
+      </div>
+    </div>
+  );
+}
+
+/** Map Product (API) → ProductChildFormData — dùng khi load components khi sửa */
+function componentToChildFormData(c: Product, firstUnitId: number | undefined): ProductChildFormData {
+  return {
+    id: c.id,
+    name: c.name ?? '',
+    component_quantity: Number(c.component_quantity) || 1,
+    unit: c.unit ?? firstUnitId ?? (0 as number),
+    category: c.category ?? undefined,
+    size_order: c.size_order ?? '',
+    size_production: c.size_production ?? '',
+    wave: c.wave ?? undefined,
+    box_type: c.box_type ?? undefined,
+    delivery_tolerance: c.delivery_tolerance ?? '',
+    process_xa: c.process_xa ?? undefined,
+    process_in: c.process_in ?? undefined,
+    process_boi: c.process_boi ?? undefined,
+    process_can_mang: c.process_can_mang ?? undefined,
+    process_be: c.process_be ?? undefined,
+    process_chap: c.process_chap ?? undefined,
+    process_dong: c.process_dong ?? undefined,
+    process_dan: c.process_dan ?? undefined,
+    process_khac: c.process_khac ?? undefined,
+    film_code: c.film_code ?? '',
+    color_count: c.color_count ?? undefined,
+    mold_code: c.mold_code ?? '',
+    waterproof: (c.waterproof as string) ?? '',
+    note_other: c.note_other ?? '',
+    note: c.note ?? '',
+    is_active: c.is_active ?? true,
+    status: (c.status as 'DRAFT' | 'ACTIVE' | 'DISCONTINUED') ?? (c.is_active !== false ? 'ACTIVE' : 'DISCONTINUED'),
+  };
+}
+
+/** Map Product (API) → ProductFormData */
+function productToMother(p: Product): ProductFormData {
+  return {
+    code: p.code ?? '',
+    name: p.name ?? '',
+    category: p.category ?? undefined,
+    description: p.description ?? '',
+    unit: p.unit ?? 0,
+    cost_price: parseFloat(String(p.cost_price ?? 0)) || 0,
+    sale_price: parseFloat(String(p.sale_price ?? 0)) || 0,
+    min_stock: parseFloat(String(p.min_stock ?? 0)) || 0,
+    status: (p.status as ProductFormData['status']) ?? 'ACTIVE',
+    size_order: p.size_order ?? '',
+    size_production: p.size_production ?? '',
+    wave: p.wave ?? undefined,
+    box_type: p.box_type ?? undefined,
+    delivery_tolerance: p.delivery_tolerance ?? '',
+    commission_per_unit: p.commission_per_unit != null ? parseFloat(String(p.commission_per_unit)) : undefined,
+    commission_percent: p.commission_percent != null ? parseFloat(String(p.commission_percent)) : undefined,
+    process_xa: p.process_xa ?? undefined,
+    process_in: p.process_in ?? undefined,
+    process_boi: p.process_boi ?? undefined,
+    process_can_mang: p.process_can_mang ?? undefined,
+    process_be: p.process_be ?? undefined,
+    process_chap: p.process_chap ?? undefined,
+    process_dong: p.process_dong ?? undefined,
+    process_dan: p.process_dan ?? undefined,
+    process_khac: p.process_khac ?? undefined,
+    film_code: p.film_code ?? '',
+    color_count: p.color_count ?? undefined,
+    mold_code: p.mold_code ?? '',
+    waterproof: (p.waterproof as string) ?? '',
+    note_other: p.note_other ?? '',
+    note: p.note ?? '',
+    is_active: p.is_active ?? true,
+  };
+}
+
+const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => {
   const queryClient = useQueryClient();
-
-  const { data: categoriesData, refetch: refetchCategories } = useQuery({
+  const { data: productDetail, isError: productFetchError } = useQuery({
+    queryKey: ['product', editingProduct?.id],
+    queryFn: () => productsApi.getProduct(editingProduct!.id),
+    enabled: visible && !!editingProduct?.id,
+    retry: false,
+  });
+  const isEditingChild = productDetail?.parent != null;
+  const { data: parentDetail } = useQuery({
+    queryKey: ['product', productDetail?.parent],
+    queryFn: () => productsApi.getProduct(productDetail!.parent!),
+    enabled: visible && !!productDetail?.parent,
+  });
+  const { data: categoriesData } = useQuery({
     queryKey: ['categories'],
-    queryFn: () => productsApi.getCategories({ page_size: 100 }),
+    queryFn: () => productsApi.getCategories({ page_size: 200 }),
+    enabled: visible,
+  });
+  const { data: unitsData } = useQuery({
+    queryKey: ['units'],
+    queryFn: () => productsApi.getUnits({ page_size: 200 }),
+    enabled: visible,
+  });
+  const { data: wavesData } = useQuery({
+    queryKey: ['waves'],
+    queryFn: () => productsApi.getWaves({ page_size: 200 }),
+    enabled: visible,
+  });
+  const { data: boxTypesData } = useQuery({
+    queryKey: ['boxTypes'],
+    queryFn: () => productsApi.getBoxTypes({ page_size: 200 }),
     enabled: visible,
   });
 
-  const { data: unitsData } = useQuery({
-    queryKey: ['units'],
-    queryFn: async () => {
-      console.log('🔍 Fetching units...');
-      const result = await productsApi.getUnits({ page_size: 100 });
-      console.log('🔍 Units fetched:', result);
-      return result;
-    },
-  });
+  const categories = useMemo(() => categoriesData?.results ?? [], [categoriesData]);
+  const units = useMemo(() => unitsData?.results ?? [], [unitsData]);
+  const waves = useMemo(() => wavesData?.results ?? [], [wavesData]);
+  const boxTypes = useMemo(() => boxTypesData?.results ?? [], [boxTypesData]);
+  const firstUnitId = units[0]?.id;
+
+  const [mother, setMother] = useState<ProductFormData>(() => defaultMother(firstUnitId));
+  const [hasChildren, setHasChildren] = useState(false);
+  const [children, setChildren] = useState<ProductChildFormData[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const { message } = App.useApp();
 
   useEffect(() => {
-    console.log('🔍 unitsData changed:', unitsData);
-    console.log('🔍 unitsData.results:', unitsData?.results);
-  }, [unitsData]);
-
-  useEffect(() => {
-    if (visible) {
-      refetchCategories();
-    }
-  }, [visible, refetchCategories]);
-
-  const saveMutation = useMutation({
-    mutationFn: (data: ProductFormData) => {
-      if (editingProduct?.id) {
-        return productsApi.updateProduct(editingProduct.id, data);
-      }
-      return productsApi.createProduct(data);
-    },
-    onSuccess: () => {
-      message.success(
-        editingProduct?.id ? 'Cập nhật thành công!' : 'Thêm mới thành công!'
-      );
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      handleClose();
-    },
-    onError: (error: any) => {
-      message.error(
-        error.response?.data?.detail || 'Có lỗi xảy ra!'
-      );
-    },
-  });
-
-  useEffect(() => {
-    if (visible) {
-      if (editingProduct) {
-        form.setFieldsValue({
-          ...editingProduct,
-          cost_price: parseFloat(editingProduct.cost_price || '0'),
-          sale_price: parseFloat(editingProduct.sale_price || '0'),
-          min_stock: parseFloat(editingProduct.min_stock || '0'),
-          commission_per_unit: parseFloat(
-            editingProduct.commission_per_unit || '0'
-          ),
-          commission_percent: parseFloat(
-            editingProduct.commission_percent || '0'
-          ),
-          color_count: editingProduct.color_count ?? 0,
-        });
+    if (!visible) return;
+    setSubmitError(null);
+    if (editingProduct?.id && productDetail) {
+      if (productDetail.parent != null) {
+        if (parentDetail) {
+          setMother(productToMother(parentDetail));
+          setHasChildren(true);
+          setChildren([componentToChildFormData(productDetail, firstUnitId)]);
+          originalComponentIdsRef.current = [productDetail.id].filter((id): id is number => id != null);
+        }
       } else {
-        form.resetFields();
-        form.setFieldsValue({
-          status: 'DRAFT',
-          is_active: true,
-          cost_price: 0,
-          sale_price: 0,
-          min_stock: 0,
-          color_count: 0,
-          commission_per_unit: 0,
-          commission_percent: 0,
-        });
+        setMother(productToMother(productDetail));
+        const comps = productDetail.components ?? [];
+        setHasChildren(comps.length > 0);
+        setChildren(comps.map((c) => componentToChildFormData(c, firstUnitId)));
+        originalComponentIdsRef.current = comps.map((c) => c.id).filter((id): id is number => id != null);
       }
+    } else if (!editingProduct) {
+      setMother(defaultMother(firstUnitId));
+      setChildren([]);
+      setHasChildren(false);
     }
-  }, [visible, editingProduct, form]);
+  }, [visible, editingProduct?.id, productDetail, parentDetail, firstUnitId]);
 
-  const handleClose = () => {
-    form.resetFields();
-    setFilmFile(null);
-    setMoldFile(null);
-    setActiveTab('basic');
-    onClose();
+  const GAP = 8;
+  const PADDING_X = 16;
+  const COLS = 10;
+  const contentRef = useRef<HTMLDivElement>(null);
+  const quickEntryContainerRef = useRef<HTMLDivElement>(null);
+  /** IDs components ban đầu khi load (để biết cần xóa khi user bỏ con) */
+  const originalComponentIdsRef = useRef<number[]>([]);
+  /* Chiều rộng grid cố định để colW không nhảy khi thêm con / scrollbar → tránh ô bị phóng to */
+  const CONTENT_MAX_WIDTH = 1280;
+  const colW = (CONTENT_MAX_WIDTH - GAP * (COLS - 1)) / COLS;
+  /* Khối Thêm con + card CON + Huỷ/Cập nhật thẳng mép phải với ô Ghi chú chung (Mẹ) = 8 + 1280 */
+  const CON_ALIGN_WIDTH = 1288;
+
+  /* Bộ nhập nhanh: Enter chuyển ô, ô cuối → Cập nhật (handleSubmit) */
+  useQuickEntryKeys(quickEntryContainerRef, {
+    onLastFieldEnter: () => void handleSubmit(),
+    enabled: visible,
+  });
+
+  const createMotherMutation = useMutation({
+    mutationFn: (data: ProductFormData) => productsApi.createProduct(data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['products'] }),
+  });
+  const updateMotherMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<ProductFormData> }) => productsApi.updateProduct(id, data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['products'] }),
+  });
+  const createChildMutation = useMutation({
+    mutationFn: (data: ProductFormData & { parent: number }) => productsApi.createProduct(data as ProductFormData),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['products'] }),
+  });
+  const updateChildMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<ProductFormData> }) => productsApi.updateProduct(id, data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['products'] }),
+  });
+  const deleteChildMutation = useMutation({
+    mutationFn: (id: number) => productsApi.deleteProduct(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['products'] }),
+  });
+
+  const setMotherField = <K extends keyof ProductFormData>(key: K, value: ProductFormData[K]) => {
+    setMother((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const setChild = (index: number, field: keyof ProductChildFormData, value: unknown) => {
+    setChildren((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const addChild = () => {
+    setChildren((prev) => [...prev, defaultChild(firstUnitId)]);
+    setHasChildren(true);
+  };
+
+  const removeChild = (index: number) => {
+    setChildren((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      if (next.length === 0) setHasChildren(false);
+      return next;
+    });
   };
 
   const handleSubmit = async () => {
+    setSubmitError(null);
+    const errMother = validateMother(mother);
+    if (errMother) {
+      setSubmitError(errMother);
+      message.error(errMother);
+      return;
+    }
+    if (hasChildren && children.length > 0) {
+      for (let i = 0; i < children.length; i++) {
+        const err = validateChild(children[i]);
+        if (err) {
+          const errMsg = `Con ${i + 1}: ${err}`;
+          setSubmitError(errMsg);
+          message.error(errMsg);
+          return;
+        }
+      }
+    }
+    setSubmitting(true);
+    setSubmitError(null);
     try {
-      const values = await form.validateFields();
+      const isSet = hasChildren && children.length > 0;
+      const motherPayload = buildMotherPayload(mother, isSet);
 
-      if (filmFile) {
-        const result = await productsApi.uploadFile(filmFile, 'film');
-        values.film_file_url = result.url;
+      if (editingProduct?.id) {
+        if (isEditingChild) {
+          const child = children[0];
+          if (child && productDetail?.parent != null) {
+            const motherId = productDetail.parent;
+            const childCode = (productDetail.code ?? '').trim() || `${(mother.code ?? '').trim()}-1`;
+            const fullPayload = buildChildPayload(child, motherId, childCode);
+            const { parent: _p, code: _c, ...updateData } = fullPayload;
+            await updateChildMutation.mutateAsync({ id: editingProduct.id, data: updateData });
+            message.success('Đã cập nhật sản phẩm thành công.');
+          } else if (children.length === 0 && productDetail?.parent != null) {
+            await deleteChildMutation.mutateAsync(editingProduct.id);
+            message.success('Đã xóa mã hàng con.');
+          }
+          queryClient.invalidateQueries({ queryKey: ['product', editingProduct.id] });
+          queryClient.invalidateQueries({ queryKey: ['product', productDetail?.parent] });
+        } else {
+          await updateMotherMutation.mutateAsync({ id: editingProduct.id, data: motherPayload });
+          const motherId = editingProduct.id;
+          const motherCode = (mother.code ?? '').trim();
+          const currentChildIds = isSet ? children.map((c) => c.id).filter((id): id is number => id != null) : [];
+          const idsToDelete = originalComponentIdsRef.current.filter((id) => !currentChildIds.includes(id));
+          for (const id of idsToDelete) {
+            await deleteChildMutation.mutateAsync(id);
+          }
+          if (isSet && children.length > 0) {
+            for (let i = 0; i < children.length; i++) {
+              const child = children[i];
+              const childCode = `${motherCode}-${i + 1}`;
+              const fullPayload = buildChildPayload(child, motherId, childCode);
+              const { parent: _p, code: _c, ...updateData } = fullPayload;
+              if (child.id != null) {
+                await updateChildMutation.mutateAsync({ id: child.id, data: updateData });
+              } else {
+                await createChildMutation.mutateAsync(fullPayload);
+              }
+            }
+          }
+          queryClient.invalidateQueries({ queryKey: ['product', editingProduct.id] });
+          message.success('Đã cập nhật sản phẩm thành công.');
+        }
+      } else {
+        const created = await createMotherMutation.mutateAsync(motherPayload);
+        const motherId = created.id;
+        const motherCode = (mother.code ?? '').trim();
+
+        if (isSet && children.length > 0) {
+          for (let i = 0; i < children.length; i++) {
+            const childPayload = buildChildPayload(children[i], motherId, `${motherCode}-${i + 1}`);
+            await createChildMutation.mutateAsync(childPayload);
+          }
+        }
+        message.success('Đã thêm sản phẩm thành công.');
       }
 
-      if (moldFile) {
-        const result = await productsApi.uploadFile(moldFile, 'mold');
-        values.mold_file_url = result.url;
-      }
-
-      if (!editingProduct) {
-        values.is_active = form.getFieldValue('is_active') ?? true;
-      }
-
-      await saveMutation.mutateAsync(values);
-    } catch (error) {
-      console.error('Form validation failed:', error);
+      setSubmitError(null);
+      onClose();
+      setMother(defaultMother(firstUnitId));
+      setChildren([]);
+      setHasChildren(false);
+    } catch (e: unknown) {
+      const { generalMessage } = parseApiError(e);
+      const msg = generalMessage || 'Có lỗi khi lưu.';
+      setSubmitError(msg);
+      message.error(msg);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
-    <Drawer
-      title={editingProduct?.id ? 'Chỉnh sửa sản phẩm' : 'Thêm sản phẩm mới'}
-      open={visible}
-      onClose={handleClose}
-      width={Math.min(900, typeof window !== 'undefined' ? window.innerWidth * 0.9 : 900)}
-      placement="right"
-      destroyOnClose
-      footer={
-        <div style={{ textAlign: 'right' }}>
-          <Button onClick={handleClose} style={{ marginRight: 8 }}>
-            Hủy
-          </Button>
-          <Button
-            type="primary"
-            loading={saveMutation.isPending}
-            onClick={handleSubmit}
-          >
-            {editingProduct?.id ? 'Cập nhật' : 'Thêm mới'}
-          </Button>
+    <Modal
+      title={
+        <div style={{ fontSize: '1.2em', textAlign: 'left', marginLeft: 0 }}>
+          {editingProduct ? 'Chỉnh sửa Sản phẩm' : 'Thêm Mới Sản phẩm'}
         </div>
       }
+      open={visible}
+      onCancel={onClose}
+      footer={null}
+      width="92vw"
+      style={{ maxWidth: 1377 }}
+      destroyOnHidden
+      styles={{
+        wrapper: { overflowX: 'hidden', overflowY: 'auto' },
+        header: { paddingLeft: PADDING_X },
+        content: { overflowX: 'hidden', maxWidth: 1377 },
+        body: { padding: 0, maxHeight: 'calc(100vh - 120px)', overflowX: 'hidden', overflowY: 'auto' },
+      }}
     >
-      <Form form={form} layout="vertical" style={{ padding: '0 8px' }}>
-        <div style={{ maxHeight: 'calc(100vh - 180px)', overflowY: 'auto' }}>
-        <Tabs
-          activeKey={activeTab}
-          onChange={setActiveTab}
-          items={[
-            {
-              key: 'basic',
-              label: '📦 Cơ bản',
-              children: (
-                <>
-                  <Row gutter={16}>
-              <Col span={24}>
-                <Form.Item
-                  label="Tên hàng"
-                  name="name"
-                  rules={[
-                    { required: true, message: 'Vui lòng nhập tên hàng!' },
-                  ]}
-                >
-                  <Input placeholder="VD: Thùng carton 50x40x30cm - 3 lớp" />
-                </Form.Item>
-              </Col>
+      <div
+        ref={contentRef}
+        style={{
+          padding: `${PADDING_X}px`,
+          overflowX: 'hidden',
+          overflowY: 'auto',
+          maxHeight: 'calc(100vh - 120px)',
+        }}
+      >
+        <div style={{ overflow: 'visible', width: CON_ALIGN_WIDTH, maxWidth: '100%', ['--pf-col-w' as string]: `${colW}px` }}>
+          <div className="pf-container" ref={quickEntryContainerRef}>
+        {editingProduct && productFetchError && (
+          <Alert type="error" message="Không thể tải thông tin sản phẩm. Vui lòng thử lại hoặc đóng form và mở lại." style={{ marginBottom: 16 }} />
+        )}
+        {submitError && (
+          <Alert
+            type="error"
+            message={submitError}
+            showIcon
+            closable
+            onClose={() => setSubmitError(null)}
+            style={{ marginBottom: 16 }}
+          />
+        )}
+        <section className="pf-section pf-section-mother">
+          <div className="pf-row pf-row-price">
+            <Field label="Mã hàng (Mẹ)" required span={2}>
+              <FormInputWithClear
+                type="text"
+                className="pf-input"
+                value={mother.code ?? ''}
+                onChange={(e) => setMotherField('code', e.target.value)}
+                onClear={() => setMotherField('code', '')}
+              />
+            </Field>
+            <Field label="Tên hàng" required span={2}>
+              <FormInputWithClear
+                type="text"
+                className="pf-input"
+                value={mother.name ?? ''}
+                onChange={(e) => setMotherField('name', e.target.value)}
+                onClear={() => setMotherField('name', '')}
+              />
+            </Field>
+            <Field label="Danh mục" span={2}>
+              <select className="pf-select" value={mother.category ?? ''} onChange={(e) => setMotherField('category', e.target.value ? Number(e.target.value) : undefined)}>
+                <option value="">Chọn</option>
+                {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Giá vốn" required span={1}>
+              <FormInputWithClear
+                type="number"
+                className="pf-input"
+                min={0}
+                value={mother.cost_price === 0 ? '' : mother.cost_price}
+                onChange={(e) => setMotherField('cost_price', e.target.value === '' ? 0 : Number(e.target.value))}
+                onClear={() => setMotherField('cost_price', 0)}
+                hasValue={mother.cost_price !== 0}
+              />
+            </Field>
+            <Field label="Đơn giá" required span={1}>
+              <FormInputWithClear
+                type="number"
+                className="pf-input"
+                min={0}
+                value={mother.sale_price === 0 ? '' : mother.sale_price}
+                onChange={(e) => setMotherField('sale_price', e.target.value === '' ? 0 : Number(e.target.value))}
+                onClear={() => setMotherField('sale_price', 0)}
+                hasValue={mother.sale_price !== 0}
+              />
+            </Field>
+            <Field label="HHCĐ" span={1}>
+              <FormInputWithClear
+                type="number"
+                className="pf-input"
+                min={0}
+                value={mother.commission_per_unit ?? ''}
+                onChange={(e) => setMotherField('commission_per_unit', e.target.value === '' ? undefined : Number(e.target.value))}
+                onClear={() => setMotherField('commission_per_unit', undefined)}
+                hasValue={mother.commission_per_unit != null}
+              />
+            </Field>
+            <Field label="HH%" span={1}>
+              <FormInputWithClear
+                type="number"
+                className="pf-input"
+                min={0}
+                value={mother.commission_percent ?? ''}
+                onChange={(e) => setMotherField('commission_percent', e.target.value === '' ? undefined : Number(e.target.value))}
+                onClear={() => setMotherField('commission_percent', undefined)}
+                hasValue={mother.commission_percent != null}
+              />
+            </Field>
+          </div>
+          <div className="pf-row pf-row-size">
+            <Field label="Dài PO" span={1}>
+              <input type="text" placeholder="Khách" className="pf-input" value={(mother.size_order ?? '').split(/x/)[0]?.trim() ?? ''} onChange={(e) => { const p = (mother.size_order ?? '').split(/x/); p[0] = e.target.value; setMotherField('size_order', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+            </Field>
+            <Field label="Rộng PO" span={1}>
+              <input type="text" placeholder="Khách" className="pf-input" value={(mother.size_order ?? '').split(/x/)[1]?.trim() ?? ''} onChange={(e) => { const p = (mother.size_order ?? '').split(/x/); p[1] = e.target.value; setMotherField('size_order', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+            </Field>
+            <Field label="Cao PO" span={1}>
+              <input type="text" placeholder="Khách" className="pf-input" value={(mother.size_order ?? '').split(/x/)[2]?.trim() ?? ''} onChange={(e) => { const p = (mother.size_order ?? '').split(/x/); p[2] = e.target.value; setMotherField('size_order', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+            </Field>
+            <Field label="Dài SX" span={1}>
+              <input type="text" placeholder="Sản xuất" className="pf-input" value={(mother.size_production ?? '').split(/x/)[0]?.trim() ?? ''} onChange={(e) => { const p = (mother.size_production ?? '').split(/x/); p[0] = e.target.value; setMotherField('size_production', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+            </Field>
+            <Field label="Rộng SX" span={1}>
+              <input type="text" placeholder="Sản xuất" className="pf-input" value={(mother.size_production ?? '').split(/x/)[1]?.trim() ?? ''} onChange={(e) => { const p = (mother.size_production ?? '').split(/x/); p[1] = e.target.value; setMotherField('size_production', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+            </Field>
+            <Field label="Cao SX" span={1}>
+              <input type="text" placeholder="Sản xuất" className="pf-input" value={(mother.size_production ?? '').split(/x/)[2]?.trim() ?? ''} onChange={(e) => { const p = (mother.size_production ?? '').split(/x/); p[2] = e.target.value; setMotherField('size_production', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
+            </Field>
+            <Field label="Sóng" required span={1}>
+              <select className="pf-select" value={mother.wave ?? ''} onChange={(e) => setMotherField('wave', e.target.value ? Number(e.target.value) : undefined)}>
+                <option value="">Chọn</option>
+                {waves.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Kiểu" required span={1}>
+              <select className="pf-select" value={mother.box_type ?? ''} onChange={(e) => setMotherField('box_type', e.target.value ? Number(e.target.value) : undefined)}>
+                <option value="">Chọn</option>
+                {boxTypes.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
+              </select>
+            </Field>
+            <Field label="ĐVT" required span={1}>
+              <select className="pf-select" value={mother.unit || ''} onChange={(e) => setMotherField('unit', e.target.value ? Number(e.target.value) : 0)}>
+                <option value="">Chọn</option>
+                {units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+            </Field>
+            <Field label="+/-" span={1}>
+              <FormInputWithClear type="text" className="pf-input" value={mother.delivery_tolerance ?? ''} onChange={(e) => setMotherField('delivery_tolerance', e.target.value)} onClear={() => setMotherField('delivery_tolerance', '')} />
+            </Field>
+          </div>
+          <div className="pf-row pf-row-process1">
+            <Field label="Xả" span={1}>
+              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_xa ?? ''} onChange={(e) => setMotherField('process_xa', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_xa', undefined)} hasValue={mother.process_xa != null} />
+            </Field>
+            <Field label="In" span={1}>
+              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_in ?? ''} onChange={(e) => setMotherField('process_in', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_in', undefined)} hasValue={mother.process_in != null} />
+            </Field>
+            <Field label="Mã phim" span={2}>
+              <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={mother.film_code ?? ''} onChange={(e) => setMotherField('film_code', e.target.value)} onClear={() => setMotherField('film_code', '')} />
+            </Field>
+            <Field label="Số màu" span={1}>
+              <FormInputWithClear type="number" className="pf-input" value={mother.color_count ?? ''} onChange={(e) => setMotherField('color_count', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('color_count', undefined)} hasValue={mother.color_count != null} />
+            </Field>
+            <Field label="C. thấm" span={1}>
+              <select className="pf-select" value={mother.waterproof ?? ''} onChange={(e) => setMotherField('waterproof', e.target.value)}>
+                {WATERPROOF_OPTIONS.map((o) => <option key={o.value || 'x'} value={o.value}>{o.label}</option>)}
+              </select>
+            </Field>
+            <Field label="Có CM" span={1}>
+              <select
+                className="pf-select"
+                value={mother.process_can_mang != null ? (Number(mother.process_can_mang) > 0 ? '1' : '0') : ''}
+                onChange={(e) => setMotherField('process_can_mang', e.target.value === '' ? undefined : e.target.value === '1' ? 1 : 0)}
+              >
+                <option value="">Chọn</option>
+                <option value="1">Có</option>
+                <option value="0">Không</option>
+              </select>
+            </Field>
+            <Field label="C. Màng" span={1}>
+              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_can_mang ?? ''} onChange={(e) => setMotherField('process_can_mang', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_can_mang', undefined)} hasValue={mother.process_can_mang != null} />
+            </Field>
+            <Field label="Bồi" span={1}>
+              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_boi ?? ''} onChange={(e) => setMotherField('process_boi', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_boi', undefined)} hasValue={mother.process_boi != null} />
+            </Field>
+            <Field label="Bế" span={1}>
+              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_be ?? ''} onChange={(e) => setMotherField('process_be', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_be', undefined)} hasValue={mother.process_be != null} />
+            </Field>
+          </div>
+          <div className="pf-row pf-row-process2">
+            <Field label="Mã khuôn" span={2}>
+              <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={mother.mold_code ?? ''} onChange={(e) => setMotherField('mold_code', e.target.value)} onClear={() => setMotherField('mold_code', '')} />
+            </Field>
+            <Field label="Chạp" span={1}>
+              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_chap ?? ''} onChange={(e) => setMotherField('process_chap', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_chap', undefined)} hasValue={mother.process_chap != null} />
+            </Field>
+            <Field label="Đóng" span={1}>
+              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_dong ?? ''} onChange={(e) => setMotherField('process_dong', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_dong', undefined)} hasValue={mother.process_dong != null} />
+            </Field>
+            <Field label="Dán" span={1}>
+              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_dan ?? ''} onChange={(e) => setMotherField('process_dan', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_dan', undefined)} hasValue={mother.process_dan != null} />
+            </Field>
+            <Field label="Khác" span={1}>
+              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_khac ?? ''} onChange={(e) => setMotherField('process_khac', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_khac', undefined)} hasValue={mother.process_khac != null} />
+            </Field>
+            <Field label="Ghi chú công đoạn khác" span={4}>
+              <FormInputWithClear type="text" className="pf-input" value={mother.note_other ?? ''} onChange={(e) => setMotherField('note_other', e.target.value)} onClear={() => setMotherField('note_other', '')} />
+            </Field>
+          </div>
+          <div className="pf-row pf-row-note">
+            <Field label="Ghi chú chung (Mẹ)" span={9}>
+              <FormInputWithClear type="text" className="pf-input" value={mother.note ?? ''} onChange={(e) => setMotherField('note', e.target.value)} onClear={() => setMotherField('note', '')} />
+            </Field>
+            <Field label="Trạng thái" span={1}>
+              <select
+                className="pf-select"
+                value={mother.status ?? 'ACTIVE'}
+                onChange={(e) => {
+                  const v = e.target.value as 'DRAFT' | 'ACTIVE' | 'DISCONTINUED';
+                  setMotherField('status', v);
+                  setMotherField('is_active', v !== 'DISCONTINUED');
+                }}
+                style={{
+                  backgroundColor:
+                    mother.status === 'ACTIVE'
+                      ? 'rgba(34, 197, 94, 0.5)'
+                      : mother.status === 'DISCONTINUED'
+                        ? 'rgba(239, 68, 68, 0.5)'
+                        : 'rgba(234, 179, 8, 0.5)',
+                }}
+              >
+                <option value="ACTIVE">Đang bán</option>
+                <option value="DISCONTINUED">Ngừng SX</option>
+                <option value="DRAFT">Nháp</option>
+              </select>
+            </Field>
+          </div>
+        </section>
 
-              <Col span={12}>
-                <Form.Item label="Danh mục" name="category">
-                  <Select
-                    placeholder="Chọn danh mục"
-                    allowClear
-                    showSearch
-                    loading={!categoriesData}
-                    optionFilterProp="label"
-                    dropdownStyle={{ zIndex: 9999 }}
-                  >
-                    {categoriesData?.results?.map((cat) => (
-                      <Select.Option key={cat.id} value={cat.id}>
-                        {cat.name}
-                      </Select.Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-              </Col>
+        <section className="pf-section pf-section-children">
+          <div className="pf-children-header">
+            <div className="pf-children-header-inner">
+              <Checkbox checked={hasChildren} onChange={(e) => setHasChildren(e.target.checked)}>
+                Có thành phần con (Lót, Khay...)
+              </Checkbox>
+              <Button type="primary" ghost onClick={addChild}>Thêm con</Button>
+            </div>
+          </div>
+          {hasChildren && children.map((child, i) => (
+            <ChildBlock
+              key={i}
+              index={i}
+              motherCode={(mother.code ?? '').trim()}
+              child={child}
+              onChange={(field, value) => setChild(i, field, value)}
+              onRemove={() => removeChild(i)}
+              canRemove={children.length >= 1}
+              categories={categories}
+              units={units}
+              waves={waves}
+              boxTypes={boxTypes}
+            />
+          ))}
+        </section>
 
-              <Col span={12}>
-                <Form.Item
-                  label="Đơn vị tính"
-                  name="unit"
-                  rules={[{ required: true, message: 'Vui lòng chọn đơn vị!' }]}
-                >
-                  <NativeSelectInput placeholder="Chọn đơn vị" parseNumber>
-                    {unitsData?.results?.map((unit: any) => (
-                      <option key={unit.id} value={unit.id}>
-                        {unit.name}
-                      </option>
-                    ))}
-                  </NativeSelectInput>
-                </Form.Item>
-              </Col>
-            </Row>
-
-            <Divider orientation="left">Kích thước & Loại</Divider>
-
-            <Row gutter={16}>
-              <Col span={12}>
-                <Form.Item label="Kích thước ĐH" name="size_order">
-                  <Input placeholder="VD: 50x40x30" />
-                </Form.Item>
-              </Col>
-
-              <Col span={12}>
-                <Form.Item label="KTSX" name="size_production">
-                  <Input placeholder="Tự động = ĐH nếu để trống" />
-                </Form.Item>
-              </Col>
-
-              <Col span={12}>
-                <Form.Item label="Sóng" name="wave_type">
-                  <NativeSelectInput placeholder="Chọn sóng">
-                    {WAVE_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </NativeSelectInput>
-                </Form.Item>
-              </Col>
-
-              <Col span={12}>
-                <Form.Item label="Kiểu" name="box_type">
-                  <NativeSelectInput placeholder="Chọn kiểu">
-                    {BOX_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </NativeSelectInput>
-                </Form.Item>
-              </Col>
-            </Row>
-
-            <Divider orientation="left">Giá & Số lượng</Divider>
-
-            <Row gutter={16}>
-              <Col span={8}>
-                <Form.Item
-                  label="Giá vốn (đ)"
-                  name="cost_price"
-                  rules={[
-                    { required: true, message: 'Vui lòng nhập giá vốn!' },
-                  ]}
-                >
-                  <InputNumber
-                    style={{ width: '100%' }}
-                    min={0}
-                    formatter={(value) =>
-                      `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-                    }
-                  />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item
-                  label="Đơn giá (đ)"
-                  name="sale_price"
-                  rules={[
-                    { required: true, message: 'Vui lòng nhập đơn giá!' },
-                  ]}
-                >
-                  <InputNumber
-                    style={{ width: '100%' }}
-                    min={0}
-                    formatter={(value) =>
-                      `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-                    }
-                  />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item label="Tồn TT" name="min_stock">
-                  <InputNumber style={{ width: '100%' }} min={0} />
-                </Form.Item>
-              </Col>
-            </Row>
-
-            <Divider orientation="left">Hoa hồng & Giao hàng</Divider>
-
-            <Row gutter={16}>
-              <Col span={8}>
-                <Form.Item label="HHCĐ (đ/cái)" name="commission_per_unit">
-                  <InputNumber style={{ width: '100%' }} min={0} />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item label="HH%" name="commission_percent">
-                  <InputNumber
-                    style={{ width: '100%' }}
-                    min={0}
-                    max={100}
-                  />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item label="+/-" name="delivery_tolerance">
-                  <Input placeholder="VD: ±5% hoặc Dư 10 cái" />
-                </Form.Item>
-              </Col>
-            </Row>
-
-            <Form.Item label="Mô tả" name="description">
-              <Input.TextArea rows={3} />
-            </Form.Item>
-                </>
-              ),
-            },
-            {
-              key: 'process',
-              label: '⚙️ Công đoạn',
-              children: (
-                <>
-                  <p
-              style={{
-                color: theme.colors.textSecondary,
-                marginBottom: 16,
-              }}
+        <div className="pf-footer">
+          <div className="pf-footer-inner">
+            <Button onClick={onClose}>Huỷ</Button>
+            <Button
+              type="primary"
+              htmlType="button"
+              loading={submitting}
+              disabled={!editingProduct && units.length === 0}
+              onClick={() => void handleSubmit()}
             >
-              Nhập định mức (cái/giờ) cho các công đoạn. Để trống nếu không có
-              công đoạn.
-            </p>
-
-            <Row gutter={16}>
-              <Col span={8}>
-                <Form.Item label="Xả (cái/giờ)" name="process_xa">
-                  <InputNumber
-                    style={{ width: '100%' }}
-                    min={0}
-                    placeholder="VD: 1000"
-                  />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item label="In (cái/giờ)" name="process_in">
-                  <InputNumber
-                    style={{ width: '100%' }}
-                    min={0}
-                    placeholder="VD: 800"
-                  />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item label="Bồi (cái/giờ)" name="process_boi">
-                  <InputNumber
-                    style={{ width: '100%' }}
-                    min={0}
-                    placeholder="VD: 1200"
-                  />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item
-                  label="Cán màng (cái/giờ)"
-                  name="process_can_mang"
-                >
-                  <InputNumber style={{ width: '100%' }} min={0} />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item label="Bế (cái/giờ)" name="process_be">
-                  <InputNumber style={{ width: '100%' }} min={0} />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item label="Chạp (cái/giờ)" name="process_chap">
-                  <InputNumber style={{ width: '100%' }} min={0} />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item label="Đóng (cái/giờ)" name="process_dong">
-                  <InputNumber style={{ width: '100%' }} min={0} />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item label="Dán (cái/giờ)" name="process_dan">
-                  <InputNumber style={{ width: '100%' }} min={0} />
-                </Form.Item>
-              </Col>
-
-              <Col span={8}>
-                <Form.Item label="Khác (cái/giờ)" name="process_khac">
-                  <InputNumber style={{ width: '100%' }} min={0} />
-                </Form.Item>
-              </Col>
-            </Row>
-                </>
-              ),
-            },
-            {
-              key: 'files',
-              label: '📄 Files & In ấn',
-              children: (
-                <>
-                  <Card size="small" title="Mã phim" style={{ marginBottom: 16 }}>
-              <Form.Item label="Mã phim" name="film_code">
-                <Input placeholder="VD: FILM-001" />
-              </Form.Item>
-
-              <Form.Item label="Link file phim (PDF)" name="film_file_url">
-                <Input
-                  prefix={<LinkOutlined />}
-                  placeholder="https://..."
-                  addonAfter={
-                    <Upload
-                      accept=".pdf"
-                      beforeUpload={(file) => {
-                        setFilmFile(file);
-                        message.success(`Đã chọn file: ${file.name}`);
-                        return false;
-                      }}
-                      showUploadList={false}
-                    >
-                      <Button icon={<UploadOutlined />}>Upload PDF</Button>
-                    </Upload>
-                  }
-                />
-              </Form.Item>
-              {filmFile && (
-                <p style={{ color: theme.colors.textSecondary }}>
-                  📎 File đã chọn: {filmFile.name}
-                </p>
-              )}
-            </Card>
-
-            <Card size="small" title="Mã khuôn" style={{ marginBottom: 16 }}>
-              <Form.Item label="Mã khuôn" name="mold_code">
-                <Input placeholder="VD: MOLD-001" />
-              </Form.Item>
-
-              <Form.Item label="Link file khuôn (PDF)" name="mold_file_url">
-                <Input
-                  prefix={<LinkOutlined />}
-                  placeholder="https://..."
-                  addonAfter={
-                    <Upload
-                      accept=".pdf"
-                      beforeUpload={(file) => {
-                        setMoldFile(file);
-                        message.success(`Đã chọn file: ${file.name}`);
-                        return false;
-                      }}
-                      showUploadList={false}
-                    >
-                      <Button icon={<UploadOutlined />}>Upload PDF</Button>
-                    </Upload>
-                  }
-                />
-              </Form.Item>
-              {moldFile && (
-                <p style={{ color: theme.colors.textSecondary }}>
-                  📎 File đã chọn: {moldFile.name}
-                </p>
-              )}
-            </Card>
-
-            <Row gutter={16}>
-              <Col span={12}>
-                <Form.Item label="Số màu" name="color_count">
-                  <InputNumber style={{ width: '100%' }} min={0} max={10} />
-                </Form.Item>
-              </Col>
-
-              <Col span={12}>
-                <Form.Item label="Chống thấm" name="waterproof">
-                  <Select
-                  dropdownStyle={{ zIndex: 9999 }}
-                  options={WATERPROOF_OPTIONS}
-                />
-                </Form.Item>
-              </Col>
-            </Row>
-                </>
-              ),
-            },
-            {
-              key: 'notes',
-              label: '📝 Ghi chú',
-              children: (
-                <>
-                  <Form.Item label="Ghi chú khác" name="note_other">
-              <Input.TextArea
-                rows={4}
-                placeholder="Ghi chú về công đoạn đặc biệt..."
-              />
-            </Form.Item>
-
-            <Form.Item label="Ghi chú" name="note">
-              <Input.TextArea rows={4} placeholder="Ghi chú chung..." />
-            </Form.Item>
-
-            <Form.Item label="Trạng thái" name="status">
-              <Select
-                dropdownStyle={{ zIndex: 9999 }}
-                options={[
-                  { label: 'Nháp', value: 'DRAFT' },
-                  { label: 'Đang bán', value: 'ACTIVE' },
-                  { label: 'Ngừng SX', value: 'DISCONTINUED' },
-                ]}
-              />
-            </Form.Item>
-                </>
-              ),
-            },
-          ]}
-        />
+              {editingProduct ? 'Cập nhật' : 'Thêm mới'}
+            </Button>
+          </div>
         </div>
-      </Form>
-    </Drawer>
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 };
 

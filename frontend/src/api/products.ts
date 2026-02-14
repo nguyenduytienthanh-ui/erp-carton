@@ -4,8 +4,6 @@ import type {
   Product,
   ProductCategory,
   ProductUnit,
-  ProductWave,
-  ProductBoxType,
   PaginatedResponse,
   ProductFormData,
 } from '../types/product';
@@ -36,13 +34,13 @@ export const productsApi = {
     await axiosInstance.delete(`${API_ENDPOINTS.PRODUCTS}${id}/`);
   },
 
-  /** Xóa nhiều sản phẩm (dùng cho cả xóa 1 hoặc nhiều) */
-  bulkDeleteProducts: async (ids: number[]): Promise<void> => {
-    await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}bulk_delete/`, { ids });
+  bulkDeleteProducts: async (ids: number[]): Promise<{ message: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}bulk_delete/`, { ids });
+    return response.data;
   },
 
   // Upload PDF file (phim, khuôn)
-  uploadFile: async (file: File, fieldName: string): Promise<{ url: string; filename?: string }> => {
+  uploadFile: async (file: File, fieldName: string): Promise<{ url: string }> => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('field_name', fieldName);
@@ -51,10 +49,6 @@ export const productsApi = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
-      transformRequest: [(data, headers) => {
-        delete headers['Content-Type'];
-        return data;
-      }],
     });
     return response.data;
   },
@@ -123,43 +117,15 @@ export const productsApi = {
   },
 
   // ===== WAVES =====
-  getWaves: async (params?: any): Promise<PaginatedResponse<ProductWave>> => {
+  getWaves: async (params?: { page_size?: number }): Promise<PaginatedResponse<{ id: number; code: string; name: string }>> => {
     const response = await axiosInstance.get(API_ENDPOINTS.WAVES, { params });
     return response.data;
   },
 
-  createWave: async (data: Partial<ProductWave>): Promise<ProductWave> => {
-    const response = await axiosInstance.post(API_ENDPOINTS.WAVES, data);
-    return response.data;
-  },
-
-  updateWave: async (id: number, data: Partial<ProductWave>): Promise<ProductWave> => {
-    const response = await axiosInstance.patch(`${API_ENDPOINTS.WAVES}${id}/`, data);
-    return response.data;
-  },
-
-  deleteWave: async (id: number): Promise<void> => {
-    await axiosInstance.delete(`${API_ENDPOINTS.WAVES}${id}/`);
-  },
-
   // ===== BOX TYPES =====
-  getBoxTypes: async (params?: any): Promise<PaginatedResponse<ProductBoxType>> => {
+  getBoxTypes: async (params?: { page_size?: number }): Promise<PaginatedResponse<{ id: number; code: string; name: string }>> => {
     const response = await axiosInstance.get(API_ENDPOINTS.BOX_TYPES, { params });
     return response.data;
-  },
-
-  createBoxType: async (data: Partial<ProductBoxType>): Promise<ProductBoxType> => {
-    const response = await axiosInstance.post(API_ENDPOINTS.BOX_TYPES, data);
-    return response.data;
-  },
-
-  updateBoxType: async (id: number, data: Partial<ProductBoxType>): Promise<ProductBoxType> => {
-    const response = await axiosInstance.patch(`${API_ENDPOINTS.BOX_TYPES}${id}/`, data);
-    return response.data;
-  },
-
-  deleteBoxType: async (id: number): Promise<void> => {
-    await axiosInstance.delete(`${API_ENDPOINTS.BOX_TYPES}${id}/`);
   },
 
   // ===== EXPORT / IMPORT =====
@@ -201,9 +167,12 @@ export const productsApi = {
     return response.data as Blob;
   },
 
-  importProducts: async (file: File): Promise<any> => {
+  importProducts: async (file: File, options?: { updateIfExists?: boolean }): Promise<any> => {
     const formData = new FormData();
     formData.append('file', file);
+    if (options?.updateIfExists) {
+      formData.append('update_if_exists', 'true');
+    }
     const response = await axiosInstance.post(API_ENDPOINTS.IMPORT_PRODUCTS, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',

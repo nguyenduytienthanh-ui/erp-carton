@@ -2,7 +2,9 @@ from io import BytesIO
 import os
 import uuid
 
-from django.db.models import Q, Count
+from django.db import IntegrityError
+from django.db.models import ProtectedError
+from django.db.models import Q, Count, Case, When, Value, IntegerField
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.http import HttpResponse
@@ -13,8 +15,17 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from django.utils import timezone
 from core.filters import ProductFilter
-from core.mixins import ExportExcelMixin
+from core.mixins import ExportExcelMixin, get_client_ip
+from core.models import AuditLog
+from core.permissions import check_action_permission
+from .filters import (
+    ProductCategoryFilter,
+    ProductUnitFilter,
+    ProductWaveFilter,
+    ProductBoxTypeFilter,
+)
 from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product
 from .serializers import (
     ProductCategorySerializer,
@@ -25,119 +36,324 @@ from .serializers import (
 )
 
 
-class ProductCategoryViewSet(viewsets.ModelViewSet):
-    """CRUD ProductCategory với tree support"""
+class ProductCategoryViewSet(ExportExcelMixin, viewsets.ModelViewSet):
+    """
+    CRUD ProductCategory (Master Data chuẩn).
+    filterset + search + ordering + bulk + pagination + export template.
+    Ví dụ: /api/product-categories?search=giay&is_active=true&ordering=code&created_at__gte=2025-01-01
+    """
 
     queryset = ProductCategory.objects.all()
     serializer_class = ProductCategorySerializer
     permission_classes = [IsAuthenticated]
+    export_template_entity_type = 'ProductCategory'
 
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['is_active', 'parent']
+    filterset_class = ProductCategoryFilter
     search_fields = ['code', 'name', 'description']
-    ordering_fields = ['code', 'name', 'created_at']
-    ordering = ['code']
+    ordering_fields = ['code', 'name', 'sort_order', 'created_at']
+    ordering = ['sort_order', 'code']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return qs.filter(deleted_at__isnull=True)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        instance.deleted_at = timezone.now()
+        instance.deleted_by = self.request.user
+        instance.save()
 
     @action(detail=False, methods=['get'])
     def tree(self, request):
         """Lấy cây danh mục"""
-        roots = self.queryset.filter(parent__isnull=True, is_active=True)
+        roots = self.get_queryset().filter(parent__isnull=True, is_active=True)
         serializer = self.get_serializer(roots, many=True)
         return Response(serializer.data)
 
-    @action(detail=True, methods=['post'])
-    def bulk_activate(self, request, pk=None):
-        """Kích hoạt nhiều danh mục"""
+    @action(detail=False, methods=['post'])
+    def bulk_activate(self, request):
+        if not check_action_permission(request.user, 'ProductCategory', 'EDIT'):
+            return Response({'error': 'Không có quyền kích hoạt'}, status=status.HTTP_403_FORBIDDEN)
         ids = request.data.get('ids', [])
-        ProductCategory.objects.filter(id__in=ids).update(is_active=True)
+        ProductCategory.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=True)
         return Response({'message': f'Đã kích hoạt {len(ids)} danh mục'})
 
     @action(detail=False, methods=['post'])
-    def bulk_delete(self, request):
-        """Xóa nhiều danh mục"""
+    def bulk_deactivate(self, request):
+        if not check_action_permission(request.user, 'ProductCategory', 'EDIT'):
+            return Response({'error': 'Không có quyền vô hiệu hóa'}, status=status.HTTP_403_FORBIDDEN)
         ids = request.data.get('ids', [])
-        ProductCategory.objects.filter(id__in=ids).delete()
-        return Response({'message': f'Đã xóa {len(ids)} danh mục'})
+        ProductCategory.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=False)
+        return Response({'message': f'Đã vô hiệu hóa {len(ids)} danh mục'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_delete(self, request):
+        ids = request.data.get('ids', [])
+        now = timezone.now()
+        ProductCategory.objects.filter(id__in=ids).update(
+            deleted_at=now, deleted_by=request.user
+        )
+        return Response({'message': f'Đã xóa (soft) {len(ids)} danh mục'})
+
+    def get_export_sheet_title(self):
+        return 'Danh mục sản phẩm'
+
+    def get_export_filename(self):
+        return 'danh_muc_san_pham.xlsx'
+
+    def get_export_headers(self):
+        return ['Mã', 'Tên', 'Mô tả', 'Đang dùng', 'Thứ tự', 'Ngày tạo']
+
+    def get_export_row(self, obj):
+        return [
+            obj.code or '',
+            obj.name or '',
+            (obj.description or '')[:200],
+            'Có' if obj.is_active else 'Không',
+            obj.sort_order or 0,
+            obj.created_at.strftime('%Y-%m-%d') if obj.created_at else '',
+        ]
 
 
-class ProductUnitViewSet(viewsets.ModelViewSet):
-    """CRUD ProductUnit (đơn giản)"""
+class ProductUnitViewSet(ExportExcelMixin, viewsets.ModelViewSet):
+    """
+    CRUD ProductUnit (Master Data chuẩn).
+    /api/product-units?search=CAI&is_active=true&ordering=code&created_at__gte=2025-01-01
+    """
 
     queryset = ProductUnit.objects.all()
     serializer_class = ProductUnitSerializer
     permission_classes = [IsAuthenticated]
+    export_template_entity_type = 'ProductUnit'
 
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['is_active']
+    filterset_class = ProductUnitFilter
     search_fields = ['code', 'name']
-    ordering_fields = ['code', 'name', 'created_at']
-    ordering = ['code']
+    ordering_fields = ['code', 'name', 'sort_order', 'created_at']
+    ordering = ['sort_order', 'code']
+
+    def get_queryset(self):
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        instance.deleted_at = timezone.now()
+        instance.deleted_by = self.request.user
+        instance.save()
 
     @action(detail=False, methods=['post'])
     def bulk_activate(self, request):
-        """Kích hoạt nhiều đơn vị"""
+        if not check_action_permission(request.user, 'ProductUnit', 'EDIT'):
+            return Response({'error': 'Không có quyền'}, status=status.HTTP_403_FORBIDDEN)
         ids = request.data.get('ids', [])
-        ProductUnit.objects.filter(id__in=ids).update(is_active=True)
+        ProductUnit.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=True)
         return Response({'message': f'Đã kích hoạt {len(ids)} đơn vị'})
 
     @action(detail=False, methods=['post'])
-    def bulk_delete(self, request):
-        """Xóa nhiều đơn vị"""
+    def bulk_deactivate(self, request):
+        if not check_action_permission(request.user, 'ProductUnit', 'EDIT'):
+            return Response({'error': 'Không có quyền'}, status=status.HTTP_403_FORBIDDEN)
         ids = request.data.get('ids', [])
-        ProductUnit.objects.filter(id__in=ids).delete()
-        return Response({'message': f'Đã xóa {len(ids)} đơn vị'})
+        ProductUnit.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=False)
+        return Response({'message': f'Đã vô hiệu hóa {len(ids)} đơn vị'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_delete(self, request):
+        ids = request.data.get('ids', [])
+        now = timezone.now()
+        ProductUnit.objects.filter(id__in=ids).update(deleted_at=now, deleted_by=request.user)
+        return Response({'message': f'Đã xóa (soft) {len(ids)} đơn vị'})
+
+    def get_export_sheet_title(self):
+        return 'Đơn vị tính'
+
+    def get_export_filename(self):
+        return 'don_vi_tinh.xlsx'
+
+    def get_export_headers(self):
+        return ['Mã', 'Tên', 'Đang dùng', 'Thứ tự', 'Ngày tạo']
+
+    def get_export_row(self, obj):
+        return [
+            obj.code or '',
+            obj.name or '',
+            'Có' if obj.is_active else 'Không',
+            obj.sort_order or 0,
+            obj.created_at.strftime('%Y-%m-%d') if obj.created_at else '',
+        ]
 
 
-class ProductWaveViewSet(viewsets.ModelViewSet):
-    """ViewSet cho quản lý loại sóng"""
+class ProductWaveViewSet(ExportExcelMixin, viewsets.ModelViewSet):
+    """
+    ViewSet cho loại sóng (Master Data chuẩn).
+    /api/product-waves?search=BC&is_active=true&ordering=code&created_at__gte=2025-01-01
+    """
     queryset = ProductWave.objects.all()
     serializer_class = ProductWaveSerializer
     permission_classes = [IsAuthenticated]
+    export_template_entity_type = 'ProductWave'
 
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['is_active']
-    search_fields = ['code', 'name']
-    ordering_fields = ['code', 'name', 'created_at']
-    ordering = ['code']
+    filterset_class = ProductWaveFilter
+    search_fields = ['code', 'name', 'description']
+    ordering_fields = ['code', 'name', 'sort_order', 'created_at']
+    ordering = ['sort_order', 'code']
 
     def get_queryset(self):
-        queryset = super().get_queryset()
-        if self.request.query_params.get('is_active') == 'true':
-            queryset = queryset.filter(is_active=True)
-        search = self.request.query_params.get('search')
-        if search:
-            queryset = queryset.filter(
-                Q(code__icontains=search) | Q(name__icontains=search)
-            )
-        return queryset.order_by('code')
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        instance.deleted_at = timezone.now()
+        instance.deleted_by = self.request.user
+        instance.save()
+
+    @action(detail=False, methods=['post'])
+    def bulk_activate(self, request):
+        ids = request.data.get('ids', [])
+        ProductWave.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=True)
+        return Response({'message': f'Đã kích hoạt {len(ids)} loại sóng'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_deactivate(self, request):
+        ids = request.data.get('ids', [])
+        ProductWave.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=False)
+        return Response({'message': f'Đã vô hiệu hóa {len(ids)} loại sóng'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_delete(self, request):
+        ids = request.data.get('ids', [])
+        now = timezone.now()
+        ProductWave.objects.filter(id__in=ids).update(deleted_at=now, deleted_by=request.user)
+        return Response({'message': f'Đã xóa (soft) {len(ids)} loại sóng'})
+
+    def get_export_sheet_title(self):
+        return 'Loại sóng'
+
+    def get_export_filename(self):
+        return 'loai_song.xlsx'
+
+    def get_export_headers(self):
+        return ['Mã', 'Tên', 'Mô tả', 'Đang dùng', 'Thứ tự', 'Ngày tạo']
+
+    def get_export_row(self, obj):
+        return [
+            obj.code or '', obj.name or '', (obj.description or '')[:200],
+            'Có' if obj.is_active else 'Không', obj.sort_order or 0,
+            obj.created_at.strftime('%Y-%m-%d') if obj.created_at else '',
+        ]
 
 
-class ProductBoxTypeViewSet(viewsets.ModelViewSet):
-    """ViewSet cho quản lý kiểu thùng"""
+class ProductBoxTypeViewSet(ExportExcelMixin, viewsets.ModelViewSet):
+    """
+    ViewSet cho kiểu thùng (Master Data chuẩn).
+    /api/product-box-types?search=A1&is_active=true&ordering=code&created_at__gte=2025-01-01
+    """
     queryset = ProductBoxType.objects.all()
     serializer_class = ProductBoxTypeSerializer
     permission_classes = [IsAuthenticated]
+    export_template_entity_type = 'ProductBoxType'
 
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['is_active']
-    search_fields = ['code', 'name']
-    ordering_fields = ['code', 'name', 'created_at']
-    ordering = ['code']
+    filterset_class = ProductBoxTypeFilter
+    search_fields = ['code', 'name', 'description']
+    ordering_fields = ['code', 'name', 'sort_order', 'created_at']
+    ordering = ['sort_order', 'code']
 
     def get_queryset(self):
-        queryset = super().get_queryset()
-        if self.request.query_params.get('is_active') == 'true':
-            queryset = queryset.filter(is_active=True)
-        search = self.request.query_params.get('search')
-        if search:
-            queryset = queryset.filter(
-                Q(code__icontains=search) | Q(name__icontains=search)
-            )
-        return queryset.order_by('code')
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        instance.deleted_at = timezone.now()
+        instance.deleted_by = self.request.user
+        instance.save()
+
+    @action(detail=False, methods=['post'])
+    def bulk_activate(self, request):
+        ids = request.data.get('ids', [])
+        ProductBoxType.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=True)
+        return Response({'message': f'Đã kích hoạt {len(ids)} kiểu thùng'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_deactivate(self, request):
+        ids = request.data.get('ids', [])
+        ProductBoxType.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=False)
+        return Response({'message': f'Đã vô hiệu hóa {len(ids)} kiểu thùng'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_delete(self, request):
+        ids = request.data.get('ids', [])
+        now = timezone.now()
+        ProductBoxType.objects.filter(id__in=ids).update(deleted_at=now, deleted_by=request.user)
+        return Response({'message': f'Đã xóa (soft) {len(ids)} kiểu thùng'})
+
+    def get_export_sheet_title(self):
+        return 'Kiểu thùng'
+
+    def get_export_filename(self):
+        return 'kieu_thung.xlsx'
+
+    def get_export_headers(self):
+        return ['Mã', 'Tên', 'Mô tả', 'Đang dùng', 'Thứ tự', 'Ngày tạo']
+
+    def get_export_row(self, obj):
+        return [
+            obj.code or '', obj.name or '', (obj.description or '')[:200],
+            'Có' if obj.is_active else 'Không', obj.sort_order or 0,
+            obj.created_at.strftime('%Y-%m-%d') if obj.created_at else '',
+        ]
 
 
 class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
     """CRUD Product với Data Scope, Export (Mixin), Bulk Actions, Import Template"""
+
+    export_template_entity_type = 'Product'
+
+    def destroy(self, request, *args, **kwargs):
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            return Response(
+                {'detail': 'Không thể xóa sản phẩm đã được sử dụng trong đơn hàng. Vui lòng xóa hoặc sửa đơn hàng liên quan trước.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except IntegrityError as e:
+            err_msg = str(e)
+            if 'code' in err_msg.lower() or 'products_product_code' in err_msg:
+                return Response(
+                    {'code': ['Mã hàng này đã tồn tại, hãy đổi lại.']},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            return Response(
+                {'detail': 'Lỗi dữ liệu. Vui lòng kiểm tra lại.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
     queryset = Product.objects.select_related(
         'category', 'unit', 'wave', 'box_type', 'owner', 'team', 'created_by', 'updated_by'
@@ -147,7 +363,12 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = ProductFilter
-    ordering_fields = ['code', 'name', 'cost_price', 'sale_price', 'created_at']
+    ordering_fields = [
+        'code', 'name', 'category__name', 'cost_price', 'sale_price', 'commission_per_unit', 'commission_percent',
+        'size_order', 'size_production', 'wave__code', 'box_type__code', 'unit__code', 'min_stock', 'delivery_tolerance',
+        'process_xa', 'process_in', 'film_code', 'color_count', 'waterproof', 'process_can_mang', 'process_boi', 'process_be',
+        'mold_code', 'process_chap', 'process_dong', 'process_dan', 'process_khac', 'note_other', 'note', 'created_at',
+    ]
     ordering = ['-created_at']
 
     def get_queryset(self):
@@ -164,13 +385,52 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         else:
             queryset = queryset.filter(Q(owner=user) | Q(owner__isnull=True))
 
-        # Fuzzy search (trigram + unidecode)
-        search = self.request.query_params.get('search', None)
-        if search:
-            from core.utils import get_fuzzy_search_queryset
-            search_fields = ['code', 'name', 'description']
-            queryset = get_fuzzy_search_queryset(queryset, search, search_fields)
-            print(f"🔍 Fuzzy search: '{search}' → {queryset.count()} results")
+        # Tìm kiếm: không dấu, lowercase, token hoá, AND search, prefix, ranking (search_text)
+        search_raw = (
+            self.request.GET.get('search') or self.request.GET.get('q') or ''
+        ).strip()
+        if hasattr(self.request, 'query_params'):
+            search_raw = search_raw or (self.request.query_params.get('search') or self.request.query_params.get('q') or '').strip()
+        exact_search = self.request.GET.get('exact_search') in ('1', 'true', 'True')
+        if hasattr(self.request, 'query_params'):
+            exact_search = exact_search or self.request.query_params.get('exact_search') in ('1', 'true', 'True')
+        if search_raw:
+            from unidecode import unidecode
+            normalized = unidecode(search_raw).lower().strip()
+            if exact_search:
+                # Tìm chính xác: khớp cả có dấu (search_raw) và không dấu (normalized)
+                q_exact = Q(search_text__icontains=normalized)
+                if search_raw != normalized:
+                    q_exact |= Q(search_text__icontains=search_raw)
+                queryset = queryset.filter(q_exact).distinct()
+            else:
+                tokens = [t for t in normalized.split() if t]
+                if tokens:
+                    note_only_tokens = {'co': ('có', 'co'), 'khong': ('không', 'khong')}
+                    if len(tokens) == 1 and tokens[0] in note_only_tokens:
+                        word_unicode, word_ascii = note_only_tokens[tokens[0]]
+                        q_ghi_chu = (
+                            Q(note__icontains=word_unicode) | Q(note_other__icontains=word_unicode)
+                            | Q(note__icontains=word_ascii) | Q(note_other__icontains=word_ascii)
+                        )
+                        queryset = queryset.filter(q_ghi_chu).distinct()
+                    else:
+                        q_and = Q(search_text__icontains=tokens[0])
+                        for t in tokens[1:]:
+                            q_and &= Q(search_text__icontains=t)
+                        queryset = queryset.filter(q_and).distinct()
+                        rank_expr = Case(
+                            When(search_text__icontains=tokens[0], then=Value(1)),
+                            default=Value(0),
+                            output_field=IntegerField(),
+                        )
+                        for t in tokens[1:]:
+                            rank_expr += Case(
+                                When(search_text__icontains=t, then=Value(1)),
+                                default=Value(0),
+                                output_field=IntegerField(),
+                            )
+                        queryset = queryset.annotate(_search_rank=rank_expr).order_by('-_search_rank', 'name')
 
         # Chỉ Mã mẹ khi LIST (bảng tổng hợp) - không filter khi retrieve/update/destroy
         if self.action == 'list' and self.request.query_params.get('parent__isnull') in ('true', 'True', '1'):
@@ -181,7 +441,6 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         from core.models import NumberSequence
 
-        # Mã tự nhập: dùng code từ request nếu có; không thì mới auto
         custom_code = (self.request.data.get('code') or '').strip()
         if custom_code:
             code = custom_code
@@ -195,22 +454,38 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                     format_template='{prefix}-{number}',
                     is_active=True,
                 )
+            # Retry nếu mã tự sinh trùng (do sequence lệch với DB)
             code = seq.get_next_number()
+            for _ in range(9):
+                if not Product.objects.filter(code__iexact=code).exists():
+                    break
+                code = seq.get_next_number()
+            else:
+                code = f"PROD-{uuid.uuid4().hex[:8].upper()}"
 
-        serializer.save(
+        obj = serializer.save(
             code=code,
             created_by=self.request.user,
             updated_by=self.request.user
         )
+        AuditLog.objects.create(
+            user=self.request.user,
+            action='CREATE',
+            entity_type='Product',
+            entity_id=obj.id,
+            entity_id_str=str(obj.id),
+            entity_code=obj.code,
+            new_values={'code': obj.code, 'name': obj.name},
+            ip_address=get_client_ip(self.request),
+            user_agent=(self.request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
 
     def perform_update(self, serializer):
         instance = serializer.instance
-        # Sản phẩm con: không cho sửa mã (mã theo mẹ)
         if instance.parent is not None:
             serializer.validated_data.pop('code', None)
         old_code = instance.code
         serializer.save(updated_by=self.request.user)
-        # Nếu mã mẹ đổi → cập nhật mã con (Mã mẹ-1, Mã mẹ-2...)
         new_code = instance.code
         if old_code != new_code and instance.parent is None:
             import re
@@ -221,24 +496,99 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                     suffix = m.group(1)
                     child.code = f"{new_code}-{suffix}"
                     child.save(update_fields=['code', 'updated_at'])
+        AuditLog.objects.create(
+            user=self.request.user,
+            action='UPDATE',
+            entity_type='Product',
+            entity_id=instance.id,
+            entity_id_str=str(instance.id),
+            entity_code=instance.code,
+            changed_fields=list(serializer.validated_data.keys()),
+            ip_address=get_client_ip(self.request),
+            user_agent=(self.request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+
+    def perform_destroy(self, instance):
+        AuditLog.objects.create(
+            user=self.request.user,
+            action='DELETE',
+            entity_type='Product',
+            entity_id=instance.id,
+            entity_id_str=str(instance.id),
+            entity_code=instance.code,
+            old_values={'code': instance.code, 'name': instance.name},
+            ip_address=get_client_ip(self.request),
+            user_agent=(self.request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        instance.delete()
 
     @action(detail=False, methods=['post'])
     def bulk_delete(self, request):
-        """Xóa nhiều sản phẩm"""
         ids = request.data.get('ids', [])
-        Product.objects.filter(id__in=ids).delete()
+        if not ids:
+            return Response({'detail': 'Chọn ít nhất một sản phẩm để xóa'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            for obj in Product.objects.filter(id__in=ids):
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='DELETE',
+                    entity_type='Product',
+                    entity_id=obj.id,
+                    entity_id_str=str(obj.id),
+                    entity_code=obj.code,
+                    old_values={'code': obj.code},
+                    ip_address=get_client_ip(request),
+                    user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+                )
+            Product.objects.filter(id__in=ids).delete()
+        except ProtectedError:
+            return Response(
+                {'detail': 'Không thể xóa sản phẩm đã được sử dụng trong đơn hàng. Vui lòng xóa hoặc sửa đơn hàng liên quan trước.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         return Response({'message': f'Đã xóa {len(ids)} sản phẩm'})
 
     @action(detail=False, methods=['post'])
     def bulk_activate(self, request):
-        """Kích hoạt nhiều sản phẩm"""
+        if not check_action_permission(request.user, 'Product', 'EDIT'):
+            return Response({'error': 'Không có quyền kích hoạt'}, status=status.HTTP_403_FORBIDDEN)
         ids = request.data.get('ids', [])
         Product.objects.filter(id__in=ids).update(is_active=True, status='ACTIVE')
+        # 1 dòng AuditLog cho cả bulk để không nặng DB
+        AuditLog.objects.create(
+            user=request.user,
+            action='ACTIVATE',
+            entity_type='Product',
+            entity_id=0,
+            entity_id_str='',
+            entity_code='',
+            new_values={'ids': ids, 'count': len(ids), 'is_active': True, 'status': 'ACTIVE'},
+            ip_address=get_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
         return Response({'message': f'Đã kích hoạt {len(ids)} sản phẩm'})
 
     @action(detail=False, methods=['post'])
+    def bulk_deactivate(self, request):
+        if not check_action_permission(request.user, 'Product', 'EDIT'):
+            return Response({'error': 'Không có quyền vô hiệu hóa'}, status=status.HTTP_403_FORBIDDEN)
+        ids = request.data.get('ids', [])
+        Product.objects.filter(id__in=ids).update(is_active=False)
+        AuditLog.objects.create(
+            user=request.user,
+            action='DEACTIVATE',
+            entity_type='Product',
+            entity_id=0,
+            entity_id_str='',
+            entity_code='',
+            new_values={'ids': ids, 'count': len(ids), 'is_active': False},
+            ip_address=get_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response({'message': f'Đã vô hiệu hóa {len(ids)} sản phẩm'})
+
+    @action(detail=False, methods=['post'])
     def bulk_discontinue(self, request):
-        """Ngừng sản xuất nhiều sản phẩm"""
         ids = request.data.get('ids', [])
         Product.objects.filter(id__in=ids).update(status='DISCONTINUED')
         return Response({'message': f'Đã ngừng sản xuất {len(ids)} sản phẩm'})
@@ -283,31 +633,59 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         return 'san_pham.xlsx'
 
     def get_export_headers(self):
+        """Thứ tự cột trùng Quản lý sản phẩm (không có Tồn TT, không có Mô tả)."""
         return [
-            'Mã SP', 'Tên sản phẩm', 'Danh mục', 'Đơn vị',
-            'Kích thước ĐH', 'KTSX', 'Sóng', 'Kiểu',
-            'Giá vốn', 'Giá bán', 'Tồn TT', '+/-',
-            'HHCĐ (đ/cái)', 'HH%', 'Mô tả', 'Trạng thái', 'Ghi chú',
+            'Mã hàng', 'Tên hàng', 'Danh mục', 'Trạng thái',
+            'Giá vốn', 'Giá bán', 'HHCĐ (đ/cái)', 'HH%',
+            'Kích thước ĐH', 'KTSX', 'Sóng', 'Kiểu', 'ĐVT', '+/-',
+            'Xả', 'In', 'Mã phim', 'Số màu', 'Chống thấm',
+            'Cán màng', 'Bồi', 'Bế', 'Mã khuôn',
+            'Chạp', 'Đóng', 'Dán', 'Khác',
+            'Ghi chú công đoạn khác', 'Ghi chú chung',
         ]
 
+    export_pdf_fields = [
+        'code', 'name', 'category__name', 'status',
+        'cost_price', 'sale_price', 'commission_per_unit', 'commission_percent',
+        'size_order', 'size_production', 'wave__code', 'box_type__code', 'unit__name',
+        'delivery_tolerance',
+        'process_xa', 'process_in', 'film_code', 'color_count', 'waterproof',
+        'process_can_mang', 'process_boi', 'process_be', 'mold_code',
+        'process_chap', 'process_dong', 'process_dan', 'process_khac',
+        'note_other', 'note',
+    ]
+
     def get_export_row(self, obj):
+        """Thứ tự cột trùng Quản lý sản phẩm (không có Tồn TT, không có Mô tả)."""
         return [
             obj.code or '',
             obj.name or '',
             obj.category.name if obj.category else '',
-            obj.unit.name if obj.unit else '',
+            obj.get_status_display() if obj.status else '',
+            float(obj.cost_price) if obj.cost_price is not None else 0,
+            float(obj.sale_price) if obj.sale_price is not None else 0,
+            float(obj.commission_per_unit) if obj.commission_per_unit is not None else 0,
+            float(obj.commission_percent) if obj.commission_percent is not None else 0,
             obj.size_order or '',
             obj.size_production or '',
             obj.wave.code if obj.wave else '',
             obj.box_type.code if obj.box_type else '',
-            float(obj.cost_price) if obj.cost_price is not None else 0,
-            float(obj.sale_price) if obj.sale_price is not None else 0,
-            float(obj.min_stock) if obj.min_stock is not None else 0,
+            obj.unit.name if obj.unit else '',
             obj.delivery_tolerance or '',
-            float(obj.commission_per_unit) if obj.commission_per_unit is not None else 0,
-            float(obj.commission_percent) if obj.commission_percent is not None else 0,
-            (obj.description or '')[:500],
-            obj.get_status_display() if obj.status else '',
+            obj.process_xa if obj.process_xa is not None else '',
+            obj.process_in if obj.process_in is not None else '',
+            obj.film_code or '',
+            obj.color_count if obj.color_count is not None else 0,
+            obj.waterproof or '',
+            obj.process_can_mang if obj.process_can_mang is not None else '',
+            obj.process_boi if obj.process_boi is not None else '',
+            obj.process_be if obj.process_be is not None else '',
+            obj.mold_code or '',
+            obj.process_chap if obj.process_chap is not None else '',
+            obj.process_dong if obj.process_dong is not None else '',
+            obj.process_dan if obj.process_dan is not None else '',
+            obj.process_khac if obj.process_khac is not None else '',
+            (obj.note_other or '')[:500],
             (obj.note or '')[:500],
         ]
 
@@ -335,28 +713,40 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='download_import_template')
     def download_import_template(self, request):
-        """Download Excel template for import (đủ cột: kích thước, sóng, kiểu, ...)"""
+        """Download Excel template - thứ tự cột trùng với Quản lý sản phẩm."""
         wb = Workbook()
         ws = wb.active
         ws.title = 'Template'
 
+        # Thứ tự cột trùng Quản lý sản phẩm (không có Tồn TT, không có Mô tả)
         headers = [
-            'Mã SP', 'Tên sản phẩm', 'Mã danh mục', 'Mã đơn vị',
-            'Kích thước ĐH', 'KTSX', 'Sóng', 'Kiểu',
-            'Giá vốn', 'Giá bán', 'Tồn TT', '+/-',
-            'HHCĐ (đ/cái)', 'HH%', 'Mô tả', 'Trạng thái', 'Ghi chú',
+            'Mã hàng', 'Tên hàng', 'Mã danh mục', 'Trạng thái',
+            'Giá vốn', 'Giá bán', 'HHCĐ (đ/cái)', 'HH%',
+            'Kích thước ĐH', 'KTSX', 'Sóng', 'Kiểu', 'Mã đơn vị', '+/-',
+            'Xả (cái/giờ)', 'In (cái/giờ)', 'Mã phim', 'Số màu', 'Chống thấm',
+            'Cán màng (cái/giờ)', 'Bồi (cái/giờ)', 'Bế (cái/giờ)', 'Mã khuôn',
+            'Chạp (cái/giờ)', 'Đóng (cái/giờ)', 'Dán (cái/giờ)', 'Khác (cái/giờ)',
+            'Ghi chú công đoạn khác', 'Ghi chú chung',
         ]
         ws.append(headers)
 
         ws.append([
-            'PROD-0001', 'Thùng carton mẫu', 'CAT-001', 'CAI',
-            '30x20x15', '30x20x15', 'BC', 'A1',
-            10000, 15000, 100, '±5%', 500, 0, 'Mô tả mẫu', 'ACTIVE', 'Ghi chú mẫu',
+            'PROD-0001', 'Thùng carton mẫu', 'CAT-001', 'ACTIVE',
+            10000, 15000, 500, 0,
+            '30x20x15', '30x20x15', 'BC', 'A1', 'CAI', '±5%',
+            1200, 800, 'PHIM-A1', 4, 'INSIDE',
+            500, 600, 400, 'KH-A1',
+            300, 350, 450, 100,
+            'Ghi chú công đoạn mẫu', 'Ghi chú chung mẫu',
         ])
         ws.append([
-            'PROD-0002', 'Hộp giấy mẫu', 'CAT-002', 'HOP',
-            '25x18x10', '25x18x10', 'E', 'A5',
-            5000, 8000, 200, '', 0, 2.5, '', 'ACTIVE', '',
+            'PROD-0002', 'Hộp giấy mẫu', 'CAT-002', 'ACTIVE',
+            5000, 8000, 0, 2.5,
+            '25x18x10', '25x18x10', 'E', 'A5', 'HOP', '',
+            1000, 700, '', 2, '',
+            '', '', 350, '',
+            '', 300, 400, '',
+            '', '',
         ])
 
         output = BytesIO()
@@ -372,20 +762,22 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def import_excel(self, request):
-        """Import sản phẩm từ Excel"""
+        """Import sản phẩm từ Excel; dùng engine chung import_from_excel_with_processor + ProductImportService."""
         file = request.FILES.get('file')
         if not file:
             return Response({'error': 'Không có file'}, status=status.HTTP_400_BAD_REQUEST)
+        if not check_action_permission(request.user, 'Product', 'IMPORT'):
+            return Response({'error': 'Không có quyền import'}, status=status.HTTP_403_FORBIDDEN)
 
-        import openpyxl
-        from core.models import NumberSequence
+        from core.utils import import_from_excel_with_processor
+        from core.models import NumberSequence, AuditLog
+        from .importers import ProductImportService
 
-        wb = openpyxl.load_workbook(file)
-        ws = wb.active
+        # Validate file extension
+        if not (file.name or '').endswith('.xlsx'):
+            return Response({'error': 'Chỉ hỗ trợ file .xlsx'}, status=status.HTTP_400_BAD_REQUEST)
 
-        success_count = 0
-        error_count = 0
-        errors = []
+        update_if_exists = str(request.data.get('update_if_exists', '')).lower() in ('true', '1', 'yes')
 
         seq = NumberSequence.objects.filter(entity_type='Product', is_active=True).first()
         if not seq:
@@ -397,86 +789,51 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                 is_active=True,
             )
 
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            try:
-                # Template: 17 cột (Mã SP, Tên, Mã DM, Mã ĐV, Kích thước ĐH, KTSX, Sóng, Kiểu, Giá vốn, Giá bán, Tồn TT, +/-, HHCĐ, HH%, Mô tả, Trạng thái, Ghi chú)
-                row = list(row)
-                if len(row) < 17:
-                    row.extend([None] * (17 - len(row)))
-                (code, name, category_code, unit_code,
-                 size_order, size_production, wave_type, box_type,
-                 cost_price, sale_price, min_stock, delivery_tolerance,
-                 commission_per_unit, commission_percent, description,
-                 status_val, note) = row[:17]
-                name = str(name).strip() if name is not None else ''
-
-                if not name:
-                    errors.append(f'Dòng {row_idx}: Thiếu tên sản phẩm')
-                    error_count += 1
-                    continue
-
-                # Get category
-                category = None
-                if category_code:
-                    category = ProductCategory.objects.filter(code=str(category_code).strip()).first()
-
-                # Get unit
-                unit = ProductUnit.objects.filter(code=str(unit_code).strip()).first() if unit_code else None
-                if not unit:
-                    errors.append(f'Dòng {row_idx}: Không tìm thấy đơn vị {unit_code}')
-                    error_count += 1
-                    continue
-
-                # Get wave and box_type by code
-                wave = None
-                if wave_type:
-                    wave = ProductWave.objects.filter(code=str(wave_type).strip()).first()
-                box_type_obj = None
-                if box_type:
-                    box_type_obj = ProductBoxType.objects.filter(code=str(box_type).strip()).first()
-
-                # Auto-generate code if empty
-                if not code:
-                    code = seq.get_next_number()
-                code = str(code).strip()
-
-                # Normalize status
-                status_val = (str(status_val).strip() if status_val else 'DRAFT')
-                if status_val not in dict(Product.STATUS_CHOICES):
-                    status_val = 'DRAFT'
-
-                # Create or update (đủ trường: kích thước, sóng, kiểu, mô tả, ghi chú, ...)
-                Product.objects.update_or_create(
-                    code=code,
-                    defaults={
-                        'name': name,
-                        'category': category,
-                        'unit': unit,
-                        'size_order': str(size_order).strip() if size_order else '',
-                        'size_production': str(size_production).strip() if size_production else '',
-                        'wave': wave,
-                        'box_type': box_type_obj,
-                        'description': str(description).strip() if description else '',
-                        'cost_price': cost_price or 0,
-                        'sale_price': sale_price or 0,
-                        'min_stock': min_stock or 0,
-                        'delivery_tolerance': str(delivery_tolerance).strip() if delivery_tolerance else '',
-                        'commission_per_unit': commission_per_unit or 0,
-                        'commission_percent': commission_percent or 0,
-                        'note': str(note).strip() if note else '',
-                        'status': status_val,
-                        'created_by': request.user,
-                        'updated_by': request.user,
-                    }
+        try:
+            result = import_from_excel_with_processor(
+                file,
+                entity_type='Product',
+                row_processor=ProductImportService.process_row,
+                user=request.user,
+                update_if_exists=update_if_exists,
+                seq=seq,
+            )
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            err_msg = str(e)
+            if 'workbook' in err_msg.lower() or 'excel' in err_msg.lower() or 'xlsx' in err_msg.lower():
+                return Response(
+                    {'error': f'Không đọc được file Excel. Kiểm tra định dạng (.xlsx) hoặc file bị lỗi. Chi tiết: {err_msg}'},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
-                success_count += 1
+            return Response(
+                {'error': err_msg, 'log_id': getattr(e, 'log_id', None)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
-            except Exception as e:
-                errors.append(f'Dòng {row_idx}: {str(e)}')
-                error_count += 1
+        # AuditLog
+        AuditLog.objects.create(
+            user=request.user,
+            action='IMPORT',
+            entity_type='Product',
+            entity_id=result['log_id'],
+            entity_id_str=str(result['log_id']),
+            entity_code=file.name or '',
+            new_values={
+                'filename': file.name,
+                'total_rows': result['total_rows'],
+                'success_count': result['success_count'],
+                'error_count': result['error_count'],
+                'log_id': result['log_id'],
+            },
+            ip_address=get_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
 
         return Response({
-            'success_count': success_count,
-            'error_count': error_count,
-            'errors': errors
+            'success_count': result['success_count'],
+            'error_count': result['error_count'],
+            'errors': result['errors'],
+            'log_id': result['log_id'],
         })

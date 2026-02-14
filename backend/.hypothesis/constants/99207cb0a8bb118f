@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\mixins.py
+# hypothesis_version: 6.151.5
+
+[400, 500, ',', '-is_default', 'CREATE', 'Content-Disposition', 'DELETE', 'Data', 'EXPORT', 'HTTP_USER_AGENT', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR', 'UPDATE', '__', 'code', 'error', 'excel', 'export.xlsx', 'export_data', 'filename', 'format', 'get', 'id', 'rows']

@@ -1,6 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
-import { createPortal } from 'react-dom';
-import { Button, Checkbox, Space } from 'antd';
+import { useState } from 'react';
+import { Button, Checkbox, Modal, Radio } from 'antd';
 import { SettingOutlined } from '@ant-design/icons';
 
 interface Column {
@@ -13,12 +12,29 @@ interface ColumnChooserProps {
   columns: Column[];
   visibleColumns: string[];
   onChange: (visibleColumns: string[]) => void;
+  sizeDisplayMode?: 'merged' | 'separated';
+  onSizeDisplayModeChange?: (mode: 'merged' | 'separated') => void;
 }
 
-const ColumnChooser = ({ columns, visibleColumns, onChange }: ColumnChooserProps) => {
+const ColumnChooser = ({
+  columns,
+  visibleColumns,
+  onChange,
+  sizeDisplayMode,
+  onSizeDisplayModeChange,
+}: ColumnChooserProps) => {
   const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLSpanElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+
+  const requiredKeys = columns.filter((c) => c.required).map((c) => c.key);
+  const optionalKeys = columns.filter((c) => !c.required).map((c) => c.key);
+  const visibleOptional = optionalKeys.filter((k) => visibleColumns.includes(k));
+  const allOptionalVisible = optionalKeys.length > 0 && visibleOptional.length === optionalKeys.length;
+  const someOptionalVisible = visibleOptional.length > 0;
+  const hasHiddenColumns = optionalKeys.length > 0 && visibleOptional.length < optionalKeys.length;
+  const columnButtonColor = hasHiddenColumns ? '#ff4d4f' : undefined;
+  const columnButtonStyle = hasHiddenColumns
+    ? { color: columnButtonColor, borderColor: '#ff4d4f' as const }
+    : { color: columnButtonColor };
 
   const handleChange = (columnKey: string, checked: boolean) => {
     if (checked) {
@@ -28,79 +44,99 @@ const ColumnChooser = ({ columns, visibleColumns, onChange }: ColumnChooserProps
     }
   };
 
-  // Đóng khi click ra ngoài
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (panelRef.current?.contains(target)) return;
-      if (wrapRef.current?.contains(target)) return;
-      setOpen(false);
-    };
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [open]);
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      onChange([...requiredKeys, ...optionalKeys]);
+    } else {
+      onChange([...requiredKeys]);
+    }
+  };
 
-  const rect = wrapRef.current?.getBoundingClientRect();
-  const panelStyle: React.CSSProperties = rect
-    ? {
-        position: 'fixed',
-        top: rect.bottom + 4,
-        left: rect.left,
-        zIndex: 1100,
-        padding: '12px',
-        background: 'white',
-        borderRadius: '8px',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-        width: '250px',
-        maxHeight: '400px',
-        overflow: 'auto',
-      }
-    : {};
-
-  const panel = open ? (
-    <div
-      ref={panelRef}
-      style={panelStyle}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
-      <div
-        style={{
-          marginBottom: '12px',
-          fontWeight: 600,
-          color: '#262626',
-          fontSize: '14px',
-        }}
-      >
-        Hiển thị cột
-      </div>
-      <Space direction="vertical" style={{ width: '100%' }} size="small">
-        {columns.map((col) => (
+  const content = (
+    <div style={{ maxHeight: 420, overflow: 'auto' }}>
+      {/* Chọn tất cả — một dòng trên cùng */}
+      {optionalKeys.length > 0 && (
+        <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid #f0f0f0' }}>
           <Checkbox
-            key={col.key}
-            checked={visibleColumns.includes(col.key)}
-            onChange={(e) => handleChange(col.key, e.target.checked)}
-            disabled={col.required}
-            style={{ width: '100%' }}
+            checked={allOptionalVisible}
+            indeterminate={someOptionalVisible && !allOptionalVisible}
+            onChange={(e) => handleSelectAll(e.target.checked)}
+            style={{ fontSize: 13 }}
           >
-            {col.title} {col.required && '(*)'}
+            Chọn tất cả / Bỏ chọn tất cả
           </Checkbox>
+        </div>
+      )}
+      {/* Hiển thị kích thước — ngay dưới "Chọn tất cả..." */}
+      {sizeDisplayMode != null && onSizeDisplayModeChange != null && (
+        <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid #f0f0f0' }}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Hiển thị kích thước</div>
+          <Radio.Group
+            value={sizeDisplayMode}
+            onChange={(e) => onSizeDisplayModeChange(e.target.value)}
+            style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+          >
+            <Radio value="separated">
+              <span style={{ fontSize: 13 }}>3 cột riêng (Dài | Rộng | Cao)</span>
+            </Radio>
+            <Radio value="merged">
+              <span style={{ fontSize: 13 }}>1 cột gộp (Dài x Rộng x Cao)</span>
+            </Radio>
+          </Radio.Group>
+        </div>
+      )}
+      {/* Danh sách cột: mỗi dòng một checkbox + nhãn (giống hình chuẩn) */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {columns.map((col) => (
+          <label
+            key={col.key}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '8px 0',
+              cursor: col.required ? 'default' : 'pointer',
+              borderBottom: '1px solid #f5f5f5',
+              fontSize: 14,
+              color: 'rgba(0,0,0,0.88)',
+            }}
+          >
+            <Checkbox
+              checked={visibleColumns.includes(col.key)}
+              onChange={(e) => !col.required && handleChange(col.key, e.target.checked)}
+              disabled={col.required}
+              style={{ marginLeft: 0, flexShrink: 0 }}
+            />
+            <span style={{ flex: 1 }}>{col.title}{col.required ? ' (*)' : ''}</span>
+          </label>
         ))}
-      </Space>
+      </div>
     </div>
-  ) : null;
+  );
 
   return (
     <>
-      <span ref={wrapRef} style={{ display: 'inline-block' }}>
-        <Button
-          icon={<SettingOutlined />}
-          onClick={() => setOpen((v) => !v)}
-        >
-          Cột
-        </Button>
-      </span>
-      {open && createPortal(panel, document.body)}
+      <Button
+        icon={<SettingOutlined style={{ color: columnButtonColor }} />}
+        onClick={() => setOpen(true)}
+        style={columnButtonStyle}
+      >
+        Cột
+      </Button>
+      <Modal
+        title="Hiển thị cột"
+        open={open}
+        onCancel={() => setOpen(false)}
+        footer={[
+          <Button key="close" type="primary" onClick={() => setOpen(false)}>
+            Xong
+          </Button>,
+        ]}
+        width={320}
+        destroyOnHidden={false}
+      >
+        {content}
+      </Modal>
     </>
   );
 };

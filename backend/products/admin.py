@@ -3,31 +3,42 @@ from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, P
 
 
 class ProductCategoryAdmin(admin.ModelAdmin):
-    """Quản lý danh mục sản phẩm với tree view"""
+    """Quản lý danh mục sản phẩm (Master Data chuẩn)"""
 
-    list_display = ['code', 'name', 'parent', 'children_count', 'is_active', 'created_at']
+    list_display = ['code', 'name', 'parent', 'children_count', 'is_active', 'sort_order', 'created_at']
     list_filter = ['is_active', 'parent', 'created_at']
     search_fields = ['code', 'name', 'description']
-    ordering = ['code']
+    ordering = ['sort_order', 'code']
     list_per_page = 50
-    readonly_fields = ['created_at', 'updated_at']
+    readonly_fields = ['created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at', 'deleted_by']
+    date_hierarchy = 'created_at'
 
     fieldsets = [
         ('Thông tin cơ bản', {
-            'fields': ['code', 'name', 'parent', 'description']
+            'fields': ['code', 'name', 'parent', 'description', 'sort_order']
         }),
         ('Trạng thái', {
             'fields': ['is_active']
         }),
         ('Thông tin hệ thống', {
-            'fields': ['created_at', 'updated_at'],
+            'fields': ['created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at', 'deleted_by'],
             'classes': ['collapse']
         })
     ]
 
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.filter(deleted_at__isnull=True)
+
     def children_count(self, obj):
-        return obj.children.filter(is_active=True).count()
+        return obj.children.filter(is_active=True, deleted_at__isnull=True).count()
     children_count.short_description = 'Số danh mục con'
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
 
     @admin.action(description='Kích hoạt các danh mục đã chọn')
     def activate_selected(self, request, queryset):
@@ -46,24 +57,34 @@ admin.site.register(ProductCategory, ProductCategoryAdmin)
 
 
 class ProductUnitAdmin(admin.ModelAdmin):
-    """Quản lý đơn vị tính"""
+    """Quản lý đơn vị tính (Master Data chuẩn)"""
 
-    list_display = ['code', 'name', 'is_active', 'created_at']
+    list_display = ['code', 'name', 'is_active', 'sort_order', 'created_at']
     list_filter = ['is_active', 'created_at']
     search_fields = ['code', 'name']
-    ordering = ['code']
+    ordering = ['sort_order', 'code']
     list_per_page = 50
-    readonly_fields = ['created_at', 'updated_at']
+    readonly_fields = ['created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at', 'deleted_by']
+    date_hierarchy = 'created_at'
 
     fieldsets = [
         ('Thông tin đơn vị', {
-            'fields': ['code', 'name', 'is_active']
+            'fields': ['code', 'name', 'is_active', 'sort_order']
         }),
         ('Thông tin hệ thống', {
-            'fields': ['created_at', 'updated_at'],
+            'fields': ['created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at', 'deleted_by'],
             'classes': ['collapse']
         })
     ]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(deleted_at__isnull=True)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
 
     @admin.action(description='Kích hoạt các đơn vị đã chọn')
     def activate_selected(self, request, queryset):
@@ -83,36 +104,52 @@ admin.site.register(ProductUnit, ProductUnitAdmin)
 
 @admin.register(ProductWave)
 class ProductWaveAdmin(admin.ModelAdmin):
-    list_display = ['code', 'name', 'is_active', 'created_at']
+    list_display = ['code', 'name', 'is_active', 'sort_order', 'created_at']
     list_filter = ['is_active']
     search_fields = ['code', 'name']
-    ordering = ['code']
+    ordering = ['sort_order', 'code']
+    readonly_fields = ['created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at', 'deleted_by']
+    date_hierarchy = 'created_at'
 
     fieldsets = (
-        ('Thông tin cơ bản', {
-            'fields': ('code', 'name', 'description')
-        }),
-        ('Trạng thái', {
-            'fields': ('is_active',)
-        }),
+        ('Thông tin cơ bản', {'fields': ('code', 'name', 'description', 'sort_order')}),
+        ('Trạng thái', {'fields': ('is_active',)}),
+        ('Hệ thống', {'fields': ('created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at', 'deleted_by'), 'classes': ('collapse',)}),
     )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(deleted_at__isnull=True)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(ProductBoxType)
 class ProductBoxTypeAdmin(admin.ModelAdmin):
-    list_display = ['code', 'name', 'is_active', 'created_at']
+    list_display = ['code', 'name', 'is_active', 'sort_order', 'created_at']
     list_filter = ['is_active']
     search_fields = ['code', 'name']
-    ordering = ['code']
+    ordering = ['sort_order', 'code']
+    readonly_fields = ['created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at', 'deleted_by']
+    date_hierarchy = 'created_at'
 
     fieldsets = (
-        ('Thông tin cơ bản', {
-            'fields': ('code', 'name', 'description')
-        }),
-        ('Trạng thái', {
-            'fields': ('is_active',)
-        }),
+        ('Thông tin cơ bản', {'fields': ('code', 'name', 'description', 'sort_order')}),
+        ('Trạng thái', {'fields': ('is_active',)}),
+        ('Hệ thống', {'fields': ('created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at', 'deleted_by'), 'classes': ('collapse',)}),
     )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(deleted_at__isnull=True)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(Product)
@@ -240,6 +277,20 @@ class ProductAdmin(admin.ModelAdmin):
         count = queryset.update(status='DISCONTINUED')
         self.message_user(request, f"Đã ngừng sản xuất {count} sản phẩm")
 
+    @admin.action(description='Gán owner = tôi')
+    def bulk_assign_owner_me(self, request, queryset):
+        count = queryset.update(owner=request.user)
+        self.message_user(request, f"Đã gán owner cho {count} sản phẩm")
+
+    @admin.action(description='Gán team = nhóm của tôi')
+    def bulk_assign_team_mine(self, request, queryset):
+        team = request.user.teams.first()
+        if not team:
+            self.message_user(request, "Bạn chưa thuộc nhóm nào", level='ERROR')
+            return
+        count = queryset.update(team=team)
+        self.message_user(request, f"Đã gán team {team.name} cho {count} sản phẩm")
+
     @admin.action(description='Export sang Excel')
     def export_to_excel(self, request, queryset):
         from core.utils import export_to_excel
@@ -260,8 +311,8 @@ class ProductAdmin(admin.ModelAdmin):
             'created_at',
         ]
         headers = [
-            'Mã SP',
-            'Tên SP',
+            'Mã hàng',
+            'Tên hàng',
             'Mã danh mục',
             'Tên danh mục',
             'Mã đơn vị',
@@ -278,4 +329,8 @@ class ProductAdmin(admin.ModelAdmin):
         filename = 'Danh_sach_san_pham.xlsx'
         return export_to_excel(queryset, fields, headers, filename)
 
-    actions = ['activate_selected', 'deactivate_selected', 'discontinue_selected', 'export_to_excel']
+    actions = [
+        'activate_selected', 'deactivate_selected', 'discontinue_selected',
+        'bulk_assign_owner_me', 'bulk_assign_team_mine',
+        'export_to_excel',
+    ]

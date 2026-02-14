@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0026_passwordpolicy.py
+# hypothesis_version: 6.151.5
+
+[100, '0025_usersession', 'ID', 'Password Policies', 'Password Policy', 'PasswordPolicy', 'core', 'db_table', 'expire_days', 'id', 'is_active', 'min_length', 'name', 'password_policies', 'prevent_reuse_count', 'require_digit', 'require_lowercase', 'require_special', 'require_uppercase', 'verbose_name', 'verbose_name_plural']

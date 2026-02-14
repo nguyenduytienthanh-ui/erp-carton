@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\products\sales_order_services.py
+# hypothesis_version: 6.151.5
+
+[500, '%Y%m', 'APPROVED', 'DRAFT', 'HTTP_USER_AGENT', 'POST', 'POSTED', 'REJECTED', 'SUBMITTED', 'SalesOrder', 'VOID', 'already posted', 'current_number', 'discount_total', 'line_number', 'line_total', 'padding', 'posted', 'posted_at', 'posted_by', 'status', 'subtotal', 'tax_total', 'total', 'updated_at']

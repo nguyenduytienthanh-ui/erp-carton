@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0037_auditlog_entity_id_str.py
+# hypothesis_version: 6.151.5
+
+['Record ID (int)', 'auditlog', 'core', 'entity_id', 'entity_id_str']

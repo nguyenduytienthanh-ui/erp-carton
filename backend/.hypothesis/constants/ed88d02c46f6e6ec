@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0021_numbersequence.py
+# hypothesis_version: 6.151.5
+
+['0020_approvalhistory', 'Current number', 'ID', 'Number Sequence', 'Number Sequences', 'NumberSequence', 'core', 'current_number', 'db_table', 'entity_type', 'format_template', 'id', 'is_active', 'number_sequences', 'padding', 'prefix', 'verbose_name', 'verbose_name_plural', '{prefix}-{number}']

@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0013_importlog.py
+# hypothesis_version: 6.151.5
+
+[255, '-created_at', '0012_savedview', 'COMPLETED', 'Completed', 'FAILED', 'Failed', 'Failed rows', 'ID', 'Import Log', 'Import Logs', 'ImportLog', 'PROCESSING', 'Processing', 'Total rows in file', 'Uploaded filename', 'core', 'created_at', 'created_by', 'db_table', 'entity_type', 'error_count', 'errors', 'filename', 'id', 'import_logs', 'ordering', 'status', 'success_count', 'total_rows', 'verbose_name', 'verbose_name_plural']

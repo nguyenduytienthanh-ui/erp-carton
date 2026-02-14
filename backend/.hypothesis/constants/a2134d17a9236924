@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\sales\permissions.py
+# hypothesis_version: 6.151.5
+
+['APPROVE', 'APPROVED', 'DRAFT', 'POST', 'POSTED', 'REJECT', 'SUBMIT', 'SUBMITTED', 'SalesOrder', 'VOID']

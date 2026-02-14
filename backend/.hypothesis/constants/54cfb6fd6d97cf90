@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\health.py
+# hypothesis_version: 6.151.5
+
+[1024, '/', 'GET', 'SELECT 1', '_request', 'audit_logs', 'available_gb', 'checks', 'comments', 'customers', 'data', 'database', 'disk', 'error', 'free_gb', 'healthy', 'media', 'memory', 'message', 'notifications', 'ok', 'path', 'percent', 'psutil not installed', 'settings', 'skipped', 'status', 'total_gb', 'unhealthy', 'users', 'warning']

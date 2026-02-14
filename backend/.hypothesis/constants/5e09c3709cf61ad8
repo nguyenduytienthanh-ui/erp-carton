@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0014_auditlog.py
+# hypothesis_version: 6.151.5
+
+['-created_at', '0013_importlog', 'APPROVE', 'Approve', 'Audit Log', 'Audit Logs', 'AuditLog', 'CREATE', 'Create', 'DELETE', 'Delete', 'ID', 'LOCK', 'Lock', 'POST', 'Post', 'REJECT', 'Record ID', 'Reject', 'UPDATE', 'Update', 'Values after change', 'Values before change', 'action', 'audit_logs', 'changed_fields', 'core', 'created_at', 'db_table', 'entity_code', 'entity_id', 'entity_type', 'id', 'indexes', 'ip_address', 'new_values', 'old_values', 'ordering', 'user', 'user_agent', 'verbose_name', 'verbose_name_plural']

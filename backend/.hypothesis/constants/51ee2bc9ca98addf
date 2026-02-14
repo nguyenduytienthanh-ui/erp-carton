@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0031_user_preferences.py
+# hypothesis_version: 6.151.5
+
+['0030_enable_trigram', 'Cấu hình', 'Cấu hình người dùng', 'ID', 'Người dùng', 'Trang', 'UserPreferences', 'config', 'core', 'created_at', 'db_table', 'id', 'page', 'preferences', 'updated_at', 'user', 'user_preferences', 'userpreferences', 'verbose_name', 'verbose_name_plural']

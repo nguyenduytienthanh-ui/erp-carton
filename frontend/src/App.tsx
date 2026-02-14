@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ConfigProvider } from 'antd';
+import { App as AntApp, ConfigProvider } from 'antd';
 import viVN from 'antd/locale/vi_VN';
 import { theme as customTheme } from './styles/theme';
 import Login from './pages/Login';
@@ -10,6 +10,9 @@ import PrivateRoute from './components/PrivateRoute';
 import ProductList from './pages/Products/ProductList';
 import CategoryList from './pages/Categories/CategoryList';
 import UnitList from './pages/Units/UnitList';
+import CustomerList from './pages/Customers/CustomerList';
+import { ProductsListFilterProvider } from './contexts/ProductsListFilterContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 function App() {
   return (
@@ -48,6 +51,7 @@ function App() {
         },
       }}
     >
+      <AntApp>
       <BrowserRouter
         future={{
           v7_startTransition: true,
@@ -61,20 +65,24 @@ function App() {
             path="/"
             element={
               <PrivateRoute>
-                <MainLayout />
+                <ProductsListFilterProvider>
+                  <MainLayout />
+                </ProductsListFilterProvider>
               </PrivateRoute>
             }
           >
             <Route index element={<Dashboard />} />
-            <Route path="products" element={<ProductList />} />
+            <Route path="products" element={<ErrorBoundary><ProductList /></ErrorBoundary>} />
             <Route path="categories" element={<CategoryList />} />
             <Route path="units" element={<UnitList />} />
+            <Route path="customers" element={<ErrorBoundary><CustomerList /></ErrorBoundary>} />
             <Route path="pricings" element={<div>Product Pricings (Đang phát triển)</div>} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
+      </AntApp>
     </ConfigProvider>
   );
 }

@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\products\migrations\0004_product_search_text.py
+# hypothesis_version: 6.151.5
+
+[500, 'Chuỗi tìm kiếm', 'Product', '[xX*×·\\s]+', 'box_type', 'box_type_id', 'category_id', 'code', 'description', 'film_code', 'mold_code', 'name', 'note', 'note_other', 'product', 'products', 'search_text', 'size_order', 'size_production', 'wave_id', 'wave_type']

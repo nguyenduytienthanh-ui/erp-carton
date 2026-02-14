@@ -1,6 +1,7 @@
 import { ReactNode } from 'react';
-import { Space, Input, Select, Button } from 'antd';
+import { Space, Input, Button } from 'antd';
 import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
+import QuickClearIcon from '../QuickClearIcon';
 
 interface CompactFiltersProps {
   searchPlaceholder?: string;
@@ -32,7 +33,7 @@ const CompactFilters = ({
         <Input
           placeholder={searchPlaceholder}
           prefix={<SearchOutlined style={{ color: '#9ca3af' }} />}
-          allowClear
+          suffix={(searchValue?.trim() ?? '') !== '' ? <QuickClearIcon onClear={() => onSearchChange?.('')} title="Xóa tìm kiếm" /> : undefined}
           value={searchValue}
           onChange={(e) => onSearchChange?.(e.target.value)}
           style={{

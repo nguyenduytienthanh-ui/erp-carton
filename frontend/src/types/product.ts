@@ -20,6 +20,26 @@ export interface ProductUnit {
   updated_at: string;
 }
 
+export interface ProductWave {
+  id: number;
+  code: string;
+  name: string;
+  description?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductBoxType {
+  id: number;
+  code: string;
+  name: string;
+  description?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Product {
   id: number;
   code: string;
@@ -35,8 +55,12 @@ export interface Product {
   // ============ KÍCH THƯỚC ============
   size_order?: string;
   size_production?: string;
-  wave_type?: string;
-  box_type?: string;
+  wave?: number;
+  wave_code?: string;
+  wave_name?: string;
+  box_type?: number;
+  box_type_code?: string;
+  box_type_name?: string;
 
   // ============ GIÁ & SỐ LƯỢNG ============
   cost_price: string;
@@ -105,14 +129,15 @@ export interface Product {
 
 export interface ProductFormData {
   name: string;
+  code?: string;
   category?: number;
   unit: number;
   description?: string;
 
   size_order?: string;
   size_production?: string;
-  wave_type?: string;
-  box_type?: string;
+  wave?: number;
+  box_type?: number;
 
   cost_price: number;
   sale_price: number;
@@ -142,11 +167,46 @@ export interface ProductFormData {
   note_other?: string;
   note?: string;
 
+  is_active?: boolean;
   is_set?: boolean;
   parent?: number;
   component_quantity?: number;
 
   status: string;
+}
+
+/** Dữ liệu form một thành phần con (Lót, Khay...) – nhập riêng, không kế thừa Mẹ; code tự sinh Mã Mẹ-1, Mã Mẹ-2... */
+export interface ProductChildFormData {
+  id?: number; /** Có khi load từ API (sửa) — dùng để update/delete */
+  name: string;
+  component_quantity: number; /* số lượng / bộ, bắt buộc */
+  category?: number;
+  unit: number; /* ĐVT bắt buộc */
+  size_order?: string;
+  size_production?: string;
+  wave?: number;
+  box_type?: number;
+  delivery_tolerance?: string;
+  process_xa?: number;
+  process_in?: number;
+  process_boi?: number;
+  process_can_mang?: number;
+  process_be?: number;
+  process_chap?: number;
+  process_dong?: number;
+  process_dan?: number;
+  process_khac?: number;
+  film_code?: string;
+  film_file_url?: string;
+  color_count?: number;
+  mold_code?: string;
+  mold_file_url?: string;
+  waterproof?: string;
+  note_other?: string;
+  note?: string;
+
+  is_active?: boolean;
+  status?: 'DRAFT' | 'ACTIVE' | 'DISCONTINUED';
 }
 
 export const WATERPROOF_OPTIONS = [

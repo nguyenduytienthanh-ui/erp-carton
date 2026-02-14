@@ -3,7 +3,7 @@ from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, P
 
 
 class ProductCategorySerializer(serializers.ModelSerializer):
-    """Serialize ProductCategory với hỗ trợ cây danh mục"""
+    """Serialize ProductCategory với hỗ trợ cây danh mục (Master Data chuẩn)"""
     
     parent_name = serializers.SerializerMethodField()
     children_count = serializers.SerializerMethodField()
@@ -12,38 +12,64 @@ class ProductCategorySerializer(serializers.ModelSerializer):
         model = ProductCategory
         fields = [
             'id', 'code', 'name', 'description', 'parent', 'parent_name',
-            'children_count', 'is_active', 'created_at', 'updated_at'
+            'children_count', 'is_active', 'sort_order',
+            'created_at', 'updated_at', 'created_by', 'updated_by',
+            'deleted_at', 'deleted_by',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'parent_name', 'children_count']
+        read_only_fields = [
+            'id', 'created_at', 'updated_at', 'parent_name', 'children_count',
+            'created_by', 'updated_by', 'deleted_at', 'deleted_by',
+        ]
     
     def get_parent_name(self, obj):
         return f"{obj.parent.code} - {obj.parent.name}" if obj.parent else None
     
     def get_children_count(self, obj):
-        return obj.children.filter(is_active=True).count()
+        return obj.children.filter(is_active=True, deleted_at__isnull=True).count()
 
 
 class ProductUnitSerializer(serializers.ModelSerializer):
-    """Serialize ProductUnit (đơn giản)"""
+    """Serialize ProductUnit (Master Data chuẩn)"""
     
     class Meta:
         model = ProductUnit
-        fields = ['id', 'code', 'name', 'is_active', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        fields = [
+            'id', 'code', 'name', 'is_active', 'sort_order',
+            'created_at', 'updated_at', 'created_by', 'updated_by',
+            'deleted_at', 'deleted_by',
+        ]
+        read_only_fields = [
+            'id', 'created_at', 'updated_at',
+            'created_by', 'updated_by', 'deleted_at', 'deleted_by',
+        ]
 
 
 class ProductWaveSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductWave
-        fields = ['id', 'code', 'name', 'description', 'is_active', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        fields = [
+            'id', 'code', 'name', 'description', 'is_active', 'sort_order',
+            'created_at', 'updated_at', 'created_by', 'updated_by',
+            'deleted_at', 'deleted_by',
+        ]
+        read_only_fields = [
+            'id', 'created_at', 'updated_at',
+            'created_by', 'updated_by', 'deleted_at', 'deleted_by',
+        ]
 
 
 class ProductBoxTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductBoxType
-        fields = ['id', 'code', 'name', 'description', 'is_active', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        fields = [
+            'id', 'code', 'name', 'description', 'is_active', 'sort_order',
+            'created_at', 'updated_at', 'created_by', 'updated_by',
+            'deleted_at', 'deleted_by',
+        ]
+        read_only_fields = [
+            'id', 'created_at', 'updated_at',
+            'created_by', 'updated_by', 'deleted_at', 'deleted_by',
+        ]
 
 
 class ProductSerializer(serializers.ModelSerializer):
@@ -95,6 +121,14 @@ class ProductSerializer(serializers.ModelSerializer):
             'created_by_name', 'updated_by_name', 'parent_name',
             'components', 'components_count', 'is_component', 'full_name',
         ]
+        extra_kwargs = {
+            'code': {
+                'allow_blank': True,
+                'required': False,
+                'default': '',
+                'error_messages': {'unique': 'Mã hàng này đã tồn tại, hãy đổi lại.'},
+            },
+        }
 
     def get_category_name(self, obj):
         return f"{obj.category.code} - {obj.category.name}" if obj.category else None
@@ -152,9 +186,28 @@ class ProductSerializer(serializers.ModelSerializer):
             data['components'] = []
         return data
 
+    def validate_code(self, value):
+        """Kiểm tra mã hàng không trùng khi có giá trị."""
+        value = (value or '').strip()
+        if not value:
+            return value
+        qs = Product.objects.filter(code__iexact=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError('Mã hàng này đã tồn tại, hãy đổi lại.')
+        return value
+
     def validate(self, data):
         if data.get('parent') and not data.get('component_quantity'):
             data['component_quantity'] = 1
+
+        if not data.get('unit'):
+            raise serializers.ValidationError({'unit': 'Vui lòng chọn ĐVT (bắt buộc).'})
+        if not data.get('wave'):
+            raise serializers.ValidationError({'wave': 'Vui lòng chọn Sóng (bắt buộc).'})
+        if not data.get('box_type'):
+            raise serializers.ValidationError({'box_type': 'Vui lòng chọn Kiểu (bắt buộc).'})
 
         if data.get('cost_price') is not None and data.get('sale_price') is not None:
             if data['cost_price'] > data['sale_price']:

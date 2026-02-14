@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0020_approvalhistory.py
+# hypothesis_version: 6.151.5
+
+['-created_at', 'APPROVE', 'Approval History', 'Approval level', 'ApprovalHistory', 'Approved', "Approver's comments", 'ID', 'REJECT', 'RESUBMIT', 'REVOKE', 'Rejected', 'Resubmitted', 'Revoked approval', 'SUBMIT', 'action', 'approval_history', 'comments', 'core', 'created_at', 'db_table', 'entity_code', 'entity_id', 'entity_type', 'id', 'indexes', 'level', 'ordering', 'user', 'verbose_name', 'verbose_name_plural']

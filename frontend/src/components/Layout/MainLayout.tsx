@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Layout, Menu, Button, Dropdown } from 'antd';
+import { useState, useCallback } from 'react';
+import { Layout, Menu, Button, Popover, message, Divider } from 'antd';
 import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -9,6 +9,7 @@ import {
   ToolOutlined,
   DollarOutlined,
   UserOutlined,
+  TeamOutlined,
   LogoutOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
@@ -44,35 +45,47 @@ const MainLayout = () => {
       label: 'Đơn vị tính',
     },
     {
+      key: '/customers',
+      icon: <TeamOutlined />,
+      label: 'Khách hàng',
+    },
+    {
       key: '/pricings',
       icon: <DollarOutlined />,
       label: 'Bảng giá',
     },
   ];
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     storage.clear();
     navigate('/login');
-  };
+  }, [navigate]);
 
-  const userMenu = {
-    items: [
-      {
-        key: 'profile',
-        icon: <UserOutlined />,
-        label: 'Thông tin cá nhân',
-      },
-      {
-        type: 'divider',
-      },
-      {
-        key: 'logout',
-        icon: <LogoutOutlined />,
-        label: 'Đăng xuất',
-        onClick: handleLogout,
-      },
-    ],
-  };
+  const accountMenuContent = (
+    <div style={{ minWidth: 180 }}>
+      <div
+        role="button"
+        tabIndex={0}
+        style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+        onClick={() => message.info('Chức năng đang phát triển')}
+        onKeyDown={(e) => e.key === 'Enter' && message.info('Chức năng đang phát triển')}
+      >
+        <UserOutlined />
+        Thông tin cá nhân
+      </div>
+      <Divider style={{ margin: '4px 0' }} />
+      <div
+        role="button"
+        tabIndex={0}
+        style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, color: '#ff4d4f' }}
+        onClick={handleLogout}
+        onKeyDown={(e) => e.key === 'Enter' && handleLogout()}
+      >
+        <LogoutOutlined />
+        Đăng xuất
+      </div>
+    </div>
+  );
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -115,11 +128,11 @@ const MainLayout = () => {
             style={{ fontSize: '16px', width: 64, height: 64 }}
           />
 
-          <Dropdown menu={userMenu} placement="bottomRight">
+          <Popover content={accountMenuContent} placement="bottomRight" trigger="click">
             <Button type="text" icon={<UserOutlined />}>
-              {user?.username || 'User'}
+              Tài khoản {user?.username ? `(${user.username})` : ''}
             </Button>
-          </Dropdown>
+          </Popover>
         </Header>
         <Content
           style={{

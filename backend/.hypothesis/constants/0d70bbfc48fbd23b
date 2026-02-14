@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0033_rename_column_perm_page_id_8a1b2c_idx_column_perm_page_27f4c8_idx_and_more.py
+# hypothesis_version: 6.151.5
+
+['columnpermission', 'core', 'userpreferences']

@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\sales\services.py
+# hypothesis_version: 6.151.5
+
+[500, '%Y%m', 'HTTP_USER_AGENT', 'POST', 'Posted.', 'SO', 'SalesOrder', 'address', 'code', 'company_name', 'current_number', 'customer', 'discount_pct', 'id', 'line_number', 'line_total', 'lines', 'name', 'padding', 'post_number', 'posted_at', 'posted_by', 'posted_snapshot', 'product', 'product_code', 'product_id', 'product_name', 'qty', 'status', 'tax_code', 'tax_pct', 'total', 'unit_price', 'updated_at', 'version']

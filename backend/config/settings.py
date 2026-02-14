@@ -45,13 +45,13 @@ INSTALLED_APPS = [
     'corsheaders',
     'core.apps.CoreConfig',
     'products',
+    'sales',
     'django_q',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
-    'core.middleware.ExportExcelMiddleware',  # /export-excel/ → gọi view trực tiếp (tránh 404 từ resolver)
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',

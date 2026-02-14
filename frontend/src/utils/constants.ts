@@ -1,7 +1,13 @@
 export const API_BASE_URL = 'http://127.0.0.1:8000/api';
 
-// Gốc server (không có /api) — dùng cho export-excel vì route ở root
-const API_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, '') || 'http://127.0.0.1:8000';
+export const PAGES = {
+  PRODUCTS_LIST: 'products-list',
+  PRODUCTS_FORM: 'products-form',
+  CUSTOMERS_LIST: 'customers-list',
+  ORDERS_LIST: 'orders-list',
+  DASHBOARD: 'dashboard',
+  SETTINGS: 'settings',
+};
 
 export const API_ENDPOINTS = {
   // Auth
@@ -17,11 +23,17 @@ export const API_ENDPOINTS = {
   BOX_TYPES: '/products/box-types/',
   PRICINGS: '/products/pricings/',
 
-  // Xuất Excel: GET {origin}/export-excel/?format=excel (route ở root, không qua /api)
-  EXPORT_PRODUCTS: `${API_ORIGIN}/export-excel/`,
+  // Xuất Excel: dùng ExportExcelMixin.export_data (chuẩn duy nhất)
+  EXPORT_PRODUCTS: '/products/products/export_data/',
   IMPORT_PRODUCTS: '/products/products/import_excel/',
   DOWNLOAD_TEMPLATE: '/products/products/download_import_template/',
   CATEGORY_TREE: '/products/categories/tree/',
+
+  // Customers: chuẩn export_data + import_excel
+  CUSTOMERS: '/customers/',
+  EXPORT_CUSTOMERS: '/customers/export_data/',
+  IMPORT_CUSTOMERS: '/customers/import_excel/',
+  DOWNLOAD_CUSTOMER_TEMPLATE: '/customers/download_import_template/',
 };
 
 export const STORAGE_KEYS = {
@@ -39,5 +51,5 @@ export const PRODUCT_STATUS = {
 export const PRODUCT_STATUS_LABELS = {
   DRAFT: 'Nháp',
   ACTIVE: 'Đang bán',
-  DISCONTINUED: 'Ngừng sản xuất',
+  DISCONTINUED: 'Ngừng SX',
 };

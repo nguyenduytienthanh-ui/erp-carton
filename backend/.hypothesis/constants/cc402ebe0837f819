@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\products\filters.py
+# hypothesis_version: 6.151.5
+
+['%Y-%m-%d', 'USE_TZ', 'code', 'created_at__gte', 'created_at__lte', 'date', 'icontains', 'is_active', 'name', 'parent', 'parent__id']

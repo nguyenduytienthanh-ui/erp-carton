@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\core\migrations\0008_user_teams.py
+# hypothesis_version: 6.151.5
+
+['0007_team', 'core', 'core.team', 'teams', 'user', 'users']

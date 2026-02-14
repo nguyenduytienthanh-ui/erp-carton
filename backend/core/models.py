@@ -1,6 +1,7 @@
 import os
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
 
 
@@ -97,59 +98,59 @@ class User(AbstractUser):
 
 class Role(models.Model):
     """
-    Role for RBAC (Role-Based Access Control)
-    
-    Represents a role that can be assigned to users.
-    Each role can have multiple permissions.
+    Role for RBAC (Master Data chuẩn).
     """
-    
-    name = models.CharField(
-        max_length=100,
-        unique=True,
-        help_text="Role name (e.g., Admin, Manager)"
+    name = models.CharField(max_length=100, help_text="Role name (e.g., Admin, Manager)")
+    code = models.CharField(max_length=50, help_text="Role code (unique trong bản ghi chưa xóa)")
+    description = models.TextField(blank=True, help_text="Role description")
+    is_active = models.BooleanField(default=True, help_text="Is this role active?")
+    sort_order = models.IntegerField(default=0, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        'User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='created_roles', verbose_name="Người tạo",
     )
-    
-    code = models.CharField(
-        max_length=50,
-        unique=True,
-        help_text="Role code (e.g., ADMIN, MANAGER)"
+    updated_by = models.ForeignKey(
+        'User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='updated_roles', verbose_name="Người cập nhật",
     )
-    
-    description = models.TextField(
-        blank=True,
-        help_text="Role description"
+    deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Ngày xóa (soft)")
+    deleted_by = models.ForeignKey(
+        'User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='deleted_roles', verbose_name="Người xóa",
     )
-    
-    is_active = models.BooleanField(
-        default=True,
-        help_text="Is this role active?"
-    )
-    
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        help_text="When this role was created"
-    )
-    
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        help_text="When this role was last updated"
-    )
-    
     permissions = models.ManyToManyField(
-        'Permission',
-        related_name='roles',
-        blank=True,
-        help_text="Permissions assigned to this role"
+        'Permission', related_name='roles', blank=True,
+        help_text="Permissions assigned to this role",
     )
-    
+
     class Meta:
         db_table = 'roles'
-        ordering = ['name']
+        ordering = ['sort_order', 'name']
         verbose_name = 'Role'
         verbose_name_plural = 'Roles'
-    
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['name']),
+            models.Index(fields=['is_active']),
+            models.Index(fields=['created_at']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['code'],
+                condition=Q(deleted_at__isnull=True),
+                name='role_code_uniq_active',
+            ),
+        ]
+
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        if self.code:
+            self.code = str(self.code).strip().upper()
+        super().save(*args, **kwargs)
 
 
 class Permission(models.Model):
@@ -197,41 +198,54 @@ class Permission(models.Model):
 
 
 class Team(models.Model):
-    """Team for Data Scope - users can only see data within their team"""
-    
-    name = models.CharField(
-        max_length=100,
-        unique=True,
-        help_text="Team name"
-    )
-    
-    code = models.CharField(
-        max_length=50,
-        unique=True,
-        help_text="Team code"
-    )
-    
-    description = models.TextField(
-        blank=True,
-        help_text="Team description"
-    )
-    
-    is_active = models.BooleanField(
-        default=True,
-        help_text="Is this team active?"
-    )
-    
+    """Team for Data Scope (Master Data chuẩn)."""
+    name = models.CharField(max_length=100, help_text="Team name")
+    code = models.CharField(max_length=50, help_text="Team code (unique trong bản ghi chưa xóa)")
+    description = models.TextField(blank=True, help_text="Team description")
+    is_active = models.BooleanField(default=True, help_text="Is this team active?")
+    sort_order = models.IntegerField(default=0, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+    created_by = models.ForeignKey(
+        'User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='created_teams', verbose_name="Người tạo",
+    )
+    updated_by = models.ForeignKey(
+        'User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='updated_teams', verbose_name="Người cập nhật",
+    )
+    deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Ngày xóa (soft)")
+    deleted_by = models.ForeignKey(
+        'User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='deleted_teams', verbose_name="Người xóa",
+    )
+
     class Meta:
         db_table = 'teams'
-        ordering = ['name']
+        ordering = ['sort_order', 'name']
         verbose_name = 'Team'
         verbose_name_plural = 'Teams'
-    
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['name']),
+            models.Index(fields=['is_active']),
+            models.Index(fields=['created_at']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['code'],
+                condition=Q(deleted_at__isnull=True),
+                name='team_code_uniq_active',
+            ),
+        ]
+
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        if self.code:
+            self.code = str(self.code).strip().upper()
+        super().save(*args, **kwargs)
 
 
 class Setting(models.Model):
@@ -375,6 +389,13 @@ class Customer(models.Model):
         ordering = ['code']
         verbose_name = 'Customer'
         verbose_name_plural = 'Customers'
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['name']),
+            models.Index(fields=['is_active']),
+            models.Index(fields=['team']),
+            models.Index(fields=['created_at']),
+        ]
     
     def __str__(self):
         return f"{self.code} - {self.name}"
@@ -546,6 +567,12 @@ class AuditLog(models.Model):
         ('REJECT', 'Reject'),
         ('POST', 'Post'),
         ('LOCK', 'Lock'),
+        ('ACTIVATE', 'Activate'),
+        ('DEACTIVATE', 'Deactivate'),
+        ('IMPORT', 'Import'),
+        ('EXPORT', 'Export'),
+        ('VOID', 'Void'),
+        ('SUBMIT', 'Submit'),
     ]
     
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='audit_logs')
@@ -554,6 +581,7 @@ class AuditLog(models.Model):
     # What was changed
     entity_type = models.CharField(max_length=50, help_text="Model name (Customer, SalesOrder...)")
     entity_id = models.IntegerField(help_text="Record ID")
+    entity_id_str = models.CharField(max_length=64, default='', help_text="Record ID as string (for UUID entities)")
     entity_code = models.CharField(max_length=50, blank=True, help_text="Record code (for display)")
     
     # Changes
@@ -1181,3 +1209,127 @@ class PasswordPolicy(models.Model):
             errors.append("Password must contain at least one special character")
 
         return errors
+
+
+class UserPreferences(models.Model):
+    """
+    GENERIC MODEL - Dùng chung cho TẤT CẢ component/page
+    Lưu cấu hình user: columns, filters, tabs, theme...
+    """
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='preferences',
+        verbose_name='Người dùng'
+    )
+    page = models.CharField(
+        max_length=50,
+        verbose_name='Trang',
+        help_text='VD: products-list, dashboard, settings...'
+    )
+    config = models.JSONField(
+        default=dict,
+        verbose_name='Cấu hình',
+        help_text='JSON tự do: {columns, filters, theme, ...}'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'user_preferences'
+        verbose_name = 'Cấu hình người dùng'
+        verbose_name_plural = 'Cấu hình người dùng'
+        unique_together = ['user', 'page']
+        indexes = [
+            models.Index(fields=['user', 'page']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.page}"
+
+
+class ColumnPermission(models.Model):
+    """
+    Phân quyền cột - Admin kiểm soát user/role nào xem được cột gì
+    User chỉ thấy cột được phép (không rối mắt)
+    """
+    page = models.CharField(
+        max_length=50,
+        verbose_name='Trang',
+        help_text='VD: products-list, customers-list'
+    )
+    column = models.CharField(
+        max_length=50,
+        verbose_name='Tên cột (key)',
+        help_text='VD: cost_price, sale_price, commission_per_unit'
+    )
+    column_label = models.CharField(
+        max_length=100,
+        verbose_name='Nhãn hiển thị',
+        help_text='VD: Giá vốn, Giá bán, HHCĐ'
+    )
+    allowed_roles = models.JSONField(
+        default=list,
+        verbose_name='Roles được phép xem',
+        help_text='VD: ["admin", "manager", "accountant"]'
+    )
+    allowed_users = models.ManyToManyField(
+        User,
+        blank=True,
+        related_name='column_permissions',
+        verbose_name='Users được phép xem (ngoài roles)'
+    )
+    is_restricted = models.BooleanField(
+        default=True,
+        verbose_name='Có giới hạn quyền',
+        help_text='False = Tất cả được xem, True = Chỉ allowed_roles/users'
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name='Đang áp dụng'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'column_permissions'
+        verbose_name = 'Phân quyền cột'
+        verbose_name_plural = 'Phân quyền cột'
+        unique_together = ['page', 'column']
+        indexes = [
+            models.Index(fields=['page', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.page} - {self.column_label}"
+
+    def user_has_permission(self, user):
+        """Kiểm tra user có quyền xem cột này không"""
+        if getattr(self, '_debug', False):
+            print(f"   🔍 Checking permission for column: {self.column}")
+            print(f"      User: {user.username} (ID: {user.id})")
+            print(f"      Is restricted: {self.is_restricted}, Is active: {self.is_active}")
+
+        if not self.is_restricted or not self.is_active:
+            if getattr(self, '_debug', False):
+                print(f"      ✅ ALLOWED (not restricted)")
+            return True
+        if self.allowed_users.filter(id=user.id).exists():
+            if getattr(self, '_debug', False):
+                print(f"      ✅ ALLOWED (direct user)")
+            return True
+        user_roles = list(user.roles.values_list('code', flat=True))
+        # Staff/Superuser coi như có thêm role "admin" (để thấy cột cho phép admin)
+        if getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False):
+            if 'admin' not in [str(r).lower() for r in user_roles]:
+                user_roles = list(user_roles) + ['admin']
+        allowed_lower = [r.lower() for r in (self.allowed_roles or [])]
+        if any((str(role) or '').lower() in allowed_lower for role in user_roles):
+            if getattr(self, '_debug', False):
+                print(f"      ✅ ALLOWED (has role)")
+            return True
+        if getattr(self, '_debug', False):
+            print(f"      ❌ DENIED")
+        return False

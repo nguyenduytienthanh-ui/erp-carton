@@ -1,0 +1,4 @@
+# file: D:\ERP-Carton\backend\products\migrations\0006_rebuild_search_text_process_labels.py
+# hypothesis_version: 6.151.5
+
+[500, '2 mặt', 'ACTIVE', 'BOTH', 'Bế', 'Bồi', 'Chạp', 'Cán màng', 'Có', 'DISCONTINUED', 'DRAFT', 'Dán', 'INSIDE', 'In', 'Khác', 'Không', 'Ngoài', 'Ngừng SX', 'Nháp', 'OUTSIDE', 'Product', 'Trong', 'Xả', 'box_type', 'category', 'code', 'color_count', 'commission_per_unit', 'commission_percent', 'cost_price', 'delivery_tolerance', 'description', 'film_code', 'min_stock', 'mold_code', 'name', 'note', 'note_other', 'process_be', 'process_boi', 'process_can_mang', 'process_chap', 'process_dan', 'process_dong', 'process_in', 'process_khac', 'process_xa', 'products', 'sale_price', 'search_text', 'size_order', 'size_production', 'status', 'unit', 'waterproof', 'wave', 'Đang bán', 'Đóng']

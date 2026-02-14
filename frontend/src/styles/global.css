@@ -82,19 +82,134 @@ body {
   border: 1px solid #e5e7eb !important;
 }
 
-.ant-table-tbody > tr > td {
-  border-bottom: 1px solid #f3f4f6 !important;
+/* Header: divider rõ nhưng mảnh (1px) */
+.ant-table-thead > tr > th {
+  border-right: 1px solid #d1d5db !important;
+}
+.ant-table-thead > tr > th:last-child {
+  border-right: none !important;
 }
 
-/* Hover effect like Linear */
+/* Body: divider rất mờ; mỗi 5 cột kẻ rõ hơn (nhóm cột) */
+.ant-table-tbody > tr > td {
+  border-bottom: 1px solid #f3f4f6 !important;
+  border-right: 1px solid #f0f0f0 !important;
+}
+.ant-table-tbody > tr > td:nth-child(5n) {
+  border-right-color: #e5e7eb !important;
+}
+.ant-table-tbody > tr > td:last-child {
+  border-right: none !important;
+}
+
+/* Zebra row */
+.ant-table-tbody > tr:nth-child(even) > td {
+  background-color: #fafafa !important;
+}
+
+/* Row hover highlight */
 .ant-table-tbody > tr:hover > td {
-  background-color: #f9fafb !important;
-  transition: background-color 0.2s ease;
+  background-color: #eff6ff !important;
+  transition: background-color 0.15s ease;
+}
+.ant-table-tbody > tr:nth-child(even):hover > td {
+  background-color: #dbeafe !important;
 }
 
 /* Selected row */
 .ant-table-tbody > tr.ant-table-row-selected > td {
   background-color: #eff6ff !important;
+}
+
+/* Column highlight khi hover header (CSS :has) */
+.ant-table-wrapper {
+  --col-hover-bg: #dbeafe;
+  --col-hover-bg-zebra: #eff6ff;
+  --col-hover-bg-row: #bfdbfe;
+}
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(1):hover) .ant-table-tbody > tr > td:nth-child(1),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(2):hover) .ant-table-tbody > tr > td:nth-child(2),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(3):hover) .ant-table-tbody > tr > td:nth-child(3),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(4):hover) .ant-table-tbody > tr > td:nth-child(4),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(5):hover) .ant-table-tbody > tr > td:nth-child(5),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(6):hover) .ant-table-tbody > tr > td:nth-child(6),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(7):hover) .ant-table-tbody > tr > td:nth-child(7),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(8):hover) .ant-table-tbody > tr > td:nth-child(8),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(9):hover) .ant-table-tbody > tr > td:nth-child(9),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(10):hover) .ant-table-tbody > tr > td:nth-child(10),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(11):hover) .ant-table-tbody > tr > td:nth-child(11),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(12):hover) .ant-table-tbody > tr > td:nth-child(12),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(13):hover) .ant-table-tbody > tr > td:nth-child(13),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(14):hover) .ant-table-tbody > tr > td:nth-child(14),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(15):hover) .ant-table-tbody > tr > td:nth-child(15),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(16):hover) .ant-table-tbody > tr > td:nth-child(16),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(17):hover) .ant-table-tbody > tr > td:nth-child(17),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(18):hover) .ant-table-tbody > tr > td:nth-child(18),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(19):hover) .ant-table-tbody > tr > td:nth-child(19),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(20):hover) .ant-table-tbody > tr > td:nth-child(20),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(21):hover) .ant-table-tbody > tr > td:nth-child(21),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(22):hover) .ant-table-tbody > tr > td:nth-child(22),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(23):hover) .ant-table-tbody > tr > td:nth-child(23),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(24):hover) .ant-table-tbody > tr > td:nth-child(24),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(25):hover) .ant-table-tbody > tr > td:nth-child(25),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(26):hover) .ant-table-tbody > tr > td:nth-child(26),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(27):hover) .ant-table-tbody > tr > td:nth-child(27),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(28):hover) .ant-table-tbody > tr > td:nth-child(28),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(29):hover) .ant-table-tbody > tr > td:nth-child(29),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(30):hover) .ant-table-tbody > tr > td:nth-child(30),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(31):hover) .ant-table-tbody > tr > td:nth-child(31),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(32):hover) .ant-table-tbody > tr > td:nth-child(32),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(33):hover) .ant-table-tbody > tr > td:nth-child(33),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(34):hover) .ant-table-tbody > tr > td:nth-child(34),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(35):hover) .ant-table-tbody > tr > td:nth-child(35),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(36):hover) .ant-table-tbody > tr > td:nth-child(36),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(37):hover) .ant-table-tbody > tr > td:nth-child(37),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(38):hover) .ant-table-tbody > tr > td:nth-child(38),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(39):hover) .ant-table-tbody > tr > td:nth-child(39),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(40):hover) .ant-table-tbody > tr > td:nth-child(40) {
+  background-color: var(--col-hover-bg) !important;
+}
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(1):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(1),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(2):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(2),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(3):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(3),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(4):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(4),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(5):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(5),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(6):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(6),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(7):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(7),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(8):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(8),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(9):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(9),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(10):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(10),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(11):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(11),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(12):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(12),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(13):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(13),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(14):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(14),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(15):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(15),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(16):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(16),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(17):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(17),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(18):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(18),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(19):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(19),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(20):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(20),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(21):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(21),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(22):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(22),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(23):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(23),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(24):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(24),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(25):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(25),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(26):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(26),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(27):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(27),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(28):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(28),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(29):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(29),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(30):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(30),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(31):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(31),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(32):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(32),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(33):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(33),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(34):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(34),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(35):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(35),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(36):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(36),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(37):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(37),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(38):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(38),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(39):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(39),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(40):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(40) {
+  background-color: var(--col-hover-bg-zebra) !important;
 }
 
 /* Remove default padding from table container */
@@ -150,6 +265,57 @@ body {
   margin: 16px 0 0 0 !important;
 }
 
+/* InputNumber với nút xóa bên trong ô — cùng kích thước/kiểu với ô tìm kiếm (ant-input-clear-icon) */
+.input-number-with-clear.ant-input-number .ant-input-number-input,
+.input-number-with-clear .ant-input-number-input {
+  padding-right: 24px !important;
+}
+/* Wrapper ô kích thước: không cắt icon, icon luôn nổi trên */
+.input-number-with-clear-wrapper {
+  position: relative;
+  display: inline-block;
+  overflow: visible;
+}
+.input-number-with-clear-wrapper .ant-input-number {
+  display: block;
+}
+/* QuickClearIcon — chuẩn UI xóa nhanh (không dùng allowClear của Ant Design) */
+.quick-clear-icon:hover {
+  color: rgba(0, 0, 0, 0.45) !important;
+}
+.quick-clear-icon:active {
+  color: rgba(0, 0, 0, 0.65) !important;
+}
+
+/* List bottom bar (Products, Customers, ...): align pagination vertically */
+.products-list-bottom-bar .ant-pagination,
+.customers-list-bottom-bar .ant-pagination {
+  margin: 0 !important;
+}
+
+.products-list-bottom-bar .ant-pagination-item,
+.products-list-bottom-bar .ant-pagination-prev,
+.products-list-bottom-bar .ant-pagination-next,
+.products-list-bottom-bar .ant-pagination-jump-prev,
+.products-list-bottom-bar .ant-pagination-jump-next,
+.customers-list-bottom-bar .ant-pagination-item,
+.customers-list-bottom-bar .ant-pagination-prev,
+.customers-list-bottom-bar .ant-pagination-next,
+.customers-list-bottom-bar .ant-pagination-jump-prev,
+.customers-list-bottom-bar .ant-pagination-jump-next {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.products-list-bottom-bar .ant-pagination-item a,
+.customers-list-bottom-bar .ant-pagination-item a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
 .ant-pagination-item {
   border-radius: 6px !important;
   border-color: #e5e7eb !important;
@@ -168,4 +334,178 @@ body {
 /* Select dropdown above Modal (fix dropdown not opening in modal) */
 .ant-select-dropdown {
   z-index: 9999 !important;
+}
+
+/* Ô lọc: dịch mũi tên danh sách thả xuống sang phải 1mm (~4px) */
+[data-filter-panel] .ant-select-arrow {
+  margin-right: -4px;
+}
+
+/* ==================== PRODUCT FORM UI – SPEC LƯỚI BẮT BUỘC ==================== */
+/* colW động từ contentRef (ResizeObserver). Grid 10 cột, gap 8px. Không cuộn ngang. */
+.pf-container {
+  width: 100%;
+  box-sizing: border-box;
+  display: block;
+  /* Thêm con + Huỷ/Cập nhật thẳng với Ghi chú chung (Mẹ) = 1288. Chỉ card xám (Con) = 1298, mép trái giữ nguyên. */
+  --pf-con-card-width: 1298px;
+  --pf-con-align-width: 1288px;
+}
+.pf-section {
+  margin-bottom: 8px;
+}
+/* Dịch khối Mẹ sang phải 8px; width calc(100% - 8px) để mép phải = 1288 (thẳng với header/footer) */
+.pf-section-mother {
+  margin-left: 8px;
+  width: calc(100% - 8px);
+  box-sizing: border-box;
+}
+.pf-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #262626;
+  margin: 0 0 4px 0;
+}
+.pf-row {
+  display: grid;
+  grid-template-columns: repeat(10, var(--pf-col-w, 117.6px));
+  column-gap: 8px;
+  row-gap: 0;
+  align-items: end;
+  margin-bottom: 8px;
+}
+.pf-row:last-child {
+  margin-bottom: 0;
+}
+.pf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.pf-field[style*="grid-column"] {
+  /* grid-column set inline via span */
+}
+.pf-label {
+  font-size: 12px;
+  color: #595959;
+  font-weight: 500;
+}
+.pf-required {
+  color: #ff4d4f;
+  margin-left: 2px;
+}
+.pf-input,
+.pf-select,
+.pf-textarea {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  color: #262626;
+  box-sizing: border-box;
+}
+.pf-select {
+  appearance: auto;
+  cursor: pointer;
+}
+.pf-select:invalid,
+.pf-select option[value=""],
+.filter-select-native option[value=""] {
+  color: #bfbfbf;
+}
+/* Ghi chú chung: input 32px, không textarea cao */
+.pf-textarea {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 10px;
+  resize: none;
+}
+.pf-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.pf-input-wrap .pf-input {
+  padding-right: 36px;
+}
+.pf-upload-icon {
+  position: absolute;
+  right: 10px;
+  color: #8c8c8c;
+  font-size: 16px;
+  pointer-events: none;
+}
+/* Thành phần con – card nhẹ */
+.pf-section-children {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
+}
+.pf-children-header {
+  margin-bottom: 8px;
+}
+.pf-children-header-inner {
+  width: var(--pf-con-align-width, 1288px);
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pf-children-header .ant-checkbox-wrapper {
+  font-size: 13px;
+  color: #262626;
+}
+/* Card Con: spacing giống phần Mẹ. Ô xám – padding trái = padding phải (Xả→mép trái = Bế→mép phải). */
+.pf-child-card {
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* UI requirement (PHẦN CON): outer card must hug content only */
+  height: auto;
+  min-height: unset;
+  max-height: unset;
+  flex: 0 0 auto;
+  /* UI requirement (PHẦN CON): keep left, shrink right only; cùng width với header/footer để thẳng phải */
+  width: var(--pf-con-card-width, 1298px);
+  /* Bỏ max-width: 100% để width có hiệu lực; mép trái giữ nguyên, chỉ thu hẹp phải */
+  min-width: 0;
+  overflow-x: hidden; /* không cuộn ngang */
+}
+.pf-child-card:last-of-type {
+  margin-bottom: 0;
+}
+.pf-footer {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
+}
+.pf-footer-inner {
+  width: var(--pf-con-align-width, 1288px);
+  max-width: 100%;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+/* Placeholder styling */
+input::placeholder,
+.ant-input::placeholder,
+textarea::placeholder {
+  color: #bfbfbf !important;
+  font-style: italic;
+  opacity: 0.6;
 }
