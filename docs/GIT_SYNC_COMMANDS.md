@@ -9,14 +9,14 @@ Mọi code, giao diện quản trị, giao diện người dùng đều nằm tr
 **Chạy trước khi rời máy (công ty hoặc nhà):**
 
 ```powershell
-cd d:\ERP-Carton
+cd <thư mục dự án>   # VD: d:\ERP-Carton hoặc D:\Projects\erp-carton
 git add .
 git status
 git commit -m "Mô tả thay đổi"
 git push
 ```
 
-**Hoặc chạy script:** `.\scripts\sync-push.ps1`
+**Hoặc chạy script:** `.\scripts\sync-push.ps1` (chạy từ thư mục gốc dự án)
 
 ---
 
@@ -25,19 +25,19 @@ git push
 **Chạy khi bắt đầu làm việc (công ty hoặc nhà):**
 
 ```powershell
-cd d:\ERP-Carton
+cd <thư mục dự án>   # VD: d:\ERP-Carton hoặc D:\Projects\erp-carton
 git pull
 ```
 
 **Nếu có thay đổi package/migration, chạy thêm:**
 
 ```powershell
-cd d:\ERP-Carton\backend
+cd backend
 pip install -r requirements.txt
 python manage.py migrate
 python manage.py seed_master_data
 
-cd d:\ERP-Carton\frontend
+cd ..\frontend
 npm install
 ```
 
@@ -74,10 +74,10 @@ Copy từ `backend/.env.example` thành `backend/.env`, rồi điền DB_NAME, D
 
 **Nguyên nhân:** Database máy nhà chưa có dữ liệu ĐVT (Đơn vị tính).
 
-**Cách sửa:** Chạy seed trên máy nhà:
+**Cách sửa:** Chạy seed (từ thư mục dự án):
 
 ```powershell
-cd d:\ERP-Carton\backend
+cd backend
 python manage.py seed_units
 ```
 
