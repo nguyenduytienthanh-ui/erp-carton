@@ -74,10 +74,16 @@ class CustomerFilter(django_filters.FilterSet):
     # Date range
     created_at__gte = django_filters.DateFilter(field_name='created_at', lookup_expr='gte')
     created_at__lte = django_filters.DateFilter(field_name='created_at', lookup_expr='lte')
-    
+
+    # Status (DRAFT, PENDING_APPROVAL, APPROVED, REJECTED)
+    status = django_filters.ChoiceFilter(choices=Customer.STATUS_CHOICES)
+
+    # Code filter
+    code = django_filters.CharFilter(lookup_expr='icontains')
+
     class Meta:
         model = Customer
-        fields = ['is_active']
+        fields = ['is_active', 'status']
     
     def filter_search(self, queryset, name, value):
         from django.db.models import Q

@@ -64,6 +64,25 @@ const CustomerForm = ({ visible, onClose, editingCustomer }: CustomerFormProps) 
         owner: customerDetail.owner ?? undefined,
         team: customerDetail.team ?? undefined,
       });
+    } else if (editingCustomer && !customerDetail && (!('id' in editingCustomer) || !(editingCustomer as Customer).id)) {
+      // Clone mode: editingCustomer có dữ liệu nhưng không fetch (không có id)
+      const c = editingCustomer as Customer;
+      setForm({
+        name: c.name ?? '',
+        code: '',
+        company_name: c.company_name ?? '',
+        tax_code: c.tax_code ?? '',
+        phone: c.phone ?? '',
+        email: c.email ?? '',
+        address: c.address ?? '',
+        contact_person: c.contact_person ?? '',
+        contact_phone: c.contact_phone ?? '',
+        payment_terms: c.payment_terms ?? 30,
+        credit_limit: c.credit_limit ?? 0,
+        is_active: c.is_active ?? true,
+        owner: c.owner ?? undefined,
+        team: c.team ?? undefined,
+      });
     } else if (!editingCustomer) {
       setForm(defaultForm);
     }
