@@ -7,6 +7,8 @@ if (Test-Path "backend\requirements.txt") {
     Push-Location backend
     pip install -r requirements.txt -q 2>$null
     python manage.py migrate --noinput 2>$null
+    # Seed master data nếu chưa có (ĐVT, Sóng, Kiểu) - cần cho form Thêm sản phẩm
+    python manage.py seed_master_data 2>$null
     Pop-Location
 }
 if (Test-Path "frontend\package.json") {

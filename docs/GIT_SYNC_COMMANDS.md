@@ -35,10 +35,13 @@ git pull
 cd d:\ERP-Carton\backend
 pip install -r requirements.txt
 python manage.py migrate
+python manage.py seed_master_data
 
 cd d:\ERP-Carton\frontend
 npm install
 ```
+
+**Lưu ý:** `seed_master_data` tạo ĐVT, Sóng, Kiểu thùng. Cần cho form Thêm sản phẩm (chọn ĐVT).
 
 **Hoặc chạy script:** `.\scripts\sync-pull.ps1`
 
@@ -58,3 +61,24 @@ npm install
 - **`.env`** không nằm trong Git (bảo mật). Máy nhà cần có file `.env` riêng (đã có).
 - **`node_modules`** không nằm trong Git. Sau `git pull` nếu `package.json` đổi → chạy `npm install`.
 - Luôn **push** trước khi rời máy, **pull** khi bắt đầu làm việc.
+
+---
+
+## Không chọn được ĐVT khi Thêm sản phẩm?
+
+**Nguyên nhân:** Database máy nhà chưa có dữ liệu ĐVT (Đơn vị tính).
+
+**Cách sửa:** Chạy seed trên máy nhà:
+
+```powershell
+cd d:\ERP-Carton\backend
+python manage.py seed_units
+```
+
+Hoặc seed toàn bộ master data (ĐVT + Sóng + Kiểu):
+
+```powershell
+python manage.py seed_master_data
+```
+
+Sau đó mở lại form Thêm sản phẩm → dropdown ĐVT sẽ có dữ liệu.
