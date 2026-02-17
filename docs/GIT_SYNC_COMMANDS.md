@@ -1,31 +1,60 @@
-# Lệnh Git đồng bộ dự án (máy công ty ↔ máy nhà)
+# Đồng bộ dự án ERP-Carton (máy công ty ↔ máy nhà)
 
-## Trước khi làm việc (chạy trên máy đang dùng)
+Mọi code, giao diện quản trị, giao diện người dùng đều nằm trong Git. Chạy đúng lệnh để 2 máy luôn giống nhau.
+
+---
+
+## KẾT THÚC LÀM VIỆC — Đẩy toàn bộ lên Git
+
+**Chạy trước khi rời máy (công ty hoặc nhà):**
+
+```powershell
+cd d:\ERP-Carton
+git add .
+git status
+git commit -m "Mô tả thay đổi"
+git push
+```
+
+**Hoặc chạy script:** `.\scripts\sync-push.ps1`
+
+---
+
+## BẮT ĐẦU LÀM VIỆC — Tải toàn bộ từ Git
+
+**Chạy khi bắt đầu làm việc (công ty hoặc nhà):**
 
 ```powershell
 cd d:\ERP-Carton
 git pull
 ```
 
-## Sau khi làm việc (chạy trước khi chuyển máy)
+**Nếu có thay đổi package/migration, chạy thêm:**
 
 ```powershell
-cd d:\ERP-Carton
-git add .
-git status
-git commit -m "Mô tả thay đổi của bạn"
-git push
+cd d:\ERP-Carton\backend
+pip install -r requirements.txt
+python manage.py migrate
+
+cd d:\ERP-Carton\frontend
+npm install
 ```
 
-## Ví dụ commit message
+**Hoặc chạy script:** `.\scripts\sync-pull.ps1`
 
-- `feat: Thêm tính năng X`
-- `fix: Sửa lỗi Y`
-- `docs: Cập nhật tài liệu`
-- `refactor: Tái cấu trúc module Z`
+---
+
+## Tóm tắt
+
+| Thời điểm | Lệnh |
+|-----------|------|
+| **Kết thúc** (trước khi đổi máy) | `git add .` → `git commit -m "..."` → `git push` |
+| **Bắt đầu** (khi vào máy) | `git pull` |
+
+---
 
 ## Lưu ý
 
-- Luôn **pull** trước khi bắt đầu làm việc
-- Luôn **push** sau khi xong việc
-- Dùng chung cho cả 2 máy (công ty và nhà)
+- **`.env`** không nằm trong Git (bảo mật). Máy nhà cần có file `.env` riêng (đã có).
+- **`node_modules`** không nằm trong Git. Sau `git pull` nếu `package.json` đổi → chạy `npm install`.
+- Luôn **push** trước khi rời máy, **pull** khi bắt đầu làm việc.
