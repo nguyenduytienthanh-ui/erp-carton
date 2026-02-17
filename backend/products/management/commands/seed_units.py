@@ -36,9 +36,8 @@ class Command(BaseCommand):
                     is_active=True,
                 )
                 created_count += 1
-                self.stdout.write(self.style.SUCCESS(f'  + Created: {u["code"]} - {u["name"]}'))
+                self.stdout.write(self.style.SUCCESS(f'  + Created: {u["code"]}'))
             else:
-                self.stdout.write(f'  - Đã có: {u["code"]}')
+                self.stdout.write(f'  - Exists: {u["code"]}')
 
-        self.stdout.write(self.style.SUCCESS(f'\n[OK] Đã tạo {created_count}/{len(units)} ĐVT.'))
-        self.stdout.write(self.style.SUCCESS('Chạy xong. Bạn có thể thêm sản phẩm và chọn ĐVT.'))
+        self.stdout.write(self.style.SUCCESS(f'\n[OK] Created {created_count}/{len(units)} units.'))

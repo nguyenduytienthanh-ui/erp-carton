@@ -64,6 +64,12 @@ npm install
 
 ---
 
+## Máy nhà thiếu .env?
+
+Copy từ `backend/.env.example` thành `backend/.env`, rồi điền DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT phù hợp máy nhà.
+
+---
+
 ## Không chọn được ĐVT khi Thêm sản phẩm?
 
 **Nguyên nhân:** Database máy nhà chưa có dữ liệu ĐVT (Đơn vị tính).
