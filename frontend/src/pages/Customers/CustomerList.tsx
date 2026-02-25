@@ -6,30 +6,42 @@
  * - Tìm kiếm, Xuất Excel/PDF, Nhập Excel, Thêm mới
  * - useUserPreferences (customers-list), useSearchFilterIntent
  */
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Table,
   Button,
+  Dropdown,
   message,
   Modal,
+  Input,
   Card,
   Checkbox,
+  Pagination,
+  Space,
+  Select,
+  Segmented,
+  Drawer,
 } from 'antd';
 import {
   PlusOutlined,
-  EyeOutlined,
-  EditOutlined,
   DeleteOutlined,
   CopyOutlined,
   ExportOutlined,
   UploadOutlined,
   FilterOutlined,
+  ReloadOutlined,
+  MoreOutlined,
+  HistoryOutlined,
+  CheckOutlined,
+  CloseOutlined,
+  SendOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import type { MenuProps } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { customersApi } from '../../api/customers';
-import type { Customer, CustomerStatus } from '../../types/customer';
+import { customersApi, type ActivityItem } from '../../api/customers';
+import type { Customer, CustomerStatus, ApprovalHistoryItem } from '../../types/customer';
 import { CUSTOMER_STATUS_LABELS } from '../../types/customer';
 import { theme } from '../../styles/theme';
 import {
@@ -46,8 +58,10 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { useBulkDelete } from '../../hooks/useBulkDelete';
 import { useRowSelection } from '../../hooks/useRowSelection';
+import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { TOAST } from '../../shared/toast';
 import { PAGES } from '../../utils/constants';
+import type { PreferencesConfig } from '../../types/preferences';
 
 const DEFAULT_CUSTOMER_VISIBLE_COLUMNS: string[] = [
   'code', 'name', 'company_name', 'phone', 'email', 'tax_code',
@@ -84,6 +98,123 @@ const EMPTY_FILTER_VALUES: FilterValues = {
   email: null,
   status: null,
   is_active: null,
+};
+
+type ListViewMode = 'table' | 'cards';
+type CardDensity = 'comfortable' | 'compact';
+type DesktopTableDensity = 'comfortable' | 'compact';
+type CustomerFormMode = 'create' | 'edit' | 'view';
+
+const getCustomerStatusTone = (status: CustomerStatus | string | null | undefined): 'ok' | 'warn' | 'pending' | 'neutral' => {
+  if (status === 'APPROVED') return 'ok';
+  if (status === 'REJECTED') return 'warn';
+  if (status === 'PENDING_APPROVAL') return 'pending';
+  return 'neutral';
+};
+
+const getHistoryActionCode = (action: string | null | undefined): string => {
+  const raw = String(action ?? '').trim().toUpperCase();
+  if (raw.includes('SUBMIT')) return 'SUBMIT';
+  if (raw.includes('APPROVE')) return 'APPROVE';
+  if (raw.includes('REJECT')) return 'REJECT';
+  if (raw.includes('CREATE')) return 'CREATE';
+  if (raw.includes('UPDATE')) return 'UPDATE';
+  if (raw.includes('DELETE')) return 'DELETE';
+  if (raw.includes('IMPORT')) return 'IMPORT';
+  if (raw.includes('EXPORT')) return 'EXPORT';
+  if (raw.includes('COMMENT')) return 'COMMENT';
+  return raw || 'UNKNOWN';
+};
+
+const getHistoryActionLabelVi = (action: string | null | undefined): string => {
+  const code = getHistoryActionCode(action);
+  const map: Record<string, string> = {
+    SUBMIT: 'Trình duyệt',
+    APPROVE: 'Duyệt',
+    REJECT: 'Từ chối',
+    CREATE: 'Tạo mới',
+    UPDATE: 'Cập nhật',
+    DELETE: 'Xóa',
+    IMPORT: 'Nhập dữ liệu',
+    EXPORT: 'Xuất dữ liệu',
+    COMMENT: 'Bình luận',
+    UNKNOWN: String(action ?? 'Không xác định'),
+  };
+  return map[code] ?? String(action ?? 'Không xác định');
+};
+
+const CUSTOMER_HISTORY_FIELD_LABELS: Record<string, string> = {
+  code: 'Mã KH',
+  name: 'Tên KH',
+  company_name: 'Công ty',
+  tax_code: 'Mã số thuế',
+  phone: 'Điện thoại',
+  email: 'Email',
+  address: 'Địa chỉ',
+  contact_person: 'Người liên hệ',
+  contact_phone: 'SĐT liên hệ',
+  payment_terms: 'Hạn TT (ngày)',
+  credit_limit: 'Hạn mức',
+  is_active: 'Hoạt động',
+  status: 'Trạng thái',
+  owner: 'Chủ sở hữu',
+  team: 'Nhóm',
+  reason: 'Lý do',
+};
+
+const getHistoryFieldLabelVi = (field: string): string => CUSTOMER_HISTORY_FIELD_LABELS[field] ?? field;
+
+const formatHistoryValueVi = (value: unknown): string => {
+  if (value === null || value === undefined || value === '') return '-';
+  if (typeof value === 'boolean') return value ? 'Có' : 'Không';
+  if (typeof value === 'number') return value.toLocaleString('vi-VN');
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+};
+
+const stableHistoryValue = (value: unknown): string => {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) return `[${value.map((v) => stableHistoryValue(v)).join(',')}]`;
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj).sort().map((k) => `${k}:${stableHistoryValue(obj[k])}`).join('|')}}`;
+  }
+  return String(value);
+};
+
+const getActivityDedupKey = (item: ActivityItem): string => {
+  const tsMs = new Date(item.timestamp).getTime();
+  const tsSec = Number.isFinite(tsMs) ? Math.floor(tsMs / 1000) : 0;
+  return [
+    item.type,
+    getHistoryActionCode(item.action),
+    item.user ?? '',
+    String(tsSec),
+    stableHistoryValue(item.details?.changed_fields ?? []),
+    stableHistoryValue(item.details?.old_values ?? {}),
+    stableHistoryValue(item.details?.new_values ?? {}),
+    String(item.details?.content ?? ''),
+  ].join('||');
+};
+
+const buildFallbackDiffRows = (action: string, record?: Customer | null): Array<{ field: string; before: string; after: string }> => {
+  const code = getHistoryActionCode(action);
+  if (code === 'SUBMIT') return [{ field: 'status', before: 'Nháp', after: 'Chờ duyệt' }];
+  if (code === 'APPROVE') return [{ field: 'status', before: 'Chờ duyệt', after: 'Đã duyệt' }];
+  if (code === 'REJECT') return [{ field: 'status', before: 'Chờ duyệt', after: 'Từ chối' }];
+  if (code === 'CREATE' && record) {
+    return [
+      { field: 'code', before: '-', after: record.code || '-' },
+      { field: 'name', before: '-', after: record.name || '-' },
+    ];
+  }
+  return [];
 };
 
 function FilterTextInput(props: {
@@ -155,6 +286,7 @@ function parseCustomerListParams(searchParams: URLSearchParams): {
   activeFilters: FilterKey[];
   page: number;
   pageSize: number;
+  exactSearch: boolean;
 } {
   const q = searchParams.get('q') ?? '';
   const code = searchParams.get('code') ?? '';
@@ -168,6 +300,7 @@ function parseCustomerListParams(searchParams: URLSearchParams): {
   const activeFiltersRaw = searchParams.get('activeFilters') ?? '';
   const page = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10));
   const pageSize = Math.max(1, Math.min(500, parseInt(searchParams.get('pageSize') ?? String(DEFAULT_PAGE_SIZE), 10)));
+  const exactSearch = searchParams.get('exact_search') === '1' || searchParams.get('exact_search') === 'true';
 
   const filterValues: FilterValues = {
     code: code.trim() || null,
@@ -185,7 +318,7 @@ function parseCustomerListParams(searchParams: URLSearchParams): {
   });
   const activeFilters = activeFromUrl.length > 0 ? activeFromUrl : activeFromValues;
 
-  return { searchInput: q, search: q, filterValues, activeFilters, page, pageSize };
+  return { searchInput: q, search: q, filterValues, activeFilters, page, pageSize, exactSearch };
 }
 
 function customerListParamsToSearch(
@@ -193,7 +326,8 @@ function customerListParamsToSearch(
   filterValues: FilterValues,
   activeFilters: FilterKey[],
   current: number,
-  pageSize: number
+  pageSize: number,
+  exactSearch: boolean
 ): Record<string, string> {
   const params: Record<string, string> = {};
   if (search.trim()) params.q = search.trim();
@@ -208,6 +342,7 @@ function customerListParamsToSearch(
   if (activeFilters.length > 0) params.activeFilters = activeFilters.join(',');
   if (current > 1) params.page = String(current);
   if (pageSize !== DEFAULT_PAGE_SIZE) params.pageSize = String(pageSize);
+  if (exactSearch) params.exact_search = '1';
   return params;
 }
 
@@ -220,10 +355,32 @@ const CustomerList = () => {
   const [filterValues, setFilterValues] = useState<FilterValues>(parsed.filterValues);
   const [activeFilters, setActiveFilters] = useState<FilterKey[]>(parsed.activeFilters);
   const [pagination, setPagination] = useState({ current: parsed.page, pageSize: parsed.pageSize });
+  const [exactSearch, setExactSearch] = useState(parsed.exactSearch);
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [formMode, setFormMode] = useState<CustomerFormMode>('create');
   const [importModalVisible, setImportModalVisible] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
+  const [viewMode, setViewMode] = useState<ListViewMode>(() => (window.innerWidth <= 768 ? 'cards' : 'table'));
+  const [cardDensity, setCardDensity] = useState<CardDensity>('comfortable');
+  const [desktopTableDensity, setDesktopTableDensity] = useState<DesktopTableDensity>('comfortable');
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const [sortField, setSortField] = useState<string | null>(null);
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | null>(null);
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyActionFilter, setHistoryActionFilter] = useState<string | undefined>(undefined);
+  const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [rejectCustomer, setRejectCustomer] = useState<Customer | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const {
     visibleColumns,
@@ -231,6 +388,41 @@ const CustomerList = () => {
   } = useColumnSettings(PAGES.CUSTOMERS_LIST, {
     defaultVisibleColumns: DEFAULT_CUSTOMER_VISIBLE_COLUMNS,
   });
+  const { config, saveConfig } = useUserPreferences(PAGES.CUSTOMERS_LIST);
+  const configRef = useRef<PreferencesConfig>({});
+
+  useEffect(() => {
+    configRef.current = (config || {}) as PreferencesConfig;
+  }, [config]);
+
+  const savePreferences = useCallback(
+    async (partial: PreferencesConfig) => {
+      const merged = { ...(configRef.current || {}), ...(partial || {}) } as PreferencesConfig;
+      configRef.current = merged;
+      await saveConfig(merged);
+    },
+    [saveConfig]
+  );
+
+  useEffect(() => {
+    const savedMode = config?.mobileListViewMode as ListViewMode | undefined;
+    if (savedMode === 'table' || savedMode === 'cards') {
+      setViewMode(savedMode);
+    }
+    const savedDensity = config?.mobileCardDensity as CardDensity | undefined;
+    if (savedDensity === 'comfortable' || savedDensity === 'compact') {
+      setCardDensity(savedDensity);
+    }
+    const savedDesktopDensity = config?.desktopTableDensity as DesktopTableDensity | undefined;
+    if (savedDesktopDensity === 'comfortable' || savedDesktopDensity === 'compact') {
+      setDesktopTableDensity(savedDesktopDensity);
+    }
+    if (config?.sort && typeof config.sort === 'object' && (config.sort as { field?: string; order?: 'asc' | 'desc' }).field && (config.sort as { field?: string; order?: 'asc' | 'desc' }).order) {
+      const s = config.sort as { field: string; order: 'asc' | 'desc' };
+      setSortField(s.field);
+      setSortOrder(s.order);
+    }
+  }, [config]);
 
   const {
     intentSearch,
@@ -249,7 +441,7 @@ const CustomerList = () => {
     const p: Record<string, unknown> = {
       page: pagination.current,
       page_size: pagination.pageSize,
-      ordering: 'code',
+      ordering: sortField ? `${sortOrder === 'desc' ? '-' : ''}${sortField}` : 'code',
     };
     if (intentSearch.trim()) p.q = intentSearch.trim();
     if (intentFilters.code?.trim()) p.code = intentFilters.code.trim();
@@ -260,13 +452,75 @@ const CustomerList = () => {
     if (intentFilters.status != null) p.status = intentFilters.status;
     if (intentFilters.is_active === true) p.is_active = 'true';
     if (intentFilters.is_active === false) p.is_active = 'false';
+    if (exactSearch) p.exact_search = '1';
     return p;
-  }, [intentSearch, intentFilters, pagination.current, pagination.pageSize]);
+  }, [intentSearch, intentFilters, pagination.current, pagination.pageSize, exactSearch, sortField, sortOrder]);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, refetch } = useQuery({
     queryKey: ['customers', apiParams],
     queryFn: () => customersApi.getCustomers(apiParams as Record<string, string>),
   });
+
+  const { data: activityStream = [], isLoading: isHistoryLoading } = useQuery<ActivityItem[]>({
+    queryKey: ['customers', 'activity', historyCustomer?.id ?? null],
+    queryFn: () => customersApi.getActivityByEntity('Customer', historyCustomer!.id),
+    enabled: historyModalOpen && historyCustomer != null,
+  });
+
+  const { data: approvalHistory = [], isLoading: isApprovalHistoryLoading } = useQuery<ApprovalHistoryItem[]>({
+    queryKey: ['customers', 'approval-history-fallback', historyCustomer?.id ?? null],
+    queryFn: () => customersApi.getApprovalHistory(historyCustomer!.id),
+    enabled: historyModalOpen && historyCustomer != null,
+  });
+
+  const mergedActivity = useMemo<ActivityItem[]>(() => {
+    const fromApproval: ActivityItem[] = approvalHistory.map((h) => ({
+      type: 'audit',
+      action: h.action,
+      user: h.user,
+      timestamp: h.created_at,
+      details: {
+        content: h.comments ?? undefined,
+      },
+    }));
+    const all = [...activityStream, ...fromApproval];
+    const unique = new Map<string, ActivityItem>();
+    all.forEach((item) => {
+      const key = getActivityDedupKey(item);
+      if (!unique.has(key)) unique.set(key, item);
+    });
+    const normalized = Array.from(unique.values());
+    const hasCreate = normalized.some((item) => getHistoryActionCode(item.action) === 'CREATE');
+
+    if (historyCustomer && !hasCreate && historyCustomer.created_at) {
+      normalized.push({
+        type: 'audit',
+        action: 'CREATE',
+        user: historyCustomer.created_by_username ?? null,
+        timestamp: historyCustomer.created_at,
+        details: { content: 'Bản ghi được tạo.' },
+      });
+    }
+
+    return normalized.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [activityStream, approvalHistory, historyCustomer]);
+
+  const filteredActivity = useMemo(() => {
+    const q = historySearch.trim().toLowerCase();
+    return mergedActivity.filter((item) => {
+      if (historyActionFilter && getHistoryActionCode(item.action) !== historyActionFilter) return false;
+      if (!q) return true;
+      const content = [
+        getHistoryActionLabelVi(item.action),
+        item.user ?? '',
+        item.details?.content ?? '',
+        JSON.stringify(item.details?.old_values ?? {}),
+        JSON.stringify(item.details?.new_values ?? {}),
+        (item.details?.changed_fields ?? []).join(','),
+      ].join(' ').toLowerCase();
+      return content.includes(q);
+    });
+  }, [mergedActivity, historyActionFilter, historySearch]);
 
   const results = data?.results ?? [];
   const total = data?.count ?? 0;
@@ -298,20 +552,22 @@ const CustomerList = () => {
   }, [searchInput, setIntentImmediate]);
 
   const syncUrl = useCallback(() => {
-    const params = customerListParamsToSearch(intentSearch, intentFilters, activeFilters, pagination.current, pagination.pageSize);
+    const params = customerListParamsToSearch(intentSearch, intentFilters, activeFilters, pagination.current, pagination.pageSize, exactSearch);
     setSearchParams(params, { replace: true });
-  }, [intentSearch, intentFilters, activeFilters, pagination, setSearchParams]);
+  }, [intentSearch, intentFilters, activeFilters, pagination, exactSearch, setSearchParams]);
 
   useEffect(() => {
     syncUrl();
-  }, [intentSearch, intentFilters, activeFilters, pagination.current, pagination.pageSize]);
+  }, [intentSearch, intentFilters, activeFilters, pagination.current, pagination.pageSize, exactSearch]);
 
   const handleAdd = () => {
+    setFormMode('create');
     setEditingCustomer(null);
     setFormVisible(true);
   };
 
   const handleEdit = (record: Customer) => {
+    setFormMode('edit');
     setEditingCustomer(record);
     setFormVisible(true);
   };
@@ -325,6 +581,122 @@ const CustomerList = () => {
       message.error((err as Error)?.message ?? 'Xóa thất bại');
     }
   };
+
+  const handleSubmitForApproval = async (record: Customer) => {
+    try {
+      await customersApi.submitForApproval(record.id);
+      message.success('Đã gửi duyệt.');
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+    } catch (err: unknown) {
+      message.error((err as Error)?.message ?? 'Gửi duyệt thất bại');
+    }
+  };
+
+  const handleApprove = async (record: Customer) => {
+    try {
+      await customersApi.approve(record.id);
+      message.success('Đã duyệt khách hàng.');
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+    } catch (err: unknown) {
+      message.error((err as Error)?.message ?? 'Duyệt thất bại');
+    }
+  };
+
+  const openRejectModal = (record: Customer) => {
+    setRejectCustomer(record);
+    setRejectReason('');
+    setRejectModalOpen(true);
+  };
+
+  const handleRejectConfirm = async () => {
+    if (!rejectCustomer) return;
+    if (!rejectReason.trim()) {
+      message.warning('Vui lòng nhập lý do từ chối.');
+      return;
+    }
+    try {
+      await customersApi.reject(rejectCustomer.id, rejectReason.trim());
+      message.success('Đã từ chối yêu cầu duyệt.');
+      setRejectModalOpen(false);
+      setRejectCustomer(null);
+      setRejectReason('');
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+    } catch (err: unknown) {
+      message.error((err as Error)?.message ?? 'Từ chối thất bại');
+    }
+  };
+
+  const openHistoryModal = (record: Customer) => {
+    setHistoryCustomer(record);
+    setHistorySearch('');
+    setHistoryActionFilter(undefined);
+    setHistoryModalOpen(true);
+  };
+
+  const handleClone = (record: Customer) => {
+    const cloned = { ...record };
+    delete (cloned as Record<string, unknown>).id;
+    delete (cloned as Record<string, unknown>).code;
+    (cloned as Record<string, unknown>).name = `${record.name} (Copy)`;
+    setFormMode('create');
+    setEditingCustomer(cloned);
+    setFormVisible(true);
+  };
+
+  const handleRowAction = (action: string, record: Customer) => {
+    if (action === 'copy') {
+      handleClone(record);
+      return;
+    }
+    if (action === 'history') {
+      openHistoryModal(record);
+      return;
+    }
+    if (action === 'submit') {
+      void handleSubmitForApproval(record);
+      return;
+    }
+    if (action === 'approve') {
+      void handleApprove(record);
+      return;
+    }
+    if (action === 'reject') {
+      openRejectModal(record);
+      return;
+    }
+    if (action === 'delete') {
+      confirmDeleteOne(record.name || record.code || String(record.id), () => handleDelete(record.id));
+    }
+  };
+
+  const renderRowActions = (record: Customer) => (
+    <div className="table-row-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <Dropdown
+        trigger={['click']}
+        menu={{
+          items: [
+            ...(record.status === 'DRAFT' ? [{ key: 'submit', icon: <SendOutlined />, label: 'Trình duyệt' }] : []),
+            ...(record.status === 'PENDING_APPROVAL'
+              ? [
+                { key: 'approve', icon: <CheckOutlined />, label: 'Duyệt' },
+                { key: 'reject', icon: <CloseOutlined />, label: 'Từ chối', danger: true },
+              ]
+              : []),
+            { key: 'history', icon: <HistoryOutlined />, label: 'Lịch sử hoạt động' },
+            { key: 'copy', icon: <CopyOutlined />, label: 'Nhân bản' },
+            { type: 'divider' as const },
+            { key: 'delete', icon: <DeleteOutlined />, label: 'Xóa', danger: true },
+          ] as MenuProps['items'],
+          onClick: ({ key, domEvent }) => {
+            domEvent.stopPropagation();
+            handleRowAction(String(key), record);
+          },
+        }}
+      >
+        <Button className="table-row-action-btn action-more" type="text" size="small" icon={<MoreOutlined style={{ fontSize: 18 }} />} onClick={(e) => e.stopPropagation()} title="Thao tác" />
+      </Dropdown>
+    </div>
+  );
 
   const handleExport = async (format: 'excel' | 'pdf') => {
     try {
@@ -344,6 +716,80 @@ const CustomerList = () => {
   const handleImportSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ['customers'] });
     setImportModalVisible(false);
+  };
+
+  const handleViewModeChange = useCallback((mode: ListViewMode) => {
+    setViewMode(mode);
+    void savePreferences({ mobileListViewMode: mode });
+  }, [savePreferences]);
+
+  const handleCardDensityChange = useCallback((density: CardDensity) => {
+    setCardDensity(density);
+    void savePreferences({ mobileCardDensity: density });
+  }, [savePreferences]);
+
+  const handleDesktopTableDensityChange = useCallback((density: DesktopTableDensity) => {
+    setDesktopTableDensity(density);
+    void savePreferences({ desktopTableDensity: density });
+  }, [savePreferences]);
+
+  const handleSort = useCallback(
+    async (orderingParam: string) => {
+      let newOrder: 'asc' | 'desc' | null = null;
+      if (sortField === orderingParam) {
+        if (sortOrder === 'asc') newOrder = 'desc';
+        else if (sortOrder === 'desc') newOrder = null;
+      } else {
+        newOrder = 'asc';
+      }
+      if (newOrder === null) {
+        setSortField(null);
+        setSortOrder(null);
+        await savePreferences({ sort: undefined });
+      } else {
+        setSortField(orderingParam);
+        setSortOrder(newOrder);
+        await savePreferences({ sort: { field: orderingParam, order: newOrder } });
+      }
+      setPagination((p) => ({ ...p, current: 1 }));
+    },
+    [sortField, sortOrder, savePreferences]
+  );
+
+  const handleFormClose = useCallback(() => {
+    setFormVisible(false);
+    setFormMode('create');
+    setEditingCustomer(null);
+    queryClient.invalidateQueries({ queryKey: ['customers'] });
+  }, [queryClient]);
+
+  const SortIcon = ({ orderingParam }: { orderingParam: string }) => {
+    if (sortField !== orderingParam) {
+      return <span style={{ color: '#bfbfbf', fontSize: 10, marginLeft: 2 }}>⇅</span>;
+    }
+    return (
+      <span style={{ color: '#1890ff', fontSize: 10, fontWeight: 'bold', marginLeft: 2 }}>
+        {sortOrder === 'asc' ? '▲' : '▼'}
+      </span>
+    );
+  };
+
+  const addSortToColumn = <T extends Record<string, unknown>>(col: T & { key?: string; title?: React.ReactNode; sortField?: string }): T => {
+    if (col.key === 'actions' || !col.sortField) return col;
+    const label = typeof col.title === 'string' ? col.title : col.title;
+    const orderingParam = col.sortField;
+    return {
+      ...col,
+      title: (
+        <div
+          onClick={(e) => { e.stopPropagation(); void handleSort(orderingParam); }}
+          style={{ cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: 2 }}
+        >
+          {label}
+          <SortIcon orderingParam={orderingParam} />
+        </div>
+      ),
+    } as T;
   };
 
   const allColumnsBase: (ColumnsType<Customer>[number] & { sortField?: string })[] = [
@@ -366,15 +812,26 @@ const CustomerList = () => {
         </span>
       ),
     },
-    { title: 'Tên KH', dataIndex: 'name', key: 'name', sortField: 'name', width: 180, ellipsis: true, render: (n: string) => n ?? '-' },
-    { title: 'Công ty', dataIndex: 'company_name', key: 'company_name', sortField: 'company_name', width: 160, ellipsis: true, render: (t: string) => t ?? '-' },
-    { title: 'Điện thoại', dataIndex: 'phone', key: 'phone', width: 110, render: (t: string) => t ?? '-' },
-    { title: 'Email', dataIndex: 'email', key: 'email', width: 160, ellipsis: true, render: (t: string) => t ?? '-' },
-    { title: 'Mã số thuế', dataIndex: 'tax_code', key: 'tax_code', width: 100, render: (t: string) => t ?? '-' },
-    { title: 'Người liên hệ', dataIndex: 'contact_person', key: 'contact_person', width: 120, ellipsis: true, render: (t: string) => t ?? '-' },
-    { title: 'SĐT liên hệ', dataIndex: 'contact_phone', key: 'contact_phone', width: 110, render: (t: string) => t ?? '-' },
-    { title: 'Hạn TT (ngày)', dataIndex: 'payment_terms', key: 'payment_terms', width: 90, align: 'right' as const, render: (v: number) => v != null ? v : '-' },
-    { title: 'Hạn mức', dataIndex: 'credit_limit', key: 'credit_limit', width: 100, align: 'right' as const, render: (v: number) => v != null ? v.toLocaleString('vi-VN') : '-' },
+    { title: 'Tên KH', dataIndex: 'name', key: 'name', sortField: 'name', width: 180, ellipsis: true, render: (n: string) => <span className="cell-text-primary">{n ?? '-'}</span> },
+    { title: 'Công ty', dataIndex: 'company_name', key: 'company_name', sortField: 'company_name', width: 160, ellipsis: true, render: (t: string) => <span className="cell-text-secondary">{t ?? '-'}</span> },
+    { title: 'Điện thoại', dataIndex: 'phone', key: 'phone', sortField: 'phone', width: 110, render: (t: string) => t ?? '-' },
+    { title: 'Email', dataIndex: 'email', key: 'email', sortField: 'email', width: 160, ellipsis: true, render: (t: string) => t ?? '-' },
+    { title: 'Mã số thuế', dataIndex: 'tax_code', key: 'tax_code', sortField: 'tax_code', width: 100, render: (t: string) => t ?? '-' },
+    { title: 'Người liên hệ', dataIndex: 'contact_person', key: 'contact_person', sortField: 'contact_person', width: 120, ellipsis: true, render: (t: string) => t ?? '-' },
+    { title: 'SĐT liên hệ', dataIndex: 'contact_phone', key: 'contact_phone', sortField: 'contact_phone', width: 110, render: (t: string) => t ?? '-' },
+    {
+      title: 'Hạn TT (ngày)',
+      dataIndex: 'payment_terms',
+      key: 'payment_terms',
+      sortField: 'payment_terms',
+      width: 90,
+      align: 'right' as const,
+      render: (v: number) => {
+        if (v == null) return '-';
+        return <span className={v >= 45 ? 'cell-warning-soft' : undefined}>{v}</span>;
+      },
+    },
+    { title: 'Hạn mức', dataIndex: 'credit_limit', key: 'credit_limit', sortField: 'credit_limit', width: 100, align: 'right' as const, render: (v: number) => v != null ? v.toLocaleString('vi-VN') : '-' },
     {
       title: 'Trạng thái',
       dataIndex: 'status',
@@ -382,32 +839,39 @@ const CustomerList = () => {
       sortField: 'status',
       width: 110,
       align: 'center' as const,
-      render: (v: string) => (CUSTOMER_STATUS_LABELS as Record<string, string>)[v] ?? v ?? '-',
+      render: (v: string) => {
+        const label = (CUSTOMER_STATUS_LABELS as Record<string, string>)[v] ?? v ?? '-';
+        return (
+          <span className={`status-pill status-pill-${getCustomerStatusTone(v)}`}>
+            {label}
+          </span>
+        );
+      },
     },
     {
       title: 'Hoạt động',
       dataIndex: 'is_active',
       key: 'is_active',
+      sortField: 'is_active',
       width: 80,
       align: 'center' as const,
-      render: (v: boolean) => (v ? 'Có' : 'Không'),
+      render: (v: boolean) => (
+        <span className={`status-pill ${v ? 'status-pill-ok' : 'status-pill-warn'}`}>
+          {v ? 'Có' : 'Không'}
+        </span>
+      ),
     },
     {
       title: 'Thao tác',
       key: 'actions',
       fixed: 'right' as const,
-      width: 130,
+      width: 72,
       align: 'center' as const,
-      render: (_: unknown, record: Customer) => (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-          <Button type="text" size="small" icon={<EyeOutlined style={{ fontSize: 18, color: '#722ed1' }} />} onClick={(e) => { e.stopPropagation(); handleEdit(record); }} title="Xem chi tiết" />
-          <Button type="text" size="small" icon={<CopyOutlined style={{ fontSize: 18, color: '#52c41a' }} />} onClick={(e) => { e.stopPropagation(); const cloned = { ...record }; delete (cloned as Record<string, unknown>).id; delete (cloned as Record<string, unknown>).code; (cloned as Record<string, unknown>).name = `${record.name} (Copy)`; setEditingCustomer(cloned); setFormVisible(true); }} title="Nhân bản" />
-          <Button type="text" size="small" icon={<EditOutlined style={{ fontSize: 18, color: '#1890ff' }} />} onClick={(e) => { e.stopPropagation(); handleEdit(record); }} title="Chỉnh sửa" />
-          <Button type="text" size="small" danger icon={<DeleteOutlined style={{ fontSize: 18 }} />} onClick={(e) => { e.stopPropagation(); confirmDeleteOne(record.name || record.code || String(record.id), () => handleDelete(record.id)); }} title="Xóa" />
-        </div>
-      ),
+      render: (_: unknown, record: Customer) => renderRowActions(record),
     },
   ];
+
+  const allColumns: ColumnsType<Customer> = allColumnsBase.map((col) => addSortToColumn(col as Record<string, unknown> & { key?: string; title?: React.ReactNode; sortField?: string }));
 
   const columnKeyToTitle: Record<string, string> = {};
   allColumnsBase.forEach((col) => {
@@ -419,7 +883,7 @@ const CustomerList = () => {
     required: col.key === 'code' || col.key === 'name',
   }));
 
-  const displayColumns = allColumnsBase.filter((col) => (visibleColumns ?? []).includes(col.key as string));
+  const displayColumns = allColumns.filter((col) => (visibleColumns ?? []).includes(col.key as string));
   const columns = displayColumns;
 
   const allFiltersSelected = FILTER_OPTIONS.length > 0 && activeFilters.length === FILTER_OPTIONS.length;
@@ -501,24 +965,51 @@ const CustomerList = () => {
     </div>
   );
 
+  const showCards = isMobile && viewMode === 'cards';
+  const showTable = !isMobile || viewMode === 'table';
+  const isCompactCards = cardDensity === 'compact';
+
   return (
     <>
-      <Card variant="borderless" style={{ margin: 0, background: 'transparent', padding: 0 }}>
-        <div style={{ background: 'white', padding: '16px 24px', borderRadius: '8px 8px 0 0', marginBottom: 0 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <Card className="list-page-card" variant="borderless" style={{ margin: 0, background: 'transparent', padding: 0 }}>
+        <div className="list-page-head" style={{ background: 'white', padding: isMobile ? '12px' : '16px 24px', borderRadius: '8px 8px 0 0', marginBottom: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
             <div>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>👥 Quản lý khách hàng</h2>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div className="list-page-toolbar" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', flex: '1 1 420px', justifyContent: isMobile ? 'flex-start' : 'flex-end', position: isMobile ? 'sticky' : 'static', top: isMobile ? 64 : 'auto', zIndex: isMobile ? 3 : 'auto', background: isMobile ? '#fff' : 'transparent', paddingBottom: isMobile ? 4 : 0 }}>
+              <Checkbox
+                checked={exactSearch}
+                onChange={(e) => setExactSearch(e.target.checked)}
+                style={{ whiteSpace: 'nowrap' }}
+              >
+                Tìm chính xác
+              </Checkbox>
               <ListSearchInput
                 placeholder="Tìm theo mã, tên, công ty, SĐT, email..."
                 value={searchInput}
                 onChange={(v) => setSearchInput(v)}
                 onClear={() => { setSearchInput(''); setPagination((p) => ({ ...p, current: 1 })); }}
+                size={isMobile ? 'small' : 'middle'}
+                className={isMobile ? 'mobile-list-search-compact' : undefined}
+                style={isMobile ? { width: '100%' } : undefined}
               />
-              <Button icon={<FilterOutlined />} onClick={() => setFilterModalOpen(true)}>
-                Lọc {activeFilters.length > 0 ? `(${activeFilters.length})` : ''}
+              {!isMobile && (
+                <Segmented
+                  size="small"
+                  value={desktopTableDensity}
+                  onChange={(value) => handleDesktopTableDensityChange(value as DesktopTableDensity)}
+                  options={[
+                    { label: 'Thoáng', value: 'comfortable' },
+                    { label: 'Gọn', value: 'compact' },
+                  ]}
+                />
+              )}
+              {!isMobile && (
+                <Button icon={<FilterOutlined />} onClick={() => setFilterModalOpen(true)} title="Lọc">
+                  {`Lọc ${activeFilters.length > 0 ? `(${activeFilters.length})` : ''}`}
               </Button>
+              )}
               <Modal
                 title="Bộ lọc khách hàng"
                 open={filterModalOpen}
@@ -531,16 +1022,18 @@ const CustomerList = () => {
               >
                 {filterModalContent}
               </Modal>
+              {!isMobile && (
               <ColumnChooser
                 columns={columnChooserList}
                 visibleColumns={visibleColumns ?? []}
                 onChange={handleVisibleColumnsChange}
               />
-              <Button icon={<UploadOutlined />} onClick={() => setImportModalVisible(true)}>Nhập Excel</Button>
-              <Button icon={<ExportOutlined />} onClick={() => handleExport('excel')}>Xuất Excel</Button>
-              <Button icon={<ExportOutlined />} onClick={() => handleExport('pdf')}>Xuất PDF</Button>
-              <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>Thêm mới</Button>
-              {selectedCount > 0 && (
+              )}
+              {!isMobile && <Button icon={<UploadOutlined />} onClick={() => setImportModalVisible(true)} title="Nhập Excel">Nhập Excel</Button>}
+              {!isMobile && <Button icon={<ExportOutlined />} onClick={() => handleExport('excel')} title="Xuất Excel">Xuất Excel</Button>}
+              {!isMobile && <Button icon={<ExportOutlined />} onClick={() => handleExport('pdf')} title="Xuất PDF">Xuất PDF</Button>}
+              {!isMobile && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới">Thêm mới</Button>}
+              {(!isMobile || viewMode === 'table') && selectedCount > 0 && (
                 <Button
                   danger
                   icon={<DeleteOutlined />}
@@ -556,29 +1049,295 @@ const CustomerList = () => {
           </div>
         </div>
 
-        <div style={{ background: 'white', padding: '0 24px 24px', borderRadius: '0 0 8px 8px' }}>
+        <div className="list-page-table-wrap" style={{ background: 'white', padding: isMobile ? '0 12px 76px' : '0 24px 24px', borderRadius: '0 0 8px 8px' }}>
+          {showTable && (
           <Table
+            className={`enterprise-data-table ${desktopTableDensity === 'compact' ? 'table-density-compact' : 'table-density-comfortable'}`}
             rowKey="id"
             columns={columns}
             dataSource={results}
             loading={isLoading}
-            pagination={{
-              current: pagination.current,
-              pageSize: pagination.pageSize,
-              total,
-              showSizeChanger: true,
-              showTotal: (t) => `Tổng ${t} khách hàng`,
-              onChange: (page, size) => setPagination((p) => ({ ...p, current: page, pageSize: size ?? p.pageSize })),
-            }}
+            pagination={false}
             rowSelection={rowSelection}
-            scroll={{ x: 1200 }}
-            size="small"
+            scroll={{ x: 'max-content' }}
+            size="middle"
+            bordered
             locale={{ emptyText: <EmptyState description="Chưa có khách hàng. Nhấn Thêm mới để tạo." /> }}
           />
+          )}
+          {showCards && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {results.length === 0 && !isLoading && (
+                <EmptyState description="Chưa có khách hàng. Nhấn Thêm mới để tạo." />
+              )}
+              {results.map((record) => (
+                <Card key={record.id} size="small" style={{ borderRadius: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <div>
+                      <div style={{ fontWeight: 600, color: theme.colors.primary, fontSize: isCompactCards ? 13 : 14 }}>{record.code || '-'}</div>
+                      <div style={{ fontWeight: 500, fontSize: isCompactCards ? 13 : 14 }}>{record.name || '-'}</div>
+                      <div style={{ color: '#595959', fontSize: isCompactCards ? 12 : 13 }}>{record.company_name || 'Không có công ty'}</div>
+                    </div>
+                    {renderRowActions(record)}
+                  </div>
+                  <div style={{ marginTop: isCompactCards ? 6 : 8, fontSize: isCompactCards ? 12 : 13, color: '#595959' }}>
+                    <div>Điện thoại: {record.phone || '-'}</div>
+                    <div>Email: {record.email || '-'}</div>
+                    <div>Trạng thái: {(CUSTOMER_STATUS_LABELS as Record<string, string>)[record.status] ?? record.status ?? '-'}</div>
         </div>
       </Card>
+              ))}
+            </div>
+          )}
+        </div>
 
-      <CustomerForm visible={formVisible} onClose={() => { setFormVisible(false); setEditingCustomer(null); queryClient.invalidateQueries({ queryKey: ['customers'] }); }} editingCustomer={editingCustomer} />
+        {!isMobile && (
+          <div
+            className="customers-list-bottom-bar"
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              alignItems: 'center',
+              marginTop: 16,
+              padding: '8px 16px',
+              background: '#fafafa',
+              borderRadius: 6,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap', marginLeft: 'auto' }}>
+              <Space size={16} align="center" wrap>
+                <span style={{ fontSize: 13, color: '#595959' }}>
+                  Tổng {total} khách hàng
+                </span>
+                <Pagination
+                  current={pagination.current}
+                  pageSize={pagination.pageSize}
+                  total={total}
+                  showSizeChanger={false}
+                  onChange={(page) => setPagination((p) => ({ ...p, current: page }))}
+                  size="small"
+                />
+                <Select
+                  size="small"
+                  value={pagination.pageSize}
+                  style={{ width: 96 }}
+                  onChange={(size) => setPagination((p) => ({ ...p, current: 1, pageSize: size }))}
+                  options={[
+                    { value: 10, label: '10 / trang' },
+                    { value: 20, label: '20 / trang' },
+                    { value: 50, label: '50 / trang' },
+                    { value: 100, label: '100 / trang' },
+                  ]}
+                />
+              </Space>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {isMobile && (
+        <div
+          style={{
+            position: 'sticky',
+            bottom: 0,
+            zIndex: 8,
+            background: 'rgba(255, 255, 255, 0.96)',
+            backdropFilter: 'blur(6px)',
+            borderTop: '1px solid #f0f0f0',
+            padding: '8px 12px calc(8px + env(safe-area-inset-bottom))',
+            marginTop: 8,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 6,
+            flexWrap: 'nowrap',
+          }}
+        >
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => void refetch()} title="Làm mới" />
+          <div className="mobile-sticky-pagination" style={{ minWidth: 132 }}>
+            <Pagination
+              className="mobile-sticky-pagination-control"
+              current={pagination.current}
+              pageSize={pagination.pageSize}
+              total={total}
+              showSizeChanger={false}
+              simple
+              onChange={(page) => setPagination((p) => ({ ...p, current: page }))}
+            />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Button size="small" icon={<MoreOutlined />} onClick={() => setMobileActionsOpen(true)} title="Tác vụ" />
+            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới" />
+          </div>
+        </div>
+      )}
+
+      <Drawer
+        title="Tác vụ nhanh"
+        placement="bottom"
+        height={320}
+        onClose={() => setMobileActionsOpen(false)}
+        open={mobileActionsOpen}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <Segmented
+            value={viewMode}
+            onChange={(value) => handleViewModeChange(value as ListViewMode)}
+            options={[
+              { label: 'Thẻ', value: 'cards' },
+              { label: 'Bảng', value: 'table' },
+            ]}
+          />
+          {viewMode === 'cards' && (
+            <Segmented
+              value={cardDensity}
+              onChange={(value) => handleCardDensityChange(value as CardDensity)}
+              options={[
+                { label: 'Thoáng', value: 'comfortable' },
+                { label: 'Gọn', value: 'compact' },
+              ]}
+            />
+          )}
+          <Button icon={<FilterOutlined />} onClick={() => { setFilterModalOpen(true); setMobileActionsOpen(false); }}>
+            Lọc {activeFilters.length > 0 ? `(${activeFilters.length})` : ''}
+          </Button>
+          <ColumnChooser
+            columns={columnChooserList}
+            visibleColumns={visibleColumns ?? []}
+            onChange={handleVisibleColumnsChange}
+          />
+          <Button icon={<UploadOutlined />} onClick={() => { setImportModalVisible(true); setMobileActionsOpen(false); }}>
+            Nhập Excel
+          </Button>
+          <Button icon={<ExportOutlined />} onClick={() => { void handleExport('excel'); setMobileActionsOpen(false); }}>
+            Xuất Excel
+          </Button>
+          <Button icon={<ExportOutlined />} onClick={() => { void handleExport('pdf'); setMobileActionsOpen(false); }}>
+            Xuất PDF
+          </Button>
+          <Button danger onClick={() => { handleClearAllFilters(); setMobileActionsOpen(false); }}>
+            Xóa toàn bộ bộ lọc
+          </Button>
+        </div>
+      </Drawer>
+
+      <CustomerForm visible={formVisible} onClose={handleFormClose} editingCustomer={editingCustomer} mode={formMode} />
+
+      <Modal
+        title={`Lịch sử hoạt động${historyCustomer ? ` - ${historyCustomer.code}` : ''}`}
+        open={historyModalOpen}
+        onCancel={() => {
+          setHistoryModalOpen(false);
+          setHistoryCustomer(null);
+        }}
+        footer={<Button size="middle" onClick={() => { setHistoryModalOpen(false); setHistoryCustomer(null); }}>Đóng</Button>}
+        width={920}
+      >
+        <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+          <Input
+            placeholder="Tìm theo hành động, người thao tác, nội dung..."
+            value={historySearch}
+            onChange={(e) => setHistorySearch(e.target.value)}
+            style={{ flex: '1 1 360px' }}
+            size="large"
+          />
+          <Select
+            allowClear
+            placeholder="Lọc hành động"
+            value={historyActionFilter}
+            onChange={(v) => setHistoryActionFilter(v)}
+            style={{ width: 220 }}
+            size="large"
+            options={[
+              { value: 'CREATE', label: 'Tạo mới' },
+              { value: 'UPDATE', label: 'Cập nhật' },
+              { value: 'SUBMIT', label: 'Trình duyệt' },
+              { value: 'APPROVE', label: 'Duyệt' },
+              { value: 'REJECT', label: 'Từ chối' },
+              { value: 'COMMENT', label: 'Bình luận' },
+              { value: 'IMPORT', label: 'Nhập dữ liệu' },
+              { value: 'EXPORT', label: 'Xuất dữ liệu' },
+              { value: 'DELETE', label: 'Xóa' },
+            ]}
+          />
+        </div>
+        {(isHistoryLoading || isApprovalHistoryLoading) && <div style={{ fontSize: 14 }}>Đang tải lịch sử...</div>}
+        {!isHistoryLoading && !isApprovalHistoryLoading && filteredActivity.length === 0 && (
+          <div style={{ color: '#6b7280', fontSize: 14 }}>Chưa có dữ liệu phù hợp.</div>
+        )}
+        {!isHistoryLoading && !isApprovalHistoryLoading && filteredActivity.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '62vh', overflowY: 'auto' }}>
+            {filteredActivity.map((item, idx) => (
+              <div key={`${item.timestamp}-${idx}`} style={{ border: '1px solid #e6ebf2', borderRadius: 10, padding: '12px 14px', background: '#fff' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: 16, color: '#1f2937' }}>{getHistoryActionLabelVi(item.action)}</div>
+                  <div style={{ fontSize: 13, color: '#667085' }}>
+                    {item.user || 'Hệ thống'} - {new Date(item.timestamp).toLocaleString('vi-VN')}
+                  </div>
+                </div>
+                  <div style={{ marginTop: 4, fontSize: 13, color: '#667085' }}>
+                    Loại bản ghi: {item.type === 'comment' ? 'Bình luận' : 'Nhật ký hệ thống'}
+                  </div>
+                {item.details?.content && <div style={{ marginTop: 6, fontSize: 14, lineHeight: 1.45 }}>{item.details.content}</div>}
+                  {(() => {
+                    const oldVals = (item.details?.old_values as Record<string, unknown> | undefined) ?? {};
+                    const newVals = (item.details?.new_values as Record<string, unknown> | undefined) ?? {};
+                    const fields = Array.from(new Set([...Object.keys(oldVals), ...Object.keys(newVals)]));
+                    const fallbackRows = buildFallbackDiffRows(item.action, historyCustomer);
+                    const hasRealDiff = fields.length > 0;
+                    const hasFallbackDiff = fallbackRows.length > 0;
+                    if (!hasRealDiff && !hasFallbackDiff) {
+                      return (
+                        <div style={{ marginTop: 8, fontSize: 13, color: '#98a2b3' }}>
+                          Chưa có dữ liệu Trước/Sau chi tiết cho bản ghi này.
+                        </div>
+                      );
+                    }
+                    return (
+                    <div style={{ marginTop: 8, fontSize: 14, color: '#334155', display: 'flex', flexDirection: 'column', gap: 6, lineHeight: 1.45 }}>
+                      {fields.map((field) => (
+                        <div key={field} style={{ display: 'grid', gridTemplateColumns: '190px 1fr 1fr', gap: 10 }}>
+                          <div style={{ color: '#1f2937', fontWeight: 700 }}>{getHistoryFieldLabelVi(field)}</div>
+                          <div>Trước: {formatHistoryValueVi(oldVals[field])}</div>
+                          <div>Sau: {formatHistoryValueVi(newVals[field])}</div>
+                        </div>
+                      ))}
+                      {!hasRealDiff && hasFallbackDiff && fallbackRows.map((row) => (
+                        <div key={`fb-${row.field}`} style={{ display: 'grid', gridTemplateColumns: '190px 1fr 1fr', gap: 10 }}>
+                          <div style={{ color: '#1f2937', fontWeight: 700 }}>{getHistoryFieldLabelVi(row.field)}</div>
+                          <div>Trước: {row.before}</div>
+                          <div>Sau: {row.after}</div>
+                        </div>
+                      ))}
+                  </div>
+                    );
+                  })()}
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        title={`Từ chối duyệt${rejectCustomer ? ` - ${rejectCustomer.code}` : ''}`}
+        open={rejectModalOpen}
+        onCancel={() => {
+          setRejectModalOpen(false);
+          setRejectCustomer(null);
+          setRejectReason('');
+        }}
+        onOk={() => void handleRejectConfirm()}
+        okText="Xác nhận từ chối"
+        okButtonProps={{ danger: true }}
+        cancelText="Hủy"
+      >
+        <Input.TextArea
+          rows={4}
+          value={rejectReason}
+          onChange={(e) => setRejectReason(e.target.value)}
+          placeholder="Nhập lý do từ chối..."
+        />
+      </Modal>
 
       <ImportModal
         visible={importModalVisible}

@@ -18,6 +18,7 @@ interface ProductFormProps {
   visible: boolean;
   onClose: () => void;
   editingProduct?: { id: number } | null;
+  mode?: 'create' | 'edit' | 'view';
 }
 
 /** Spec lưới: span 1–10 cột (colW động theo contentRef), gap 8. data-quick-entry = bộ nhập nhanh (Enter chuyển ô). */
@@ -30,7 +31,7 @@ function Field({
   label: string;
   required?: boolean;
   children: React.ReactNode;
-  span: 1 | 2 | 3 | 4 | 9 | 10;
+  span: 1 | 2 | 3 | 4 | 5 | 9 | 10;
 }) {
   return (
     <div className="pf-field" style={{ gridColumn: `span ${span}` }} data-quick-entry>
@@ -129,6 +130,13 @@ function validateChild(c: ProductChildFormData): string | null {
   if (!c.wave) return 'Vui lòng chọn Sóng (bắt buộc).';
   if (!c.box_type) return 'Vui lòng chọn Kiểu (bắt buộc).';
   return null;
+}
+
+function normalizeDateTimeLocal(value: string): string | undefined {
+  const raw = value.trim();
+  if (!raw) return undefined;
+  if (raw.length === 16) return `${raw}:00`;
+  return raw;
 }
 
 /** Build payload Mẹ để gửi API. */
@@ -462,8 +470,10 @@ function productToMother(p: Product): ProductFormData {
   };
 }
 
-const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => {
+const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: ProductFormProps) => {
   const queryClient = useQueryClient();
+  const isViewMode = mode === 'view';
+  const isEditingMode = mode === 'edit';
   const { data: productDetail, isError: productFetchError } = useQuery({
     queryKey: ['product', editingProduct?.id],
     queryFn: () => productsApi.getProduct(editingProduct!.id),
@@ -506,6 +516,8 @@ const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => 
   const [mother, setMother] = useState<ProductFormData>(() => defaultMother(firstUnitId));
   const [hasChildren, setHasChildren] = useState(false);
   const [children, setChildren] = useState<ProductChildFormData[]>([]);
+  const [priceChangeReason, setPriceChangeReason] = useState('');
+  const [priceEffectiveAt, setPriceEffectiveAt] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const { message } = App.useApp();
@@ -533,6 +545,8 @@ const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => 
       setChildren([]);
       setHasChildren(false);
     }
+    setPriceChangeReason('');
+    setPriceEffectiveAt('');
   }, [visible, editingProduct?.id, productDetail, parentDetail, firstUnitId]);
 
   const GAP = 8;
@@ -601,6 +615,7 @@ const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => 
   };
 
   const handleSubmit = async () => {
+    if (isViewMode) return;
     setSubmitError(null);
     const errMother = validateMother(mother);
     if (errMother) {
@@ -642,7 +657,14 @@ const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => 
           queryClient.invalidateQueries({ queryKey: ['product', editingProduct.id] });
           queryClient.invalidateQueries({ queryKey: ['product', productDetail?.parent] });
         } else {
-          await updateMotherMutation.mutateAsync({ id: editingProduct.id, data: motherPayload });
+          await updateMotherMutation.mutateAsync({
+            id: editingProduct.id,
+            data: {
+              ...motherPayload,
+              price_change_reason: priceChangeReason.trim() || undefined,
+              price_effective_at: normalizeDateTimeLocal(priceEffectiveAt),
+            },
+          });
           const motherId = editingProduct.id;
           const motherCode = (mother.code ?? '').trim();
           const currentChildIds = isSet ? children.map((c) => c.id).filter((id): id is number => id != null) : [];
@@ -699,7 +721,7 @@ const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => 
     <Modal
       title={
         <div style={{ fontSize: '1.2em', textAlign: 'left', marginLeft: 0 }}>
-          {editingProduct ? 'Chỉnh sửa Sản phẩm' : 'Thêm Mới Sản phẩm'}
+          {isViewMode ? 'Chi tiết Sản phẩm' : isEditingMode ? 'Chỉnh sửa Sản phẩm' : 'Thêm Mới Sản phẩm'}
         </div>
       }
       open={visible}
@@ -725,7 +747,7 @@ const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => 
         }}
       >
         <div style={{ overflow: 'visible', width: CON_ALIGN_WIDTH, maxWidth: '100%', ['--pf-col-w' as string]: `${colW}px` }}>
-          <div className="pf-container" ref={quickEntryContainerRef}>
+          <div className={`pf-container${isViewMode ? ' pf-view-mode' : ''}`} ref={quickEntryContainerRef}>
         {editingProduct && productFetchError && (
           <Alert type="error" message="Không thể tải thông tin sản phẩm. Vui lòng thử lại hoặc đóng form và mở lại." style={{ marginBottom: 16 }} />
         )}
@@ -739,6 +761,13 @@ const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => 
             style={{ marginBottom: 16 }}
           />
         )}
+        <div
+          aria-disabled={isViewMode}
+          style={{
+            pointerEvents: isViewMode ? 'none' : 'auto',
+            userSelect: isViewMode ? 'none' : 'auto',
+          }}
+        >
         <section className="pf-section pf-section-mother">
           <div className="pf-row pf-row-price">
             <Field label="Mã hàng (Mẹ)" required span={2}>
@@ -807,6 +836,25 @@ const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => 
                 onChange={(e) => setMotherField('commission_percent', e.target.value === '' ? undefined : Number(e.target.value))}
                 onClear={() => setMotherField('commission_percent', undefined)}
                 hasValue={mother.commission_percent != null}
+              />
+            </Field>
+          </div>
+          <div className="pf-row">
+            <Field label="Lý do thay đổi giá (nếu có đổi giá)" span={4}>
+              <FormInputWithClear
+                type="text"
+                className="pf-input"
+                value={priceChangeReason}
+                onChange={(e) => setPriceChangeReason(e.target.value)}
+                onClear={() => setPriceChangeReason('')}
+              />
+            </Field>
+            <Field label="Thời điểm hiệu lực giá" span={2}>
+              <input
+                type="datetime-local"
+                className="pf-input"
+                value={priceEffectiveAt}
+                onChange={(e) => setPriceEffectiveAt(e.target.value)}
               />
             </Field>
           </div>
@@ -965,10 +1013,12 @@ const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => 
             />
           ))}
         </section>
+        </div>
 
         <div className="pf-footer">
           <div className="pf-footer-inner">
-            <Button onClick={onClose}>Huỷ</Button>
+            <Button onClick={onClose}>{isViewMode ? 'Đóng' : 'Huỷ'}</Button>
+            {!isViewMode && (
             <Button
               type="primary"
               htmlType="button"
@@ -976,8 +1026,9 @@ const ProductForm = ({ visible, onClose, editingProduct }: ProductFormProps) => 
               disabled={!editingProduct && units.length === 0}
               onClick={() => void handleSubmit()}
             >
-              {editingProduct ? 'Cập nhật' : 'Thêm mới'}
+                {isEditingMode ? 'Cập nhật' : 'Thêm mới'}
             </Button>
+            )}
           </div>
         </div>
           </div>

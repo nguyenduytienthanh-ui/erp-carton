@@ -29,10 +29,13 @@ interface CustomerFormProps {
   visible: boolean;
   onClose: () => void;
   editingCustomer?: Customer | { id: number } | null;
+  mode?: 'create' | 'edit' | 'view';
 }
 
-const CustomerForm = ({ visible, onClose, editingCustomer }: CustomerFormProps) => {
+const CustomerForm = ({ visible, onClose, editingCustomer, mode = 'create' }: CustomerFormProps) => {
   const queryClient = useQueryClient();
+  const isViewMode = mode === 'view';
+  const isEditMode = mode === 'edit';
   const { data: customerDetail } = useQuery({
     queryKey: ['customer', (editingCustomer as Customer)?.id],
     queryFn: () => customersApi.getCustomer((editingCustomer as Customer).id),
@@ -100,6 +103,7 @@ const CustomerForm = ({ visible, onClose, editingCustomer }: CustomerFormProps) 
   };
 
   const handleSubmit = async () => {
+    if (isViewMode) return;
     setFieldErrors({});
     const err = validate();
     if (err) {
@@ -134,25 +138,37 @@ const CustomerForm = ({ visible, onClose, editingCustomer }: CustomerFormProps) 
 
   useQuickEntryKeys(formContainerRef, {
     onLastFieldEnter: () => void handleSubmit(),
-    enabled: visible,
+    enabled: visible && !isViewMode,
   });
 
   const errorBorder = (key: string) => (fieldErrors[key] ? { borderColor: '#ff4d4f' } : undefined);
+  const isDetailLikeMode = !!editingCustomer;
 
   return (
     <Modal
-      title={editingCustomer ? 'Chỉnh sửa Khách hàng' : 'Thêm khách hàng'}
+      title={isViewMode ? 'Chi tiết Khách hàng' : isEditMode ? 'Chỉnh sửa Khách hàng' : 'Thêm khách hàng'}
       open={visible}
       onCancel={onClose}
       footer={[
-        <Button key="cancel" onClick={onClose}>Huỷ</Button>,
+        <Button key="cancel" onClick={onClose}>{isViewMode ? 'Đóng' : 'Huỷ'}</Button>,
+        ...(!isViewMode ? [
         <Button key="submit" type="primary" loading={submitting} onClick={() => void handleSubmit()}>
-          {editingCustomer ? 'Cập nhật' : 'Thêm mới'}
+            {isEditMode ? 'Cập nhật' : 'Thêm mới'}
         </Button>,
+        ] : []),
       ]}
       width={560}
     >
-      <div ref={formContainerRef} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div
+        ref={formContainerRef}
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: isDetailLikeMode ? 6 : 10,
+          pointerEvents: isViewMode ? 'none' : 'auto',
+          userSelect: isViewMode ? 'none' : 'auto',
+        }}
+      >
         <div data-quick-entry>
           <label style={{ display: 'block', marginBottom: 2, fontWeight: 500 }}>Mã khách hàng</label>
           <FormInputWithClear

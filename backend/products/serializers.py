@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product
+from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product, PriceChange
 
 
 class ProductCategorySerializer(serializers.ModelSerializer):
@@ -86,6 +86,14 @@ class ProductSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     updated_by_name = serializers.SerializerMethodField()
     parent_name = serializers.SerializerMethodField()
+    has_pending_price_change = serializers.BooleanField(read_only=True)
+    price_change_reason = serializers.CharField(write_only=True, required=False, allow_blank=True, default='')
+    price_effective_at = serializers.DateTimeField(
+        write_only=True,
+        required=False,
+        allow_null=True,
+        input_formats=['%Y-%m-%dT%H:%M', '%Y-%m-%dT%H:%M:%S', 'iso-8601'],
+    )
 
     components = serializers.SerializerMethodField()
     components_count = serializers.SerializerMethodField()
@@ -111,8 +119,10 @@ class ProductSerializer(serializers.ModelSerializer):
             'parent', 'parent_name', 'component_quantity', 'is_set', 'components', 'components_count',
             'is_component', 'full_name',
             'status', 'owner', 'owner_name', 'team', 'team_name', 'is_active',
+            'has_pending_price_change',
             'created_at', 'updated_at', 'created_by', 'created_by_name',
             'updated_by', 'updated_by_name',
+            'price_change_reason', 'price_effective_at',
         ]
         read_only_fields = [
             'id', 'created_at', 'updated_at',
@@ -120,6 +130,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'box_type_name', 'box_type_code', 'owner_name', 'team_name',
             'created_by_name', 'updated_by_name', 'parent_name',
             'components', 'components_count', 'is_component', 'full_name',
+            'has_pending_price_change',
         ]
         extra_kwargs = {
             'code': {
@@ -202,17 +213,54 @@ class ProductSerializer(serializers.ModelSerializer):
         if data.get('parent') and not data.get('component_quantity'):
             data['component_quantity'] = 1
 
-        if not data.get('unit'):
+        # Khi update (partial), chỉ validate nếu field được gửi lên
+        # Khi create, validate bắt buộc
+        is_partial = self.partial if hasattr(self, 'partial') else False
+        
+        # Kiểm tra unit - chỉ validate nếu được gửi lên hoặc đang create
+        unit_value = data.get('unit')
+        if unit_value is not None:
+            # Nếu có giá trị nhưng là 0 hoặc None, báo lỗi
+            if not unit_value:
+                raise serializers.ValidationError({'unit': 'Vui lòng chọn ĐVT (bắt buộc).'})
+        elif not is_partial:
+            # Khi create, unit là bắt buộc
             raise serializers.ValidationError({'unit': 'Vui lòng chọn ĐVT (bắt buộc).'})
-        if not data.get('wave'):
+        
+        # Kiểm tra wave - chỉ validate nếu được gửi lên hoặc đang create
+        wave_value = data.get('wave')
+        if wave_value is not None:
+            if not wave_value:
+                raise serializers.ValidationError({'wave': 'Vui lòng chọn Sóng (bắt buộc).'})
+        elif not is_partial:
             raise serializers.ValidationError({'wave': 'Vui lòng chọn Sóng (bắt buộc).'})
-        if not data.get('box_type'):
+        
+        # Kiểm tra box_type - chỉ validate nếu được gửi lên hoặc đang create
+        box_type_value = data.get('box_type')
+        if box_type_value is not None:
+            if not box_type_value:
+                raise serializers.ValidationError({'box_type': 'Vui lòng chọn Kiểu (bắt buộc).'})
+        elif not is_partial:
             raise serializers.ValidationError({'box_type': 'Vui lòng chọn Kiểu (bắt buộc).'})
 
         if data.get('cost_price') is not None and data.get('sale_price') is not None:
             if data['cost_price'] > data['sale_price']:
                 raise serializers.ValidationError({
                     'sale_price': 'Giá bán phải lớn hơn giá vốn'
+                })
+
+        # Nếu cập nhật giá vốn/đơn giá thì bắt buộc ghi lý do đổi giá.
+        if self.instance:
+            price_touched = False
+            if 'cost_price' in data and data.get('cost_price') != getattr(self.instance, 'cost_price', None):
+                price_touched = True
+            if 'sale_price' in data and data.get('sale_price') != getattr(self.instance, 'sale_price', None):
+                price_touched = True
+            if price_touched:
+                reason = (data.get('price_change_reason') or '').strip()
+                if not reason:
+                    raise serializers.ValidationError({
+                        'price_change_reason': 'Vui lòng nhập lý do khi thay đổi giá bán/mua.'
                 })
 
         process_fields = [
@@ -235,6 +283,8 @@ class ProductSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
+        validated_data.pop('price_change_reason', None)
+        validated_data.pop('price_effective_at', None)
         request = self.context.get('request')
         if request and request.user:
             validated_data['updated_by'] = request.user
@@ -249,3 +299,33 @@ class ProductSerializer(serializers.ModelSerializer):
         if value is not None and value < 0:
             raise serializers.ValidationError("Giá vốn không được âm")
         return value
+
+
+class PriceChangeSerializer(serializers.ModelSerializer):
+    product_code = serializers.CharField(source='product.code', read_only=True)
+    submitted_by_name = serializers.SerializerMethodField()
+    approved_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PriceChange
+        fields = [
+            'id', 'product', 'product_code',
+            'old_cost_price', 'new_cost_price', 'old_sale_price', 'new_sale_price',
+            'delta_cost', 'delta_sale', 'delta_cost_percent', 'delta_sale_percent',
+            'reason', 'source', 'effective_at', 'status',
+            'submitted_by', 'submitted_by_name',
+            'approved_by', 'approved_by_name', 'approved_at', 'reject_reason',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'product_code',
+            'delta_cost', 'delta_sale', 'delta_cost_percent', 'delta_sale_percent',
+            'submitted_by_name', 'approved_by_name',
+            'created_at', 'updated_at',
+        ]
+
+    def get_submitted_by_name(self, obj):
+        return obj.submitted_by.username if obj.submitted_by else None
+
+    def get_approved_by_name(self, obj):
+        return obj.approved_by.username if obj.approved_by else None

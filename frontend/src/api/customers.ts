@@ -7,6 +7,20 @@ import type {
   ApprovalHistoryItem,
 } from '../types/customer';
 
+export interface ActivityItem {
+  type: 'audit' | 'comment';
+  action: string;
+  user: string | null;
+  timestamp: string;
+  details?: {
+    old_values?: Record<string, unknown> | null;
+    new_values?: Record<string, unknown> | null;
+    changed_fields?: string[];
+    content?: string;
+    mentions?: string[];
+  };
+}
+
 export const customersApi = {
   getCustomers: async (params?: Record<string, unknown>): Promise<PaginatedResponse<Customer>> => {
     const response = await axiosInstance.get(API_ENDPOINTS.CUSTOMERS, { params });
@@ -62,6 +76,13 @@ export const customersApi = {
 
   getApprovalHistory: async (id: number): Promise<ApprovalHistoryItem[]> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.CUSTOMERS}${id}/approval_history/`);
+    return response.data;
+  },
+
+  getActivityByEntity: async (entityType: string, entityId: number): Promise<ActivityItem[]> => {
+    const response = await axiosInstance.get('/activity/by_entity/', {
+      params: { entity_type: entityType, entity_id: entityId },
+    });
     return response.data;
   },
 

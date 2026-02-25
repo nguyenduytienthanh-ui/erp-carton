@@ -13,6 +13,8 @@ export interface ListSearchInputProps {
   /** Gọi khi bấm xóa (có thể reset pagination, search state) */
   onClear?: () => void;
   style?: React.CSSProperties;
+  className?: string;
+  size?: 'small' | 'middle' | 'large';
 }
 
 export default function ListSearchInput({
@@ -21,6 +23,8 @@ export default function ListSearchInput({
   onChange,
   onClear,
   style,
+  className,
+  size = 'middle',
 }: ListSearchInputProps) {
   const handleClear = () => {
     onChange('');
@@ -32,8 +36,9 @@ export default function ListSearchInput({
       placeholder={placeholder}
       prefix={<SearchOutlined style={{ color: '#9ca3af' }} />}
       suffix={(value?.trim() ?? '') !== '' ? <QuickClearIcon onClear={handleClear} title="Xóa tìm kiếm" /> : undefined}
-      style={{ width: 300, borderRadius: 8, ...style }}
-      size="middle"
+      style={{ width: 'min(100%, 300px)', borderRadius: 8, ...style }}
+      className={className}
+      size={size}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       allowClear={false}

@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react';
-import { Layout, Menu, Button, Popover, message, Divider } from 'antd';
+import { useState, useCallback, useEffect } from 'react';
+import { Layout, Menu, Button, Popover, message, Divider, Drawer } from 'antd';
 import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -19,9 +19,28 @@ const { Header, Sider, Content } = Layout;
 
 const MainLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileMenuVisible, setMobileMenuVisible] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const navigate = useNavigate();
   const location = useLocation();
   const user = storage.getUser();
+  const desktopControlSize = 40;
+
+  // Detect mobile screen size
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth <= 768;
+      setIsMobile(mobile);
+      if (mobile) {
+        setCollapsed(true); // Auto-collapse on mobile
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    handleResize(); // Initial check
+
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const menuItems = [
     {
@@ -87,60 +106,124 @@ const MainLayout = () => {
     </div>
   );
 
+  const handleMenuClick = useCallback(({ key }: { key: string }) => {
+    navigate(key);
+    if (isMobile) {
+      setMobileMenuVisible(false);
+    }
+  }, [navigate, isMobile]);
+
+  const menuContent = (
+    <Menu
+      theme={isMobile ? 'light' : 'dark'}
+      mode="inline"
+      selectedKeys={[location.pathname]}
+      items={menuItems}
+      onClick={handleMenuClick}
+    />
+  );
+
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Sider trigger={null} collapsible collapsed={collapsed}>
-        <div
+    <Layout className="app-main-layout" style={{ minHeight: '100vh' }}>
+      {/* Desktop Sidebar */}
+      {!isMobile && (
+        <Sider
+          className="app-desktop-sider"
+          trigger={null}
+          collapsible
+          collapsed={collapsed}
+          width={200}
           style={{
-            height: '64px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'white',
-            fontSize: '18px',
-            fontWeight: 'bold',
+            borderRight: '1px solid rgba(255, 255, 255, 0.1)',
           }}
         >
-          {collapsed ? '🏭' : '🏭 ERP Carton'}
-        </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[location.pathname]}
-          items={menuItems}
-          onClick={({ key }) => navigate(key)}
-        />
-      </Sider>
-      <Layout>
+          <div
+            style={{
+              height: '64px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              fontSize: '18px',
+              fontWeight: 'bold',
+            }}
+          >
+            {collapsed ? '🏭' : '🏭 ERP Carton'}
+          </div>
+          {menuContent}
+        </Sider>
+      )}
+
+      {/* Mobile Drawer */}
+      {isMobile && (
+        <Drawer
+          title={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: '20px' }}>🏭</span>
+              <span style={{ fontSize: '18px', fontWeight: 'bold' }}>ERP Carton</span>
+            </div>
+          }
+          placement="left"
+          onClose={() => setMobileMenuVisible(false)}
+          open={mobileMenuVisible}
+          bodyStyle={{ padding: 0 }}
+          width={250}
+        >
+          {menuContent}
+        </Drawer>
+      )}
+
+      <Layout style={{ minWidth: 0 }}>
         <Header
+          className="app-top-header"
           style={{
-            padding: '0 16px',
+            padding: isMobile ? '0 12px' : '0 16px',
             background: '#fff',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            height: isMobile ? '56px' : '64px',
+            boxShadow: isMobile ? '0 1px 6px rgba(15, 23, 42, 0.08)' : 'none',
+            borderBottom: '1px solid #eef2f7',
+            position: 'sticky',
+            top: 0,
+            zIndex: 999,
           }}
         >
           <Button
             type="text"
-            icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            onClick={() => setCollapsed(!collapsed)}
-            style={{ fontSize: '16px', width: 64, height: 64 }}
+            icon={isMobile ? (mobileMenuVisible ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />) : (collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />)}
+            onClick={() => {
+              if (isMobile) {
+                setMobileMenuVisible(!mobileMenuVisible);
+              } else {
+                setCollapsed(!collapsed);
+              }
+            }}
+            style={{
+              fontSize: '18px',
+              width: isMobile ? 44 : desktopControlSize,
+              height: isMobile ? 44 : desktopControlSize,
+            }}
           />
 
           <Popover content={accountMenuContent} placement="bottomRight" trigger="click">
-            <Button type="text" icon={<UserOutlined />}>
-              Tài khoản {user?.username ? `(${user.username})` : ''}
+            <Button type="text" icon={<UserOutlined />} style={{ fontSize: isMobile ? '14px' : '15px', height: isMobile ? 40 : desktopControlSize }}>
+              {isMobile ? (user?.username || 'Tài khoản') : `Tài khoản ${user?.username ? `(${user.username})` : ''}`}
             </Button>
           </Popover>
         </Header>
         <Content
+          className="app-main-content"
           style={{
-            margin: '24px 16px',
-            padding: 24,
+            margin: isMobile ? '12px 8px' : '14px auto 18px',
+            width: isMobile ? 'auto' : 'min(100% - 20px, 1760px)',
+            padding: isMobile ? 16 : 18,
             minHeight: 280,
             background: '#fff',
-            borderRadius: '8px',
+            borderRadius: isMobile ? '8px' : '12px',
+            border: isMobile ? 'none' : '1px solid #eef2f7',
+            boxShadow: isMobile ? 'none' : '0 1px 2px rgba(15, 23, 42, 0.04)',
           }}
         >
           <Outlet />

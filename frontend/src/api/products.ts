@@ -8,6 +8,40 @@ import type {
   ProductFormData,
 } from '../types/product';
 
+export interface ActivityItem {
+  type: 'audit' | 'comment';
+  action: string;
+  user: string | null;
+  timestamp: string;
+  details?: {
+    old_values?: Record<string, unknown> | null;
+    new_values?: Record<string, unknown> | null;
+    changed_fields?: string[];
+    content?: string;
+    mentions?: string[];
+  };
+}
+
+export interface PriceChangeRecord {
+  id: number;
+  product: number;
+  product_code?: string;
+  old_cost_price?: string | null;
+  new_cost_price?: string | null;
+  old_sale_price?: string | null;
+  new_sale_price?: string | null;
+  delta_cost?: string | null;
+  delta_sale?: string | null;
+  delta_cost_percent?: string | null;
+  delta_sale_percent?: string | null;
+  reason?: string;
+  source?: string;
+  effective_at?: string | null;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'APPLIED';
+  reject_reason?: string;
+  created_at: string;
+}
+
 export const productsApi = {
   // ===== PRODUCTS CRUD =====
   getProducts: async (params?: any): Promise<PaginatedResponse<Product>> => {
@@ -177,6 +211,39 @@ export const productsApi = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+    });
+    return response.data;
+  },
+
+  getActivityByEntity: async (entityType: string, entityId: number): Promise<ActivityItem[]> => {
+    const response = await axiosInstance.get('/activity/by_entity/', {
+      params: { entity_type: entityType, entity_id: entityId },
+    });
+    return response.data;
+  },
+
+  getPriceChanges: async (productId: number): Promise<PriceChangeRecord[]> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTS}${productId}/price_changes/`);
+    return response.data;
+  },
+
+  submitPriceChange: async (
+    productId: number,
+    data: { new_cost_price?: number; new_sale_price?: number; reason: string; effective_at?: string }
+  ): Promise<PriceChangeRecord> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}${productId}/submit_price_change/`, data);
+    return response.data;
+  },
+
+  approvePriceChange: async (productId: number, changeId: number): Promise<PriceChangeRecord> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}${productId}/approve_price_change/`, { change_id: changeId });
+    return response.data;
+  },
+
+  rejectPriceChange: async (productId: number, changeId: number, rejectReason: string): Promise<PriceChangeRecord> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}${productId}/reject_price_change/`, {
+      change_id: changeId,
+      reject_reason: rejectReason,
     });
     return response.data;
   },

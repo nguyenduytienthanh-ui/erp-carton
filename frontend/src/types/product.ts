@@ -110,6 +110,7 @@ export interface Product {
 
   // ============ TRẠNG THÁI ============
   status: 'DRAFT' | 'ACTIVE' | 'DISCONTINUED';
+  has_pending_price_change?: boolean;
 
   // ============ PHÂN QUYỀN ============
   owner?: number;
@@ -173,6 +174,8 @@ export interface ProductFormData {
   component_quantity?: number;
 
   status: string;
+  price_change_reason?: string;
+  price_effective_at?: string;
 }
 
 /** Dữ liệu form một thành phần con (Lót, Khay...) – nhập riêng, không kế thừa Mẹ; code tự sinh Mã Mẹ-1, Mã Mẹ-2... */

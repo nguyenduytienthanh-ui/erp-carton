@@ -607,3 +607,73 @@ class Product(models.Model):
         if self.wave:
             parts.append(f"- {self.wave.code}")
         return " ".join(parts)
+
+
+class PriceChange(models.Model):
+    """Lịch sử thay đổi giá chuyên dụng cho sản phẩm."""
+
+    STATUS_CHOICES = [
+        ('PENDING', 'Chờ duyệt'),
+        ('APPROVED', 'Đã duyệt'),
+        ('REJECTED', 'Từ chối'),
+        ('APPLIED', 'Đã áp dụng'),
+    ]
+
+    SOURCE_CHOICES = [
+        ('MANUAL', 'Thủ công'),
+        ('IMPORT', 'Nhập dữ liệu'),
+        ('API', 'API'),
+    ]
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='price_changes',
+        verbose_name='Sản phẩm',
+    )
+
+    old_cost_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    new_cost_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    old_sale_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    new_sale_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+
+    delta_cost = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    delta_sale = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    delta_cost_percent = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
+    delta_sale_percent = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
+
+    reason = models.TextField(blank=True, default='')
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='MANUAL')
+    effective_at = models.DateTimeField(null=True, blank=True)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='APPLIED')
+    submitted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='submitted_price_changes',
+    )
+    approved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='approved_price_changes',
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    reject_reason = models.TextField(blank=True, default='')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'product_price_changes'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['product', 'created_at']),
+            models.Index(fields=['status', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.product.code} - {self.status} ({self.created_at:%Y-%m-%d %H:%M})"

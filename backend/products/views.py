@@ -1,10 +1,11 @@
 from io import BytesIO
 import os
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import IntegrityError
 from django.db.models import ProtectedError
-from django.db.models import Q, Count, Case, When, Value, IntegerField
+from django.db.models import Q, Count, Case, When, Value, IntegerField, Exists, OuterRef
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.http import HttpResponse
@@ -16,23 +17,26 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from core.filters import ProductFilter
 from core.mixins import ExportExcelMixin, get_client_ip
 from core.models import AuditLog
 from core.permissions import check_action_permission
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from .filters import (
     ProductCategoryFilter,
     ProductUnitFilter,
     ProductWaveFilter,
     ProductBoxTypeFilter,
 )
-from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product
+from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product, PriceChange
 from .serializers import (
     ProductCategorySerializer,
     ProductUnitSerializer,
     ProductWaveSerializer,
     ProductBoxTypeSerializer,
     ProductSerializer,
+    PriceChangeSerializer,
 )
 
 
@@ -343,6 +347,8 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         try:
             return super().create(request, *args, **kwargs)
+        except DRFValidationError as e:
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         except IntegrityError as e:
             err_msg = str(e)
             if 'code' in err_msg.lower() or 'products_product_code' in err_msg:
@@ -353,6 +359,47 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             return Response(
                 {'detail': 'Lỗi dữ liệu. Vui lòng kiểm tra lại.'},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            import traceback
+            error_detail = str(e)
+            traceback_str = traceback.format_exc()
+            # Log lỗi để debug
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error creating product: {error_detail}\n{traceback_str}")
+            return Response(
+                {'detail': f'Lỗi server: {error_detail}. Vui lòng kiểm tra log backend.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def update(self, request, *args, **kwargs):
+        try:
+            return super().update(request, *args, **kwargs)
+        except DRFValidationError as e:
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+        except IntegrityError as e:
+            err_msg = str(e)
+            if 'code' in err_msg.lower() or 'products_product_code' in err_msg:
+                return Response(
+                    {'code': ['Mã hàng này đã tồn tại, hãy đổi lại.']},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            return Response(
+                {'detail': 'Lỗi dữ liệu. Vui lòng kiểm tra lại.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            import traceback
+            error_detail = str(e)
+            traceback_str = traceback.format_exc()
+            # Log lỗi để debug
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error updating product: {error_detail}\n{traceback_str}")
+            return Response(
+                {'detail': f'Lỗi server: {error_detail}. Vui lòng kiểm tra log backend.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
     queryset = Product.objects.select_related(
@@ -436,77 +483,210 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         if self.action == 'list' and self.request.query_params.get('parent__isnull') in ('true', 'True', '1'):
             queryset = queryset.filter(parent__isnull=True).annotate(components_count=Count('components'))
 
+        # Badge vận hành: đánh dấu sản phẩm đang có đề xuất giá chờ duyệt.
+        pending_price_change_qs = PriceChange.objects.filter(product_id=OuterRef('pk'), status='PENDING')
+        queryset = queryset.annotate(has_pending_price_change=Exists(pending_price_change_qs))
+
         return queryset
+
+    @staticmethod
+    def _to_decimal(value):
+        if value is None or value == '':
+            return None
+        if isinstance(value, Decimal):
+            return value
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return None
+
+    @classmethod
+    def _calc_delta(cls, old_value, new_value):
+        old_dec = cls._to_decimal(old_value)
+        new_dec = cls._to_decimal(new_value)
+        if old_dec is None or new_dec is None:
+            return None, None
+        delta = new_dec - old_dec
+        pct = None
+        if old_dec != 0:
+            pct = ((delta / old_dec) * Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        return delta, pct
+
+    @staticmethod
+    def _parse_effective_at(value):
+        if value in (None, ''):
+            return None
+        if hasattr(value, 'tzinfo'):
+            dt = value
+        else:
+            raw = str(value).strip()
+            if len(raw) == 16:
+                raw = f"{raw}:00"
+            dt = parse_datetime(raw)
+        if dt is None:
+            raise DRFValidationError({'effective_at': 'Ngày áp dụng không hợp lệ.'})
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.get_current_timezone())
+        return dt
 
     def perform_create(self, serializer):
         from core.models import NumberSequence
+        import logging
+        logger = logging.getLogger(__name__)
 
-        custom_code = (self.request.data.get('code') or '').strip()
-        if custom_code:
-            code = custom_code
-        else:
-            seq = NumberSequence.objects.filter(entity_type='Product', is_active=True).first()
-            if not seq:
-                seq = NumberSequence.objects.create(
-                    entity_type='Product',
-                    prefix='PROD',
-                    padding=3,
-                    format_template='{prefix}-{number}',
-                    is_active=True,
-                )
-            # Retry nếu mã tự sinh trùng (do sequence lệch với DB)
-            code = seq.get_next_number()
-            for _ in range(9):
-                if not Product.objects.filter(code__iexact=code).exists():
-                    break
-                code = seq.get_next_number()
+        try:
+            custom_code = (self.request.data.get('code') or '').strip()
+            if custom_code:
+                code = custom_code
             else:
-                code = f"PROD-{uuid.uuid4().hex[:8].upper()}"
+                seq = NumberSequence.objects.filter(entity_type='Product', is_active=True).first()
+                if not seq:
+                    seq = NumberSequence.objects.create(
+                        entity_type='Product',
+                        prefix='PROD',
+                        padding=3,
+                        format_template='{prefix}-{number}',
+                        is_active=True,
+                    )
+                # Retry nếu mã tự sinh trùng (do sequence lệch với DB)
+                code = seq.get_next_number()
+                for _ in range(9):
+                    if not Product.objects.filter(code__iexact=code).exists():
+                        break
+                    code = seq.get_next_number()
+                else:
+                    code = f"PROD-{uuid.uuid4().hex[:8].upper()}"
 
-        obj = serializer.save(
-            code=code,
-            created_by=self.request.user,
-            updated_by=self.request.user
-        )
-        AuditLog.objects.create(
-            user=self.request.user,
-            action='CREATE',
-            entity_type='Product',
-            entity_id=obj.id,
-            entity_id_str=str(obj.id),
-            entity_code=obj.code,
-            new_values={'code': obj.code, 'name': obj.name},
-            ip_address=get_client_ip(self.request),
-            user_agent=(self.request.META.get('HTTP_USER_AGENT') or '')[:500],
-        )
+            obj = serializer.save(
+                code=code,
+                created_by=self.request.user,
+                updated_by=self.request.user
+            )
+            
+            # Tạo AuditLog với error handling
+            try:
+                create_values = {'code': obj.code}
+                for k, v in serializer.validated_data.items():
+                    if isinstance(v, (str, int, float, bool)) or v is None:
+                        create_values[k] = v
+                    else:
+                        create_values[k] = str(v)
+                AuditLog.objects.create(
+                    user=self.request.user,
+                    action='CREATE',
+                    entity_type='Product',
+                    entity_id=obj.id,
+                    entity_id_str=str(obj.id),
+                    entity_code=obj.code,
+                    new_values=create_values,
+                    ip_address=get_client_ip(self.request),
+                    user_agent=(self.request.META.get('HTTP_USER_AGENT') or '')[:500],
+                )
+            except Exception as audit_error:
+                # Log lỗi AuditLog nhưng không fail việc tạo product
+                logger.warning(f"Failed to create AuditLog for product {obj.id}: {audit_error}")
+        except Exception as e:
+            import traceback
+            error_detail = str(e)
+            traceback_str = traceback.format_exc()
+            logger.error(f"Error in perform_create: {error_detail}\n{traceback_str}")
+            raise  # Re-raise để create() method catch
 
     def perform_update(self, serializer):
-        instance = serializer.instance
-        if instance.parent is not None:
-            serializer.validated_data.pop('code', None)
-        old_code = instance.code
-        serializer.save(updated_by=self.request.user)
-        new_code = instance.code
-        if old_code != new_code and instance.parent is None:
-            import re
-            prefix = re.escape(old_code) + r'-(\d+)$'
-            for child in instance.components.all():
-                m = re.match(prefix, child.code or '')
-                if m:
-                    suffix = m.group(1)
-                    child.code = f"{new_code}-{suffix}"
-                    child.save(update_fields=['code', 'updated_at'])
-        AuditLog.objects.create(
-            user=self.request.user,
-            action='UPDATE',
-            entity_type='Product',
-            entity_id=instance.id,
-            entity_id_str=str(instance.id),
-            entity_code=instance.code,
-            changed_fields=list(serializer.validated_data.keys()),
-            ip_address=get_client_ip(self.request),
-            user_agent=(self.request.META.get('HTTP_USER_AGENT') or '')[:500],
-        )
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            instance = serializer.instance
+            if instance.parent is not None:
+                serializer.validated_data.pop('code', None)
+            price_change_reason = (serializer.validated_data.pop('price_change_reason', '') or '').strip()
+            price_effective_at = serializer.validated_data.pop('price_effective_at', None)
+            old_values = {}
+            new_values = {}
+            changed_fields = []
+            for field, new_val in serializer.validated_data.items():
+                old_val = getattr(instance, field, None)
+                if old_val != new_val:
+                    changed_fields.append(field)
+                    if isinstance(old_val, (str, int, float, bool)) or old_val is None:
+                        old_values[field] = old_val
+                    else:
+                        old_values[field] = str(old_val)
+                    if isinstance(new_val, (str, int, float, bool)) or new_val is None:
+                        new_values[field] = new_val
+                    else:
+                        new_values[field] = str(new_val)
+            old_code = instance.code
+            serializer.save(updated_by=self.request.user)
+            new_code = instance.code
+            if old_code != new_code and instance.parent is None:
+                import re
+                prefix = re.escape(old_code) + r'-(\d+)$'
+                for child in instance.components.all():
+                    m = re.match(prefix, child.code or '')
+                    if m:
+                        suffix = m.group(1)
+                        child.code = f"{new_code}-{suffix}"
+                        child.save(update_fields=['code', 'updated_at'])
+
+            # Lịch sử giá chuyên dụng: chỉ tạo khi có thay đổi giá bán/mua.
+            price_fields_changed = {'cost_price', 'sale_price'} & set(changed_fields)
+            if price_fields_changed:
+                old_cost = self._to_decimal(old_values.get('cost_price', instance.cost_price))
+                new_cost = self._to_decimal(new_values.get('cost_price', instance.cost_price))
+                old_sale = self._to_decimal(old_values.get('sale_price', instance.sale_price))
+                new_sale = self._to_decimal(new_values.get('sale_price', instance.sale_price))
+
+                delta_cost, delta_cost_pct = self._calc_delta(old_cost, new_cost)
+                delta_sale, delta_sale_pct = self._calc_delta(old_sale, new_sale)
+
+                PriceChange.objects.create(
+                    product=instance,
+                    old_cost_price=old_cost,
+                    new_cost_price=new_cost,
+                    old_sale_price=old_sale,
+                    new_sale_price=new_sale,
+                    delta_cost=delta_cost,
+                    delta_sale=delta_sale,
+                    delta_cost_percent=delta_cost_pct,
+                    delta_sale_percent=delta_sale_pct,
+                    reason=price_change_reason,
+                    source='MANUAL',
+                    effective_at=price_effective_at,
+                    status='APPLIED',
+                    submitted_by=self.request.user,
+                    approved_by=self.request.user,
+                    approved_at=timezone.now(),
+                )
+                new_values['price_change_reason'] = price_change_reason
+                if price_effective_at:
+                    new_values['price_effective_at'] = price_effective_at.isoformat()
+            
+            # Tạo AuditLog với error handling
+            try:
+                AuditLog.objects.create(
+                    user=self.request.user,
+                    action='UPDATE',
+                    entity_type='Product',
+                    entity_id=instance.id,
+                    entity_id_str=str(instance.id),
+                    entity_code=instance.code,
+                    old_values=old_values,
+                    new_values=new_values,
+                    changed_fields=changed_fields,
+                    ip_address=get_client_ip(self.request),
+                    user_agent=(self.request.META.get('HTTP_USER_AGENT') or '')[:500],
+                )
+            except Exception as audit_error:
+                # Log lỗi AuditLog nhưng không fail việc update product
+                logger.warning(f"Failed to create AuditLog for product update {instance.id}: {audit_error}")
+        except Exception as e:
+            import traceback
+            error_detail = str(e)
+            traceback_str = traceback.format_exc()
+            logger.error(f"Error in perform_update: {error_detail}\n{traceback_str}")
+            raise  # Re-raise để update() method catch
 
     def perform_destroy(self, instance):
         AuditLog.objects.create(
@@ -592,6 +772,162 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         ids = request.data.get('ids', [])
         Product.objects.filter(id__in=ids).update(status='DISCONTINUED')
         return Response({'message': f'Đã ngừng sản xuất {len(ids)} sản phẩm'})
+
+    @action(detail=True, methods=['get'], url_path='price_changes')
+    def price_changes(self, request, pk=None):
+        product = self.get_object()
+        queryset = PriceChange.objects.filter(product=product).order_by('-created_at')[:100]
+        serializer = PriceChangeSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='submit_price_change')
+    def submit_price_change(self, request, pk=None):
+        product = self.get_object()
+        reason = (request.data.get('reason') or '').strip()
+        if not reason:
+            return Response({'reason': 'Vui lòng nhập lý do đề xuất thay đổi giá.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        new_cost = self._to_decimal(request.data.get('new_cost_price'))
+        new_sale = self._to_decimal(request.data.get('new_sale_price'))
+        if new_cost is None and new_sale is None:
+            return Response({'detail': 'Cần nhập ít nhất 1 giá mới (giá vốn hoặc đơn giá).'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_cost is None:
+            new_cost = self._to_decimal(product.cost_price)
+        if new_sale is None:
+            new_sale = self._to_decimal(product.sale_price)
+        if new_cost is not None and new_sale is not None and new_sale < new_cost:
+            return Response({'new_sale_price': 'Đơn giá mới phải lớn hơn hoặc bằng giá vốn mới.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        old_cost = self._to_decimal(product.cost_price)
+        old_sale = self._to_decimal(product.sale_price)
+        delta_cost, delta_cost_pct = self._calc_delta(old_cost, new_cost)
+        delta_sale, delta_sale_pct = self._calc_delta(old_sale, new_sale)
+        effective_at = self._parse_effective_at(request.data.get('effective_at'))
+
+        price_change = PriceChange.objects.create(
+            product=product,
+            old_cost_price=old_cost,
+            new_cost_price=new_cost,
+            old_sale_price=old_sale,
+            new_sale_price=new_sale,
+            delta_cost=delta_cost,
+            delta_sale=delta_sale,
+            delta_cost_percent=delta_cost_pct,
+            delta_sale_percent=delta_sale_pct,
+            reason=reason,
+            source='MANUAL',
+            effective_at=effective_at,
+            status='PENDING',
+            submitted_by=request.user,
+        )
+
+        AuditLog.objects.create(
+            user=request.user,
+            action='SUBMIT',
+            entity_type='Product',
+            entity_id=product.id,
+            entity_id_str=str(product.id),
+            entity_code=product.code,
+            old_values={'cost_price': str(old_cost), 'sale_price': str(old_sale)},
+            new_values={
+                'cost_price': str(new_cost),
+                'sale_price': str(new_sale),
+                'price_change_reason': reason,
+                'price_effective_at': effective_at.isoformat() if effective_at else None,
+                'price_change_id': price_change.id,
+            },
+            changed_fields=['cost_price', 'sale_price'],
+            ip_address=get_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response(PriceChangeSerializer(price_change).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='approve_price_change')
+    def approve_price_change(self, request, pk=None):
+        product = self.get_object()
+        change_id = request.data.get('change_id')
+        if not change_id:
+            return Response({'change_id': 'Thiếu change_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            price_change = PriceChange.objects.get(id=change_id, product=product, status='PENDING')
+        except PriceChange.DoesNotExist:
+            return Response({'detail': 'Đề xuất giá không tồn tại hoặc đã xử lý.'}, status=status.HTTP_404_NOT_FOUND)
+
+        product.cost_price = price_change.new_cost_price if price_change.new_cost_price is not None else product.cost_price
+        product.sale_price = price_change.new_sale_price if price_change.new_sale_price is not None else product.sale_price
+        product.updated_by = request.user
+        product.save(update_fields=['cost_price', 'sale_price', 'updated_by', 'updated_at'])
+
+        price_change.status = 'APPROVED'
+        price_change.approved_by = request.user
+        price_change.approved_at = timezone.now()
+        price_change.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
+
+        AuditLog.objects.create(
+            user=request.user,
+            action='APPROVE',
+            entity_type='Product',
+            entity_id=product.id,
+            entity_id_str=str(product.id),
+            entity_code=product.code,
+            old_values={'cost_price': str(price_change.old_cost_price), 'sale_price': str(price_change.old_sale_price)},
+            new_values={
+                'cost_price': str(price_change.new_cost_price),
+                'sale_price': str(price_change.new_sale_price),
+                'price_change_reason': price_change.reason,
+                'price_effective_at': price_change.effective_at.isoformat() if price_change.effective_at else None,
+                'price_change_id': price_change.id,
+            },
+            changed_fields=['cost_price', 'sale_price'],
+            ip_address=get_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response(PriceChangeSerializer(price_change).data)
+
+    @action(detail=True, methods=['post'], url_path='reject_price_change')
+    def reject_price_change(self, request, pk=None):
+        product = self.get_object()
+        change_id = request.data.get('change_id')
+        reject_reason = (request.data.get('reject_reason') or '').strip()
+        if not change_id:
+            return Response({'change_id': 'Thiếu change_id.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not reject_reason:
+            return Response({'reject_reason': 'Vui lòng nhập lý do từ chối.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            price_change = PriceChange.objects.get(id=change_id, product=product, status='PENDING')
+        except PriceChange.DoesNotExist:
+            return Response({'detail': 'Đề xuất giá không tồn tại hoặc đã xử lý.'}, status=status.HTTP_404_NOT_FOUND)
+
+        price_change.status = 'REJECTED'
+        price_change.reject_reason = reject_reason
+        price_change.approved_by = request.user
+        price_change.approved_at = timezone.now()
+        price_change.save(update_fields=['status', 'reject_reason', 'approved_by', 'approved_at', 'updated_at'])
+
+        AuditLog.objects.create(
+            user=request.user,
+            action='REJECT',
+            entity_type='Product',
+            entity_id=product.id,
+            entity_id_str=str(product.id),
+            entity_code=product.code,
+            old_values={'cost_price': str(price_change.old_cost_price), 'sale_price': str(price_change.old_sale_price)},
+            new_values={
+                'cost_price': str(price_change.new_cost_price),
+                'sale_price': str(price_change.new_sale_price),
+                'price_change_reason': price_change.reason,
+                'price_effective_at': price_change.effective_at.isoformat() if price_change.effective_at else None,
+                'reject_reason': reject_reason,
+                'price_change_id': price_change.id,
+            },
+            changed_fields=['cost_price', 'sale_price'],
+            ip_address=get_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response(PriceChangeSerializer(price_change).data)
 
     @action(detail=True, methods=['post'])
     def assign_owner(self, request, pk=None):

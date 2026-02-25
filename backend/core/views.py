@@ -1102,6 +1102,54 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
                 }
             })
         
+        # Get product price workflow events (avoid duplicate with direct UPDATE audit logs)
+        if str(entity_type).lower() == 'product':
+            try:
+                from products.models import PriceChange
+                price_events = PriceChange.objects.filter(
+                    product_id=entity_id
+                ).exclude(status='APPLIED').order_by('-created_at')[:20]
+                for event in price_events:
+                    action = {
+                        'PENDING': 'SUBMIT',
+                        'APPROVED': 'APPROVE',
+                        'REJECTED': 'REJECT',
+                    }.get(event.status, 'UPDATE')
+                    activities.append({
+                        'type': 'audit',
+                        'action': action,
+                        'user': event.submitted_by.username if event.submitted_by else None,
+                        'timestamp': event.created_at,
+                        'details': {
+                            'old_values': {
+                                'cost_price': str(event.old_cost_price) if event.old_cost_price is not None else None,
+                                'sale_price': str(event.old_sale_price) if event.old_sale_price is not None else None,
+                            },
+                            'new_values': {
+                                'cost_price': str(event.new_cost_price) if event.new_cost_price is not None else None,
+                                'sale_price': str(event.new_sale_price) if event.new_sale_price is not None else None,
+                                'price_change_reason': event.reason or '',
+                                'price_effective_at': event.effective_at.isoformat() if event.effective_at else None,
+                                'reject_reason': event.reject_reason or '',
+                                'delta_cost_percent': str(event.delta_cost_percent) if event.delta_cost_percent is not None else None,
+                                'delta_sale_percent': str(event.delta_sale_percent) if event.delta_sale_percent is not None else None,
+                            },
+                            'changed_fields': [
+                                'cost_price', 'sale_price',
+                                *(['price_change_reason'] if event.reason else []),
+                                *(['price_effective_at'] if event.effective_at else []),
+                                *(['reject_reason'] if event.reject_reason else []),
+                            ],
+                            'content': (
+                                f"Lý do: {event.reason}"
+                                + (f" | Hiệu lực: {event.effective_at.strftime('%d/%m/%Y %H:%M')}" if event.effective_at else '')
+                            ).strip() if event.reason or event.effective_at else None,
+                        }
+                    })
+            except Exception:
+                # Activity stream should still work even if price event query fails.
+                pass
+        
         # Sort by timestamp (newest first)
         activities.sort(key=lambda x: x['timestamp'], reverse=True)
         

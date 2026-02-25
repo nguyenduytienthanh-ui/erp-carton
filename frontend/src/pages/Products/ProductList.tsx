@@ -3,29 +3,39 @@ import { useSearchParams } from 'react-router-dom';
 import {
   Table,
   Button,
+  Dropdown,
   message,
   Modal,
   Pagination,
   Space,
   Input,
   InputNumber,
+  Select,
   Card,
   Checkbox,
   Radio,
+  Tag,
+  Segmented,
+  Drawer,
 } from 'antd';
 import {
   PlusOutlined,
-  EyeOutlined,
-  EditOutlined,
   DeleteOutlined,
   CopyOutlined,
   ExportOutlined,
   UploadOutlined,
   FilterOutlined,
+  ReloadOutlined,
+  MoreOutlined,
+  HistoryOutlined,
+  SendOutlined,
+  CheckOutlined,
+  CloseOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import type { MenuProps } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { productsApi } from '../../api/products';
+import { productsApi, type ActivityItem, type PriceChangeRecord } from '../../api/products';
 import type { Product } from '../../types/product';
 import { theme } from '../../styles/theme';
 import {
@@ -47,6 +57,7 @@ import {
 } from '../../contexts/ProductsListFilterContext';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { useColumnSettings } from '../../hooks/useColumnSettings';
+import { parseApiError } from '../../shared/apiError';
 import { useColumnPermissions } from '../../hooks/useColumnPermissions';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useQuickEntryKeys } from '../../hooks/useQuickEntryKeys';
@@ -203,6 +214,140 @@ const FILTER_INTENT_DEBOUNCE_MS = 300;
 const URL_WRITE_DEBOUNCE_MS = 500;
 const DEFAULT_PAGE_SIZE = 20;
 const PRODUCTS_LIST_STORAGE_KEY = 'erp_products_list_state';
+type ListViewMode = 'table' | 'cards';
+type CardDensity = 'comfortable' | 'compact';
+type DesktopTableDensity = 'comfortable' | 'compact';
+type ProductFormMode = 'create' | 'edit' | 'view';
+
+const getProductStatusTone = (status: string | null | undefined): 'ok' | 'warn' | 'neutral' => {
+  if (status === 'ACTIVE') return 'ok';
+  if (status === 'DISCONTINUED') return 'warn';
+  return 'neutral';
+};
+
+const getHistoryActionCode = (action: string | null | undefined): string => {
+  const raw = String(action ?? '').trim().toUpperCase();
+  if (raw.includes('SUBMIT')) return 'SUBMIT';
+  if (raw.includes('APPROVE')) return 'APPROVE';
+  if (raw.includes('REJECT')) return 'REJECT';
+  if (raw.includes('CREATE')) return 'CREATE';
+  if (raw.includes('UPDATE')) return 'UPDATE';
+  if (raw.includes('DELETE')) return 'DELETE';
+  if (raw.includes('IMPORT')) return 'IMPORT';
+  if (raw.includes('EXPORT')) return 'EXPORT';
+  if (raw.includes('COMMENT')) return 'COMMENT';
+  return raw || 'UNKNOWN';
+};
+
+const getHistoryActionLabelVi = (action: string | null | undefined): string => {
+  const code = getHistoryActionCode(action);
+  const map: Record<string, string> = {
+    SUBMIT: 'Trình duyệt',
+    APPROVE: 'Duyệt',
+    REJECT: 'Từ chối',
+    CREATE: 'Tạo mới',
+    UPDATE: 'Cập nhật',
+    DELETE: 'Xóa',
+    IMPORT: 'Nhập dữ liệu',
+    EXPORT: 'Xuất dữ liệu',
+    COMMENT: 'Bình luận',
+    UNKNOWN: String(action ?? 'Không xác định'),
+  };
+  return map[code] ?? String(action ?? 'Không xác định');
+};
+
+const PRODUCT_HISTORY_FIELD_LABELS: Record<string, string> = {
+  code: 'Mã hàng',
+  name: 'Tên hàng',
+  category: 'Danh mục',
+  category_name: 'Danh mục',
+  unit: 'Đơn vị',
+  unit_name: 'Đơn vị',
+  cost_price: 'Giá vốn',
+  sale_price: 'Đơn giá',
+  status: 'Trạng thái',
+  is_active: 'Hoạt động',
+  size_order: 'Kích thước PO',
+  size_production: 'Kích thước SX',
+  wave: 'Sóng',
+  box_type: 'Kiểu',
+  note: 'Ghi chú',
+  note_other: 'Ghi chú công đoạn khác',
+  min_stock: 'Tồn tối thiểu',
+  commission_per_unit: 'HHCĐ',
+  commission_percent: 'HH%',
+  price_change_reason: 'Lý do thay đổi giá',
+  price_effective_at: 'Hiệu lực từ',
+  effective_at: 'Hiệu lực từ',
+  reason: 'Lý do',
+  reject_reason: 'Lý do từ chối',
+  delta_cost_percent: '% thay đổi giá vốn',
+  delta_sale_percent: '% thay đổi đơn giá',
+};
+
+const getHistoryFieldLabelVi = (field: string): string => PRODUCT_HISTORY_FIELD_LABELS[field] ?? field;
+
+const formatHistoryValueVi = (value: unknown): string => {
+  if (value === null || value === undefined || value === '') return '-';
+  if (typeof value === 'boolean') return value ? 'Có' : 'Không';
+  if (typeof value === 'number') return value.toLocaleString('vi-VN');
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+};
+
+const formatHistoryFieldValueVi = (field: string, value: unknown): string => {
+  if (value === null || value === undefined || value === '') return '-';
+  if (field.includes('effective_at') || field.includes('price_effective_at')) {
+    const d = new Date(String(value));
+    if (!Number.isNaN(d.getTime())) return d.toLocaleString('vi-VN');
+  }
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    if (field.includes('percent')) return `${numeric.toLocaleString('vi-VN')}%`;
+    if (field.includes('price') || field.includes('delta_cost') || field.includes('delta_sale')) {
+      return `${numeric.toLocaleString('vi-VN')} đ`;
+    }
+  }
+  return formatHistoryValueVi(value);
+};
+
+const normalizeDateTimeLocal = (value: string): string | undefined => {
+  const raw = value.trim();
+  if (!raw) return undefined;
+  if (raw.length === 16) return `${raw}:00`;
+  return raw;
+};
+
+const stableHistoryValue = (value: unknown): string => {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) return `[${value.map((v) => stableHistoryValue(v)).join(',')}]`;
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj).sort().map((k) => `${k}:${stableHistoryValue(obj[k])}`).join('|')}}`;
+  }
+  return String(value);
+};
+
+const getActivityDedupKey = (item: ActivityItem): string => {
+  const tsMs = new Date(item.timestamp).getTime();
+  const tsSec = Number.isFinite(tsMs) ? Math.floor(tsMs / 1000) : 0;
+  return [
+    item.type,
+    getHistoryActionCode(item.action),
+    item.user ?? '',
+    String(tsSec),
+    stableHistoryValue(item.details?.changed_fields ?? []),
+    stableHistoryValue(item.details?.old_values ?? {}),
+    stableHistoryValue(item.details?.new_values ?? {}),
+    String(item.details?.content ?? ''),
+  ].join('||');
+};
 
 /** Ô lọc số (Dài/Rộng/Cao, giá): input layer lưu string thuần, không parse sớm → nhập liên tục. */
 const NUMERIC_FILTER_KEYS = [
@@ -572,15 +717,41 @@ const ProductList = () => {
   const [importModalVisible, setImportModalVisible] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [formMode, setFormMode] = useState<ProductFormMode>('create');
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [customPageSize, setCustomPageSize] = useState('');
   const [sortField, setSortField] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | null>(null);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
+  const [viewMode, setViewMode] = useState<ListViewMode>(() => (window.innerWidth <= 768 ? 'cards' : 'table'));
+  const [cardDensity, setCardDensity] = useState<CardDensity>('comfortable');
+  const [desktopTableDensity, setDesktopTableDensity] = useState<DesktopTableDensity>('comfortable');
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const [pageSizeDraft, setPageSizeDraft] = useState<number | null>(null);
   const [isEditingPageSize, setIsEditingPageSize] = useState(false);
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyActionFilter, setHistoryActionFilter] = useState<string | undefined>(undefined);
+  const [priceWorkflowProduct, setPriceWorkflowProduct] = useState<Product | null>(null);
+  const [priceSubmitModalOpen, setPriceSubmitModalOpen] = useState(false);
+  const [priceRejectModalOpen, setPriceRejectModalOpen] = useState(false);
+  const [pendingPriceChangeId, setPendingPriceChangeId] = useState<number | null>(null);
+  const [priceNewCost, setPriceNewCost] = useState<number | null>(null);
+  const [priceNewSale, setPriceNewSale] = useState<number | null>(null);
+  const [priceReason, setPriceReason] = useState('');
+  const [priceEffectiveAt, setPriceEffectiveAt] = useState('');
+  const [priceRejectReason, setPriceRejectReason] = useState('');
+  const [priceWorkflowLoading, setPriceWorkflowLoading] = useState(false);
   const pageSizeInputRef = useRef<any>(null);
   const filterPanelRef = useRef<HTMLDivElement>(null);
   const inlineFilterPanelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   /* Bộ nhập nhanh trong modal Lọc: Enter chuyển ô, ô cuối → áp dụng lọc và đóng modal */
   useQuickEntryKeys(filterPanelRef, {
@@ -677,7 +848,34 @@ const ProductList = () => {
       setSortField(s.field);
       setSortOrder(s.order);
     }
+    const savedMode = config.mobileListViewMode as ListViewMode | undefined;
+    if (savedMode === 'table' || savedMode === 'cards') {
+      setViewMode(savedMode);
+    }
+    const savedDensity = config.mobileCardDensity as CardDensity | undefined;
+    if (savedDensity === 'comfortable' || savedDensity === 'compact') {
+      setCardDensity(savedDensity);
+    }
+    const savedDesktopDensity = config.desktopTableDensity as DesktopTableDensity | undefined;
+    if (savedDesktopDensity === 'comfortable' || savedDesktopDensity === 'compact') {
+      setDesktopTableDensity(savedDesktopDensity);
+    }
   }, [config, searchInput, setIntentImmediate]);
+
+  const handleViewModeChange = useCallback((mode: ListViewMode) => {
+    setViewMode(mode);
+    void savePreferences({ mobileListViewMode: mode });
+  }, [savePreferences]);
+
+  const handleCardDensityChange = useCallback((density: CardDensity) => {
+    setCardDensity(density);
+    void savePreferences({ mobileCardDensity: density });
+  }, [savePreferences]);
+
+  const handleDesktopTableDensityChange = useCallback((density: DesktopTableDensity) => {
+    setDesktopTableDensity(density);
+    void savePreferences({ desktopTableDensity: density });
+  }, [savePreferences]);
 
   /** Cập nhật ô lọc: chỉ đổi local (merge prev), không parse/validate trong onChange. */
   const applyFilterChange = useCallback((update: (prev: LocalFilterInput) => LocalFilterInput) => {
@@ -824,7 +1022,7 @@ const ProductList = () => {
     return normalizeParamsToOrderedString(params, ORDERED_URL_KEYS);
   }, [intentSearch, intentFilterStableString, activeFilters, pagination.current, pagination.pageSize, exactSearch]);
 
-  const { data: productsData, isLoading, isError, error } = useQuery({
+  const { data: productsData, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['products', productsQueryParamsKey, sortField, sortOrder],
     queryFn: () => {
       const params: Record<string, unknown> = {
@@ -859,6 +1057,12 @@ const ProductList = () => {
       }
       return productsApi.getProducts(params);
     },
+  });
+
+  const { data: activityStream = [], isLoading: isHistoryLoading } = useQuery<ActivityItem[]>({
+    queryKey: ['products', 'activity', historyProduct?.id ?? null],
+    queryFn: () => productsApi.getActivityByEntity('Product', historyProduct!.id),
+    enabled: historyModalOpen && historyProduct != null,
   });
 
   useEffect(() => {
@@ -900,6 +1104,45 @@ const ProductList = () => {
   const waves = wavesData?.results ?? [];
   const boxTypes = boxTypesData?.results ?? [];
   const products = productsData?.results ?? [];
+
+  const mergedActivity = useMemo<ActivityItem[]>(() => {
+    const unique = new Map<string, ActivityItem>();
+    activityStream.forEach((item) => {
+      const key = getActivityDedupKey(item);
+      if (!unique.has(key)) unique.set(key, item);
+    });
+    const base = Array.from(unique.values());
+    const hasCreate = base.some((item) => getHistoryActionCode(item.action) === 'CREATE');
+
+    if (historyProduct && !hasCreate && historyProduct.created_at) {
+      base.push({
+        type: 'audit',
+        action: 'CREATE',
+        user: historyProduct.created_by_name ?? null,
+        timestamp: historyProduct.created_at,
+        details: { content: 'Bản ghi được tạo.' },
+      });
+    }
+
+    return base.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [activityStream, historyProduct]);
+
+  const filteredActivity = useMemo(() => {
+    const q = historySearch.trim().toLowerCase();
+    return mergedActivity.filter((item) => {
+      if (historyActionFilter && getHistoryActionCode(item.action) !== historyActionFilter) return false;
+      if (!q) return true;
+      const content = [
+        getHistoryActionLabelVi(item.action),
+        item.user ?? '',
+        item.details?.content ?? '',
+        JSON.stringify(item.details?.old_values ?? {}),
+        JSON.stringify(item.details?.new_values ?? {}),
+        (item.details?.changed_fields ?? []).join(','),
+      ].join(' ').toLowerCase();
+      return content.includes(q);
+    });
+  }, [mergedActivity, historyActionFilter, historySearch]);
 
   const refetchProducts = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -1035,17 +1278,218 @@ const ProductList = () => {
   }, [intentSearch, intentFilterStableString]);
 
   const handleAdd = useCallback(() => {
+    setFormMode('create');
     setEditingProduct(null);
     setFormVisible(true);
   }, []);
 
   const handleEdit = useCallback((product: Product) => {
+    setFormMode('edit');
     setEditingProduct(product);
     setFormVisible(true);
   }, []);
 
+  const handleClone = useCallback((record: Product) => {
+    const cloned = { ...record };
+    delete (cloned as Record<string, unknown>).id;
+    delete (cloned as Record<string, unknown>).code;
+    cloned.name = `${record.name} (Copy)`;
+    setFormMode('create');
+    setEditingProduct(cloned);
+    setFormVisible(true);
+  }, []);
+
+  const openHistoryModal = useCallback((record: Product) => {
+    setHistoryProduct(record);
+    setHistorySearch('');
+    setHistoryActionFilter(undefined);
+    setHistoryModalOpen(true);
+  }, []);
+
+  const refreshAfterPriceWorkflow = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['products'] });
+    queryClient.invalidateQueries({ queryKey: ['products', 'activity'] });
+  }, [queryClient]);
+
+  const getLatestPendingPriceChange = useCallback(async (productId: number): Promise<PriceChangeRecord | null> => {
+    const changes = await productsApi.getPriceChanges(productId);
+    return changes.find((item) => item.status === 'PENDING') ?? null;
+  }, []);
+
+  const openSubmitPriceModal = useCallback((record: Product) => {
+    setPriceWorkflowProduct(record);
+    setPriceNewCost(Number(record.cost_price ?? 0));
+    setPriceNewSale(Number(record.sale_price ?? 0));
+    setPriceReason('');
+    setPriceEffectiveAt('');
+    setPriceSubmitModalOpen(true);
+  }, []);
+
+  const handleSubmitPriceChange = useCallback(async () => {
+    if (!priceWorkflowProduct) return;
+    const reason = priceReason.trim();
+    if (!reason) {
+      message.warning('Vui lòng nhập lý do đề xuất thay đổi giá.');
+      return;
+    }
+    const currentCost = Number(priceWorkflowProduct.cost_price ?? 0);
+    const currentSale = Number(priceWorkflowProduct.sale_price ?? 0);
+    const nextCost = priceNewCost ?? currentCost;
+    const nextSale = priceNewSale ?? currentSale;
+    if (nextCost === currentCost && nextSale === currentSale) {
+      message.warning('Bạn chưa thay đổi giá vốn hoặc đơn giá.');
+      return;
+    }
+    if (nextSale < nextCost) {
+      message.warning('Đơn giá mới phải lớn hơn hoặc bằng giá vốn mới.');
+      return;
+    }
+    setPriceWorkflowLoading(true);
+    try {
+      await productsApi.submitPriceChange(priceWorkflowProduct.id, {
+        new_cost_price: nextCost,
+        new_sale_price: nextSale,
+        reason,
+        effective_at: normalizeDateTimeLocal(priceEffectiveAt),
+      });
+      message.success('Đã gửi đề xuất thay đổi giá.');
+      setPriceSubmitModalOpen(false);
+      setPriceWorkflowProduct(null);
+      refreshAfterPriceWorkflow();
+    } catch (err: unknown) {
+      const { generalMessage } = parseApiError(err);
+      message.error(generalMessage || 'Gửi đề xuất thay đổi giá thất bại.');
+    } finally {
+      setPriceWorkflowLoading(false);
+    }
+  }, [priceWorkflowProduct, priceReason, priceNewCost, priceNewSale, priceEffectiveAt, refreshAfterPriceWorkflow]);
+
+  const handleApproveLatestPriceChange = useCallback(async (record: Product) => {
+    setPriceWorkflowLoading(true);
+    try {
+      const pending = await getLatestPendingPriceChange(record.id);
+      if (!pending) {
+        message.info('Không có đề xuất giá nào đang chờ duyệt.');
+        return;
+      }
+      await productsApi.approvePriceChange(record.id, pending.id);
+      message.success('Đã duyệt đề xuất thay đổi giá.');
+      refreshAfterPriceWorkflow();
+    } catch (err: unknown) {
+      const { generalMessage } = parseApiError(err);
+      message.error(generalMessage || 'Duyệt đề xuất giá thất bại.');
+    } finally {
+      setPriceWorkflowLoading(false);
+    }
+  }, [getLatestPendingPriceChange, refreshAfterPriceWorkflow]);
+
+  const openRejectLatestPriceChangeModal = useCallback(async (record: Product) => {
+    setPriceWorkflowLoading(true);
+    try {
+      const pending = await getLatestPendingPriceChange(record.id);
+      if (!pending) {
+        message.info('Không có đề xuất giá nào đang chờ duyệt.');
+        return;
+      }
+      setPriceWorkflowProduct(record);
+      setPendingPriceChangeId(pending.id);
+      setPriceRejectReason('');
+      setPriceRejectModalOpen(true);
+    } catch (err: unknown) {
+      const { generalMessage } = parseApiError(err);
+      message.error(generalMessage || 'Không lấy được đề xuất giá chờ duyệt.');
+    } finally {
+      setPriceWorkflowLoading(false);
+    }
+  }, [getLatestPendingPriceChange]);
+
+  const handleRejectLatestPriceChange = useCallback(async () => {
+    if (!priceWorkflowProduct || !pendingPriceChangeId) return;
+    const rejectReason = priceRejectReason.trim();
+    if (!rejectReason) {
+      message.warning('Vui lòng nhập lý do từ chối.');
+      return;
+    }
+    setPriceWorkflowLoading(true);
+    try {
+      await productsApi.rejectPriceChange(priceWorkflowProduct.id, pendingPriceChangeId, rejectReason);
+      message.success('Đã từ chối đề xuất thay đổi giá.');
+      setPriceRejectModalOpen(false);
+      setPriceWorkflowProduct(null);
+      setPendingPriceChangeId(null);
+      setPriceRejectReason('');
+      refreshAfterPriceWorkflow();
+    } catch (err: unknown) {
+      const { generalMessage } = parseApiError(err);
+      message.error(generalMessage || 'Từ chối đề xuất giá thất bại.');
+    } finally {
+      setPriceWorkflowLoading(false);
+    }
+  }, [priceWorkflowProduct, pendingPriceChangeId, priceRejectReason, refreshAfterPriceWorkflow]);
+
+  const handleRowAction = useCallback((action: string, record: Product) => {
+    if (action === 'history') {
+      openHistoryModal(record);
+      return;
+    }
+    if (action === 'copy') {
+      handleClone(record);
+      return;
+    }
+    if (action === 'submit_price_change') {
+      openSubmitPriceModal(record);
+      return;
+    }
+    if (action === 'approve_price_change') {
+      void handleApproveLatestPriceChange(record);
+      return;
+    }
+    if (action === 'reject_price_change') {
+      void openRejectLatestPriceChangeModal(record);
+      return;
+    }
+    if (action === 'delete') {
+      confirmDeleteOne(record.name || record.code || String(record.id), () => handleDelete(record.id));
+    }
+  }, [
+    confirmDeleteOne,
+    handleClone,
+    handleDelete,
+    openHistoryModal,
+    openSubmitPriceModal,
+    handleApproveLatestPriceChange,
+    openRejectLatestPriceChangeModal,
+  ]);
+
+  const renderRowActions = useCallback((record: Product) => (
+    <div className="table-row-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <Dropdown
+        trigger={['click']}
+        menu={{
+          items: [
+            { key: 'submit_price_change', icon: <SendOutlined />, label: 'Trình duyệt thay đổi giá' },
+            { key: 'approve_price_change', icon: <CheckOutlined />, label: 'Duyệt đề xuất giá gần nhất' },
+            { key: 'reject_price_change', icon: <CloseOutlined />, label: 'Từ chối đề xuất giá gần nhất', danger: true },
+            { type: 'divider' },
+            { key: 'history', icon: <HistoryOutlined />, label: 'Lịch sử hoạt động' },
+            { key: 'copy', icon: <CopyOutlined />, label: 'Nhân bản' },
+            { type: 'divider' },
+            { key: 'delete', icon: <DeleteOutlined />, label: 'Xóa', danger: true },
+          ] as MenuProps['items'],
+          onClick: ({ key, domEvent }) => {
+            domEvent.stopPropagation();
+            handleRowAction(String(key), record);
+          },
+        }}
+      >
+        <Button className="table-row-action-btn action-more" type="text" size="small" icon={<MoreOutlined style={{ fontSize: 18 }} />} onClick={(e) => e.stopPropagation()} title="Thao tác" />
+      </Dropdown>
+    </div>
+  ), [handleRowAction]);
+
   const handleFormClose = useCallback(() => {
     setFormVisible(false);
+    setFormMode('create');
     setEditingProduct(null);
   }, []);
 
@@ -1098,8 +1542,8 @@ const ProductList = () => {
         </span>
       ),
     },
-    { title: 'Tên hàng', dataIndex: 'name', key: 'name', sortField: 'name', width: 200, ellipsis: true, render: (n: string) => n ?? '-' },
-    { title: 'Danh mục', dataIndex: 'category_name', key: 'category_name', sortField: 'category__name', width: 140, ellipsis: true, render: (t: string) => t ?? '-' },
+    { title: 'Tên hàng', dataIndex: 'name', key: 'name', sortField: 'name', width: 200, ellipsis: true, render: (n: string) => <span className="cell-text-primary">{n ?? '-'}</span> },
+    { title: 'Danh mục', dataIndex: 'category_name', key: 'category_name', sortField: 'category__name', width: 140, ellipsis: true, render: (t: string) => <span className="cell-text-secondary">{t ?? '-'}</span> },
     {
       title: 'Giá vốn',
       dataIndex: 'cost_price',
@@ -1116,7 +1560,16 @@ const ProductList = () => {
       sortField: 'sale_price',
       width: 95,
       align: 'right' as const,
-      render: (p: string) => <FormattedPrice value={p} />,
+      render: (p: string, record: Product) => {
+        const sale = Number(p);
+        const cost = Number(record.cost_price ?? 0);
+        const isMarginRisk = Number.isFinite(sale) && Number.isFinite(cost) && cost > 0 && sale < cost;
+        return (
+          <span className={isMarginRisk ? 'cell-warning-soft' : undefined}>
+            <FormattedPrice value={p} />
+          </span>
+        );
+      },
     },
     { title: 'HHCĐ', dataIndex: 'commission_per_unit', key: 'commission_per_unit', sortField: 'commission_per_unit', width: 75, align: 'right' as const, render: (v: string) => parseFloat(v || '0').toLocaleString('vi-VN') },
     { title: 'HH%', dataIndex: 'commission_percent', key: 'commission_percent', sortField: 'commission_percent', width: 60, align: 'right' as const, render: (v: string) => parseFloat(v || '0').toLocaleString('vi-VN') },
@@ -1180,25 +1633,29 @@ const ProductList = () => {
       sortField: 'status',
       width: 100,
       align: 'center' as const,
-      render: (v: string) => {
+      render: (v: string, record: Product) => {
         const label = (PRODUCT_STATUS_LABELS as Record<string, string>)[v] ?? v ?? '-';
-        return v === 'DISCONTINUED' ? <span style={{ fontWeight: 700 }}>{label}</span> : label;
+        return (
+          <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+            <span className={`status-pill status-pill-${getProductStatusTone(v)}`}>
+              {label}
+            </span>
+            {record.has_pending_price_change && (
+              <Tag color="gold" style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: '16px', paddingInline: 6 }}>
+                Chờ duyệt giá
+              </Tag>
+            )}
+          </div>
+        );
       },
     },
     {
       title: 'Thao tác',
       key: 'actions',
       fixed: 'right' as const,
-      width: 130,
+      width: 72,
       align: 'center' as const,
-      render: (_: unknown, record: Product) => (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-          <Button type="text" size="small" icon={<EyeOutlined style={{ fontSize: 18, color: '#722ed1' }} />} onClick={(e) => { e.stopPropagation(); handleEdit(record); }} title="Xem chi tiết" />
-          <Button type="text" size="small" icon={<CopyOutlined style={{ fontSize: 18, color: '#52c41a' }} />} onClick={(e) => { e.stopPropagation(); const cloned = { ...record }; delete (cloned as Record<string, unknown>).id; delete (cloned as Record<string, unknown>).code; cloned.name = `${record.name} (Copy)`; setEditingProduct(cloned); setFormVisible(true); }} title="Nhân bản" />
-          <Button type="text" size="small" icon={<EditOutlined style={{ fontSize: 18, color: '#1890ff' }} />} onClick={(e) => { e.stopPropagation(); handleEdit(record); }} title="Chỉnh sửa" />
-          <Button type="text" size="small" danger icon={<DeleteOutlined style={{ fontSize: 18 }} />} onClick={(e) => { e.stopPropagation(); confirmDeleteOne(record.name || record.code || String(record.id), () => handleDelete(record.id)); }} title="Xóa" />
-        </div>
-      ),
+      render: (_: unknown, record: Product) => renderRowActions(record),
     },
   ];
 
@@ -1473,14 +1930,19 @@ const ProductList = () => {
     </div>
   );
 
+  const showCards = isMobile && viewMode === 'cards';
+  const showTable = !isMobile || viewMode === 'table';
+  const isCompactCards = cardDensity === 'compact';
+
   return (
     <>
-      <Card variant="borderless" style={{ margin: 0, background: 'transparent', padding: 0 }}>
+      <Card className="list-page-card" variant="borderless" style={{ margin: 0, background: 'transparent', padding: 0 }}>
         {/* HEADER: Row 1 = Title (trái) + Nút chính (phải); Row 2 = Bộ lọc đang bật (trái) */}
         <div
+          className="list-page-head"
           style={{
             background: 'white',
-            padding: '16px 24px',
+            padding: isMobile ? '12px' : '16px 24px',
             borderRadius: '8px 8px 0 0',
             marginBottom: 0,
           }}
@@ -1491,6 +1953,8 @@ const ProductList = () => {
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 12,
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -1499,7 +1963,7 @@ const ProductList = () => {
               </h2>
             </div>
 
-            <Space size={12}>
+            <div className="list-page-toolbar" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', flex: '1 1 420px', justifyContent: isMobile ? 'flex-start' : 'flex-end', position: isMobile ? 'sticky' : 'static', top: isMobile ? 64 : 'auto', zIndex: isMobile ? 3 : 'auto', background: isMobile ? '#fff' : 'transparent', paddingBottom: isMobile ? 4 : 0 }}>
               <Checkbox
                 checked={exactSearch}
                 onChange={(e) => setExactSearch(e.target.checked)}
@@ -1518,13 +1982,30 @@ const ProductList = () => {
                   setSearch('');
                   setPagination((p) => ({ ...p, current: 1 }));
                 }}
+                size={isMobile ? 'small' : 'middle'}
+                className={isMobile ? 'mobile-list-search-compact' : undefined}
+                style={isMobile ? { width: '100%' } : undefined}
               />
+              {!isMobile && (
+                <Segmented
+                  size="small"
+                  value={desktopTableDensity}
+                  onChange={(value) => handleDesktopTableDensityChange(value as DesktopTableDensity)}
+                  options={[
+                    { label: 'Thoáng', value: 'comfortable' },
+                    { label: 'Gọn', value: 'compact' },
+                  ]}
+                />
+              )}
+              {!isMobile && (
               <Button
                 icon={<FilterOutlined />}
                 onClick={() => setFilterModalOpen(true)}
+                  title="Lọc"
               >
-                Lọc {activeFilters.length > 0 ? `(${activeFilters.length})` : ''}
+                  {`Lọc ${activeFilters.length > 0 ? `(${activeFilters.length})` : ''}`}
               </Button>
+              )}
               <Modal
                 title="Bộ lọc sản phẩm"
                 open={filterModalOpen}
@@ -1543,6 +2024,7 @@ const ProductList = () => {
               >
                 {filterModalContent}
               </Modal>
+              {!isMobile && (
               <ColumnChooser
                 columns={columnChooserList}
                 visibleColumns={visibleColumns}
@@ -1550,19 +2032,28 @@ const ProductList = () => {
                 sizeDisplayMode={sizeDisplayMode}
                 onSizeDisplayModeChange={handleSizeDisplayModeChange}
               />
-              <Button icon={<UploadOutlined />} onClick={() => setImportModalVisible(true)}>
+              )}
+              {!isMobile && (
+                <Button icon={<UploadOutlined />} onClick={() => setImportModalVisible(true)} title="Nhập Excel">
               Nhập Excel
             </Button>
-            <Button icon={<ExportOutlined />} onClick={() => handleExport('excel')}>
+              )}
+              {!isMobile && (
+                <Button icon={<ExportOutlined />} onClick={() => handleExport('excel')} title="Xuất Excel">
               Xuất Excel
             </Button>
-            <Button icon={<ExportOutlined />} onClick={() => handleExport('pdf')}>
+              )}
+              {!isMobile && (
+                <Button icon={<ExportOutlined />} onClick={() => handleExport('pdf')} title="Xuất PDF">
               Xuất PDF
             </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+              )}
+              {!isMobile && (
+                <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới">
               Thêm mới
             </Button>
-            {selectedCount > 0 && (
+              )}
+            {!isMobile && selectedCount > 0 && (
               <Button
                 danger
                 icon={<DeleteOutlined />}
@@ -1577,7 +2068,7 @@ const ProductList = () => {
                 Xóa ({selectedCount})
               </Button>
             )}
-            </Space>
+            </div>
           </div>
 
           {/* Row 2: Bộ lọc đang bật — nhãn trên phải, ô dưới (gọn) */}
@@ -1825,8 +2316,9 @@ const ProductList = () => {
         )}
 
         {/* TABLE - liền kề (ẩn khi đang lỗi để tránh nhầm "0 sản phẩm") */}
-        {!isError && (
+        {!isError && showTable && (
         <Table<Product>
+          className={`enterprise-data-table ${desktopTableDensity === 'compact' ? 'table-density-compact' : 'table-density-comfortable'}`}
           rowKey="id"
           columns={columns}
           dataSource={products}
@@ -1854,23 +2346,55 @@ const ProductList = () => {
         />
         )}
 
+        {!isError && showCards && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {products.length === 0 && !isLoading && (
+              <EmptyState
+                description="Chưa có sản phẩm nào"
+                actionText="Thêm sản phẩm đầu tiên"
+                onAction={handleAdd}
+              />
+            )}
+            {products.map((record) => (
+              <Card key={record.id} size="small" style={{ borderRadius: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <div>
+                    <div style={{ fontWeight: 600, color: theme.colors.primary, fontSize: isCompactCards ? 13 : 14 }}>{record.code || '-'}</div>
+                    <div style={{ fontWeight: 500, fontSize: isCompactCards ? 13 : 14 }}>{record.name || '-'}</div>
+                    <div style={{ color: '#595959', fontSize: isCompactCards ? 12 : 13 }}>
+                      {(record.category_name as string) || '-'} • {(record.unit_name as string) || '-'}
+                    </div>
+                  </div>
+                  {renderRowActions(record)}
+                </div>
+                <div style={{ marginTop: isCompactCards ? 6 : 8, fontSize: isCompactCards ? 12 : 13, color: '#595959' }}>
+                  <div>Giá vốn: {record.cost_price != null ? `${Number(record.cost_price).toLocaleString('vi-VN')} đ` : '-'}</div>
+                  <div>Đơn giá: {record.sale_price != null ? `${Number(record.sale_price).toLocaleString('vi-VN')} đ` : '-'}</div>
+                  <div>Trạng thái: {(PRODUCT_STATUS_LABELS as Record<string, string>)[record.status as string] ?? record.status ?? '-'}</div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+
         {/* Bottom bar: Page size + Pagination */}
+        {!isMobile && (
         <div
           className="products-list-bottom-bar"
           style={{
             display: 'flex',
-            justifyContent: 'flex-end',
+            justifyContent: isMobile ? 'stretch' : 'flex-end',
             alignItems: 'center',
             marginTop: 16,
-            padding: '8px 16px',
+            padding: isMobile ? '10px 12px' : '8px 16px',
             background: '#fafafa',
             borderRadius: 6,
           }}
         >
           {/* Wrapper: dịch như ảnh (1 hàng, sát nhau) */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap', marginLeft: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap', marginLeft: isMobile ? 0 : 'auto', width: isMobile ? '100%' : 'auto' }}>
             {/* RIGHT SIDE: Total + Pagination + PageSize selector */}
-            <Space size={16} align="center" wrap>
+            <Space size={16} align="center" wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : 'auto', justifyContent: isMobile ? 'space-between' : undefined }}>
               <span style={{ fontSize: 13, color: '#595959' }}>
                 Tổng {productsData?.count ?? 0} sản phẩm
               </span>
@@ -1945,6 +2469,258 @@ const ProductList = () => {
             </Space>
           </div>
         </div>
+        )}
+
+        {isMobile && (
+          <div
+            style={{
+              position: 'sticky',
+              bottom: 0,
+              zIndex: 8,
+              background: 'rgba(255, 255, 255, 0.96)',
+              backdropFilter: 'blur(6px)',
+              borderTop: '1px solid #f0f0f0',
+              padding: '8px 12px calc(8px + env(safe-area-inset-bottom))',
+              marginTop: 8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 6,
+              flexWrap: 'nowrap',
+            }}
+          >
+            <Button size="small" icon={<ReloadOutlined />} onClick={() => void refetch()} title="Làm mới" />
+            <div className="mobile-sticky-pagination" style={{ minWidth: 132 }}>
+              <Pagination
+                className="mobile-sticky-pagination-control"
+                current={pagination.current}
+                pageSize={pagination.pageSize}
+                total={productsData?.count ?? 0}
+                showSizeChanger={false}
+                onChange={(newPage) => setPage(newPage)}
+                size="small"
+                simple
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Button size="small" icon={<MoreOutlined />} onClick={() => setMobileActionsOpen(true)} title="Tác vụ" />
+              <Button size="small" type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới" />
+            </div>
+          </div>
+        )}
+
+        <Drawer
+          title="Tác vụ nhanh"
+          placement="bottom"
+          height={340}
+          onClose={() => setMobileActionsOpen(false)}
+          open={mobileActionsOpen}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Segmented
+              value={viewMode}
+              onChange={(value) => handleViewModeChange(value as ListViewMode)}
+              options={[
+                { label: 'Thẻ', value: 'cards' },
+                { label: 'Bảng', value: 'table' },
+              ]}
+            />
+            {viewMode === 'cards' && (
+              <Segmented
+                value={cardDensity}
+                onChange={(value) => handleCardDensityChange(value as CardDensity)}
+                options={[
+                  { label: 'Thoáng', value: 'comfortable' },
+                  { label: 'Gọn', value: 'compact' },
+                ]}
+              />
+            )}
+            <Button icon={<FilterOutlined />} onClick={() => { setFilterModalOpen(true); setMobileActionsOpen(false); }}>
+              Lọc {activeFilters.length > 0 ? `(${activeFilters.length})` : ''}
+            </Button>
+            <ColumnChooser
+              columns={columnChooserList}
+              visibleColumns={visibleColumns}
+              onChange={handleVisibleColumnsChange}
+              sizeDisplayMode={sizeDisplayMode}
+              onSizeDisplayModeChange={handleSizeDisplayModeChange}
+            />
+            <Button icon={<UploadOutlined />} onClick={() => { setImportModalVisible(true); setMobileActionsOpen(false); }}>
+              Nhập Excel
+            </Button>
+            <Button icon={<ExportOutlined />} onClick={() => { void handleExport('excel'); setMobileActionsOpen(false); }}>
+              Xuất Excel
+            </Button>
+            <Button icon={<ExportOutlined />} onClick={() => { void handleExport('pdf'); setMobileActionsOpen(false); }}>
+              Xuất PDF
+            </Button>
+            <Button danger onClick={() => { handleClearAllFilters(); setMobileActionsOpen(false); }}>
+              Xóa toàn bộ bộ lọc
+            </Button>
+          </div>
+        </Drawer>
+
+        <Modal
+          title={`Lịch sử hoạt động${historyProduct ? ` - ${historyProduct.code}` : ''}`}
+          open={historyModalOpen}
+          onCancel={() => {
+            setHistoryModalOpen(false);
+            setHistoryProduct(null);
+          }}
+          footer={<Button size="middle" onClick={() => { setHistoryModalOpen(false); setHistoryProduct(null); }}>Đóng</Button>}
+          width={920}
+        >
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+            <Input
+              placeholder="Tìm theo hành động, người thao tác, nội dung..."
+              value={historySearch}
+              onChange={(e) => setHistorySearch(e.target.value)}
+              style={{ flex: '1 1 360px' }}
+              size="large"
+            />
+            <Select
+              allowClear
+              placeholder="Lọc hành động"
+              value={historyActionFilter}
+              onChange={(v) => setHistoryActionFilter(v)}
+              style={{ width: 220 }}
+              size="large"
+              options={[
+                { value: 'CREATE', label: 'Tạo mới' },
+                { value: 'UPDATE', label: 'Cập nhật' },
+                { value: 'SUBMIT', label: 'Trình duyệt' },
+                { value: 'APPROVE', label: 'Duyệt' },
+                { value: 'REJECT', label: 'Từ chối' },
+                { value: 'COMMENT', label: 'Bình luận' },
+                { value: 'DELETE', label: 'Xóa' },
+                { value: 'IMPORT', label: 'Nhập dữ liệu' },
+                { value: 'EXPORT', label: 'Xuất dữ liệu' },
+              ]}
+            />
+          </div>
+          {isHistoryLoading && <div style={{ fontSize: 14 }}>Đang tải lịch sử...</div>}
+          {!isHistoryLoading && filteredActivity.length === 0 && (
+            <div style={{ color: '#6b7280', fontSize: 14 }}>Chưa có dữ liệu phù hợp.</div>
+          )}
+          {!isHistoryLoading && filteredActivity.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '62vh', overflowY: 'auto' }}>
+              {filteredActivity.map((item, idx) => (
+                <div key={`${item.timestamp}-${idx}`} style={{ border: '1px solid #e6ebf2', borderRadius: 10, padding: '12px 14px', background: '#fff' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: 16, color: '#1f2937' }}>{getHistoryActionLabelVi(item.action)}</div>
+                    <div style={{ fontSize: 13, color: '#667085' }}>
+                      {item.user || 'Hệ thống'} - {new Date(item.timestamp).toLocaleString('vi-VN')}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 13, color: '#667085' }}>
+                    Loại bản ghi: {item.type === 'comment' ? 'Bình luận' : 'Nhật ký hệ thống'}
+                  </div>
+                  {item.details?.content && <div style={{ marginTop: 6, fontSize: 14, lineHeight: 1.45 }}>{item.details.content}</div>}
+                  {(() => {
+                    const oldVals = (item.details?.old_values as Record<string, unknown> | undefined) ?? {};
+                    const newVals = (item.details?.new_values as Record<string, unknown> | undefined) ?? {};
+                    const fields = Array.from(new Set([...Object.keys(oldVals), ...Object.keys(newVals)]));
+                    if (fields.length === 0) {
+                      return (
+                        <div style={{ marginTop: 8, fontSize: 13, color: '#98a2b3' }}>
+                          Chưa có dữ liệu Trước/Sau chi tiết cho bản ghi này.
+                        </div>
+                      );
+                    }
+                    return (
+                      <div style={{ marginTop: 8, fontSize: 14, color: '#334155', display: 'flex', flexDirection: 'column', gap: 6, lineHeight: 1.45 }}>
+                        {fields.map((field) => (
+                          <div key={field} style={{ display: 'grid', gridTemplateColumns: '190px 1fr 1fr', gap: 10 }}>
+                            <div style={{ color: '#1f2937', fontWeight: 700 }}>{getHistoryFieldLabelVi(field)}</div>
+                            <div>Trước: {formatHistoryFieldValueVi(field, oldVals[field])}</div>
+                            <div>Sau: {formatHistoryFieldValueVi(field, newVals[field])}</div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              ))}
+            </div>
+          )}
+        </Modal>
+
+        <Modal
+          title={`Trình duyệt thay đổi giá${priceWorkflowProduct ? ` - ${priceWorkflowProduct.code}` : ''}`}
+          open={priceSubmitModalOpen}
+          onCancel={() => {
+            setPriceSubmitModalOpen(false);
+            setPriceWorkflowProduct(null);
+            setPriceReason('');
+            setPriceEffectiveAt('');
+          }}
+          onOk={() => void handleSubmitPriceChange()}
+          okText="Gửi đề xuất"
+          confirmLoading={priceWorkflowLoading}
+          cancelText="Hủy"
+        >
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <div style={{ marginBottom: 6, fontWeight: 600 }}>Giá vốn mới</div>
+              <InputNumber
+                style={{ width: '100%' }}
+                min={0}
+                value={priceNewCost}
+                onChange={(v) => setPriceNewCost(v as number | null)}
+              />
+            </div>
+            <div>
+              <div style={{ marginBottom: 6, fontWeight: 600 }}>Đơn giá mới</div>
+              <InputNumber
+                style={{ width: '100%' }}
+                min={0}
+                value={priceNewSale}
+                onChange={(v) => setPriceNewSale(v as number | null)}
+              />
+            </div>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <div style={{ marginBottom: 6, fontWeight: 600 }}>Hiệu lực từ (tuỳ chọn)</div>
+            <input
+              type="datetime-local"
+              className="pf-input"
+              value={priceEffectiveAt}
+              onChange={(e) => setPriceEffectiveAt(e.target.value)}
+            />
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <div style={{ marginBottom: 6, fontWeight: 600 }}>Lý do thay đổi giá</div>
+            <Input.TextArea
+              rows={4}
+              value={priceReason}
+              onChange={(e) => setPriceReason(e.target.value)}
+              placeholder="Nhập lý do thay đổi giá..."
+            />
+          </div>
+        </Modal>
+
+        <Modal
+          title={`Từ chối đề xuất giá${priceWorkflowProduct ? ` - ${priceWorkflowProduct.code}` : ''}`}
+          open={priceRejectModalOpen}
+          onCancel={() => {
+            setPriceRejectModalOpen(false);
+            setPriceWorkflowProduct(null);
+            setPendingPriceChangeId(null);
+            setPriceRejectReason('');
+          }}
+          onOk={() => void handleRejectLatestPriceChange()}
+          okText="Xác nhận từ chối"
+          okButtonProps={{ danger: true }}
+          confirmLoading={priceWorkflowLoading}
+          cancelText="Hủy"
+        >
+          <Input.TextArea
+            rows={4}
+            value={priceRejectReason}
+            onChange={(e) => setPriceRejectReason(e.target.value)}
+            placeholder="Nhập lý do từ chối đề xuất giá..."
+          />
+        </Modal>
 
         <ImportModal
           visible={importModalVisible}
@@ -1962,6 +2738,7 @@ const ProductList = () => {
           visible={formVisible}
           onClose={handleFormClose}
           editingProduct={editingProduct}
+          mode={formMode}
         />
       </Card>
     </>

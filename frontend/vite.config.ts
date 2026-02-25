@@ -7,4 +7,8 @@ export default defineConfig({
   resolve: {
     dedupe: ['react', 'react-dom'],
   },
+  server: {
+    host: '127.0.0.1', // Ensure Vite listens on IPv4
+    port: 5173,
+  },
 })

@@ -1,0 +1,16 @@
+# LỆNH ĐẦY ĐỦ - COPY TOÀN BỘ VÀ PASTE VÀO POWERSHELL Ở MÁY CÔNG TY
+# ================================================================
+
+cd D:\Projects\erp-carton; git checkout sprint2-business-models; git add .; git status; git commit -m "feat: Add CustomerList with filter panel, column chooser, and row selection"; git push origin sprint2-business-models; git status
+
+# ================================================================
+# HOẶC CHẠY TỪNG LỆNH MỘT (NẾU LỆNH TRÊN QUÁ DÀI):
+# ================================================================
+
+cd D:\Projects\erp-carton
+git checkout sprint2-business-models
+git add .
+git status
+git commit -m "feat: Add CustomerList with filter panel, column chooser, and row selection"
+git push origin sprint2-business-models
+git status

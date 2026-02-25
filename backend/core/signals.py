@@ -39,9 +39,16 @@ def store_old_values(sender, instance, **kwargs):
                 'code': old_instance.code,
                 'name': old_instance.name,
                 'company_name': old_instance.company_name,
+                'tax_code': old_instance.tax_code,
                 'phone': old_instance.phone,
                 'email': old_instance.email,
+                'address': old_instance.address,
+                'contact_person': old_instance.contact_person,
+                'contact_phone': old_instance.contact_phone,
+                'payment_terms': old_instance.payment_terms,
+                'credit_limit': old_instance.credit_limit,
                 'is_active': old_instance.is_active,
+                'status': old_instance.status,
             }
         except sender.DoesNotExist:
             pass
@@ -79,7 +86,7 @@ def log_customer_save(sender, instance, created, **kwargs):
             old_values = {}
             new_values = {}
             
-            for field in ['code', 'name', 'company_name', 'phone', 'email', 'is_active']:
+            for field in ['code', 'name', 'company_name', 'tax_code', 'phone', 'email', 'address', 'contact_person', 'contact_phone', 'payment_terms', 'credit_limit', 'is_active', 'status']:
                 old_val = old_vals.get(field)
                 new_val = getattr(instance, field, None)
                 

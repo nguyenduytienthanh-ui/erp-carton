@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Space, Input, Button } from 'antd';
 import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
 import QuickClearIcon from '../QuickClearIcon';
@@ -37,7 +37,7 @@ const CompactFilters = ({
           value={searchValue}
           onChange={(e) => onSearchChange?.(e.target.value)}
           style={{
-            width: 300,
+            width: 'min(100%, 300px)',
             borderRadius: '8px',
           }}
         />
