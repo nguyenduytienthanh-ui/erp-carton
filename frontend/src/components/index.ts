@@ -16,3 +16,5 @@ export { default as FormInputWithClear } from './FormInputWithClear';
 export { default as FormTextAreaWithClear } from './FormTextAreaWithClear';
 export { default as SelectNoAutoOpen } from './SelectNoAutoOpen';
 export { default as PrivateRoute } from './PrivateRoute';
+export { default as CommentBox } from './CommentBox/CommentBox';
+export { default as TaskPanel, BlockingTasksBadge } from './TaskPanel/TaskPanel';

@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import IntegrityError
 from django.db.models import ProtectedError
-from django.db.models import Q, Count, Case, When, Value, IntegerField, Exists, OuterRef
+from django.db.models import Q, Count, Case, When, Value, IntegerField, Exists, OuterRef, Subquery
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.http import HttpResponse
@@ -20,7 +20,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from core.filters import ProductFilter
 from core.mixins import ExportExcelMixin, get_client_ip
-from core.models import AuditLog
+from core.models import AuditLog, Task as CoreTask
 from core.permissions import check_action_permission
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from .filters import (
@@ -431,6 +431,23 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             )
         else:
             queryset = queryset.filter(Q(owner=user) | Q(owner__isnull=True))
+
+        # Annotate blocking_tasks_count để tránh N+1 query trong serializer
+        blocking_subquery = (
+            CoreTask.objects
+            .filter(
+                entity_type='Product',
+                entity_id=OuterRef('pk'),
+                is_blocking=True,
+                status__in=['TODO', 'IN_PROGRESS'],
+            )
+            .values('entity_id')
+            .annotate(cnt=Count('id'))
+            .values('cnt')
+        )
+        queryset = queryset.annotate(
+            blocking_tasks_count_db=Subquery(blocking_subquery, output_field=IntegerField())
+        )
 
         # Tìm kiếm: không dấu, lowercase, token hoá, AND search, prefix, ranking (search_text)
         search_raw = (

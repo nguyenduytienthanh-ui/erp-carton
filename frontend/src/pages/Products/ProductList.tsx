@@ -13,10 +13,10 @@ import {
   Select,
   Card,
   Checkbox,
-  Radio,
   Tag,
   Segmented,
   Drawer,
+  Tooltip,
 } from 'antd';
 import {
   PlusOutlined,
@@ -31,6 +31,8 @@ import {
   SendOutlined,
   CheckOutlined,
   CloseOutlined,
+  LockOutlined,
+  ProjectOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { MenuProps } from 'antd';
@@ -46,6 +48,8 @@ import {
   QuickClearIcon,
   FilterSelect,
   ListSearchInput,
+  CommentBox,
+  TaskPanel,
 } from '../../components';
 import ProductForm from './ProductForm';
 import {
@@ -68,6 +72,12 @@ import {
 import type { PreferencesConfig } from '../../types/preferences';
 import { useRowSelection } from '../../hooks/useRowSelection';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import {
+  getHistoryActionCode,
+  getHistoryActionLabelVi,
+  filterHistoryItems,
+} from '../../utils/historyUtils';
 import { useBulkDelete } from '../../hooks/useBulkDelete';
 import { TOAST } from '../../shared/toast';
 import { PRODUCT_STATUS_LABELS } from '../../utils/constants';
@@ -120,8 +130,9 @@ function FilterNumberInput(
           border: '1px solid #d9d9d9',
           borderRadius: 6,
           outline: 'none',
-          height: 22,
+          ...style,
         }}
+        className={className}
       />
       {showClear && onClear && (
         <QuickClearIcon
@@ -225,36 +236,7 @@ const getProductStatusTone = (status: string | null | undefined): 'ok' | 'warn' 
   return 'neutral';
 };
 
-const getHistoryActionCode = (action: string | null | undefined): string => {
-  const raw = String(action ?? '').trim().toUpperCase();
-  if (raw.includes('SUBMIT')) return 'SUBMIT';
-  if (raw.includes('APPROVE')) return 'APPROVE';
-  if (raw.includes('REJECT')) return 'REJECT';
-  if (raw.includes('CREATE')) return 'CREATE';
-  if (raw.includes('UPDATE')) return 'UPDATE';
-  if (raw.includes('DELETE')) return 'DELETE';
-  if (raw.includes('IMPORT')) return 'IMPORT';
-  if (raw.includes('EXPORT')) return 'EXPORT';
-  if (raw.includes('COMMENT')) return 'COMMENT';
-  return raw || 'UNKNOWN';
-};
-
-const getHistoryActionLabelVi = (action: string | null | undefined): string => {
-  const code = getHistoryActionCode(action);
-  const map: Record<string, string> = {
-    SUBMIT: 'Trình duyệt',
-    APPROVE: 'Duyệt',
-    REJECT: 'Từ chối',
-    CREATE: 'Tạo mới',
-    UPDATE: 'Cập nhật',
-    DELETE: 'Xóa',
-    IMPORT: 'Nhập dữ liệu',
-    EXPORT: 'Xuất dữ liệu',
-    COMMENT: 'Bình luận',
-    UNKNOWN: String(action ?? 'Không xác định'),
-  };
-  return map[code] ?? String(action ?? 'Không xác định');
-};
+// getHistoryActionCode & getHistoryActionLabelVi → dùng từ ../../utils/historyUtils (shared)
 
 const PRODUCT_HISTORY_FIELD_LABELS: Record<string, string> = {
   code: 'Mã hàng',
@@ -379,34 +361,34 @@ const EMPTY_LOCAL_FILTER_INPUT: LocalFilterInput = {
 const TEXT_FILTER_KEYS: (keyof FilterValues)[] = ['code', 'name', 'note'];
 
 function localInputToFilterValues(local: LocalFilterInput): FilterValues {
-  const fv: FilterValues = { ...EMPTY_FILTER_VALUES };
+  const fv = { ...EMPTY_FILTER_VALUES } as Record<string, any>;
   for (const k of Object.keys(EMPTY_FILTER_VALUES) as (keyof FilterValues)[]) {
     const v = local[k as keyof LocalFilterInput];
     if (NUMERIC_FILTER_KEYS.includes(k as NumericFilterKey)) {
       const s = v == null ? '' : String(v).trim();
-      (fv as Record<string, unknown>)[k] = s === '' ? null : (k.includes('price') ? parseFloat(s) : parseInt(s, 10));
-      if (Number.isNaN((fv as Record<string, unknown>)[k])) (fv as Record<string, unknown>)[k] = null;
+      fv[k] = s === '' ? null : (k.includes('price') ? parseFloat(s) : parseInt(s, 10));
+      if (Number.isNaN(fv[k])) fv[k] = null;
     } else if (TEXT_FILTER_KEYS.includes(k)) {
       const s = v != null && typeof v === 'string' ? v.trim() : '';
-      (fv as Record<string, unknown>)[k] = s === '' ? null : s;
+      fv[k] = s === '' ? null : s;
     } else {
-      (fv as Record<string, unknown>)[k] = v ?? null;
+      fv[k] = v ?? null;
     }
   }
-  return fv;
+  return fv as FilterValues;
 }
 
 function filterValuesToLocalInput(fv: FilterValues): LocalFilterInput {
-  const local: LocalFilterInput = { ...EMPTY_LOCAL_FILTER_INPUT };
+  const local = { ...EMPTY_LOCAL_FILTER_INPUT } as Record<string, any>;
   for (const k of Object.keys(EMPTY_FILTER_VALUES) as (keyof FilterValues)[]) {
     const v = fv[k];
     if (NUMERIC_FILTER_KEYS.includes(k as NumericFilterKey)) {
-      (local as Record<string, unknown>)[k] = v == null ? null : String(v);
+      local[k] = v == null ? null : String(v);
     } else {
-      (local as Record<string, unknown>)[k] = v ?? null;
+      local[k] = v ?? null;
     }
   }
-  return local;
+  return local as LocalFilterInput;
 }
 
 const FILTER_KEYS_ORDER = Object.keys(EMPTY_FILTER_VALUES).sort() as (keyof FilterValues)[];
@@ -419,27 +401,14 @@ function parseStableFilterString(s: string | undefined): FilterValues {
   if (!s || typeof s !== 'string') return { ...EMPTY_FILTER_VALUES };
   try {
     const o = JSON.parse(s) as Record<string, unknown>;
-    const out = { ...EMPTY_FILTER_VALUES };
+    const out = { ...EMPTY_FILTER_VALUES } as Record<string, any>;
     for (const k of FILTER_KEYS_ORDER) {
-      if (o[k] !== undefined && o[k] !== null) (out as Record<string, unknown>)[k] = o[k];
+      if (o[k] !== undefined && o[k] !== null) out[k] = o[k];
     }
-    return out;
+    return out as FilterValues;
   } catch {
     return { ...EMPTY_FILTER_VALUES };
   }
-}
-
-/** True nếu có ít nhất một ô lọc đã có giá trị (user đã tương tác) — tránh ghi đè khi đang gõ. */
-function hasAnyFilterValue(fv: FilterValues): boolean {
-  if (fv.code?.trim()) return true;
-  if (fv.name?.trim()) return true;
-  if (fv.note?.trim()) return true;
-  if (fv.category != null || fv.unit != null || fv.status != null || fv.wave != null || fv.box_type != null) return true;
-  if (fv.min_cost_price != null || fv.max_cost_price != null || fv.min_sale_price != null || fv.max_sale_price != null) return true;
-  if (fv.size_po_dai != null || fv.size_po_rong != null || fv.size_po_cao != null) return true;
-  if (fv.size_sx_dai != null || fv.size_sx_rong != null || fv.size_sx_cao != null) return true;
-  if (fv.waterproof != null || fv.co_cm != null) return true;
-  return false;
 }
 
 /** Parse "DàixRộngxCao" (vd: 50x40x30) thành [dài, rộng, cao] */
@@ -447,6 +416,24 @@ function parseSizeDRC(s: string | undefined): [string, string, string] {
   if (!s || typeof s !== 'string') return ['', '', ''];
   const parts = s.trim().split(/[xX*×]/).map((p) => p.trim());
   return [parts[0] ?? '', parts[1] ?? '', parts[2] ?? ''];
+}
+
+function toNumberOrNull(v: string | number | null): number | null {
+  if (v === null) return null;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toStatusOrNull(v: string | number | null): ProductStatus | null {
+  if (v === null) return null;
+  const s = String(v) as ProductStatus;
+  return s === 'DRAFT' || s === 'ACTIVE' || s === 'DISCONTINUED' ? s : null;
+}
+
+function toStringOrNull(v: string | number | null): string | null {
+  if (v === null) return null;
+  const s = String(v);
+  return s;
 }
 
 const WATERPROOF_LABELS: Record<string, string> = {
@@ -633,7 +620,7 @@ const ProductList = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const isFirstMount = useRef(true);
   const {
-    state: { searchInput, search, activeFilters, filterValues, pagination },
+    state: { searchInput, activeFilters, filterValues, pagination },
     setSearchInput,
     setSearch,
     setActiveFilters,
@@ -719,7 +706,6 @@ const ProductList = () => {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [formMode, setFormMode] = useState<ProductFormMode>('create');
   const [filterModalOpen, setFilterModalOpen] = useState(false);
-  const [customPageSize, setCustomPageSize] = useState('');
   const [sortField, setSortField] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | null>(null);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
@@ -731,8 +717,11 @@ const ProductList = () => {
   const [isEditingPageSize, setIsEditingPageSize] = useState(false);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
-  const [historySearch, setHistorySearch] = useState('');
+  const [historySearchInput, setHistorySearchInput] = useState('');
+  const [historySearch] = useDebouncedValue(historySearchInput, 300);
   const [historyActionFilter, setHistoryActionFilter] = useState<string | undefined>(undefined);
+  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [taskProduct, setTaskProduct] = useState<Product | null>(null);
   const [priceWorkflowProduct, setPriceWorkflowProduct] = useState<Product | null>(null);
   const [priceSubmitModalOpen, setPriceSubmitModalOpen] = useState(false);
   const [priceRejectModalOpen, setPriceRejectModalOpen] = useState(false);
@@ -1127,22 +1116,10 @@ const ProductList = () => {
     return base.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }, [activityStream, historyProduct]);
 
-  const filteredActivity = useMemo(() => {
-    const q = historySearch.trim().toLowerCase();
-    return mergedActivity.filter((item) => {
-      if (historyActionFilter && getHistoryActionCode(item.action) !== historyActionFilter) return false;
-      if (!q) return true;
-      const content = [
-        getHistoryActionLabelVi(item.action),
-        item.user ?? '',
-        item.details?.content ?? '',
-        JSON.stringify(item.details?.old_values ?? {}),
-        JSON.stringify(item.details?.new_values ?? {}),
-        (item.details?.changed_fields ?? []).join(','),
-      ].join(' ').toLowerCase();
-      return content.includes(q);
-    });
-  }, [mergedActivity, historyActionFilter, historySearch]);
+  const filteredActivity = useMemo(
+    () => filterHistoryItems(mergedActivity, historySearch, historyActionFilter, getHistoryFieldLabelVi),
+    [mergedActivity, historyActionFilter, historySearch],
+  );
 
   const refetchProducts = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -1301,7 +1278,7 @@ const ProductList = () => {
 
   const openHistoryModal = useCallback((record: Product) => {
     setHistoryProduct(record);
-    setHistorySearch('');
+    setHistorySearchInput('');
     setHistoryActionFilter(undefined);
     setHistoryModalOpen(true);
   }, []);
@@ -1427,9 +1404,18 @@ const ProductList = () => {
     }
   }, [priceWorkflowProduct, pendingPriceChangeId, priceRejectReason, refreshAfterPriceWorkflow]);
 
+  const openTaskModal = useCallback((record: Product) => {
+    setTaskProduct(record);
+    setTaskModalOpen(true);
+  }, []);
+
   const handleRowAction = useCallback((action: string, record: Product) => {
     if (action === 'history') {
       openHistoryModal(record);
+      return;
+    }
+    if (action === 'tasks') {
+      openTaskModal(record);
       return;
     }
     if (action === 'copy') {
@@ -1456,6 +1442,7 @@ const ProductList = () => {
     handleClone,
     handleDelete,
     openHistoryModal,
+    openTaskModal,
     openSubmitPriceModal,
     handleApproveLatestPriceChange,
     openRejectLatestPriceChangeModal,
@@ -1471,6 +1458,20 @@ const ProductList = () => {
             { key: 'approve_price_change', icon: <CheckOutlined />, label: 'Duyệt đề xuất giá gần nhất' },
             { key: 'reject_price_change', icon: <CloseOutlined />, label: 'Từ chối đề xuất giá gần nhất', danger: true },
             { type: 'divider' },
+            {
+              key: 'tasks',
+              icon: <ProjectOutlined />,
+              label: (
+                <span>
+                  Giao nhiệm vụ
+                  {(record.blocking_tasks_count ?? 0) > 0 && (
+                    <Tooltip title="Có blocking task đang chặn sản xuất">
+                      <LockOutlined style={{ color: '#ff4d4f', marginLeft: 6 }} />
+                    </Tooltip>
+                  )}
+                </span>
+              ),
+            },
             { key: 'history', icon: <HistoryOutlined />, label: 'Lịch sử hoạt động' },
             { key: 'copy', icon: <CopyOutlined />, label: 'Nhân bản' },
             { type: 'divider' },
@@ -1504,9 +1505,13 @@ const ProductList = () => {
     );
   };
 
-  const addSortToColumn = <T extends Record<string, unknown>>(col: T & { key?: string; title?: React.ReactNode; sortField?: string }): T => {
+  const addSortToColumn = (
+    col: (ColumnsType<Product>[number] & { sortField?: string })
+  ): ColumnsType<Product>[number] => {
     if (col.key === 'actions' || !col.sortField) return col;
-    const label = typeof col.title === 'string' ? col.title : col.title;
+    const label = typeof col.title === 'function'
+      ? (typeof col.key === 'string' ? col.key : '')
+      : col.title;
     const orderingParam = col.sortField;
     return {
       ...col,
@@ -1519,7 +1524,7 @@ const ProductList = () => {
           <SortIcon orderingParam={orderingParam} />
         </div>
       ),
-    } as T;
+    };
   };
 
   const allColumnsBase: (ColumnsType<Product>[number] & { sortField?: string })[] = [
@@ -1531,14 +1536,24 @@ const ProductList = () => {
       width: 100,
       fixed: 'left' as const,
       render: (code: string, record: Product) => (
-        <span
-          role="button"
-          tabIndex={0}
-          onClick={() => handleEdit(record)}
-          onKeyDown={(e) => e.key === 'Enter' && handleEdit(record)}
-          style={{ fontWeight: 500, color: theme.colors.primary, cursor: 'pointer' }}
-        >
-          {code ?? '-'}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={() => handleEdit(record)}
+            onKeyDown={(e) => e.key === 'Enter' && handleEdit(record)}
+            style={{ fontWeight: 500, color: theme.colors.primary, cursor: 'pointer' }}
+          >
+            {code ?? '-'}
+          </span>
+          {(record.blocking_tasks_count ?? 0) > 0 && (
+            <Tooltip title={`${record.blocking_tasks_count} nhiệm vụ blocking đang chặn sản xuất`}>
+              <LockOutlined
+                style={{ color: '#ff4d4f', fontSize: 12, cursor: 'pointer' }}
+                onClick={(e) => { e.stopPropagation(); openTaskModal(record); }}
+              />
+            </Tooltip>
+          )}
         </span>
       ),
     },
@@ -1759,11 +1774,11 @@ const ProductList = () => {
                     placeholder="Chọn danh mục"
                     style={{ width: 220 }}
                     value={localFilterInput.category}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, category: v }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, category: toNumberOrNull(v) }))}
                     options={categories.map((c) => ({ label: c.name, value: c.id }))}
                     showClear
                     hasValue={localFilterInput.category != null}
-                    onClear={() => applyFilterChange((prev) => ({ ...prev, category: undefined }))}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, category: null }))}
                   />
                 </div>
               )}
@@ -1773,11 +1788,11 @@ const ProductList = () => {
                     placeholder="Chọn đơn vị"
                     style={{ width: 220 }}
                     value={localFilterInput.unit}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, unit: v }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, unit: toNumberOrNull(v) }))}
                     options={units.map((u) => ({ label: u.name, value: u.id }))}
                     showClear
                     hasValue={localFilterInput.unit != null}
-                    onClear={() => applyFilterChange((prev) => ({ ...prev, unit: undefined }))}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, unit: null }))}
                   />
                 </div>
               )}
@@ -1787,15 +1802,15 @@ const ProductList = () => {
                     placeholder="Chọn trạng thái"
                     style={{ width: 220 }}
                     value={localFilterInput.status}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, status: v }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, status: toStatusOrNull(v) }))}
                     options={[
                       { label: 'Nháp', value: 'DRAFT' },
                       { label: 'Đang bán', value: 'ACTIVE' },
                       { label: 'Ngừng SX', value: 'DISCONTINUED' },
                     ]}
                     showClear
-                    hasValue={localFilterInput.status != null && localFilterInput.status !== ''}
-                    onClear={() => applyFilterChange((prev) => ({ ...prev, status: undefined }))}
+                    hasValue={localFilterInput.status != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, status: null }))}
                   />
                 </div>
               )}
@@ -1805,11 +1820,11 @@ const ProductList = () => {
                     placeholder="Chọn sóng"
                     style={{ width: 220 }}
                     value={localFilterInput.wave}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, wave: v }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, wave: toNumberOrNull(v) }))}
                     options={waves.map((w: { id: number; code: string }) => ({ label: w.code, value: w.id }))}
                     showClear
                     hasValue={localFilterInput.wave != null}
-                    onClear={() => applyFilterChange((prev) => ({ ...prev, wave: undefined }))}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, wave: null }))}
                   />
                 </div>
               )}
@@ -1819,11 +1834,11 @@ const ProductList = () => {
                     placeholder="Chọn kiểu"
                     style={{ width: 220 }}
                     value={localFilterInput.box_type}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, box_type: v }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, box_type: toNumberOrNull(v) }))}
                     options={boxTypes.map((b: { id: number; code: string }) => ({ label: b.code, value: b.id }))}
                     showClear
                     hasValue={localFilterInput.box_type != null}
-                    onClear={() => applyFilterChange((prev) => ({ ...prev, box_type: undefined }))}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, box_type: null }))}
                   />
                 </div>
               )}
@@ -1885,7 +1900,7 @@ const ProductList = () => {
                     placeholder="C. thấm"
                     style={{ width: 140 }}
                     value={localFilterInput.waterproof ?? undefined}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, waterproof: v ?? null }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, waterproof: toStringOrNull(v) }))}
                     options={Object.entries(WATERPROOF_LABELS).map(([val, label]) => ({ label, value: val }))}
                     showClear
                     hasValue={(localFilterInput.waterproof ?? '') !== ''}
@@ -2115,11 +2130,11 @@ const ProductList = () => {
                   <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Danh mục</span>
                   <FilterSelect
                     value={localFilterInput.category}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, category: v }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, category: toNumberOrNull(v) }))}
                     options={categories.map((c) => ({ label: c.name, value: c.id }))}
                     showClear
                     hasValue={localFilterInput.category != null}
-                    onClear={() => applyFilterChange((prev) => ({ ...prev, category: undefined }))}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, category: null }))}
                   />
                 </div>
               )}
@@ -2128,11 +2143,11 @@ const ProductList = () => {
                   <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Đơn vị</span>
                   <FilterSelect
                     value={localFilterInput.unit}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, unit: v }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, unit: toNumberOrNull(v) }))}
                     options={units.map((u) => ({ label: u.name, value: u.id }))}
                     showClear
                     hasValue={localFilterInput.unit != null}
-                    onClear={() => applyFilterChange((prev) => ({ ...prev, unit: undefined }))}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, unit: null }))}
                   />
                 </div>
               )}
@@ -2141,11 +2156,11 @@ const ProductList = () => {
                   <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Sóng</span>
                   <FilterSelect
                     value={localFilterInput.wave}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, wave: v }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, wave: toNumberOrNull(v) }))}
                     options={waves.map((w: { id: number; code: string }) => ({ label: w.code, value: w.id }))}
                     showClear
                     hasValue={localFilterInput.wave != null}
-                    onClear={() => applyFilterChange((prev) => ({ ...prev, wave: undefined }))}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, wave: null }))}
                   />
                 </div>
               )}
@@ -2154,11 +2169,11 @@ const ProductList = () => {
                   <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Kiểu</span>
                   <FilterSelect
                     value={localFilterInput.box_type}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, box_type: v }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, box_type: toNumberOrNull(v) }))}
                     options={boxTypes.map((b: { id: number; code: string }) => ({ label: b.code, value: b.id }))}
                     showClear
                     hasValue={localFilterInput.box_type != null}
-                    onClear={() => applyFilterChange((prev) => ({ ...prev, box_type: undefined }))}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, box_type: null }))}
                   />
                 </div>
               )}
@@ -2167,15 +2182,15 @@ const ProductList = () => {
                   <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Trạng thái</span>
                   <FilterSelect
                     value={localFilterInput.status}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, status: v }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, status: toStatusOrNull(v) }))}
                     options={[
                       { label: 'Nháp', value: 'DRAFT' },
                       { label: 'Đang bán', value: 'ACTIVE' },
                       { label: 'Ngừng SX', value: 'DISCONTINUED' },
                     ]}
                     showClear
-                    hasValue={localFilterInput.status != null && localFilterInput.status !== ''}
-                    onClear={() => applyFilterChange((prev) => ({ ...prev, status: undefined }))}
+                    hasValue={localFilterInput.status != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, status: null }))}
                   />
                 </div>
               )}
@@ -2248,7 +2263,7 @@ const ProductList = () => {
                   <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>C. thấm</span>
                   <FilterSelect
                     value={localFilterInput.waterproof ?? undefined}
-                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, waterproof: v ?? null }))}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, waterproof: toStringOrNull(v) }))}
                     options={Object.entries(WATERPROOF_LABELS).map(([val, label]) => ({ label, value: val }))}
                     showClear
                     hasValue={(localFilterInput.waterproof ?? '') !== ''}
@@ -2419,14 +2434,14 @@ const ProductList = () => {
                 value={isEditingPageSize ? pageSizeDraft : pagination.pageSize}
                 formatter={(v) => {
                   // Khi đang nhập và đã xoá trắng, hiển thị trống hoàn toàn
-                  if (isEditingPageSize && (v == null || v === '')) return '';
+                  if (isEditingPageSize && v == null) return '';
                   return `${v ?? ''} / trang`;
                 }}
                 parser={(v) => {
                   const digits = String(v ?? '').replace(/[^\d]/g, '');
-                  if (!digits) return '';
+                  if (!digits) return Number.NaN;
                   const n = parseInt(digits, 10);
-                  return Number.isNaN(n) ? '' : n;
+                  return Number.isNaN(n) ? Number.NaN : n;
                 }}
                 // Click vào để nhập: xoá hết dữ liệu (trống)
                 onFocus={() => {
@@ -2462,7 +2477,7 @@ const ProductList = () => {
                 });
               }}
               />
-              {(isEditingPageSize ? pageSizeDraft : pagination.pageSize) != null && (isEditingPageSize ? pageSizeDraft : pagination.pageSize) !== '' && (
+              {(isEditingPageSize ? pageSizeDraft : pagination.pageSize) != null && (
                 <QuickClearIcon onClear={() => { setPageSizeDraft(null); setIsEditingPageSize(true); }} title="Xóa nhanh" style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', zIndex: 1 }} />
               )}
             </div>
@@ -2571,10 +2586,10 @@ const ProductList = () => {
           width={920}
         >
           <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-            <Input
-              placeholder="Tìm theo hành động, người thao tác, nội dung..."
-              value={historySearch}
-              onChange={(e) => setHistorySearch(e.target.value)}
+            <ListSearchInput
+              placeholder="Tìm theo hành động, người thao tác, tên trường, giá trị..."
+              value={historySearchInput}
+              onChange={setHistorySearchInput}
               style={{ flex: '1 1 360px' }}
               size="large"
             />
@@ -2598,50 +2613,145 @@ const ProductList = () => {
               ]}
             />
           </div>
-          {isHistoryLoading && <div style={{ fontSize: 14 }}>Đang tải lịch sử...</div>}
+          {isHistoryLoading && <div style={{ fontSize: 14, color: '#6b7280' }}>Đang tải lịch sử...</div>}
           {!isHistoryLoading && filteredActivity.length === 0 && (
-            <div style={{ color: '#6b7280', fontSize: 14 }}>Chưa có dữ liệu phù hợp.</div>
+            <div style={{ color: '#9ca3af', fontSize: 14, textAlign: 'center', padding: '24px 0' }}>
+              Chưa có dữ liệu phù hợp.
+            </div>
           )}
           {!isHistoryLoading && filteredActivity.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '62vh', overflowY: 'auto' }}>
-              {filteredActivity.map((item, idx) => (
-                <div key={`${item.timestamp}-${idx}`} style={{ border: '1px solid #e6ebf2', borderRadius: 10, padding: '12px 14px', background: '#fff' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-                    <div style={{ fontWeight: 700, fontSize: 16, color: '#1f2937' }}>{getHistoryActionLabelVi(item.action)}</div>
-                    <div style={{ fontSize: 13, color: '#667085' }}>
-                      {item.user || 'Hệ thống'} - {new Date(item.timestamp).toLocaleString('vi-VN')}
-                    </div>
-                  </div>
-                  <div style={{ marginTop: 4, fontSize: 13, color: '#667085' }}>
-                    Loại bản ghi: {item.type === 'comment' ? 'Bình luận' : 'Nhật ký hệ thống'}
-                  </div>
-                  {item.details?.content && <div style={{ marginTop: 6, fontSize: 14, lineHeight: 1.45 }}>{item.details.content}</div>}
-                  {(() => {
-                    const oldVals = (item.details?.old_values as Record<string, unknown> | undefined) ?? {};
-                    const newVals = (item.details?.new_values as Record<string, unknown> | undefined) ?? {};
-                    const fields = Array.from(new Set([...Object.keys(oldVals), ...Object.keys(newVals)]));
-                    if (fields.length === 0) {
-                      return (
-                        <div style={{ marginTop: 8, fontSize: 13, color: '#98a2b3' }}>
-                          Chưa có dữ liệu Trước/Sau chi tiết cho bản ghi này.
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: '52vh', overflowY: 'auto', paddingRight: 2 }}>
+              {filteredActivity.map((item, idx) => {
+                const isComment = item.type === 'comment';
+                if (isComment) {
+                  // ── Comment: chat bubble style ──
+                  return (
+                    <div
+                      key={`${item.timestamp}-${idx}`}
+                      style={{
+                        display: 'flex',
+                        gap: 10,
+                        alignItems: 'flex-start',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 32, height: 32, borderRadius: '50%',
+                          background: '#667eea', color: '#fff',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontWeight: 700, fontSize: 12, flexShrink: 0, marginTop: 2,
+                        }}
+                      >
+                        {(item.user ?? 'U').slice(0, 2).toUpperCase()}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 4 }}>
+                          <span style={{ fontWeight: 600, fontSize: 13, color: '#1f2937' }}>
+                            {item.user || 'Ẩn danh'}
+                          </span>
+                          <span style={{ fontSize: 12, color: '#9ca3af' }}>
+                            {new Date(item.timestamp).toLocaleString('vi-VN')}
+                          </span>
                         </div>
-                      );
-                    }
-                    return (
-                      <div style={{ marginTop: 8, fontSize: 14, color: '#334155', display: 'flex', flexDirection: 'column', gap: 6, lineHeight: 1.45 }}>
+                        <div
+                          style={{
+                            background: '#f0f4ff',
+                            border: '1px solid #e0e7ff',
+                            borderRadius: '0 10px 10px 10px',
+                            padding: '8px 12px',
+                            fontSize: 14,
+                            color: '#1f2937',
+                            lineHeight: 1.55,
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                          }}
+                        >
+                          {item.details?.content}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+
+                // ── Audit log: system event style ──
+                const oldVals = (item.details?.old_values as Record<string, unknown> | undefined) ?? {};
+                const newVals = (item.details?.new_values as Record<string, unknown> | undefined) ?? {};
+                const fields = Array.from(new Set([...Object.keys(oldVals), ...Object.keys(newVals)]));
+                return (
+                  <div
+                    key={`${item.timestamp}-${idx}`}
+                    style={{ border: '1px solid #e6ebf2', borderRadius: 10, padding: '10px 14px', background: '#fafafa' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: '#1f2937' }}>
+                        {getHistoryActionLabelVi(item.action)}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>
+                        {item.user || 'Hệ thống'} · {new Date(item.timestamp).toLocaleString('vi-VN')}
+                      </div>
+                    </div>
+                    {item.details?.content && (
+                      <div style={{ marginTop: 4, fontSize: 13, color: '#6b7280' }}>{item.details.content}</div>
+                    )}
+                    {fields.length > 0 && (
+                      <div style={{ marginTop: 8, fontSize: 13, color: '#334155', display: 'flex', flexDirection: 'column', gap: 5 }}>
                         {fields.map((field) => (
-                          <div key={field} style={{ display: 'grid', gridTemplateColumns: '190px 1fr 1fr', gap: 10 }}>
-                            <div style={{ color: '#1f2937', fontWeight: 700 }}>{getHistoryFieldLabelVi(field)}</div>
-                            <div>Trước: {formatHistoryFieldValueVi(field, oldVals[field])}</div>
-                            <div>Sau: {formatHistoryFieldValueVi(field, newVals[field])}</div>
+                          <div key={field} style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr', gap: 8 }}>
+                            <div style={{ color: '#374151', fontWeight: 600 }}>{getHistoryFieldLabelVi(field)}</div>
+                            <div style={{ color: '#6b7280' }}>Trước: {formatHistoryFieldValueVi(field, oldVals[field])}</div>
+                            <div style={{ color: '#059669', fontWeight: 500 }}>Sau: {formatHistoryFieldValueVi(field, newVals[field])}</div>
                           </div>
                         ))}
                       </div>
-                    );
-                  })()}
-                </div>
-              ))}
+                    )}
+                  </div>
+                );
+              })}
             </div>
+          )}
+
+          {/* ── Ô nhập bình luận ── */}
+          {historyProduct && (
+            <CommentBox
+              entityType="Product"
+              entityId={historyProduct.id}
+              onSuccess={() => {
+                void queryClient.invalidateQueries({
+                  queryKey: ['products', 'activity', historyProduct.id],
+                });
+              }}
+            />
+          )}
+        </Modal>
+
+        {/* ── Modal Giao nhiệm vụ ── */}
+        <Modal
+          title={
+            <Space>
+              <ProjectOutlined style={{ color: '#1677ff' }} />
+              {`Nhiệm vụ${taskProduct ? ` - ${taskProduct.code}` : ''}`}
+              {(taskProduct?.blocking_tasks_count ?? 0) > 0 && (
+                <Tooltip title="Có blocking task đang chặn sản xuất">
+                  <LockOutlined style={{ color: '#ff4d4f' }} />
+                </Tooltip>
+              )}
+            </Space>
+          }
+          open={taskModalOpen}
+          onCancel={() => { setTaskModalOpen(false); setTaskProduct(null); }}
+          footer={<Button onClick={() => { setTaskModalOpen(false); setTaskProduct(null); }}>Đóng</Button>}
+          width={680}
+          destroyOnClose
+        >
+          {taskProduct && (
+            <TaskPanel
+              entityType="Product"
+              entityId={taskProduct.id}
+              entityCode={taskProduct.code}
+              onTasksChange={() => {
+                void queryClient.invalidateQueries({ queryKey: ['products'], refetchType: 'all' });
+              }}
+            />
           )}
         </Modal>
 

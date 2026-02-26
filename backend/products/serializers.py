@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product, PriceChange
+from core.models import Task
 
 
 class ProductCategorySerializer(serializers.ModelSerializer):
@@ -99,6 +100,7 @@ class ProductSerializer(serializers.ModelSerializer):
     components_count = serializers.SerializerMethodField()
     is_component = serializers.SerializerMethodField()
     full_name = serializers.SerializerMethodField()
+    blocking_tasks_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -120,6 +122,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'is_component', 'full_name',
             'status', 'owner', 'owner_name', 'team', 'team_name', 'is_active',
             'has_pending_price_change',
+            'blocking_tasks_count',
             'created_at', 'updated_at', 'created_by', 'created_by_name',
             'updated_by', 'updated_by_name',
             'price_change_reason', 'price_effective_at',
@@ -130,7 +133,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'box_type_name', 'box_type_code', 'owner_name', 'team_name',
             'created_by_name', 'updated_by_name', 'parent_name',
             'components', 'components_count', 'is_component', 'full_name',
-            'has_pending_price_change',
+            'has_pending_price_change', 'blocking_tasks_count',
         ]
         extra_kwargs = {
             'code': {
@@ -190,6 +193,17 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_full_name(self, obj):
         return obj.full_name
+
+    def get_blocking_tasks_count(self, obj):
+        # Dùng annotated value từ get_queryset để tránh N+1 query
+        if hasattr(obj, 'blocking_tasks_count_db'):
+            return obj.blocking_tasks_count_db or 0
+        return Task.objects.filter(
+            entity_type='Product',
+            entity_id=obj.id,
+            is_blocking=True,
+            status__in=[Task.STATUS_TODO, Task.STATUS_IN_PROGRESS],
+        ).count()
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

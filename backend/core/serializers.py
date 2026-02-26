@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, UserSession, UserPreferences, ColumnPermission
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, UserSession, UserPreferences, ColumnPermission, Task
 
 
 class PermissionSerializer(serializers.ModelSerializer):
@@ -195,3 +195,120 @@ class ColumnPermissionSerializer(serializers.ModelSerializer):
 
     def get_allowed_users_list(self, obj):
         return list(obj.allowed_users.values('id', 'username', 'email'))
+
+
+class TaskSerializer(serializers.ModelSerializer):
+    assigned_to_info = serializers.SerializerMethodField(read_only=True)
+    assigned_by_info = serializers.SerializerMethodField(read_only=True)
+    depends_on_info = serializers.SerializerMethodField(read_only=True)
+    last_updated_by_info = serializers.SerializerMethodField(read_only=True)
+    comment_count = serializers.SerializerMethodField(read_only=True)
+    attachment_count = serializers.SerializerMethodField(read_only=True)
+    activity_updated_at = serializers.SerializerMethodField(read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    is_open = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = Task
+        fields = [
+            'id',
+            'entity_type', 'entity_id', 'entity_code',
+            'title', 'description',
+            'assigned_to', 'assigned_to_info',
+            'assigned_by', 'assigned_by_info',
+            'depends_on', 'depends_on_info',
+            'status', 'status_display',
+            'priority', 'priority_display',
+            'is_blocking', 'blocks_action',
+            'due_date', 'completed_at',
+            # Cần hỗ trợ
+            'needs_help', 'help_reason', 'help_requested_at',
+            # Ghi chú tiến độ
+            'last_update_note', 'last_update_at', 'last_updated_by', 'last_updated_by_info',
+            # Realtime meta cho UI (badge bình luận/file)
+            'comment_count', 'attachment_count', 'activity_updated_at',
+            'created_at', 'updated_at',
+            'is_open',
+        ]
+        read_only_fields = [
+            'id', 'assigned_by', 'completed_at',
+            'help_requested_at', 'last_update_at', 'last_updated_by',
+            'created_at', 'updated_at',
+        ]
+
+    def get_assigned_to_info(self, obj):
+        if obj.assigned_to:
+            return {
+                'id': obj.assigned_to.id,
+                'username': obj.assigned_to.username,
+                'full_name': obj.assigned_to.get_full_name() or obj.assigned_to.username,
+            }
+        return None
+
+    def get_assigned_by_info(self, obj):
+        if obj.assigned_by:
+            return {
+                'id': obj.assigned_by.id,
+                'username': obj.assigned_by.username,
+                'full_name': obj.assigned_by.get_full_name() or obj.assigned_by.username,
+            }
+        return None
+
+    def get_last_updated_by_info(self, obj):
+        if obj.last_updated_by:
+            return {
+                'id': obj.last_updated_by.id,
+                'username': obj.last_updated_by.username,
+                'full_name': obj.last_updated_by.get_full_name() or obj.last_updated_by.username,
+            }
+        return None
+
+    def get_depends_on_info(self, obj):
+        if obj.depends_on:
+            return {
+                'id': obj.depends_on.id,
+                'title': obj.depends_on.title,
+                'status': obj.depends_on.status,
+                'status_display': obj.depends_on.get_status_display(),
+            }
+        return None
+
+    def get_comment_count(self, obj):
+        # Ưu tiên annotated value để tránh N+1 query.
+        if hasattr(obj, 'comment_count_db'):
+            return obj.comment_count_db or 0
+        return Comment.objects.filter(entity_type='Task', entity_id=obj.id, is_deleted=False).count()
+
+    def get_attachment_count(self, obj):
+        # Ưu tiên annotated value để tránh N+1 query.
+        if hasattr(obj, 'attachment_count_db'):
+            return obj.attachment_count_db or 0
+        return Attachment.objects.filter(entity_type='Task', entity_id=obj.id).count()
+
+    def get_activity_updated_at(self, obj):
+        latest_comment = getattr(obj, 'latest_comment_at_db', None)
+        latest_attachment = getattr(obj, 'latest_attachment_at_db', None)
+        latest = max([d for d in [latest_comment, latest_attachment] if d is not None], default=None)
+        return latest
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            validated_data['assigned_by'] = request.user
+        return super().create(validated_data)
+
+    def validate(self, attrs):
+        depends_on = attrs.get('depends_on')
+        entity_type = attrs.get('entity_type', getattr(self.instance, 'entity_type', None))
+        entity_id = attrs.get('entity_id', getattr(self.instance, 'entity_id', None))
+
+        if depends_on:
+            if self.instance and depends_on.id == self.instance.id:
+                raise serializers.ValidationError({'depends_on': 'Không thể phụ thuộc chính nó.'})
+            if depends_on.entity_type != entity_type or depends_on.entity_id != entity_id:
+                raise serializers.ValidationError({'depends_on': 'Chỉ được phụ thuộc nhiệm vụ cùng đối tượng.'})
+            # Chặn vòng phụ thuộc đơn giản: A -> B thì B không được -> A
+            if self.instance and depends_on.depends_on_id == self.instance.id:
+                raise serializers.ValidationError({'depends_on': 'Không thể tạo vòng phụ thuộc giữa 2 nhiệm vụ.'})
+        return attrs

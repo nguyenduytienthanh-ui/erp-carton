@@ -12,7 +12,7 @@ export const permissionsApi = {
       );
       return response.data;
     } catch {
-      return { available_columns: [], restricted_columns: [], user_roles: [] };
+      return { page, user_id: 0, available_columns: [], restricted_columns: [], user_roles: [] };
     }
   },
 };

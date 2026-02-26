@@ -51,6 +51,7 @@ import {
   QuickClearIcon,
   FilterSelect,
   ListSearchInput,
+  CommentBox,
 } from '../../components';
 import CustomerForm from './CustomerForm';
 import { useColumnSettings } from '../../hooks/useColumnSettings';
@@ -59,9 +60,15 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { useBulkDelete } from '../../hooks/useBulkDelete';
 import { useRowSelection } from '../../hooks/useRowSelection';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { TOAST } from '../../shared/toast';
 import { PAGES } from '../../utils/constants';
 import type { PreferencesConfig } from '../../types/preferences';
+import {
+  getHistoryActionCode,
+  getHistoryActionLabelVi,
+  filterHistoryItems,
+} from '../../utils/historyUtils';
 
 const DEFAULT_CUSTOMER_VISIBLE_COLUMNS: string[] = [
   'code', 'name', 'company_name', 'phone', 'email', 'tax_code',
@@ -112,36 +119,7 @@ const getCustomerStatusTone = (status: CustomerStatus | string | null | undefine
   return 'neutral';
 };
 
-const getHistoryActionCode = (action: string | null | undefined): string => {
-  const raw = String(action ?? '').trim().toUpperCase();
-  if (raw.includes('SUBMIT')) return 'SUBMIT';
-  if (raw.includes('APPROVE')) return 'APPROVE';
-  if (raw.includes('REJECT')) return 'REJECT';
-  if (raw.includes('CREATE')) return 'CREATE';
-  if (raw.includes('UPDATE')) return 'UPDATE';
-  if (raw.includes('DELETE')) return 'DELETE';
-  if (raw.includes('IMPORT')) return 'IMPORT';
-  if (raw.includes('EXPORT')) return 'EXPORT';
-  if (raw.includes('COMMENT')) return 'COMMENT';
-  return raw || 'UNKNOWN';
-};
-
-const getHistoryActionLabelVi = (action: string | null | undefined): string => {
-  const code = getHistoryActionCode(action);
-  const map: Record<string, string> = {
-    SUBMIT: 'Trình duyệt',
-    APPROVE: 'Duyệt',
-    REJECT: 'Từ chối',
-    CREATE: 'Tạo mới',
-    UPDATE: 'Cập nhật',
-    DELETE: 'Xóa',
-    IMPORT: 'Nhập dữ liệu',
-    EXPORT: 'Xuất dữ liệu',
-    COMMENT: 'Bình luận',
-    UNKNOWN: String(action ?? 'Không xác định'),
-  };
-  return map[code] ?? String(action ?? 'Không xác định');
-};
+// getHistoryActionCode & getHistoryActionLabelVi → dùng từ ../../utils/historyUtils (shared)
 
 const CUSTOMER_HISTORY_FIELD_LABELS: Record<string, string> = {
   code: 'Mã KH',
@@ -370,7 +348,8 @@ const CustomerList = () => {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | null>(null);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
-  const [historySearch, setHistorySearch] = useState('');
+  const [historySearchInput, setHistorySearchInput] = useState('');
+  const [historySearch] = useDebouncedValue(historySearchInput, 300);
   const [historyActionFilter, setHistoryActionFilter] = useState<string | undefined>(undefined);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectCustomer, setRejectCustomer] = useState<Customer | null>(null);
@@ -505,22 +484,10 @@ const CustomerList = () => {
     return normalized.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }, [activityStream, approvalHistory, historyCustomer]);
 
-  const filteredActivity = useMemo(() => {
-    const q = historySearch.trim().toLowerCase();
-    return mergedActivity.filter((item) => {
-      if (historyActionFilter && getHistoryActionCode(item.action) !== historyActionFilter) return false;
-      if (!q) return true;
-      const content = [
-        getHistoryActionLabelVi(item.action),
-        item.user ?? '',
-        item.details?.content ?? '',
-        JSON.stringify(item.details?.old_values ?? {}),
-        JSON.stringify(item.details?.new_values ?? {}),
-        (item.details?.changed_fields ?? []).join(','),
-      ].join(' ').toLowerCase();
-      return content.includes(q);
-    });
-  }, [mergedActivity, historyActionFilter, historySearch]);
+  const filteredActivity = useMemo(
+    () => filterHistoryItems(mergedActivity, historySearch, historyActionFilter, getHistoryFieldLabelVi),
+    [mergedActivity, historyActionFilter, historySearch],
+  );
 
   const results = data?.results ?? [];
   const total = data?.count ?? 0;
@@ -628,7 +595,7 @@ const CustomerList = () => {
 
   const openHistoryModal = (record: Customer) => {
     setHistoryCustomer(record);
-    setHistorySearch('');
+    setHistorySearchInput('');
     setHistoryActionFilter(undefined);
     setHistoryModalOpen(true);
   };
@@ -1234,10 +1201,10 @@ const CustomerList = () => {
         width={920}
       >
         <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-          <Input
-            placeholder="Tìm theo hành động, người thao tác, nội dung..."
-            value={historySearch}
-            onChange={(e) => setHistorySearch(e.target.value)}
+          <ListSearchInput
+            placeholder="Tìm theo hành động, người thao tác, tên trường, giá trị..."
+            value={historySearchInput}
+            onChange={setHistorySearchInput}
             style={{ flex: '1 1 360px' }}
             size="large"
           />
@@ -1262,59 +1229,111 @@ const CustomerList = () => {
           />
         </div>
         {(isHistoryLoading || isApprovalHistoryLoading) && <div style={{ fontSize: 14 }}>Đang tải lịch sử...</div>}
+        {(isHistoryLoading || isApprovalHistoryLoading) && (
+          <div style={{ fontSize: 14, color: '#6b7280' }}>Đang tải lịch sử...</div>
+        )}
         {!isHistoryLoading && !isApprovalHistoryLoading && filteredActivity.length === 0 && (
-          <div style={{ color: '#6b7280', fontSize: 14 }}>Chưa có dữ liệu phù hợp.</div>
+          <div style={{ color: '#9ca3af', fontSize: 14, textAlign: 'center', padding: '24px 0' }}>
+            Chưa có dữ liệu phù hợp.
+          </div>
         )}
         {!isHistoryLoading && !isApprovalHistoryLoading && filteredActivity.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '62vh', overflowY: 'auto' }}>
-            {filteredActivity.map((item, idx) => (
-              <div key={`${item.timestamp}-${idx}`} style={{ border: '1px solid #e6ebf2', borderRadius: 10, padding: '12px 14px', background: '#fff' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-                    <div style={{ fontWeight: 700, fontSize: 16, color: '#1f2937' }}>{getHistoryActionLabelVi(item.action)}</div>
-                  <div style={{ fontSize: 13, color: '#667085' }}>
-                    {item.user || 'Hệ thống'} - {new Date(item.timestamp).toLocaleString('vi-VN')}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: '52vh', overflowY: 'auto', paddingRight: 2 }}>
+            {filteredActivity.map((item, idx) => {
+              const isComment = item.type === 'comment';
+              if (isComment) {
+                // ── Comment: chat bubble style ──
+                return (
+                  <div key={`${item.timestamp}-${idx}`} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                    <div
+                      style={{
+                        width: 32, height: 32, borderRadius: '50%',
+                        background: '#667eea', color: '#fff',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontWeight: 700, fontSize: 12, flexShrink: 0, marginTop: 2,
+                      }}
+                    >
+                      {(item.user ?? 'U').slice(0, 2).toUpperCase()}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 4 }}>
+                        <span style={{ fontWeight: 600, fontSize: 13, color: '#1f2937' }}>
+                          {item.user || 'Ẩn danh'}
+                        </span>
+                        <span style={{ fontSize: 12, color: '#9ca3af' }}>
+                          {new Date(item.timestamp).toLocaleString('vi-VN')}
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          background: '#f0f4ff', border: '1px solid #e0e7ff',
+                          borderRadius: '0 10px 10px 10px',
+                          padding: '8px 12px', fontSize: 14, color: '#1f2937',
+                          lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                        }}
+                      >
+                        {item.details?.content}
+                      </div>
+                    </div>
                   </div>
-                </div>
-                  <div style={{ marginTop: 4, fontSize: 13, color: '#667085' }}>
-                    Loại bản ghi: {item.type === 'comment' ? 'Bình luận' : 'Nhật ký hệ thống'}
+                );
+              }
+
+              // ── Audit log: system event style ──
+              const oldVals = (item.details?.old_values as Record<string, unknown> | undefined) ?? {};
+              const newVals = (item.details?.new_values as Record<string, unknown> | undefined) ?? {};
+              const fields = Array.from(new Set([...Object.keys(oldVals), ...Object.keys(newVals)]));
+              const fallbackRows = buildFallbackDiffRows(item.action, historyCustomer);
+              const hasRealDiff = fields.length > 0;
+              const hasFallbackDiff = fallbackRows.length > 0;
+              return (
+                <div key={`${item.timestamp}-${idx}`} style={{ border: '1px solid #e6ebf2', borderRadius: 10, padding: '10px 14px', background: '#fafafa' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: '#1f2937' }}>
+                      {getHistoryActionLabelVi(item.action)}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>
+                      {item.user || 'Hệ thống'} · {new Date(item.timestamp).toLocaleString('vi-VN')}
+                    </div>
                   </div>
-                {item.details?.content && <div style={{ marginTop: 6, fontSize: 14, lineHeight: 1.45 }}>{item.details.content}</div>}
-                  {(() => {
-                    const oldVals = (item.details?.old_values as Record<string, unknown> | undefined) ?? {};
-                    const newVals = (item.details?.new_values as Record<string, unknown> | undefined) ?? {};
-                    const fields = Array.from(new Set([...Object.keys(oldVals), ...Object.keys(newVals)]));
-                    const fallbackRows = buildFallbackDiffRows(item.action, historyCustomer);
-                    const hasRealDiff = fields.length > 0;
-                    const hasFallbackDiff = fallbackRows.length > 0;
-                    if (!hasRealDiff && !hasFallbackDiff) {
-                      return (
-                        <div style={{ marginTop: 8, fontSize: 13, color: '#98a2b3' }}>
-                          Chưa có dữ liệu Trước/Sau chi tiết cho bản ghi này.
-                        </div>
-                      );
-                    }
-                    return (
-                    <div style={{ marginTop: 8, fontSize: 14, color: '#334155', display: 'flex', flexDirection: 'column', gap: 6, lineHeight: 1.45 }}>
+                  {item.details?.content && (
+                    <div style={{ marginTop: 4, fontSize: 13, color: '#6b7280' }}>{item.details.content}</div>
+                  )}
+                  {(hasRealDiff || hasFallbackDiff) && (
+                    <div style={{ marginTop: 8, fontSize: 13, color: '#334155', display: 'flex', flexDirection: 'column', gap: 5 }}>
                       {fields.map((field) => (
-                        <div key={field} style={{ display: 'grid', gridTemplateColumns: '190px 1fr 1fr', gap: 10 }}>
-                          <div style={{ color: '#1f2937', fontWeight: 700 }}>{getHistoryFieldLabelVi(field)}</div>
-                          <div>Trước: {formatHistoryValueVi(oldVals[field])}</div>
-                          <div>Sau: {formatHistoryValueVi(newVals[field])}</div>
+                        <div key={field} style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr', gap: 8 }}>
+                          <div style={{ color: '#374151', fontWeight: 600 }}>{getHistoryFieldLabelVi(field)}</div>
+                          <div style={{ color: '#6b7280' }}>Trước: {formatHistoryValueVi(oldVals[field])}</div>
+                          <div style={{ color: '#059669', fontWeight: 500 }}>Sau: {formatHistoryValueVi(newVals[field])}</div>
                         </div>
                       ))}
                       {!hasRealDiff && hasFallbackDiff && fallbackRows.map((row) => (
-                        <div key={`fb-${row.field}`} style={{ display: 'grid', gridTemplateColumns: '190px 1fr 1fr', gap: 10 }}>
-                          <div style={{ color: '#1f2937', fontWeight: 700 }}>{getHistoryFieldLabelVi(row.field)}</div>
-                          <div>Trước: {row.before}</div>
-                          <div>Sau: {row.after}</div>
+                        <div key={`fb-${row.field}`} style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr', gap: 8 }}>
+                          <div style={{ color: '#374151', fontWeight: 600 }}>{getHistoryFieldLabelVi(row.field)}</div>
+                          <div style={{ color: '#6b7280' }}>Trước: {row.before}</div>
+                          <div style={{ color: '#059669', fontWeight: 500 }}>Sau: {row.after}</div>
                         </div>
                       ))}
-                  </div>
-                    );
-                  })()}
-              </div>
-            ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
+        )}
+
+        {/* ── Ô nhập bình luận ── */}
+        {historyCustomer && (
+          <CommentBox
+            entityType="Customer"
+            entityId={historyCustomer.id}
+            onSuccess={() => {
+              void queryClient.invalidateQueries({
+                queryKey: ['customers', 'activity', historyCustomer.id],
+              });
+            }}
+          />
         )}
       </Modal>
 

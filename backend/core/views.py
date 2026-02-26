@@ -7,12 +7,15 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.http import HttpResponse
 from django.db import models
+from django.db.models import Count, DateTimeField, IntegerField, OuterRef, Subquery
+from django.db.models.functions import Coalesce
 from datetime import datetime
-from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, AuditLog, UserSession, UserPreferences, ColumnPermission
+from datetime import timedelta
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, AuditLog, UserSession, UserPreferences, ColumnPermission, Task
 from .serializers import (
     UserSerializer, RoleSerializer, PermissionSerializer,
     TeamSerializer, SettingSerializer, CustomTokenObtainPairSerializer,
-    CustomerSerializer, ExportTemplateSerializer, SavedViewSerializer, AttachmentSerializer, CommentSerializer, NotificationSerializer, UserSessionSerializer, UserPreferencesSerializer, ColumnPermissionSerializer
+    CustomerSerializer, ExportTemplateSerializer, SavedViewSerializer, AttachmentSerializer, CommentSerializer, NotificationSerializer, UserSessionSerializer, UserPreferencesSerializer, ColumnPermissionSerializer, TaskSerializer,
 )
 from django.utils import timezone as django_timezone
 from .filters import CustomerFilter, TeamFilter, RoleFilter
@@ -1306,3 +1309,431 @@ def logout_view(request):
         return Response({"success": True, "message": "Logged out successfully"})
     except Exception as e:
         return Response({"error": str(e)}, status=400)
+
+
+class TaskViewSet(viewsets.ModelViewSet):
+    """
+    CRUD + actions cho nhiệm vụ (task/assignment).
+    Lọc theo entity: GET /api/v1/tasks/?entity_type=Product&entity_id=5
+    """
+    serializer_class = TaskSerializer
+    permission_classes = [IsAuthenticated]
+
+    def _can_manage_task(self, user, task):
+        return (
+            task.assigned_to_id == user.id
+            or task.assigned_by_id == user.id
+            or user.is_staff
+            or user.is_superuser
+        )
+
+    def get_queryset(self):
+        comment_count_subquery = (
+            Comment.objects
+            .filter(entity_type='Task', entity_id=OuterRef('pk'), is_deleted=False)
+            .values('entity_id')
+            .annotate(cnt=Count('id'))
+            .values('cnt')
+        )
+        attachment_count_subquery = (
+            Attachment.objects
+            .filter(entity_type='Task', entity_id=OuterRef('pk'))
+            .values('entity_id')
+            .annotate(cnt=Count('id'))
+            .values('cnt')
+        )
+        latest_comment_subquery = (
+            Comment.objects
+            .filter(entity_type='Task', entity_id=OuterRef('pk'), is_deleted=False)
+            .order_by('-created_at')
+            .values('created_at')[:1]
+        )
+        latest_attachment_subquery = (
+            Attachment.objects
+            .filter(entity_type='Task', entity_id=OuterRef('pk'))
+            .order_by('-uploaded_at')
+            .values('uploaded_at')[:1]
+        )
+
+        qs = (
+            Task.objects
+            .select_related('assigned_to', 'assigned_by', 'last_updated_by', 'depends_on')
+            .annotate(
+                comment_count_db=Coalesce(
+                    Subquery(comment_count_subquery, output_field=IntegerField()),
+                    0,
+                ),
+                attachment_count_db=Coalesce(
+                    Subquery(attachment_count_subquery, output_field=IntegerField()),
+                    0,
+                ),
+                latest_comment_at_db=Subquery(latest_comment_subquery, output_field=DateTimeField()),
+                latest_attachment_at_db=Subquery(latest_attachment_subquery, output_field=DateTimeField()),
+            )
+        )
+        entity_type = self.request.query_params.get('entity_type')
+        entity_id = self.request.query_params.get('entity_id')
+        if entity_type:
+            qs = qs.filter(entity_type=entity_type)
+        if entity_id:
+            qs = qs.filter(entity_id=entity_id)
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            qs = qs.filter(status=status_param)
+        mine = self.request.query_params.get('mine')
+        if mine == '1':
+            qs = qs.filter(assigned_to=self.request.user)
+        # Blocking tasks trước, rồi theo thời gian tạo mới nhất
+        return qs.order_by('-is_blocking', '-created_at')
+
+    @action(detail=True, methods=['post'])
+    def start(self, request, pk=None):
+        task = self.get_object()
+        if task.status != Task.STATUS_TODO:
+            return Response({'error': 'Chỉ có thể bắt đầu nhiệm vụ đang ở trạng thái Chờ thực hiện.'}, status=400)
+        if task.depends_on_id and task.depends_on and task.depends_on.status != Task.STATUS_DONE:
+            return Response(
+                {'error': f'Nhiệm vụ này đang chờ "{task.depends_on.title}" hoàn thành.'},
+                status=400
+            )
+        task.start()
+        return Response(TaskSerializer(task, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        task = self.get_object()
+        if task.status == Task.STATUS_DONE:
+            return Response({'error': 'Nhiệm vụ này đã hoàn thành.'}, status=400)
+        if task.status == Task.STATUS_CANCELLED:
+            return Response({'error': 'Không thể hoàn thành nhiệm vụ đã hủy.'}, status=400)
+        task.complete(user=request.user)
+        return Response(TaskSerializer(task, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        task = self.get_object()
+        if task.status in (Task.STATUS_DONE, Task.STATUS_CANCELLED):
+            return Response({'error': 'Không thể hủy nhiệm vụ đã hoàn thành hoặc đã hủy.'}, status=400)
+        task.cancel()
+        return Response(TaskSerializer(task, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def unblock(self, request, pk=None):
+        """Tắt blocking flag — chỉ manager/admin hoặc người tạo task."""
+        task = self.get_object()
+        reason = (request.data.get('reason') or '').strip()
+
+        if not task.is_blocking:
+            return Response({'error': 'Nhiệm vụ này không có blocking.'}, status=400)
+
+        # Permission: người tạo hoặc staff/admin
+        is_creator = task.assigned_by_id == request.user.id
+        if not (is_creator or request.user.is_staff or request.user.is_superuser):
+            return Response({'error': 'Chỉ người tạo hoặc quản lý mới có thể bỏ blocking.'}, status=403)
+
+        task.is_blocking = False
+        # Ghi lý do vào description nếu có
+        if reason:
+            note = f'\n\n[Bỏ blocking bởi {request.user.get_full_name() or request.user.username} — Lý do: {reason}]'
+            task.description = (task.description or '') + note
+            task.save(update_fields=['is_blocking', 'description', 'updated_at'])
+        else:
+            task.save(update_fields=['is_blocking', 'updated_at'])
+
+        # Ghi AuditLog
+        AuditLog.objects.create(
+            user=request.user,
+            action='UPDATE',
+            entity_type='Task',
+            entity_id=task.id,
+            entity_code=task.entity_code or str(task.id),
+            changed_fields=['is_blocking'],
+            old_values={'is_blocking': True},
+            new_values={'is_blocking': False, 'reason': reason},
+        )
+
+        return Response(TaskSerializer(task, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def request_help(self, request, pk=None):
+        """Nhân viên báo cần hỗ trợ — thông báo cho người tạo task và manager."""
+        task = self.get_object()
+        if not task.is_open:
+            return Response({'error': 'Chỉ có thể báo cần hỗ trợ cho nhiệm vụ đang mở.'}, status=400)
+
+        reason = (request.data.get('reason') or '').strip()
+        task.needs_help = True
+        task.help_reason = reason
+        task.help_requested_at = django_timezone.now()
+        task.save(update_fields=['needs_help', 'help_reason', 'help_requested_at', 'updated_at'])
+
+        # Thông báo cho người tạo task (nếu khác người báo)
+        actor_name = request.user.get_full_name() or request.user.username
+        msg = f'{actor_name} cần hỗ trợ cho nhiệm vụ "{task.title}"'
+        if reason:
+            msg += f' — {reason}'
+        recipients = set()
+        if task.assigned_by_id and task.assigned_by_id != request.user.id:
+            recipients.add(task.assigned_by_id)
+        # Thông báo cho superuser/staff nếu cần (có thể mở rộng sau)
+        for uid in recipients:
+            Notification.objects.create(
+                recipient_id=uid,
+                notification_type='system',
+                title=f'🆘 Cần hỗ trợ: {task.title[:60]}',
+                message=msg,
+                entity_type='Task',
+                entity_id=task.id,
+                actor=request.user,
+            )
+        AuditLog.objects.create(
+            user=request.user, action='UPDATE', entity_type='Task',
+            entity_id=task.id, entity_code=task.entity_code or str(task.id),
+            changed_fields=['needs_help'], old_values={'needs_help': False},
+            new_values={'needs_help': True, 'reason': reason},
+        )
+        return Response(TaskSerializer(task, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def resolve_help(self, request, pk=None):
+        """Manager/người tạo đánh dấu đã xử lý hỗ trợ."""
+        task = self.get_object()
+        if not task.needs_help:
+            return Response({'error': 'Nhiệm vụ này không có yêu cầu hỗ trợ.'}, status=400)
+        is_creator = task.assigned_by_id == request.user.id
+        if not (is_creator or request.user.is_staff or request.user.is_superuser):
+            return Response({'error': 'Chỉ người tạo hoặc quản lý mới có thể giải quyết hỗ trợ.'}, status=403)
+
+        task.needs_help = False
+        task.help_reason = ''
+        task.save(update_fields=['needs_help', 'help_reason', 'updated_at'])
+
+        # Thông báo lại cho người đã báo cần hỗ trợ
+        if task.assigned_to_id and task.assigned_to_id != request.user.id:
+            Notification.objects.create(
+                recipient_id=task.assigned_to_id,
+                notification_type='system',
+                title=f'✅ Đã được hỗ trợ: {task.title[:60]}',
+                message=f'{request.user.get_full_name() or request.user.username} đã xác nhận hỗ trợ cho nhiệm vụ "{task.title}".',
+                entity_type='Task', entity_id=task.id, actor=request.user,
+            )
+        return Response(TaskSerializer(task, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def reassign(self, request, pk=None):
+        """Chuyển nhiệm vụ sang người khác — assigned person, creator, hoặc manager."""
+        task = self.get_object()
+        if not task.is_open:
+            return Response({'error': 'Chỉ có thể chuyển nhiệm vụ đang mở.'}, status=400)
+
+        new_assignee_id = request.data.get('assigned_to')
+        note = (request.data.get('note') or '').strip()
+
+        is_assigned = task.assigned_to_id == request.user.id
+        is_creator = task.assigned_by_id == request.user.id
+        if not (is_assigned or is_creator or request.user.is_staff or request.user.is_superuser):
+            return Response({'error': 'Không có quyền chuyển nhiệm vụ này.'}, status=403)
+
+        old_assignee_name = task.assigned_to.get_full_name() if task.assigned_to else 'Chưa giao'
+        old_assignee_id = task.assigned_to_id
+
+        task.assigned_to_id = new_assignee_id or None
+        # Reset cần hỗ trợ khi chuyển người — đúng logic: help request gắn với người cũ
+        # KHÔNG đụng last_update_note — giữ nguyên tiến độ cho người nhận mới tham khảo
+        task.needs_help = False
+        task.help_reason = ''
+        task.save(update_fields=['assigned_to', 'needs_help', 'help_reason', 'updated_at'])
+
+        # Lý do chuyển giao → lưu vào Comment để giữ lịch sử, KHÔNG ghi đè ghi chú tiến độ
+        actor_name = request.user.get_full_name() or request.user.username
+        new_assignee_obj = task.assigned_to
+        new_name = new_assignee_obj.get_full_name() or new_assignee_obj.username if new_assignee_obj else 'Chưa xác định'
+        comment_content = f'🔄 **Chuyển giao nhiệm vụ**\nTừ: {old_assignee_name} → Đến: {new_name}\nBởi: {actor_name}'
+        if note:
+            comment_content += f'\nLý do: {note}'
+        if task.last_update_note:
+            comment_content += f'\n\n📋 *Tiến độ hiện tại: {task.last_update_note}*'
+        Comment.objects.create(
+            entity_type='Task',
+            entity_id=task.id,
+            content=comment_content,
+            created_by=request.user,
+        )
+
+        # Thông báo cho người nhận mới
+        if new_assignee_id and new_assignee_id != request.user.id:
+            notif_msg = f'{actor_name} đã chuyển giao nhiệm vụ "{task.title}" cho bạn'
+            if old_assignee_id:
+                notif_msg += f' (từ {old_assignee_name})'
+            if note:
+                notif_msg += f'. Lý do: {note}'
+            if task.last_update_note:
+                notif_msg += f'. Tiến độ hiện tại: {task.last_update_note}'
+            Notification.objects.create(
+                recipient_id=new_assignee_id,
+                notification_type='assignment',
+                title=f'👤 Nhiệm vụ chuyển giao: {task.title[:60]}',
+                message=notif_msg,
+                entity_type='Task', entity_id=task.id, actor=request.user,
+            )
+
+        # Thông báo cho người cũ (nếu là bên thứ ba chuyển, không phải tự chuyển)
+        if old_assignee_id and old_assignee_id != request.user.id and old_assignee_id != new_assignee_id:
+            Notification.objects.create(
+                recipient_id=old_assignee_id,
+                notification_type='system',
+                title=f'↩️ Nhiệm vụ đã được chuyển: {task.title[:60]}',
+                message=f'{actor_name} đã chuyển nhiệm vụ "{task.title}" từ bạn sang {new_name}.',
+                entity_type='Task', entity_id=task.id, actor=request.user,
+            )
+
+        AuditLog.objects.create(
+            user=request.user, action='UPDATE', entity_type='Task',
+            entity_id=task.id, entity_code=task.entity_code or str(task.id),
+            changed_fields=['assigned_to'],
+            old_values={'assigned_to': old_assignee_id, 'assignee_name': old_assignee_name},
+            new_values={'assigned_to': new_assignee_id, 'assignee_name': new_name, 'note': note},
+        )
+        return Response(TaskSerializer(task, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def add_note(self, request, pk=None):
+        """Thêm ghi chú tiến độ — người được giao, người tạo, hoặc manager."""
+        task = self.get_object()
+        note = (request.data.get('note') or '').strip()
+        if not note:
+            return Response({'error': 'Vui lòng nhập nội dung ghi chú.'}, status=400)
+
+        is_involved = (
+            task.assigned_to_id == request.user.id
+            or task.assigned_by_id == request.user.id
+            or request.user.is_staff
+            or request.user.is_superuser
+        )
+        if not is_involved:
+            return Response({'error': 'Chỉ người liên quan đến nhiệm vụ mới có thể ghi chú.'}, status=403)
+
+        task.last_update_note = note
+        task.last_update_at = django_timezone.now()
+        task.last_updated_by = request.user
+        if task.needs_help and task.assigned_by_id == request.user.id:
+            task.needs_help = False  # Manager trả lời → tự reset help flag
+        task.save(update_fields=['last_update_note', 'last_update_at', 'last_updated_by', 'needs_help', 'updated_at'])
+        return Response(TaskSerializer(task, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def remind_overdue(self, request, pk=None):
+        """
+        Nhắc quá hạn cho nhiệm vụ mở.
+        - Người liên quan/manager có thể bấm nhắc tay.
+        - Chống spam: không gửi trùng cho cùng recipient trong 6 giờ gần nhất.
+        """
+        task = self.get_object()
+        if not task.is_open:
+            return Response({'error': 'Chỉ nhắc quá hạn cho nhiệm vụ đang mở.'}, status=400)
+        if not task.due_date:
+            return Response({'error': 'Nhiệm vụ chưa có hạn hoàn thành.'}, status=400)
+        if task.due_date >= django_timezone.localdate():
+            return Response({'error': 'Nhiệm vụ chưa quá hạn.'}, status=400)
+        if not self._can_manage_task(request.user, task):
+            return Response({'error': 'Không có quyền gửi nhắc quá hạn cho nhiệm vụ này.'}, status=403)
+
+        actor_name = request.user.get_full_name() or request.user.username
+        overdue_days = (django_timezone.localdate() - task.due_date).days
+        sent_count = 0
+        recipients = set()
+        if task.assigned_to_id:
+            recipients.add(task.assigned_to_id)
+        if task.assigned_by_id:
+            recipients.add(task.assigned_by_id)
+
+        # Escalation nhẹ: quá hạn >= 2 ngày thì nhắc thêm manager/admin.
+        if overdue_days >= 2:
+            manager_ids = User.objects.filter(
+                models.Q(is_staff=True) | models.Q(is_superuser=True),
+                is_active=True,
+            ).values_list('id', flat=True)
+            recipients.update(set(manager_ids))
+
+        recipients.discard(request.user.id)
+        cool_down_since = django_timezone.now() - timedelta(hours=6)
+
+        for uid in recipients:
+            duplicated_recent = Notification.objects.filter(
+                recipient_id=uid,
+                notification_type='due_date',
+                entity_type='Task',
+                entity_id=task.id,
+                created_at__gte=cool_down_since,
+            ).exists()
+            if duplicated_recent:
+                continue
+            Notification.objects.create(
+                recipient_id=uid,
+                notification_type='due_date',
+                title=f'⏰ Nhắc quá hạn: {task.title[:60]}',
+                message=(
+                    f'{actor_name} nhắc nhiệm vụ "{task.title}" đã quá hạn {overdue_days} ngày.'
+                    f' Hạn: {task.due_date.strftime("%d/%m/%Y")}.'
+                ),
+                entity_type='Task',
+                entity_id=task.id,
+                actor=request.user,
+            )
+            sent_count += 1
+
+        # Ghi comment sự kiện để timeline rõ loại event.
+        Comment.objects.create(
+            entity_type='Task',
+            entity_id=task.id,
+            content=(
+                f'⏰ **Nhắc quá hạn** bởi {actor_name}\n'
+                f'Quá hạn: {overdue_days} ngày (hạn {task.due_date.strftime("%d/%m/%Y")}).'
+            ),
+            created_by=request.user,
+        )
+        AuditLog.objects.create(
+            user=request.user,
+            action='UPDATE',
+            entity_type='Task',
+            entity_id=task.id,
+            entity_code=task.entity_code or str(task.id),
+            changed_fields=['overdue_reminder'],
+            old_values={'sent_count': 0},
+            new_values={'sent_count': sent_count, 'overdue_days': overdue_days},
+        )
+        return Response({
+            'success': True,
+            'sent_count': sent_count,
+            'overdue_days': overdue_days,
+            'message': f'Đã gửi {sent_count} thông báo nhắc quá hạn.',
+        })
+
+    def perform_update(self, serializer):
+        """Ghi AuditLog khi edit task. Dùng serializer.instance để tránh gọi get_object() thêm lần nữa."""
+        track_fields = ['title', 'description', 'assigned_to_id', 'depends_on_id', 'priority', 'is_blocking', 'due_date']
+        # Snapshot giá trị cũ TRƯỚC khi save (serializer.instance do DRF đã fetch)
+        old_snapshot = {f: getattr(serializer.instance, f) for f in track_fields}
+
+        instance = serializer.save()
+
+        changed, old_vals, new_vals = [], {}, {}
+        for field in track_fields:
+            old_val = old_snapshot[field]
+            new_val = getattr(instance, field)
+            if old_val != new_val:
+                changed.append(field)
+                old_vals[field] = str(old_val) if old_val is not None else None
+                new_vals[field] = str(new_val) if new_val is not None else None
+
+        if changed:
+            AuditLog.objects.create(
+                user=self.request.user,
+                action='UPDATE',
+                entity_type='Task',
+                entity_id=instance.id,
+                entity_code=instance.entity_code or str(instance.id),
+                changed_fields=changed,
+                old_values=old_vals,
+                new_values=new_vals,
+            )

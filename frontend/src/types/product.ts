@@ -111,6 +111,7 @@ export interface Product {
   // ============ TRẠNG THÁI ============
   status: 'DRAFT' | 'ACTIVE' | 'DISCONTINUED';
   has_pending_price_change?: boolean;
+  blocking_tasks_count?: number;
 
   // ============ PHÂN QUYỀN ============
   owner?: number;

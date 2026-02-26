@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Space } from 'antd';
 import { theme } from '../../styles/theme';
 

@@ -7,20 +7,9 @@ import type {
   PaginatedResponse,
   ProductFormData,
 } from '../types/product';
+import type { ActivityItem } from '../utils/historyUtils';
 
-export interface ActivityItem {
-  type: 'audit' | 'comment';
-  action: string;
-  user: string | null;
-  timestamp: string;
-  details?: {
-    old_values?: Record<string, unknown> | null;
-    new_values?: Record<string, unknown> | null;
-    changed_fields?: string[];
-    content?: string;
-    mentions?: string[];
-  };
-}
+export type { ActivityItem } from '../utils/historyUtils';
 
 export interface PriceChangeRecord {
   id: number;

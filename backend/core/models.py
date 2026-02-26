@@ -1333,3 +1333,127 @@ class ColumnPermission(models.Model):
         if getattr(self, '_debug', False):
             print(f"      ❌ DENIED")
         return False
+
+
+class Task(models.Model):
+    """
+    Nhiệm vụ giao cho người dùng, liên kết với bất kỳ đối tượng nào
+    (Product, Customer, SalesOrder, ...) qua entity_type + entity_id.
+
+    Blocking task: nếu is_blocking=True và status chưa DONE,
+    sẽ chặn các hành động như RELEASE sản xuất, duyệt đơn hàng.
+    """
+
+    STATUS_TODO = 'TODO'
+    STATUS_IN_PROGRESS = 'IN_PROGRESS'
+    STATUS_DONE = 'DONE'
+    STATUS_CANCELLED = 'CANCELLED'
+
+    STATUS_CHOICES = [
+        (STATUS_TODO, 'Chờ thực hiện'),
+        (STATUS_IN_PROGRESS, 'Đang thực hiện'),
+        (STATUS_DONE, 'Hoàn thành'),
+        (STATUS_CANCELLED, 'Đã hủy'),
+    ]
+
+    PRIORITY_LOW = 'LOW'
+    PRIORITY_MEDIUM = 'MEDIUM'
+    PRIORITY_HIGH = 'HIGH'
+    PRIORITY_URGENT = 'URGENT'
+
+    PRIORITY_CHOICES = [
+        (PRIORITY_LOW, 'Thấp'),
+        (PRIORITY_MEDIUM, 'Trung bình'),
+        (PRIORITY_HIGH, 'Cao'),
+        (PRIORITY_URGENT, 'Khẩn cấp'),
+    ]
+
+    # Liên kết đối tượng (cùng pattern với Comment, AuditLog)
+    entity_type = models.CharField(max_length=50, verbose_name='Loại đối tượng')
+    entity_id = models.PositiveIntegerField(verbose_name='ID đối tượng')
+    entity_code = models.CharField(max_length=100, blank=True, verbose_name='Mã đối tượng')
+
+    # Nội dung nhiệm vụ
+    title = models.CharField(max_length=200, verbose_name='Tiêu đề')
+    description = models.TextField(blank=True, verbose_name='Mô tả chi tiết')
+
+    # Giao việc
+    assigned_to = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='assigned_tasks', verbose_name='Người thực hiện',
+    )
+    assigned_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='created_tasks', verbose_name='Người giao',
+    )
+    depends_on = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='blocked_tasks', verbose_name='Phụ thuộc nhiệm vụ',
+        help_text='Task này chỉ thực hiện được sau khi nhiệm vụ phụ thuộc hoàn thành.',
+    )
+
+    # Trạng thái & ưu tiên
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_TODO, verbose_name='Trạng thái')
+    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default=PRIORITY_MEDIUM, verbose_name='Ưu tiên')
+
+    # Blocking: chặn hành động sản xuất cho đến khi DONE
+    is_blocking = models.BooleanField(default=False, verbose_name='Chặn sản xuất')
+    blocks_action = models.CharField(
+        max_length=50, blank=True,
+        verbose_name='Hành động bị chặn',
+        help_text='VD: RELEASE, APPROVE. Để trống = chặn tất cả.',
+    )
+
+    # Thời hạn
+    due_date = models.DateField(null=True, blank=True, verbose_name='Hạn hoàn thành')
+    completed_at = models.DateTimeField(null=True, blank=True, verbose_name='Thời gian hoàn thành')
+
+    # Cần hỗ trợ — nhân viên tự báo khi vướng mắc
+    needs_help = models.BooleanField(default=False, verbose_name='Cần hỗ trợ')
+    help_reason = models.TextField(blank=True, verbose_name='Lý do cần hỗ trợ')
+    help_requested_at = models.DateTimeField(null=True, blank=True, verbose_name='Thời điểm báo cần hỗ trợ')
+
+    # Ghi chú tiến độ — người được giao có thể cập nhật
+    last_update_note = models.TextField(blank=True, verbose_name='Ghi chú tiến độ')
+    last_update_at = models.DateTimeField(null=True, blank=True, verbose_name='Cập nhật tiến độ lần cuối')
+    last_updated_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='task_notes', verbose_name='Người cập nhật tiến độ',
+    )
+
+    # Audit
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'tasks'
+        ordering = ['-is_blocking', 'due_date', '-created_at']
+        verbose_name = 'Nhiệm vụ'
+        verbose_name_plural = 'Nhiệm vụ'
+        indexes = [
+            models.Index(fields=['entity_type', 'entity_id']),
+            models.Index(fields=['assigned_to']),
+            models.Index(fields=['status']),
+            models.Index(fields=['is_blocking', 'status']),
+        ]
+
+    def __str__(self):
+        return f'[{self.get_status_display()}] {self.title}'
+
+    @property
+    def is_open(self):
+        return self.status in (self.STATUS_TODO, self.STATUS_IN_PROGRESS)
+
+    def complete(self, user=None):
+        from django.utils import timezone
+        self.status = self.STATUS_DONE
+        self.completed_at = timezone.now()
+        self.save(update_fields=['status', 'completed_at', 'updated_at'])
+
+    def start(self):
+        self.status = self.STATUS_IN_PROGRESS
+        self.save(update_fields=['status', 'updated_at'])
+
+    def cancel(self):
+        self.status = self.STATUS_CANCELLED
+        self.save(update_fields=['status', 'updated_at'])

@@ -6,20 +6,9 @@ import type {
   PaginatedResponse,
   ApprovalHistoryItem,
 } from '../types/customer';
+import type { ActivityItem } from '../utils/historyUtils';
 
-export interface ActivityItem {
-  type: 'audit' | 'comment';
-  action: string;
-  user: string | null;
-  timestamp: string;
-  details?: {
-    old_values?: Record<string, unknown> | null;
-    new_values?: Record<string, unknown> | null;
-    changed_fields?: string[];
-    content?: string;
-    mentions?: string[];
-  };
-}
+export type { ActivityItem } from '../utils/historyUtils';
 
 export const customersApi = {
   getCustomers: async (params?: Record<string, unknown>): Promise<PaginatedResponse<Customer>> => {

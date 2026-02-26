@@ -84,14 +84,14 @@ export default function ListPagination({
               className="input-number-with-clear"
               value={isEditingPageSize ? pageSizeDraft : pageSize}
               formatter={(v) => {
-                if (isEditingPageSize && (v == null || v === '')) return '';
+                if (isEditingPageSize && v == null) return '';
                 return `${v ?? ''} / trang`;
               }}
               parser={(v) => {
                 const digits = String(v ?? '').replace(/[^\d]/g, '');
-                if (!digits) return '';
+                if (!digits) return Number.NaN;
                 const n = parseInt(digits, 10);
-                return Number.isNaN(n) ? '' : n;
+                return Number.isNaN(n) ? Number.NaN : n;
               }}
               onFocus={() => {
                 setIsEditingPageSize(true);
@@ -120,8 +120,7 @@ export default function ListPagination({
                 (pageSizeInputRef.current as any)?.blur?.();
               }}
             />
-            {(isEditingPageSize ? pageSizeDraft : pageSize) != null &&
-              (isEditingPageSize ? pageSizeDraft : pageSize) !== '' && (
+            {(isEditingPageSize ? pageSizeDraft : pageSize) != null && (
                 <QuickClearIcon
                   onClear={() => {
                     setPageSizeDraft(null);

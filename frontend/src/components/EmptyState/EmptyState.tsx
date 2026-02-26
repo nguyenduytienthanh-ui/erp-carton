@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Empty, Button } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { theme } from '../../styles/theme';
