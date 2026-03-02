@@ -49,7 +49,7 @@ import {
   FilterSelect,
   ListSearchInput,
   CommentBox,
-  TaskPanel,
+  TaskWorkspaceModal,
 } from '../../components';
 import ProductForm from './ProductForm';
 import {
@@ -1546,6 +1546,12 @@ const ProductList = () => {
           >
             {code ?? '-'}
           </span>
+          <Tooltip title="Giao nhiệm vụ nhanh cho mã hàng này">
+            <ProjectOutlined
+              style={{ color: '#1677ff', fontSize: 12, cursor: 'pointer' }}
+              onClick={(e) => { e.stopPropagation(); openTaskModal(record); }}
+            />
+          </Tooltip>
           {(record.blocking_tasks_count ?? 0) > 0 && (
             <Tooltip title={`${record.blocking_tasks_count} nhiệm vụ blocking đang chặn sản xuất`}>
               <LockOutlined
@@ -2725,35 +2731,14 @@ const ProductList = () => {
         </Modal>
 
         {/* ── Modal Giao nhiệm vụ ── */}
-        <Modal
-          title={
-            <Space>
-              <ProjectOutlined style={{ color: '#1677ff' }} />
-              {`Nhiệm vụ${taskProduct ? ` - ${taskProduct.code}` : ''}`}
-              {(taskProduct?.blocking_tasks_count ?? 0) > 0 && (
-                <Tooltip title="Có blocking task đang chặn sản xuất">
-                  <LockOutlined style={{ color: '#ff4d4f' }} />
-                </Tooltip>
-              )}
-            </Space>
-          }
+        <TaskWorkspaceModal
           open={taskModalOpen}
-          onCancel={() => { setTaskModalOpen(false); setTaskProduct(null); }}
-          footer={<Button onClick={() => { setTaskModalOpen(false); setTaskProduct(null); }}>Đóng</Button>}
-          width={680}
-          destroyOnClose
-        >
-          {taskProduct && (
-            <TaskPanel
-              entityType="Product"
-              entityId={taskProduct.id}
-              entityCode={taskProduct.code}
-              onTasksChange={() => {
-                void queryClient.invalidateQueries({ queryKey: ['products'], refetchType: 'all' });
-              }}
-            />
-          )}
-        </Modal>
+          onClose={() => { setTaskModalOpen(false); setTaskProduct(null); }}
+          entityType="Product"
+          entityId={taskProduct?.id ?? null}
+          entityCode={taskProduct?.code}
+          blockingCount={taskProduct?.blocking_tasks_count ?? 0}
+        />
 
         <Modal
           title={`Trình duyệt thay đổi giá${priceWorkflowProduct ? ` - ${priceWorkflowProduct.code}` : ''}`}

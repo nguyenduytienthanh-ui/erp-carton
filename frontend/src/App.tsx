@@ -11,6 +11,10 @@ import ProductList from './pages/Products/ProductList';
 import CategoryList from './pages/Categories/CategoryList';
 import UnitList from './pages/Units/UnitList';
 import CustomerList from './pages/Customers/CustomerList';
+import TaskOperationsBoard from './pages/Tasks/TaskOperationsBoard';
+import TaskInbox from './pages/Tasks/TaskInbox';
+import WorkflowTaskTemplateList from './pages/WorkflowTaskTemplates/WorkflowTaskTemplateList';
+import WorkflowPipelineBoard from './pages/WorkflowPipeline/WorkflowPipelineBoard';
 import { ProductsListFilterProvider } from './contexts/ProductsListFilterContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
@@ -76,6 +80,10 @@ function App() {
             <Route path="categories" element={<CategoryList />} />
             <Route path="units" element={<UnitList />} />
             <Route path="customers" element={<ErrorBoundary><CustomerList /></ErrorBoundary>} />
+            <Route path="task-operations" element={<ErrorBoundary><TaskOperationsBoard /></ErrorBoundary>} />
+            <Route path="task-inbox" element={<ErrorBoundary><TaskInbox /></ErrorBoundary>} />
+            <Route path="workflow-task-templates" element={<ErrorBoundary><WorkflowTaskTemplateList /></ErrorBoundary>} />
+            <Route path="workflow-pipeline" element={<ErrorBoundary><WorkflowPipelineBoard /></ErrorBoundary>} />
             <Route path="pricings" element={<div>Product Pricings (Đang phát triển)</div>} />
           </Route>
 

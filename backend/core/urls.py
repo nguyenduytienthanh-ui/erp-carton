@@ -8,6 +8,7 @@ from .views import (
     UserPreferencesViewSet,
     ColumnPermissionViewSet,
     TaskViewSet,
+    WorkflowTaskTemplateViewSet,
 )
 from products.views import (
     ProductCategoryViewSet,
@@ -41,6 +42,7 @@ router.register(r'products/box-types', ProductBoxTypeViewSet, basename='boxtype'
 router.register(r'products/products', ProductViewSet, basename='product')
 router.register(r'sales/orders', SalesOrderViewSet, basename='salesorder')
 router.register(r'tasks', TaskViewSet, basename='task')
+router.register(r'workflow-task-templates', WorkflowTaskTemplateViewSet, basename='workflowtasktemplate')
 
 urlpatterns = [
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),

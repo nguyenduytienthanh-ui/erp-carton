@@ -1395,6 +1395,8 @@ class Task(models.Model):
     # Trạng thái & ưu tiên
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_TODO, verbose_name='Trạng thái')
     priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default=PRIORITY_MEDIUM, verbose_name='Ưu tiên')
+    is_pinned = models.BooleanField(default=False, verbose_name='Ghim ưu tiên')
+    tags = models.JSONField(default=list, blank=True, verbose_name='Nhãn')
 
     # Blocking: chặn hành động sản xuất cho đến khi DONE
     is_blocking = models.BooleanField(default=False, verbose_name='Chặn sản xuất')
@@ -1419,6 +1421,13 @@ class Task(models.Model):
     last_updated_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='task_notes', verbose_name='Người cập nhật tiến độ',
+    )
+
+    # Chống tạo trùng khi sinh từ template (idempotency key)
+    source_key = models.CharField(
+        max_length=200, blank=True, null=True, unique=True,
+        verbose_name='Khóa nguồn gốc',
+        help_text='Định danh duy nhất khi sinh tự động từ template. Dạng: wft-{template_id}-{entity_type}-{entity_id}',
     )
 
     # Audit
@@ -1457,3 +1466,173 @@ class Task(models.Model):
     def cancel(self):
         self.status = self.STATUS_CANCELLED
         self.save(update_fields=['status', 'updated_at'])
+
+
+class TaskWatcher(models.Model):
+    """
+    Người theo dõi nhiệm vụ (watch/follow).
+    """
+    task = models.ForeignKey(
+        'Task', on_delete=models.CASCADE,
+        related_name='watchers', verbose_name='Nhiệm vụ',
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='watched_tasks', verbose_name='Người theo dõi',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'task_watchers'
+        verbose_name = 'Theo dõi nhiệm vụ'
+        verbose_name_plural = 'Theo dõi nhiệm vụ'
+        unique_together = [('task', 'user')]
+        indexes = [
+            models.Index(fields=['user', 'created_at']),
+            models.Index(fields=['task', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.user_id} watches {self.task_id}'
+
+
+class WorkflowTaskTemplate(models.Model):
+    """
+    Mẫu nhiệm vụ tự động sinh theo workflow.
+
+    Khi entity (SalesOrder, Product...) chuyển trạng thái (trigger),
+    hệ thống tự tạo Task theo template này (nếu is_active=True).
+
+    assign_rule JSON examples:
+      {}                               → không gán người
+      {"type": "role", "value": "Sales"}  → gán user đầu tiên có role đó
+      {"type": "user", "id": 5}        → gán user cụ thể theo id
+    """
+
+    TRIGGER_SUBMIT = 'SUBMIT'
+    TRIGGER_APPROVE = 'APPROVE'
+    TRIGGER_REJECT = 'REJECT'
+    TRIGGER_POST = 'POST'
+    TRIGGER_VOID = 'VOID'
+    TRIGGER_MANUAL = 'MANUAL'
+    TRIGGER_CHOICES = [
+        (TRIGGER_SUBMIT, 'Nộp duyệt'),
+        (TRIGGER_APPROVE, 'Phê duyệt'),
+        (TRIGGER_REJECT, 'Từ chối'),
+        (TRIGGER_POST, 'Đăng sổ (Post)'),
+        (TRIGGER_VOID, 'Hủy (Void)'),
+        (TRIGGER_MANUAL, 'Thủ công'),
+    ]
+
+    entity_type = models.CharField(
+        max_length=50, verbose_name='Loại đối tượng',
+        help_text='VD: SalesOrder, Product',
+    )
+    trigger = models.CharField(
+        max_length=50, choices=TRIGGER_CHOICES, verbose_name='Sự kiện kích hoạt',
+    )
+    title_template = models.CharField(
+        max_length=200, verbose_name='Tiêu đề nhiệm vụ',
+        help_text='Hỗ trợ placeholder: {entity_code}, {entity_type}, {trigger}',
+    )
+    description_template = models.TextField(
+        blank=True, verbose_name='Mô tả nhiệm vụ',
+        help_text='Hỗ trợ placeholder: {entity_code}, {entity_type}, {trigger}',
+    )
+    assign_rule = models.JSONField(
+        default=dict, blank=True, verbose_name='Quy tắc gán người',
+    )
+    due_in_days = models.PositiveSmallIntegerField(
+        default=3, verbose_name='Hạn hoàn thành (ngày)',
+        help_text='Số ngày kể từ ngày tạo task.',
+    )
+    priority = models.CharField(
+        max_length=20, choices=Task.PRIORITY_CHOICES,
+        default=Task.PRIORITY_MEDIUM, verbose_name='Ưu tiên',
+    )
+    is_blocking = models.BooleanField(
+        default=False, verbose_name='Chặn sản xuất',
+    )
+    blocks_action = models.CharField(
+        max_length=50, blank=True, verbose_name='Hành động bị chặn',
+    )
+    tags = models.JSONField(
+        default=list, blank=True, verbose_name='Nhãn',
+    )
+    depends_on_previous = models.BooleanField(
+        default=True,
+        verbose_name='Phụ thuộc bước trước',
+        help_text='Bật: task sinh từ mẫu này sẽ phụ thuộc task của mẫu đứng ngay trước theo thứ tự.',
+    )
+    sort_order = models.PositiveSmallIntegerField(
+        default=0, verbose_name='Thứ tự',
+    )
+    is_active = models.BooleanField(default=True, verbose_name='Kích hoạt')
+
+    # Audit
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='created_workflow_templates', verbose_name='Người tạo',
+    )
+
+    class Meta:
+        db_table = 'workflow_task_templates'
+        ordering = ['entity_type', 'trigger', 'sort_order', 'id']
+        verbose_name = 'Mẫu nhiệm vụ workflow'
+        verbose_name_plural = 'Mẫu nhiệm vụ workflow'
+        indexes = [
+            models.Index(fields=['entity_type', 'trigger', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f'[{self.entity_type}/{self.trigger}] {self.title_template}'
+
+
+class WorkflowPipelineEvent(models.Model):
+    """
+    Nhật ký chuyển tiếp công việc theo pipeline cho từng entity.
+    """
+    ACTION_ADVANCE = 'ADVANCE'
+    ACTION_MOVE = 'MOVE'
+    ACTION_FAIL = 'FAIL'
+    ACTION_GENERATE = 'GENERATE'
+    ACTION_CHOICES = [
+        (ACTION_ADVANCE, 'Chuyển bước'),
+        (ACTION_MOVE, 'Di chuyển cột'),
+        (ACTION_FAIL, 'Thất bại'),
+        (ACTION_GENERATE, 'Sinh task'),
+    ]
+
+    entity_type = models.CharField(max_length=50, db_index=True, verbose_name='Loại đối tượng')
+    entity_id = models.PositiveIntegerField(db_index=True, verbose_name='ID đối tượng')
+    entity_code = models.CharField(max_length=100, blank=True, verbose_name='Mã đối tượng')
+
+    trigger = models.CharField(max_length=50, blank=True, verbose_name='Trigger')
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES, verbose_name='Hành động')
+    from_step = models.CharField(max_length=200, blank=True, verbose_name='Từ bước')
+    to_step = models.CharField(max_length=200, blank=True, verbose_name='Đến bước')
+    note = models.TextField(blank=True, verbose_name='Ghi chú')
+
+    task = models.ForeignKey(
+        'Task', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='pipeline_events', verbose_name='Task liên quan',
+    )
+    actor = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='workflow_pipeline_events', verbose_name='Người thao tác',
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = 'workflow_pipeline_events'
+        ordering = ['-created_at', '-id']
+        verbose_name = 'Sự kiện pipeline workflow'
+        verbose_name_plural = 'Sự kiện pipeline workflow'
+        indexes = [
+            models.Index(fields=['entity_type', 'entity_id', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f'[{self.entity_type}:{self.entity_id}] {self.action} {self.from_step} -> {self.to_step}'

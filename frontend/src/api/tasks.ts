@@ -44,6 +44,8 @@ export interface TaskItem {
   status_display: string;
   priority: TaskPriority;
   priority_display: string;
+  is_pinned: boolean;
+  tags: string[];
   is_blocking: boolean;
   blocks_action: string;
   due_date: string | null;
@@ -61,6 +63,8 @@ export interface TaskItem {
   comment_count: number;
   attachment_count: number;
   activity_updated_at: string | null;
+  watchers_count: number;
+  is_watching: boolean;
   created_at: string;
   updated_at: string;
   is_open: boolean;
@@ -75,6 +79,8 @@ export interface TaskCreatePayload {
   assigned_to?: number | null;
   depends_on?: number | null;
   priority?: TaskPriority;
+  is_pinned?: boolean;
+  tags?: string[];
   is_blocking?: boolean;
   blocks_action?: string;
   due_date?: string | null;
@@ -87,8 +93,32 @@ export interface OverdueReminderResult {
   message: string;
 }
 
+export interface TaskMySummary {
+  assigned_to_me: number;
+  created_by_me: number;
+  watching: number;
+  team_members: number;
+  overdue: number;
+}
+
 export const tasksApi = {
-  list(params: { entity_type?: string; entity_id?: number; status?: string; mine?: boolean }) {
+  list(params: {
+    entity_type?: string;
+    entity_id?: number;
+    status?: string;
+    mine?: boolean;
+    created_by_me?: boolean;
+    watching?: boolean;
+    team_members?: boolean;
+    is_open?: boolean;
+    needs_help?: boolean;
+    is_blocking?: boolean;
+    is_overdue?: boolean;
+    dependency_blocked?: boolean;
+    ordering_mode?: 'quick_queue';
+    q?: string;
+    tag?: string;
+  }) {
     return axiosInstance
       .get<TaskItem[] | { results: TaskItem[]; count: number }>('/tasks/', {
         params: {
@@ -151,5 +181,17 @@ export const tasksApi = {
 
   remindOverdue(id: number) {
     return axiosInstance.post<OverdueReminderResult>(`/tasks/${id}/remind_overdue/`).then((r) => r.data);
+  },
+
+  watch(id: number) {
+    return axiosInstance.post<{ success: boolean; watching: boolean }>(`/tasks/${id}/watch/`).then((r) => r.data);
+  },
+
+  unwatch(id: number) {
+    return axiosInstance.post<{ success: boolean; watching: boolean }>(`/tasks/${id}/unwatch/`).then((r) => r.data);
+  },
+
+  mySummary() {
+    return axiosInstance.get<TaskMySummary>('/tasks/my_summary/').then((r) => r.data);
   },
 };

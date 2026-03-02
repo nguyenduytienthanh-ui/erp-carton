@@ -7,15 +7,16 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.http import HttpResponse
 from django.db import models
-from django.db.models import Count, DateTimeField, IntegerField, OuterRef, Subquery
+from django.db.models import Count, DateTimeField, Exists, IntegerField, OuterRef, Subquery
 from django.db.models.functions import Coalesce
 from datetime import datetime
 from datetime import timedelta
-from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, AuditLog, UserSession, UserPreferences, ColumnPermission, Task
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, AuditLog, UserSession, UserPreferences, ColumnPermission, Task, WorkflowTaskTemplate, TaskWatcher
 from .serializers import (
     UserSerializer, RoleSerializer, PermissionSerializer,
     TeamSerializer, SettingSerializer, CustomTokenObtainPairSerializer,
     CustomerSerializer, ExportTemplateSerializer, SavedViewSerializer, AttachmentSerializer, CommentSerializer, NotificationSerializer, UserSessionSerializer, UserPreferencesSerializer, ColumnPermissionSerializer, TaskSerializer,
+    WorkflowTaskTemplateSerializer,
 )
 from django.utils import timezone as django_timezone
 from .filters import CustomerFilter, TeamFilter, RoleFilter
@@ -1328,6 +1329,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         )
 
     def get_queryset(self):
+        user = self.request.user
         comment_count_subquery = (
             Comment.objects
             .filter(entity_type='Task', entity_id=OuterRef('pk'), is_deleted=False)
@@ -1354,6 +1356,14 @@ class TaskViewSet(viewsets.ModelViewSet):
             .order_by('-uploaded_at')
             .values('uploaded_at')[:1]
         )
+        watcher_count_subquery = (
+            TaskWatcher.objects
+            .filter(task_id=OuterRef('pk'))
+            .values('task_id')
+            .annotate(cnt=Count('id'))
+            .values('cnt')
+        )
+        is_watching_subquery = TaskWatcher.objects.filter(task_id=OuterRef('pk'), user=user)
 
         qs = (
             Task.objects
@@ -1369,6 +1379,11 @@ class TaskViewSet(viewsets.ModelViewSet):
                 ),
                 latest_comment_at_db=Subquery(latest_comment_subquery, output_field=DateTimeField()),
                 latest_attachment_at_db=Subquery(latest_attachment_subquery, output_field=DateTimeField()),
+                watchers_count_db=Coalesce(
+                    Subquery(watcher_count_subquery, output_field=IntegerField()),
+                    0,
+                ),
+                is_watching_db=Exists(is_watching_subquery),
             )
         )
         entity_type = self.request.query_params.get('entity_type')
@@ -1380,11 +1395,80 @@ class TaskViewSet(viewsets.ModelViewSet):
         status_param = self.request.query_params.get('status')
         if status_param:
             qs = qs.filter(status=status_param)
+        is_open = self.request.query_params.get('is_open')
+        if is_open == '1':
+            qs = qs.filter(status__in=[Task.STATUS_TODO, Task.STATUS_IN_PROGRESS])
+        needs_help = self.request.query_params.get('needs_help')
+        if needs_help == '1':
+            qs = qs.filter(needs_help=True, status__in=[Task.STATUS_TODO, Task.STATUS_IN_PROGRESS])
+        is_blocking = self.request.query_params.get('is_blocking')
+        if is_blocking == '1':
+            qs = qs.filter(is_blocking=True, status__in=[Task.STATUS_TODO, Task.STATUS_IN_PROGRESS])
+        is_overdue = self.request.query_params.get('is_overdue')
+        if is_overdue == '1':
+            qs = qs.filter(
+                due_date__lt=django_timezone.localdate(),
+                status__in=[Task.STATUS_TODO, Task.STATUS_IN_PROGRESS],
+            )
+        dependency_blocked = self.request.query_params.get('dependency_blocked')
+        if dependency_blocked == '1':
+            qs = qs.filter(depends_on__isnull=False).exclude(depends_on__status=Task.STATUS_DONE)
+        tag = (self.request.query_params.get('tag') or '').strip().lower()
+        if tag:
+            qs = qs.filter(tags__contains=[tag])
+        q = (self.request.query_params.get('q') or '').strip()
+        if q:
+            qs = qs.filter(
+                models.Q(title__icontains=q)
+                | models.Q(description__icontains=q)
+                | models.Q(entity_code__icontains=q)
+            )
         mine = self.request.query_params.get('mine')
         if mine == '1':
             qs = qs.filter(assigned_to=self.request.user)
-        # Blocking tasks trước, rồi theo thời gian tạo mới nhất
-        return qs.order_by('-is_blocking', '-created_at')
+        created_by_me = self.request.query_params.get('created_by_me')
+        if created_by_me == '1':
+            qs = qs.filter(assigned_by=self.request.user)
+        watching = self.request.query_params.get('watching')
+        if watching == '1':
+            qs = qs.filter(watchers__user=self.request.user)
+        team_members = self.request.query_params.get('team_members')
+        if team_members == '1':
+            team_ids = list(self.request.user.teams.values_list('id', flat=True))
+            if team_ids:
+                qs = qs.filter(assigned_to__teams__id__in=team_ids).exclude(assigned_to=self.request.user)
+            else:
+                qs = qs.none()
+        ordering_mode = (self.request.query_params.get('ordering_mode') or '').strip()
+        if ordering_mode == 'quick_queue':
+            today = django_timezone.localdate()
+            qs = qs.annotate(
+                overdue_rank=models.Case(
+                    models.When(
+                        due_date__lt=today,
+                        status__in=[Task.STATUS_TODO, Task.STATUS_IN_PROGRESS],
+                        then=models.Value(1),
+                    ),
+                    default=models.Value(0),
+                    output_field=IntegerField(),
+                ),
+                dependency_rank=models.Case(
+                    models.When(depends_on__isnull=False, depends_on__status=Task.STATUS_DONE, then=models.Value(0)),
+                    models.When(depends_on__isnull=False, then=models.Value(1)),
+                    default=models.Value(0),
+                    output_field=IntegerField(),
+                ),
+                priority_rank=models.Case(
+                    models.When(priority=Task.PRIORITY_URGENT, then=models.Value(4)),
+                    models.When(priority=Task.PRIORITY_HIGH, then=models.Value(3)),
+                    models.When(priority=Task.PRIORITY_MEDIUM, then=models.Value(2)),
+                    default=models.Value(1),
+                    output_field=IntegerField(),
+                ),
+            )
+            return qs.order_by('-is_pinned', '-is_blocking', '-needs_help', '-overdue_rank', '-dependency_rank', '-priority_rank', 'due_date', '-created_at').distinct()
+        # Mặc định: ưu tiên ghim + blocking + mới nhất
+        return qs.order_by('-is_pinned', '-is_blocking', '-created_at').distinct()
 
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
@@ -1407,6 +1491,9 @@ class TaskViewSet(viewsets.ModelViewSet):
         if task.status == Task.STATUS_CANCELLED:
             return Response({'error': 'Không thể hoàn thành nhiệm vụ đã hủy.'}, status=400)
         task.complete(user=request.user)
+        # Tự động đẩy qua bước kế tiếp nếu task thuộc pipeline template.
+        from .workflow_services import auto_advance_pipeline_from_completed_task
+        auto_advance_pipeline_from_completed_task(task, actor=request.user)
         return Response(TaskSerializer(task, context={'request': request}).data)
 
     @action(detail=True, methods=['post'])
@@ -1709,9 +1796,54 @@ class TaskViewSet(viewsets.ModelViewSet):
             'message': f'Đã gửi {sent_count} thông báo nhắc quá hạn.',
         })
 
+    @action(detail=True, methods=['post'])
+    def watch(self, request, pk=None):
+        task = self.get_object()
+        TaskWatcher.objects.get_or_create(task=task, user=request.user)
+        return Response({'success': True, 'watching': True})
+
+    @action(detail=True, methods=['post'])
+    def unwatch(self, request, pk=None):
+        task = self.get_object()
+        TaskWatcher.objects.filter(task=task, user=request.user).delete()
+        return Response({'success': True, 'watching': False})
+
+    @action(detail=False, methods=['get'])
+    def my_summary(self, request):
+        today = django_timezone.localdate()
+        team_ids = list(request.user.teams.values_list('id', flat=True))
+        open_statuses = [Task.STATUS_TODO, Task.STATUS_IN_PROGRESS]
+
+        assigned_to_me = Task.objects.filter(assigned_to=request.user, status__in=open_statuses).count()
+        created_by_me = Task.objects.filter(assigned_by=request.user, status__in=open_statuses).count()
+        watching = Task.objects.filter(watchers__user=request.user, status__in=open_statuses).distinct().count()
+        overdue = Task.objects.filter(
+            status__in=open_statuses,
+            due_date__lt=today,
+        ).filter(
+            models.Q(assigned_to=request.user)
+            | models.Q(assigned_by=request.user)
+            | models.Q(watchers__user=request.user)
+        ).distinct().count()
+        if team_ids:
+            team_members = Task.objects.filter(
+                status__in=open_statuses,
+                assigned_to__teams__id__in=team_ids,
+            ).exclude(assigned_to=request.user).distinct().count()
+        else:
+            team_members = 0
+
+        return Response({
+            'assigned_to_me': assigned_to_me,
+            'created_by_me': created_by_me,
+            'watching': watching,
+            'team_members': team_members,
+            'overdue': overdue,
+        })
+
     def perform_update(self, serializer):
         """Ghi AuditLog khi edit task. Dùng serializer.instance để tránh gọi get_object() thêm lần nữa."""
-        track_fields = ['title', 'description', 'assigned_to_id', 'depends_on_id', 'priority', 'is_blocking', 'due_date']
+        track_fields = ['title', 'description', 'assigned_to_id', 'depends_on_id', 'priority', 'is_pinned', 'tags', 'is_blocking', 'due_date']
         # Snapshot giá trị cũ TRƯỚC khi save (serializer.instance do DRF đã fetch)
         old_snapshot = {f: getattr(serializer.instance, f) for f in track_fields}
 
@@ -1737,3 +1869,238 @@ class TaskViewSet(viewsets.ModelViewSet):
                 old_values=old_vals,
                 new_values=new_vals,
             )
+
+
+class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
+    """
+    CRUD Mẫu nhiệm vụ workflow.
+    GET  /api/workflow-task-templates/
+    POST /api/workflow-task-templates/{id}/preview_generate/  — xem trước task sẽ sinh
+    POST /api/workflow-task-templates/generate_for_entity/    — sinh thật task cho entity
+    """
+    serializer_class = WorkflowTaskTemplateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = WorkflowTaskTemplate.objects.select_related('created_by')
+        entity_type = self.request.query_params.get('entity_type')
+        trigger = self.request.query_params.get('trigger')
+        is_active = self.request.query_params.get('is_active')
+        if entity_type:
+            qs = qs.filter(entity_type=entity_type)
+        if trigger:
+            qs = qs.filter(trigger=trigger)
+        if is_active is not None:
+            qs = qs.filter(is_active=(is_active not in ('0', 'false', 'False')))
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=False, methods=['post'], url_path='generate_for_entity')
+    def generate_for_entity(self, request):
+        """
+        Sinh task từ template cho một entity + trigger cụ thể.
+        Body: { entity_type, entity_id, entity_code, trigger }
+        Returns: { created: [...task titles], skipped: N }
+        """
+        from .workflow_services import generate_tasks_for_entity
+
+        entity_type = (request.data.get('entity_type') or '').strip()
+        entity_id = request.data.get('entity_id')
+        entity_code = (request.data.get('entity_code') or '').strip()
+        trigger = (request.data.get('trigger') or '').strip()
+
+        if not entity_type or not entity_id or not trigger:
+            return Response(
+                {'error': 'entity_type, entity_id và trigger là bắt buộc.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            entity_id = int(entity_id)
+        except (TypeError, ValueError):
+            return Response({'error': 'entity_id phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        created = generate_tasks_for_entity(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            entity_code=entity_code,
+            trigger=trigger,
+            triggered_by=request.user,
+        )
+
+        return Response({
+            'created_count': len(created),
+            'created': [{'id': t.id, 'title': t.title, 'source_key': t.source_key} for t in created],
+        })
+
+    @action(detail=False, methods=['post'], url_path='preview_generate')
+    def preview_generate(self, request):
+        """
+        Xem trước task sẽ được sinh (không tạo thật).
+        Body: { entity_type, entity_id, entity_code, trigger }
+        """
+        from .workflow_services import preview_tasks_for_entity
+
+        entity_type = (request.data.get('entity_type') or '').strip()
+        entity_id = request.data.get('entity_id')
+        entity_code = (request.data.get('entity_code') or '').strip()
+        trigger = (request.data.get('trigger') or '').strip()
+
+        if not entity_type or not entity_id or not trigger:
+            return Response(
+                {'error': 'entity_type, entity_id và trigger là bắt buộc.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            entity_id = int(entity_id)
+        except (TypeError, ValueError):
+            return Response({'error': 'entity_id phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        preview = preview_tasks_for_entity(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            entity_code=entity_code,
+            trigger=trigger,
+        )
+
+        return Response({'preview': preview, 'total': len(preview)})
+
+    @action(detail=False, methods=['get'], url_path='pipeline_board')
+    def pipeline_board(self, request):
+        """
+        Board quy trình kiểu cột cho entity + trigger.
+        GET /api/workflow-task-templates/pipeline_board/?entity_type=SalesOrder&trigger=SUBMIT&limit=200
+        """
+        from .workflow_services import build_workflow_pipeline_board
+
+        entity_type = (request.query_params.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.query_params.get('trigger') or 'SUBMIT').strip()
+        limit_raw = request.query_params.get('limit') or '200'
+        try:
+            limit = int(limit_raw)
+        except (TypeError, ValueError):
+            return Response({'error': 'limit phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+        limit = max(10, min(limit, 500))
+
+        data = build_workflow_pipeline_board(
+            entity_type=entity_type,
+            trigger=trigger,
+            limit=limit,
+        )
+        return Response(data)
+
+    @action(detail=False, methods=['post'], url_path='advance_pipeline')
+    def advance_pipeline(self, request):
+        """
+        Chuyển entity sang bước kế tiếp.
+        Body: {entity_type, entity_id, entity_code, trigger, note}
+        """
+        from .workflow_services import advance_pipeline_step
+
+        entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.data.get('trigger') or 'SUBMIT').strip()
+        entity_code = (request.data.get('entity_code') or '').strip()
+        note = (request.data.get('note') or '').strip()
+        try:
+            entity_id = int(request.data.get('entity_id'))
+        except (TypeError, ValueError):
+            return Response({'error': 'entity_id phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = advance_pipeline_step(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            entity_code=entity_code,
+            trigger=trigger,
+            actor=request.user,
+            note=note,
+        )
+        if not result.get('success'):
+            return Response({'error': result.get('error') or 'Không thể chuyển bước.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
+
+    @action(detail=False, methods=['post'], url_path='move_pipeline_card')
+    def move_pipeline_card(self, request):
+        """
+        Di chuyển card sang cột khác (drag-drop).
+        Body: {entity_type, entity_id, entity_code, trigger, target_column_id, note}
+        """
+        from .workflow_services import move_pipeline_card
+
+        entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.data.get('trigger') or 'SUBMIT').strip()
+        entity_code = (request.data.get('entity_code') or '').strip()
+        target_column_id = (request.data.get('target_column_id') or '').strip()
+        note = (request.data.get('note') or '').strip()
+        if not target_column_id:
+            return Response({'error': 'target_column_id là bắt buộc.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            entity_id = int(request.data.get('entity_id'))
+        except (TypeError, ValueError):
+            return Response({'error': 'entity_id phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = move_pipeline_card(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            entity_code=entity_code,
+            trigger=trigger,
+            target_column_id=target_column_id,
+            actor=request.user,
+            note=note,
+        )
+        if not result.get('success'):
+            return Response({'error': result.get('error') or 'Không thể di chuyển card.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
+
+    @action(detail=False, methods=['get'], url_path='pipeline_timeline')
+    def pipeline_timeline(self, request):
+        """
+        Timeline sự kiện pipeline theo entity.
+        GET .../pipeline_timeline/?entity_type=SalesOrder&entity_id=123&limit=100
+        """
+        from .workflow_services import get_pipeline_timeline
+
+        entity_type = (request.query_params.get('entity_type') or 'SalesOrder').strip()
+        try:
+            entity_id = int(request.query_params.get('entity_id'))
+        except (TypeError, ValueError):
+            return Response({'error': 'entity_id phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            limit = int(request.query_params.get('limit') or 100)
+        except (TypeError, ValueError):
+            limit = 100
+        limit = max(10, min(limit, 300))
+
+        timeline = get_pipeline_timeline(entity_type=entity_type, entity_id=entity_id, limit=limit)
+        return Response({'items': timeline, 'total': len(timeline)})
+
+    @action(detail=False, methods=['post'], url_path='retry_pipeline_failed')
+    def retry_pipeline_failed(self, request):
+        """
+        Khôi phục card Failed về bước xử lý trước đó.
+        Body: {entity_type, entity_id, entity_code, trigger, note}
+        """
+        from .workflow_services import retry_pipeline_from_failed
+
+        entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.data.get('trigger') or 'SUBMIT').strip()
+        entity_code = (request.data.get('entity_code') or '').strip()
+        note = (request.data.get('note') or '').strip()
+        try:
+            entity_id = int(request.data.get('entity_id'))
+        except (TypeError, ValueError):
+            return Response({'error': 'entity_id phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = retry_pipeline_from_failed(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            entity_code=entity_code,
+            trigger=trigger,
+            actor=request.user,
+            note=note,
+        )
+        if not result.get('success'):
+            return Response({'error': result.get('error') or 'Không thể khôi phục card failed.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)

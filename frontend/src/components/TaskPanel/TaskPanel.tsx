@@ -138,6 +138,8 @@ interface FormValues {
   assigned_to?: number;
   depends_on?: number;
   priority: TaskPriority;
+  is_pinned?: boolean;
+  tags?: string[];
   is_blocking: boolean;
   due_date?: dayjs.Dayjs;
 }
@@ -164,6 +166,20 @@ function renderFormFields(users: UserList, tasks: TaskItem[], currentTaskId?: nu
       <Form.Item name="description" label="Mô tả chi tiết" style={{ marginBottom: 10 }}>
         <Input.TextArea rows={2} placeholder="Thông tin thêm, yêu cầu kỹ thuật... (tuỳ chọn)" />
       </Form.Item>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <Form.Item name="is_pinned" label="Ghim ưu tiên" valuePropName="checked" initialValue={false} style={{ marginBottom: 10 }}>
+          <Switch size="small" />
+        </Form.Item>
+        <Form.Item name="tags" label="Nhãn (tags)" style={{ marginBottom: 10 }}>
+          <Select
+            mode="tags"
+            tokenSeparators={[',', ' ']}
+            placeholder="VD: phim_in, khuon_be, qc"
+            options={[]}
+          />
+        </Form.Item>
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
         <Form.Item name="assigned_to" label="Người thực hiện" style={{ marginBottom: 10 }}>
@@ -466,7 +482,7 @@ function TaskCard({ task, users, onRefresh, onEdit, lastReadAt, onMarkRead, queu
   const dependencyBlocked = isOpen && !!task.depends_on_info && task.depends_on_info.status !== 'DONE';
   const activityCount = (task.comment_count ?? 0) + (task.attachment_count ?? 0);
   const hasAnyActivity = activityCount > 0;
-  const hasUnreadActivity = !!task.activity_updated_at
+  const hasUnreadActivity = task.activity_updated_at
     ? (lastReadAt ? dayjs(task.activity_updated_at).isAfter(dayjs(lastReadAt)) : hasAnyActivity)
     : false;
 
@@ -550,6 +566,9 @@ function TaskCard({ task, users, onRefresh, onEdit, lastReadAt, onMarkRead, queu
                 Cần hỗ trợ
               </Tag>
             )}
+            {task.is_pinned && (
+              <Tag color="magenta" style={{ margin: 0, fontWeight: 600 }}>Ghim</Tag>
+            )}
             {task.is_blocking && isOpen && (
               <Tooltip title="Nhiệm vụ này đang chặn sản xuất">
                 <Tag icon={<LockOutlined />} color="error" style={{ margin: 0, cursor: 'default' }}>Blocking</Tag>
@@ -568,6 +587,13 @@ function TaskCard({ task, users, onRefresh, onEdit, lastReadAt, onMarkRead, queu
             <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 3, lineHeight: 1.5 }}>
               {task.description}
             </Text>
+          )}
+          {!!task.tags?.length && (
+            <div style={{ marginTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {task.tags.map((tag) => (
+                <Tag key={tag} style={{ marginInlineEnd: 0 }}>#{tag}</Tag>
+              ))}
+            </div>
           )}
 
           {/* Help reason */}
@@ -978,6 +1004,8 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
       assigned_to: values.assigned_to ?? null,
       depends_on: values.depends_on ?? null,
       priority: values.priority ?? 'MEDIUM',
+      is_pinned: !!values.is_pinned,
+      tags: (values.tags ?? []).map((x) => String(x).trim().toLowerCase()).filter(Boolean),
       is_blocking: values.is_blocking ?? false,
       due_date: values.due_date ? values.due_date.format('YYYY-MM-DD') : null,
     };
@@ -1006,6 +1034,8 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
       assigned_to: task.assigned_to ?? undefined,
       depends_on: task.depends_on ?? undefined,
       priority: task.priority as TaskPriority,
+      is_pinned: !!task.is_pinned,
+      tags: task.tags ?? [],
       is_blocking: task.is_blocking,
       due_date: task.due_date ? dayjs(task.due_date) : undefined,
     });
@@ -1023,6 +1053,8 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
         assigned_to: values.assigned_to ?? null,
         depends_on: values.depends_on ?? null,
         priority: values.priority, is_blocking: values.is_blocking,
+        is_pinned: !!values.is_pinned,
+        tags: (values.tags ?? []).map((x) => String(x).trim().toLowerCase()).filter(Boolean),
         due_date: values.due_date ? values.due_date.format('YYYY-MM-DD') : null,
       },
     });

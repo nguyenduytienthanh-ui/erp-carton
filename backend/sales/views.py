@@ -13,6 +13,7 @@ from django.db.models import Q
 
 from core.mixins import get_client_ip
 from core.models import AuditLog, ApprovalHistory
+from core.workflow_services import generate_tasks_for_entity
 from sales.models import SalesOrder, SalesOrderStatus
 from sales.serializers import SalesOrderSerializer
 from sales.filters import SalesOrderFilter
@@ -102,6 +103,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             new_values={'status': SalesOrderStatus.SUBMITTED},
             ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
+        generate_tasks_for_entity('SalesOrder', order.id, order.code, 'SUBMIT', triggered_by=request.user)
         return Response({'status': order.status})
 
     @action(detail=True, methods=['post'])
@@ -129,6 +131,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             new_values={'status': SalesOrderStatus.APPROVED},
             ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
+        generate_tasks_for_entity('SalesOrder', order.id, order.code, 'APPROVE', triggered_by=request.user)
         return Response({'status': order.status})
 
     @action(detail=True, methods=['post'])
@@ -155,6 +158,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             new_values={'status': SalesOrderStatus.REJECTED, 'reason': reason},
             ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
+        generate_tasks_for_entity('SalesOrder', order.id, order.code, 'REJECT', triggered_by=request.user)
         return Response({'status': order.status})
 
     @action(detail=True, methods=['post'])
@@ -166,6 +170,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         ok, msg = post_sales_order(order, request.user, request)
         if not ok:
             return Response({'error': msg}, status=status.HTTP_400_BAD_REQUEST)
+        generate_tasks_for_entity('SalesOrder', order.id, order.code, 'POST', triggered_by=request.user)
         return Response({'status': order.status, 'post_number': order.post_number, 'message': msg})
 
     @action(detail=True, methods=['post'])
@@ -194,6 +199,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             new_values={'status': SalesOrderStatus.VOID, 'reason': void_reason},
             ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
+        generate_tasks_for_entity('SalesOrder', order.id, order.code, 'VOID', triggered_by=request.user)
         return Response({'status': order.status})
 
     @action(detail=True, methods=['get'])

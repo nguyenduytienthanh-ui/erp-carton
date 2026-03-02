@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Layout, Menu, Button, Popover, message, Divider, Drawer } from 'antd';
+import { Layout, Menu, Button, Popover, Space, message, Divider, Drawer } from 'antd';
 import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -8,12 +8,17 @@ import {
   TagsOutlined,
   ToolOutlined,
   DollarOutlined,
+  ProjectOutlined,
+  ThunderboltOutlined,
+  ApartmentOutlined,
+  InboxOutlined,
   UserOutlined,
   TeamOutlined,
   LogoutOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { storage } from '../../utils/storage';
+import TaskQuickLauncher from '../TaskQuickLauncher/TaskQuickLauncher';
 
 const { Header, Sider, Content } = Layout;
 
@@ -72,6 +77,26 @@ const MainLayout = () => {
       key: '/pricings',
       icon: <DollarOutlined />,
       label: 'Bảng giá',
+    },
+    {
+      key: '/task-inbox',
+      icon: <InboxOutlined />,
+      label: 'Nhiệm vụ của tôi',
+    },
+    {
+      key: '/task-operations',
+      icon: <ProjectOutlined />,
+      label: 'Điều hành nhiệm vụ',
+    },
+    {
+      key: '/workflow-task-templates',
+      icon: <ThunderboltOutlined />,
+      label: 'Template nhiệm vụ',
+    },
+    {
+      key: '/workflow-pipeline',
+      icon: <ApartmentOutlined />,
+      label: 'Pipeline workflow',
     },
   ];
 
@@ -207,11 +232,14 @@ const MainLayout = () => {
             }}
           />
 
-          <Popover content={accountMenuContent} placement="bottomRight" trigger="click">
-            <Button type="text" icon={<UserOutlined />} style={{ fontSize: isMobile ? '14px' : '15px', height: isMobile ? 40 : desktopControlSize }}>
-              {isMobile ? (user?.username || 'Tài khoản') : `Tài khoản ${user?.username ? `(${user.username})` : ''}`}
-            </Button>
-          </Popover>
+          <Space size={10}>
+            {!isMobile && <TaskQuickLauncher />}
+            <Popover content={accountMenuContent} placement="bottomRight" trigger="click">
+              <Button type="text" icon={<UserOutlined />} style={{ fontSize: isMobile ? '14px' : '15px', height: isMobile ? 40 : desktopControlSize }}>
+                {isMobile ? (user?.username || 'Tài khoản') : `Tài khoản ${user?.username ? `(${user.username})` : ''}`}
+              </Button>
+            </Popover>
+          </Space>
         </Header>
         <Content
           className="app-main-content"
