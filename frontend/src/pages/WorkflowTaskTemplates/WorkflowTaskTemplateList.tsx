@@ -20,6 +20,7 @@ import {
   DeleteOutlined,
   ReloadOutlined,
   ThunderboltOutlined,
+  BookOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -34,13 +35,14 @@ import { TASK_PRIORITY_LABELS, TASK_PRIORITY_COLORS, type TaskPriority } from '.
 import { ColumnChooser, QuickClearIcon } from '../../components';
 import { useColumnSettings } from '../../hooks/useColumnSettings';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
+import { getEntityTypeLabel } from '../../utils/constants';
 
 const PAGE_KEY = 'workflow-task-templates-list';
 
 const ENTITY_TYPE_OPTIONS = [
-  { value: 'SalesOrder', label: 'Đơn hàng (SalesOrder)' },
-  { value: 'Product', label: 'Sản phẩm (Product)' },
-  { value: 'Customer', label: 'Khách hàng (Customer)' },
+  { value: 'SalesOrder', label: 'Đơn hàng' },
+  { value: 'Product', label: 'Sản phẩm' },
+  { value: 'Customer', label: 'Khách hàng' },
 ];
 
 const TRIGGER_OPTIONS = Object.entries(WFT_TRIGGER_LABELS).map(([value, label]) => ({
@@ -52,6 +54,22 @@ const PRIORITY_OPTIONS = Object.entries(TASK_PRIORITY_LABELS).map(([value, label
   value,
   label,
 }));
+
+function normalizeStepTitle(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/\{entity_code\}/gi, 'mã đối tượng')
+    .replace(/\(entity_code\)/gi, '(mã đối tượng)')
+    .replace(/\{entity_type\}/gi, 'loại đối tượng')
+    .replace(/\(entity_type\)/gi, '(loại đối tượng)')
+    .replace(/\{trigger\}/gi, 'sự kiện')
+    .replace(/\(trigger\)/gi, '(sự kiện)')
+    .replace(/\bXac nhan thong tin don\b/gi, 'Xác nhận thông tin đơn')
+    .replace(/\bLap ke hoach vat tu cho don\b/gi, 'Lập kế hoạch vật tư cho đơn')
+    .replace(/\bDieu do san xuat don\b/gi, 'Điều độ sản xuất đơn')
+    .replace(/\bQC thanh pham don\b/gi, 'QC thành phẩm đơn')
+    .replace(/\bChuan bi giao hang don\b/gi, 'Chuẩn bị giao hàng đơn');
+}
 
 const ALL_COLUMNS: { key: string; title: string; required?: boolean }[] = [
   { key: 'entity_type', title: 'Loại đối tượng', required: true },
@@ -177,6 +195,42 @@ export default function WorkflowTaskTemplateList() {
     onError: () => message.error('Lỗi khi xóa mẫu nhiệm vụ.'),
   });
 
+  const [playbookOpen, setPlaybookOpen] = useState(false);
+  const [playbookEntityType, setPlaybookEntityType] = useState<'SalesOrder' | 'Product' | 'Customer'>('SalesOrder');
+  const [playbookScenario, setPlaybookScenario] = useState<string | undefined>(undefined);
+  const [overwriteExisting, setOverwriteExisting] = useState(false);
+
+  const playbookQuery = useQuery({
+    queryKey: ['workflow-playbook-suggestions', playbookEntityType, playbookScenario],
+    queryFn: () =>
+      workflowTaskTemplatesApi.getPlaybookSuggestions({
+        entity_type: playbookEntityType,
+        scenario: playbookScenario,
+      }),
+    enabled: playbookOpen,
+    staleTime: 30_000,
+  });
+
+  const applyPlaybookMutation = useMutation({
+    mutationFn: () =>
+      workflowTaskTemplatesApi.applyPlaybook({
+        entity_type: playbookEntityType,
+        scenario: playbookScenario,
+        overwrite_existing: overwriteExisting,
+      }),
+    onSuccess: (res) => {
+      message.success(
+        `Đã áp dụng bộ mẫu: tạo mới ${res.created_count}, cập nhật ${res.updated_count}, bỏ qua ${res.skipped_count}.`
+      );
+      invalidate();
+      setPlaybookOpen(false);
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      message.error(msg || 'Không thể áp dụng bộ mẫu.');
+    },
+  });
+
   const toggleActiveMutation = useMutation({
     mutationFn: ({ id, is_active }: { id: number; is_active: boolean }) =>
       workflowTaskTemplatesApi.update(id, { is_active }),
@@ -279,7 +333,7 @@ export default function WorkflowTaskTemplateList() {
       dataIndex: 'entity_type',
       title: 'Loại đối tượng',
       width: 150,
-      render: (v: string) => <Tag>{v}</Tag>,
+      render: (v: string) => <Tag>{getEntityTypeLabel(v)}</Tag>,
     },
     {
       key: 'trigger',
@@ -414,13 +468,24 @@ export default function WorkflowTaskTemplateList() {
         <div>
           <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>
             <ThunderboltOutlined style={{ color: '#1677ff', marginRight: 8 }} />
-            Mẫu nhiệm vụ Workflow
+            Mẫu nhiệm vụ quy trình
           </h2>
           <p style={{ margin: '2px 0 0', color: '#666', fontSize: 13 }}>
             Tự động sinh task theo sự kiện chuyển trạng thái (đơn hàng, sản phẩm…)
           </p>
         </div>
         <Space>
+          <Button
+            icon={<BookOutlined />}
+            onClick={() => {
+              setPlaybookEntityType('SalesOrder');
+              setPlaybookScenario(undefined);
+              setOverwriteExisting(false);
+              setPlaybookOpen(true);
+            }}
+          >
+            Áp dụng bộ mẫu
+          </Button>
           <ColumnChooser
             columns={ALL_COLUMNS}
             visibleColumns={visibleColumns}
@@ -663,6 +728,91 @@ export default function WorkflowTaskTemplateList() {
             </div>
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="Áp dụng bộ mẫu quy trình"
+        open={playbookOpen}
+        onCancel={() => setPlaybookOpen(false)}
+        onOk={() => applyPlaybookMutation.mutate()}
+        okText="Áp dụng"
+        cancelText="Hủy"
+        confirmLoading={applyPlaybookMutation.isPending}
+        width={820}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space wrap>
+            <Select<'SalesOrder' | 'Product' | 'Customer'>
+              value={playbookEntityType}
+              onChange={(v) => {
+                setPlaybookEntityType(v);
+                setPlaybookScenario(undefined);
+              }}
+              options={ENTITY_TYPE_OPTIONS.map((x) => ({ value: x.value as 'SalesOrder' | 'Product' | 'Customer', label: x.label }))}
+              style={{ width: 240 }}
+            />
+            <Select<string>
+              value={playbookScenario}
+              onChange={setPlaybookScenario}
+              options={(playbookQuery.data?.available_scenarios ?? []).map((s) => ({
+                value: s,
+                label: s === 'STANDARD_ORDER' ? 'Đơn hàng tiêu chuẩn' : s,
+              }))}
+              placeholder="Chọn kịch bản"
+              style={{ width: 280 }}
+              loading={playbookQuery.isFetching}
+            />
+            <span style={{ color: '#666', fontSize: 13 }}>
+              Ghi đè mẫu trùng:
+            </span>
+            <Switch checked={overwriteExisting} onChange={setOverwriteExisting} />
+          </Space>
+
+          {playbookQuery.data?.description ? (
+            <div style={{ color: '#666', fontSize: 13 }}>
+              {playbookQuery.data.description}
+            </div>
+          ) : null}
+
+          <Table
+            size="small"
+            loading={playbookQuery.isLoading}
+            rowKey={(r) => `${r.trigger}-${r.sort_order}-${r.title_template}`}
+            dataSource={playbookQuery.data?.items ?? []}
+            pagination={false}
+            columns={[
+              { title: 'Thứ tự', dataIndex: 'sort_order', key: 'sort_order', width: 70 },
+              {
+                title: 'Sự kiện',
+                dataIndex: 'trigger',
+                key: 'trigger',
+                width: 100,
+                render: (v: WftTrigger) => WFT_TRIGGER_LABELS[v] ?? v,
+              },
+              {
+                title: 'Tiêu đề mẫu',
+                dataIndex: 'title_template',
+                key: 'title_template',
+                render: (v: string) => normalizeStepTitle(v),
+              },
+              { title: 'Hạn (ngày)', dataIndex: 'due_in_days', key: 'due_in_days', width: 90 },
+              {
+                title: 'Ưu tiên',
+                dataIndex: 'priority',
+                key: 'priority',
+                width: 90,
+                render: (v: TaskPriority) => TASK_PRIORITY_LABELS[v] ?? v,
+              },
+              {
+                title: 'Phụ thuộc',
+                dataIndex: 'depends_on_previous',
+                key: 'depends_on_previous',
+                width: 90,
+                render: (v: boolean) => (v ? 'Có' : 'Không'),
+              },
+            ]}
+          />
+        </Space>
       </Modal>
     </div>
   );

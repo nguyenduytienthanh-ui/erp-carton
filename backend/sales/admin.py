@@ -5,7 +5,13 @@ from django.db.models import Q
 
 from core.models import ApprovalHistory, AuditLog
 from core.mixins import get_client_ip
-from sales.models import SalesOrder, SalesOrderLine, SalesOrderPostingLog, SalesOrderStatus
+from sales.models import (
+    SalesOrder,
+    SalesOrderLine,
+    SalesOrderDeliveryPlan,
+    SalesOrderPostingLog,
+    SalesOrderStatus,
+)
 from sales.services import get_next_sales_order_code, post_sales_order
 
 
@@ -17,7 +23,7 @@ class SalesOrderLineInline(admin.TabularInline):
 
 @admin.register(SalesOrder)
 class SalesOrderAdmin(admin.ModelAdmin):
-    list_display = ['code', 'order_date', 'customer', 'status', 'total', 'posted_at', 'post_number', 'created_at']
+    list_display = ['code', 'order_date', 'delivery_date', 'customer', 'status', 'total', 'posted_at', 'post_number', 'created_at']
     list_filter = ['status', 'order_date', 'team']
     search_fields = ['code', 'reference', 'notes']
     date_hierarchy = 'order_date'
@@ -32,7 +38,7 @@ class SalesOrderAdmin(admin.ModelAdmin):
         'created_by', 'created_at', 'updated_by', 'updated_at',
     ]
     fieldsets = [
-        ('Thông tin chung', {'fields': ['code', 'doc_type', 'order_date', 'status', 'reference', 'customer', 'notes']}),
+        ('Thông tin chung', {'fields': ['code', 'doc_type', 'order_date', 'delivery_date', 'status', 'reference', 'customer', 'notes']}),
         ('Tiền tệ & Số tiền', {'fields': ['currency', 'exchange_rate', 'subtotal', 'discount_total', 'tax_total', 'total']}),
         ('Duyệt', {'fields': ['submitted_by', 'submitted_at', 'approved_by', 'approved_at', 'rejected_by', 'rejected_at', 'reject_reason']}),
         ('Vào sổ', {'fields': ['posted_by', 'posted_at', 'post_number', 'posted_snapshot']}),
@@ -43,7 +49,7 @@ class SalesOrderAdmin(admin.ModelAdmin):
     def get_readonly_fields(self, request, obj=None):
         ro = list(super().get_readonly_fields(request, obj))
         if obj and obj.status != SalesOrderStatus.DRAFT:
-            ro = ro + ['order_date', 'reference', 'customer', 'currency', 'exchange_rate', 'notes']
+            ro = ro + ['order_date', 'delivery_date', 'reference', 'customer', 'currency', 'exchange_rate', 'notes']
         return ro
 
     def get_queryset(self, request):
@@ -104,6 +110,20 @@ class SalesOrderLineAdmin(admin.ModelAdmin):
     list_display = ['sales_order', 'line_number', 'product', 'qty', 'unit_price', 'line_total']
     list_filter = ['sales_order']
     raw_id_fields = ['sales_order', 'product']
+
+
+@admin.register(SalesOrderDeliveryPlan)
+class SalesOrderDeliveryPlanAdmin(admin.ModelAdmin):
+    list_display = [
+        'line',
+        'delivery_date',
+        'qty',
+        'delivered_qty',
+        'remaining_qty',
+    ]
+    list_filter = ['delivery_date']
+    search_fields = ['line__sales_order__code', 'line__product__code', 'line__product__name']
+    raw_id_fields = ['line']
 
 
 @admin.register(SalesOrderPostingLog)

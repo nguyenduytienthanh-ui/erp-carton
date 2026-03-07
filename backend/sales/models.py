@@ -66,6 +66,7 @@ class SalesOrder(models.Model):
     code = models.CharField(max_length=50, unique=True, db_index=True)
     doc_type = models.CharField(max_length=20, default='SO')
     order_date = models.DateField()
+    delivery_date = models.DateField(null=True, blank=True, db_index=True)
     status = models.CharField(
         max_length=20,
         choices=SalesOrderStatus.CHOICES,
@@ -178,6 +179,7 @@ class SalesOrder(models.Model):
         indexes = [
             models.Index(fields=['code']),
             models.Index(fields=['order_date']),
+            models.Index(fields=['delivery_date']),
             models.Index(fields=['status']),
             models.Index(fields=['team']),
             models.Index(fields=['posted_at']),
@@ -252,6 +254,58 @@ class SalesOrderLine(models.Model):
         self.tax_amount = tax
         self.line_total = total
         super().save(*args, **kwargs)
+
+    @property
+    def planned_qty_total(self):
+        from django.db.models import Sum
+        agg = self.delivery_plans.aggregate(v=Sum('qty'))
+        return agg['v'] or Decimal('0')
+
+    @property
+    def unplanned_qty(self):
+        remaining = (self.qty or Decimal('0')) - self.planned_qty_total
+        return remaining if remaining > 0 else Decimal('0')
+
+
+class SalesOrderDeliveryPlan(models.Model):
+    """
+    Kế hoạch giao hàng theo từng dòng hàng.
+    - Một mã hàng có thể giao nhiều ngày khác nhau.
+    - Một mã hàng có thể tách nhiều lần theo số lượng.
+    """
+    line = models.ForeignKey(
+        SalesOrderLine,
+        on_delete=models.CASCADE,
+        related_name='delivery_plans',
+    )
+    delivery_date = models.DateField(db_index=True)
+    qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    delivered_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sales_order_delivery_plans'
+        ordering = ['delivery_date', 'id']
+        indexes = [
+            models.Index(fields=['delivery_date']),
+            models.Index(fields=['line', 'delivery_date']),
+        ]
+        verbose_name = 'Sales Order Delivery Plan'
+        verbose_name_plural = 'Sales Order Delivery Plans'
+
+    def __str__(self):
+        return f"{self.line.sales_order.code}#{self.line.line_number} {self.delivery_date} qty={self.qty}"
+
+    @property
+    def remaining_qty(self):
+        remain = (self.qty or Decimal('0')) - (self.delivered_qty or Decimal('0'))
+        return remain if remain > 0 else Decimal('0')
+
+    @property
+    def is_completed(self):
+        return self.remaining_qty <= 0
 
 
 # Posting log: ghi lại mỗi lần post (idempotent check bằng post_number / posted_at)

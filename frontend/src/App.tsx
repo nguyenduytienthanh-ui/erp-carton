@@ -15,6 +15,9 @@ import TaskOperationsBoard from './pages/Tasks/TaskOperationsBoard';
 import TaskInbox from './pages/Tasks/TaskInbox';
 import WorkflowTaskTemplateList from './pages/WorkflowTaskTemplates/WorkflowTaskTemplateList';
 import WorkflowPipelineBoard from './pages/WorkflowPipeline/WorkflowPipelineBoard';
+import WorkflowAnalyticsDashboard from './pages/WorkflowPipeline/WorkflowAnalyticsDashboard';
+import NotificationCenter from './pages/Notifications/NotificationCenter';
+import OperationsLogDashboard from './pages/Operations/OperationsLogDashboard';
 import { ProductsListFilterProvider } from './contexts/ProductsListFilterContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
@@ -84,7 +87,10 @@ function App() {
             <Route path="task-inbox" element={<ErrorBoundary><TaskInbox /></ErrorBoundary>} />
             <Route path="workflow-task-templates" element={<ErrorBoundary><WorkflowTaskTemplateList /></ErrorBoundary>} />
             <Route path="workflow-pipeline" element={<ErrorBoundary><WorkflowPipelineBoard /></ErrorBoundary>} />
-            <Route path="pricings" element={<div>Product Pricings (Đang phát triển)</div>} />
+            <Route path="workflow-analytics" element={<ErrorBoundary><WorkflowAnalyticsDashboard /></ErrorBoundary>} />
+            <Route path="notifications" element={<ErrorBoundary><NotificationCenter /></ErrorBoundary>} />
+            <Route path="operations-log" element={<ErrorBoundary><OperationsLogDashboard /></ErrorBoundary>} />
+            <Route path="pricings" element={<div>Bảng giá sản phẩm (Đang phát triển)</div>} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

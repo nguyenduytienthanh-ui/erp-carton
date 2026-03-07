@@ -11,7 +11,9 @@ from django.db.models import Count, DateTimeField, Exists, IntegerField, OuterRe
 from django.db.models.functions import Coalesce
 from datetime import datetime
 from datetime import timedelta
-from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, AuditLog, UserSession, UserPreferences, ColumnPermission, Task, WorkflowTaskTemplate, TaskWatcher
+from django.utils.dateparse import parse_datetime
+from django.core.cache import cache
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, AuditLog, UserSession, UserPreferences, ColumnPermission, Task, WorkflowTaskTemplate, TaskWatcher, WorkflowPipelineEvent
 from .serializers import (
     UserSerializer, RoleSerializer, PermissionSerializer,
     TeamSerializer, SettingSerializer, CustomTokenObtainPairSerializer,
@@ -1053,7 +1055,7 @@ class CommentViewSet(viewsets.ModelViewSet):
 
 class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
     """Combined activity stream from audit logs and comments"""
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     
     @action(detail=False, methods=['get'])
     def by_entity(self, request):
@@ -1159,13 +1161,261 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
         
         return Response(activities[:50])  # Return top 50
 
+    @staticmethod
+    def _to_bool(raw):
+        if raw is None:
+            return None
+        lowered = str(raw).strip().lower()
+        if lowered in ('1', 'true', 'yes'):
+            return True
+        if lowered in ('0', 'false', 'no'):
+            return False
+        return None
+
+    @staticmethod
+    def _parse_since(since_raw):
+        if since_raw is None or str(since_raw).strip() == '':
+            return None
+        dt = parse_datetime(str(since_raw).strip())
+        if dt is None:
+            return 'INVALID'
+        if django_timezone.is_naive(dt):
+            dt = django_timezone.make_aware(dt, django_timezone.get_current_timezone())
+        return dt
+
+    def _build_operations_items(
+        self,
+        user,
+        actor_query='',
+        action_filter='ALL',
+        source_filter='ALL',
+        success_filter='ALL',
+        q='',
+        include_all=False,
+        limit=100,
+    ):
+        actor_query = (actor_query or '').strip().lower()
+        action_filter = (action_filter or 'ALL').strip().upper()
+        source_filter = (source_filter or 'ALL').strip().upper()
+        success_filter = (success_filter or 'ALL').strip().upper()
+        q = (q or '').strip().lower()
+
+        allow_all = include_all and (user.is_staff or user.is_superuser)
+        items = []
+
+        def allow_item(source, action, actor_name, success, message):
+            if source_filter != 'ALL' and source != source_filter:
+                return False
+            if action_filter != 'ALL' and str(action or '').upper() != action_filter:
+                return False
+            if actor_query and actor_query not in (actor_name or '').lower():
+                return False
+            if success_filter == 'SUCCESS' and success is not True:
+                return False
+            if success_filter == 'FAILED' and success is not False:
+                return False
+            if q:
+                haystack = ' '.join([
+                    source,
+                    str(action or ''),
+                    actor_name or '',
+                    message or '',
+                ]).lower()
+                if q not in haystack:
+                    return False
+            return True
+
+        audit_qs = AuditLog.objects.filter(
+            entity_type__in=['TaskBulk', 'WorkflowAnalytics', 'Task', 'WorkflowAutomation']
+        ).select_related('user').order_by('-created_at', '-id')
+        if not allow_all:
+            audit_qs = audit_qs.filter(user=user)
+        audit_qs = audit_qs[: max(limit * 3, 120)]
+
+        for log in audit_qs:
+            payload = log.new_values or {}
+            actor_name = log.user.username if log.user else None
+            if log.entity_type == 'TaskBulk':
+                source = 'TASK_BULK'
+                action = str(payload.get('action') or 'UPDATE').upper()
+                failed_count = int(payload.get('failed_count') or 0)
+                success = failed_count == 0
+                message = (
+                    f'Bulk {action}: thành công {int(payload.get("success_count") or 0)}, '
+                    f'lỗi {failed_count}.'
+                )
+                meta = {
+                    'selected_count': int(payload.get('total_requested') or 0),
+                    'processed_count': int(payload.get('processed_count') or 0),
+                    'success_count': int(payload.get('success_count') or 0),
+                    'failed_count': failed_count,
+                    'reminder_sent_count': int(payload.get('reminder_sent_count') or 0),
+                }
+            elif log.entity_type == 'WorkflowAnalytics':
+                source = 'INSIGHT_ACTION'
+                action = str(payload.get('suggested_action') or 'EXECUTE').upper()
+                success = bool(payload.get('success', True))
+                message = str(payload.get('message') or payload.get('insight_type') or 'Thực thi insight')
+                meta = {
+                    'insight_type': payload.get('insight_type'),
+                    'manual_action': bool(payload.get('manual_action', False)),
+                }
+            elif log.entity_type == 'WorkflowAutomation':
+                source = 'AUTOMATION_RUN'
+                action = str(payload.get('profile_key') or 'RUN_PROFILE').upper()
+                success = bool(payload.get('success', True))
+                message = str(payload.get('message') or 'Đã chạy profile tự động hóa.')
+                meta = {
+                    'run_mode': payload.get('run_mode') or 'MANUAL_PROFILE',
+                    'auto_started_count': int(payload.get('auto_started_count') or 0),
+                    'overdue_reminded_count': int(payload.get('overdue_reminded_count') or 0),
+                    'notifications_sent': int(payload.get('notifications_sent') or 0),
+                }
+            else:
+                source = 'TASK_AUDIT'
+                action = str(log.action or 'UPDATE').upper()
+                success = True
+                message = ', '.join(log.changed_fields or []) or 'Cập nhật task'
+                meta = {
+                    'entity_type': log.entity_type,
+                    'entity_id': log.entity_id,
+                }
+
+            if not allow_item(source, action, actor_name, success, message):
+                continue
+            items.append({
+                'id': f'audit-{log.id}',
+                'source': source,
+                'action': action,
+                'actor': actor_name,
+                'success': success,
+                'message': message,
+                'entity_type': log.entity_type,
+                'entity_id': log.entity_id,
+                'entity_code': log.entity_code,
+                'created_at': log.created_at,
+                'meta': meta,
+            })
+
+        pipeline_qs = WorkflowPipelineEvent.objects.select_related('actor').order_by('-created_at', '-id')
+        if not allow_all:
+            pipeline_qs = pipeline_qs.filter(actor=user)
+        pipeline_qs = pipeline_qs[: max(limit * 3, 120)]
+        for ev in pipeline_qs:
+            source = 'PIPELINE_EVENT'
+            action = str(ev.action or '').upper()
+            actor_name = ev.actor.username if ev.actor else None
+            success = True
+            message = ev.note or f'{ev.from_step or "-"} -> {ev.to_step or "-"}'
+            if not allow_item(source, action, actor_name, success, message):
+                continue
+            items.append({
+                'id': f'pipeline-{ev.id}',
+                'source': source,
+                'action': action,
+                'actor': actor_name,
+                'success': success,
+                'message': message,
+                'entity_type': ev.entity_type,
+                'entity_id': ev.entity_id,
+                'entity_code': ev.entity_code,
+                'created_at': ev.created_at,
+                'meta': {
+                    'trigger': ev.trigger,
+                    'from_step': ev.from_step,
+                    'to_step': ev.to_step,
+                },
+            })
+
+        items.sort(key=lambda x: x['created_at'], reverse=True)
+        return items[:limit]
+
+    @action(detail=False, methods=['get'], url_path='operations_log')
+    def operations_log(self, request):
+        """
+        Nhật ký vận hành hợp nhất (Task/Pipeline/Bulk/Insight).
+        Query:
+          - actor_query, action, source, success, q, limit, include_all
+        """
+        actor_query = request.query_params.get('actor_query') or ''
+        action_filter = request.query_params.get('action') or 'ALL'
+        source_filter = request.query_params.get('source') or 'ALL'
+        success_filter = request.query_params.get('success') or 'ALL'
+        q = request.query_params.get('q') or ''
+        include_all = str(request.query_params.get('include_all') or '').strip().lower() in ('1', 'true', 'yes')
+        try:
+            limit = int(request.query_params.get('limit') or 100)
+        except (TypeError, ValueError):
+            return Response({'error': 'limit phải là số nguyên.'}, status=400)
+        limit = max(10, min(limit, 300))
+        items = self._build_operations_items(
+            user=request.user,
+            actor_query=actor_query,
+            action_filter=action_filter,
+            source_filter=source_filter,
+            success_filter=success_filter,
+            q=q,
+            include_all=include_all,
+            limit=limit,
+        )
+        return Response({'items': items, 'total': len(items)})
+
+    @action(detail=False, methods=['get'], url_path='operations_live_updates')
+    def operations_live_updates(self, request):
+        """
+        Kiểm tra thay đổi mới cho nhật ký vận hành (lightweight).
+        Query: giống operations_log + since (ISO datetime)
+        """
+        since_dt = self._parse_since(request.query_params.get('since'))
+        if since_dt == 'INVALID':
+            return Response({'error': 'since phải là ISO datetime hợp lệ.'}, status=400)
+
+        actor_query = request.query_params.get('actor_query') or ''
+        action_filter = request.query_params.get('action') or 'ALL'
+        source_filter = request.query_params.get('source') or 'ALL'
+        success_filter = request.query_params.get('success') or 'ALL'
+        q = request.query_params.get('q') or ''
+        include_all = str(request.query_params.get('include_all') or '').strip().lower() in ('1', 'true', 'yes')
+
+        # Lấy một tập mới nhất rồi lọc theo cùng tiêu chí để xác định latest + changed_count.
+        items = self._build_operations_items(
+            user=request.user,
+            actor_query=actor_query,
+            action_filter=action_filter,
+            source_filter=source_filter,
+            success_filter=success_filter,
+            q=q,
+            include_all=include_all,
+            limit=300,
+        )
+        latest_at = items[0]['created_at'] if items else None
+        changed_count = 0
+        if since_dt is not None:
+            changed_count = sum(1 for item in items if item['created_at'] > since_dt)
+        return Response({
+            'has_changes': changed_count > 0,
+            'latest_at': latest_at,
+            'server_time': django_timezone.now(),
+            'changed_count': changed_count,
+        })
+
 
 class NotificationViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationSerializer
     
     def get_queryset(self):
         # User chỉ thấy notifications của mình
-        return Notification.objects.filter(recipient=self.request.user)
+        qs = Notification.objects.filter(recipient=self.request.user)
+        unread = self.request.query_params.get('unread')
+        if unread in ('1', 'true', 'yes'):
+            qs = qs.filter(is_read=False)
+        type_filter = (self.request.query_params.get('type') or '').strip()
+        if type_filter:
+            qs = qs.filter(notification_type=type_filter)
+        q = (self.request.query_params.get('q') or '').strip()
+        if q:
+            qs = qs.filter(models.Q(title__icontains=q) | models.Q(message__icontains=q))
+        return qs
     
     @action(detail=False, methods=['get'])
     def unread(self, request):
@@ -1196,6 +1446,50 @@ class NotificationViewSet(viewsets.ModelViewSet):
             read_at=timezone.now()
         )
         return Response({"success": True, "count": count})
+
+    @action(detail=False, methods=['post'])
+    def mark_many_read(self, request):
+        """Mark selected notifications as read"""
+        from django.utils import timezone
+        raw_ids = request.data.get('ids') or []
+        if not isinstance(raw_ids, list):
+            return Response({'error': 'ids phải là danh sách.'}, status=400)
+        ids = []
+        for raw in raw_ids:
+            try:
+                nid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if nid > 0:
+                ids.append(nid)
+        if not ids:
+            return Response({'error': 'ids không hợp lệ.'}, status=400)
+        count = self.get_queryset().filter(id__in=ids, is_read=False).update(
+            is_read=True,
+            read_at=timezone.now(),
+        )
+        return Response({'success': True, 'count': count})
+
+    @action(detail=False, methods=['get'])
+    def live_updates(self, request):
+        """Lightweight endpoint for notification realtime checks"""
+        since_dt = TaskViewSet._parse_since(request.query_params.get('since'))
+        if since_dt == 'INVALID':
+            return Response({'error': 'since phải là ISO datetime hợp lệ.'}, status=400)
+
+        qs = self.get_queryset()
+        latest_at = qs.order_by('-created_at', '-id').values_list('created_at', flat=True).first()
+        unread_count = qs.filter(is_read=False).count()
+        changed_count = 0
+        if since_dt is not None:
+            changed_count = qs.filter(created_at__gt=since_dt).count()
+        return Response({
+            'has_changes': changed_count > 0,
+            'latest_at': latest_at,
+            'server_time': django_timezone.now(),
+            'changed_count': changed_count,
+            'unread_count': unread_count,
+        })
 
 
 class UserSessionViewSet(viewsets.ReadOnlyModelViewSet):
@@ -1327,6 +1621,17 @@ class TaskViewSet(viewsets.ModelViewSet):
             or user.is_staff
             or user.is_superuser
         )
+
+    @staticmethod
+    def _parse_since(since_raw):
+        if since_raw is None or str(since_raw).strip() == '':
+            return None
+        dt = parse_datetime(str(since_raw).strip())
+        if dt is None:
+            return 'INVALID'
+        if django_timezone.is_naive(dt):
+            dt = django_timezone.make_aware(dt, django_timezone.get_current_timezone())
+        return dt
 
     def get_queryset(self):
         user = self.request.user
@@ -1808,6 +2113,342 @@ class TaskViewSet(viewsets.ModelViewSet):
         TaskWatcher.objects.filter(task=task, user=request.user).delete()
         return Response({'success': True, 'watching': False})
 
+    @action(detail=False, methods=['post'])
+    def bulk_action(self, request):
+        """
+        Thao tác task hàng loạt.
+        Body:
+          {
+            "action": "START" | "COMPLETE" | "REMIND_OVERDUE",
+            "task_ids": [1,2,3]
+          }
+        """
+        action_name = str(request.data.get('action') or '').strip().upper()
+        raw_ids = request.data.get('task_ids') or []
+        if action_name not in ('START', 'COMPLETE', 'REMIND_OVERDUE'):
+            return Response({'error': 'action không hợp lệ.'}, status=400)
+        if not isinstance(raw_ids, list):
+            return Response({'error': 'task_ids phải là danh sách.'}, status=400)
+
+        ordered_ids = []
+        for raw_id in raw_ids:
+            try:
+                task_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if task_id > 0 and task_id not in ordered_ids:
+                ordered_ids.append(task_id)
+        if not ordered_ids:
+            return Response({'error': 'task_ids không hợp lệ.'}, status=400)
+
+        task_map = {
+            task.id: task
+            for task in Task.objects.select_related('depends_on', 'assigned_to', 'assigned_by').filter(id__in=ordered_ids)
+        }
+        today = django_timezone.localdate()
+        cool_down_since = django_timezone.now() - timedelta(hours=6)
+        actor_name = request.user.get_full_name() or request.user.username
+        items = []
+        success_count = 0
+        failed_count = 0
+        reminder_sent_total = 0
+        failed_items = []
+
+        for task_id in ordered_ids:
+            task = task_map.get(task_id)
+            if not task:
+                failed_count += 1
+                failed_items.append({'task_id': task_id, 'message': 'Không tìm thấy nhiệm vụ.'})
+                items.append({
+                    'task_id': task_id,
+                    'success': False,
+                    'message': 'Không tìm thấy nhiệm vụ.',
+                })
+                continue
+            try:
+                if action_name == 'START':
+                    if task.status != Task.STATUS_TODO:
+                        raise ValueError('Chỉ có thể bắt đầu nhiệm vụ đang ở trạng thái Chờ thực hiện.')
+                    if task.depends_on_id and task.depends_on and task.depends_on.status != Task.STATUS_DONE:
+                        raise ValueError(f'Nhiệm vụ đang chờ "{task.depends_on.title}" hoàn thành.')
+                    task.start()
+                    success_count += 1
+                    items.append({
+                        'task_id': task.id,
+                        'success': True,
+                        'message': 'Đã bắt đầu nhiệm vụ.',
+                    })
+                    continue
+
+                if action_name == 'COMPLETE':
+                    if task.status == Task.STATUS_DONE:
+                        raise ValueError('Nhiệm vụ đã hoàn thành.')
+                    if task.status == Task.STATUS_CANCELLED:
+                        raise ValueError('Không thể hoàn thành nhiệm vụ đã hủy.')
+                    task.complete(user=request.user)
+                    from .workflow_services import auto_advance_pipeline_from_completed_task
+                    auto_advance_pipeline_from_completed_task(task, actor=request.user)
+                    success_count += 1
+                    items.append({
+                        'task_id': task.id,
+                        'success': True,
+                        'message': 'Đã hoàn thành nhiệm vụ.',
+                    })
+                    continue
+
+                if action_name == 'REMIND_OVERDUE':
+                    if not task.is_open:
+                        raise ValueError('Chỉ nhắc quá hạn cho nhiệm vụ đang mở.')
+                    if not task.due_date:
+                        raise ValueError('Nhiệm vụ chưa có hạn hoàn thành.')
+                    if task.due_date >= today:
+                        raise ValueError('Nhiệm vụ chưa quá hạn.')
+                    if not self._can_manage_task(request.user, task):
+                        raise PermissionError('Không có quyền gửi nhắc quá hạn cho nhiệm vụ này.')
+
+                    overdue_days = (today - task.due_date).days
+                    recipients = set()
+                    if task.assigned_to_id:
+                        recipients.add(task.assigned_to_id)
+                    if task.assigned_by_id:
+                        recipients.add(task.assigned_by_id)
+                    if overdue_days >= 2:
+                        manager_ids = User.objects.filter(
+                            models.Q(is_staff=True) | models.Q(is_superuser=True),
+                            is_active=True,
+                        ).values_list('id', flat=True)
+                        recipients.update(set(manager_ids))
+                    recipients.discard(request.user.id)
+
+                    sent_count = 0
+                    for uid in recipients:
+                        duplicated_recent = Notification.objects.filter(
+                            recipient_id=uid,
+                            notification_type='due_date',
+                            entity_type='Task',
+                            entity_id=task.id,
+                            created_at__gte=cool_down_since,
+                        ).exists()
+                        if duplicated_recent:
+                            continue
+                        Notification.objects.create(
+                            recipient_id=uid,
+                            notification_type='due_date',
+                            title=f'⏰ Nhắc quá hạn: {task.title[:60]}',
+                            message=(
+                                f'{actor_name} nhắc nhiệm vụ "{task.title}" đã quá hạn {overdue_days} ngày.'
+                                f' Hạn: {task.due_date.strftime("%d/%m/%Y")}.'
+                            ),
+                            entity_type='Task',
+                            entity_id=task.id,
+                            actor=request.user,
+                        )
+                        sent_count += 1
+                    Comment.objects.create(
+                        entity_type='Task',
+                        entity_id=task.id,
+                        content=(
+                            f'⏰ **Nhắc quá hạn (bulk)** bởi {actor_name}\n'
+                            f'Quá hạn: {overdue_days} ngày (hạn {task.due_date.strftime("%d/%m/%Y")}).'
+                        ),
+                        created_by=request.user,
+                    )
+                    AuditLog.objects.create(
+                        user=request.user,
+                        action='UPDATE',
+                        entity_type='Task',
+                        entity_id=task.id,
+                        entity_code=task.entity_code or str(task.id),
+                        changed_fields=['overdue_reminder'],
+                        old_values={'sent_count': 0},
+                        new_values={'sent_count': sent_count, 'overdue_days': overdue_days, 'mode': 'BULK'},
+                    )
+                    success_count += 1
+                    reminder_sent_total += sent_count
+                    items.append({
+                        'task_id': task.id,
+                        'success': True,
+                        'message': 'Đã xử lý nhắc quá hạn.',
+                        'sent_count': sent_count,
+                    })
+                    continue
+
+                raise ValueError('Thao tác không hỗ trợ.')
+            except PermissionError as e:
+                failed_count += 1
+                failed_items.append({'task_id': task.id, 'message': str(e)})
+                items.append({
+                    'task_id': task.id,
+                    'success': False,
+                    'message': str(e),
+                })
+            except Exception as e:
+                failed_count += 1
+                failed_items.append({'task_id': task.id, 'message': str(e)})
+                items.append({
+                    'task_id': task.id,
+                    'success': False,
+                    'message': str(e),
+                })
+
+        summary_payload = {
+            'success': True,
+            'action': action_name,
+            'total_requested': len(ordered_ids),
+            'processed_count': len(items),
+            'success_count': success_count,
+            'failed_count': failed_count,
+            'reminder_sent_count': reminder_sent_total,
+            'items': items,
+        }
+        # Audit log tổng hợp cho thao tác hàng loạt (dùng cho lịch sử vận hành).
+        AuditLog.objects.create(
+            user=request.user,
+            action='UPDATE',
+            entity_type='TaskBulk',
+            entity_id=0,
+            entity_code='TASK_BULK',
+            changed_fields=['bulk_action'],
+            old_values={},
+            new_values={
+                'action': action_name,
+                'total_requested': len(ordered_ids),
+                'processed_count': len(items),
+                'success_count': success_count,
+                'failed_count': failed_count,
+                'reminder_sent_count': reminder_sent_total,
+                'failed_items': failed_items[:50],
+            },
+        )
+        return Response(summary_payload)
+
+    @action(detail=False, methods=['get'])
+    def bulk_history(self, request):
+        """
+        Lịch sử thao tác task hàng loạt (từ AuditLog).
+        Query:
+          - action: START | COMPLETE | REMIND_OVERDUE
+          - result: ALL | SUCCESS | HAS_ERROR
+          - limit: 1..200
+        """
+        action_filter = str(request.query_params.get('action') or 'ALL').strip().upper()
+        result_filter = str(request.query_params.get('result') or 'ALL').strip().upper()
+        try:
+            limit = int(request.query_params.get('limit') or 50)
+        except (TypeError, ValueError):
+            return Response({'error': 'limit phải là số nguyên.'}, status=400)
+        limit = max(1, min(limit, 200))
+
+        qs = AuditLog.objects.filter(entity_type='TaskBulk').order_by('-created_at', '-id')
+        # Mặc định user xem log của chính mình; staff/superuser có thể xem tất cả bằng include_all=1
+        include_all = str(request.query_params.get('include_all') or '').strip().lower() in ('1', 'true', 'yes')
+        if not include_all or not (request.user.is_staff or request.user.is_superuser):
+            qs = qs.filter(user=request.user)
+
+        items = []
+        for log in qs[:limit]:
+            payload = log.new_values or {}
+            action_name = str(payload.get('action') or '').upper()
+            failed_count = int(payload.get('failed_count') or 0)
+            if action_filter != 'ALL' and action_name != action_filter:
+                continue
+            if result_filter == 'SUCCESS' and failed_count > 0:
+                continue
+            if result_filter == 'HAS_ERROR' and failed_count == 0:
+                continue
+            items.append({
+                'id': str(log.id),
+                'action': action_name,
+                'action_label': (
+                    'Bắt đầu' if action_name == 'START'
+                    else 'Hoàn thành' if action_name == 'COMPLETE'
+                    else 'Nhắc quá hạn' if action_name == 'REMIND_OVERDUE'
+                    else action_name
+                ),
+                'selected_count': int(payload.get('total_requested') or 0),
+                'processed_count': int(payload.get('processed_count') or 0),
+                'success_count': int(payload.get('success_count') or 0),
+                'failed_count': failed_count,
+                'reminder_sent_count': int(payload.get('reminder_sent_count') or 0),
+                'failed_items': payload.get('failed_items') or [],
+                'actor': log.user.username if log.user else None,
+                'created_at': log.created_at,
+            })
+
+        return Response({'items': items, 'total': len(items)})
+
+    @action(detail=False, methods=['post'])
+    def clear_bulk_history(self, request):
+        """
+        Xóa lịch sử thao tác hàng loạt.
+        - User thường: xóa log của chính mình.
+        - Staff/Superuser + include_all=1: xóa toàn bộ.
+        """
+        include_all = str(request.data.get('include_all') or '').strip().lower() in ('1', 'true', 'yes')
+        qs = AuditLog.objects.filter(entity_type='TaskBulk')
+        if include_all and (request.user.is_staff or request.user.is_superuser):
+            deleted, _ = qs.delete()
+            return Response({'success': True, 'deleted_count': deleted, 'scope': 'ALL'})
+        qs = qs.filter(user=request.user)
+        deleted, _ = qs.delete()
+        return Response({'success': True, 'deleted_count': deleted, 'scope': 'MINE'})
+
+    @action(detail=False, methods=['get'])
+    def live_updates(self, request):
+        """
+        Endpoint nhẹ để frontend kiểm tra có thay đổi mới hay không.
+        Query:
+          - since: ISO datetime (UTC/local đều được)
+          - dùng lại các filter chính của /tasks/ để theo đúng scope đang xem
+        """
+        since_dt = self._parse_since(request.query_params.get('since'))
+        if since_dt == 'INVALID':
+            return Response({'error': 'since phải là ISO datetime hợp lệ.'}, status=400)
+
+        qs = self.get_queryset()
+        latest_task_at = qs.order_by('-updated_at', '-id').values_list('updated_at', flat=True).first()
+        latest_bulk_log_at = (
+            AuditLog.objects
+            .filter(entity_type='TaskBulk', user=request.user)
+            .order_by('-created_at', '-id')
+            .values_list('created_at', flat=True)
+            .first()
+        )
+        latest_audit_at = (
+            AuditLog.objects
+            .filter(entity_type='Task', entity_id__in=qs.values('id'))
+            .order_by('-created_at', '-id')
+            .values_list('created_at', flat=True)
+            .first()
+        )
+        latest_candidates = [v for v in (latest_task_at, latest_bulk_log_at, latest_audit_at) if v is not None]
+        latest_at = max(latest_candidates) if latest_candidates else None
+
+        task_changed_count = 0
+        bulk_changed_count = 0
+        audit_changed_count = 0
+        if since_dt is not None:
+            task_changed_count = qs.filter(updated_at__gt=since_dt).count()
+            bulk_changed_count = AuditLog.objects.filter(
+                entity_type='TaskBulk',
+                user=request.user,
+                created_at__gt=since_dt,
+            ).count()
+            audit_changed_count = AuditLog.objects.filter(
+                entity_type='Task',
+                entity_id__in=qs.values('id'),
+                created_at__gt=since_dt,
+            ).count()
+
+        return Response({
+            'has_changes': (task_changed_count + bulk_changed_count + audit_changed_count) > 0,
+            'latest_at': latest_at,
+            'server_time': django_timezone.now(),
+            'task_changed_count': task_changed_count,
+            'bulk_changed_count': bulk_changed_count,
+            'audit_changed_count': audit_changed_count,
+        })
+
     @action(detail=False, methods=['get'])
     def my_summary(self, request):
         today = django_timezone.localdate()
@@ -1880,6 +2521,28 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
     """
     serializer_class = WorkflowTaskTemplateSerializer
     permission_classes = [IsAuthenticated]
+    SCHEDULER_JOB_NAME = 'workflow-automation-global-scheduler'
+
+    @staticmethod
+    def _to_bool(value, default=False):
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+    @staticmethod
+    def _default_automation_profiles():
+        from .workflow_services import get_default_automation_profiles
+        return get_default_automation_profiles()
+
+    def _get_automation_pref(self):
+        pref, _ = UserPreferences.objects.get_or_create(
+            user=self.request.user,
+            page='workflow-automation-profiles',
+            defaults={'config': {}},
+        )
+        return pref
 
     def get_queryset(self):
         qs = WorkflowTaskTemplate.objects.select_related('created_by')
@@ -1992,6 +2655,53 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
         )
         return Response(data)
 
+    @action(detail=False, methods=['get'], url_path='pipeline_live_updates')
+    def pipeline_live_updates(self, request):
+        """
+        Endpoint nhẹ để board biết khi nào cần reload.
+        Query:
+          - entity_type, trigger
+          - since: ISO datetime
+        """
+        entity_type = (request.query_params.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.query_params.get('trigger') or 'SUBMIT').strip()
+        since_dt = TaskViewSet._parse_since(request.query_params.get('since'))
+        if since_dt == 'INVALID':
+            return Response({'error': 'since phải là ISO datetime hợp lệ.'}, status=400)
+
+        events_qs = WorkflowPipelineEvent.objects.filter(entity_type=entity_type, trigger=trigger)
+        latest_event_at = events_qs.order_by('-created_at', '-id').values_list('created_at', flat=True).first()
+        latest_template_at = (
+            WorkflowTaskTemplate.objects
+            .filter(entity_type=entity_type, trigger=trigger, is_active=True)
+            .order_by('-updated_at', '-id')
+            .values_list('updated_at', flat=True)
+            .first()
+        )
+        latest_candidates = [v for v in (latest_event_at, latest_template_at) if v is not None]
+        latest_at = max(latest_candidates) if latest_candidates else None
+
+        event_changed_count = 0
+        template_changed_count = 0
+        if since_dt is not None:
+            event_changed_count = events_qs.filter(created_at__gt=since_dt).count()
+            template_changed_count = WorkflowTaskTemplate.objects.filter(
+                entity_type=entity_type,
+                trigger=trigger,
+                is_active=True,
+                updated_at__gt=since_dt,
+            ).count()
+
+        return Response({
+            'has_changes': (event_changed_count + template_changed_count) > 0,
+            'latest_at': latest_at,
+            'server_time': django_timezone.now(),
+            'event_changed_count': event_changed_count,
+            'template_changed_count': template_changed_count,
+            'entity_type': entity_type,
+            'trigger': trigger,
+        })
+
     @action(detail=False, methods=['post'], url_path='advance_pipeline')
     def advance_pipeline(self, request):
         """
@@ -2103,4 +2813,852 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
         )
         if not result.get('success'):
             return Response({'error': result.get('error') or 'Không thể khôi phục card failed.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
+
+    @action(detail=False, methods=['get'], url_path='pipeline_analytics')
+    def pipeline_analytics(self, request):
+        """
+        Dashboard analytics cho pipeline theo entity/trigger.
+        GET .../pipeline_analytics/?entity_type=SalesOrder&trigger=SUBMIT&days=30
+        """
+        from .workflow_services import get_pipeline_analytics
+
+        entity_type = (request.query_params.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.query_params.get('trigger') or 'SUBMIT').strip()
+        try:
+            days = int(request.query_params.get('days') or 30)
+        except (TypeError, ValueError):
+            return Response({'error': 'days phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+        days = max(1, min(days, 365))
+
+        data = get_pipeline_analytics(entity_type=entity_type, trigger=trigger, days=days)
+        return Response(data)
+
+    @action(detail=False, methods=['post'], url_path='run_automation')
+    def run_automation(self, request):
+        """
+        Chạy automation workflow theo entity/trigger.
+        Body: {entity_type, trigger, remind_overdue, auto_start_ready, reminder_cooldown_hours}
+        """
+        from .workflow_services import run_pipeline_automation
+
+        entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.data.get('trigger') or 'SUBMIT').strip()
+        remind_overdue = self._to_bool(request.data.get('remind_overdue'), default=True)
+        auto_start_ready = self._to_bool(request.data.get('auto_start_ready'), default=True)
+        try:
+            reminder_cooldown_hours = int(request.data.get('reminder_cooldown_hours') or 24)
+        except (TypeError, ValueError):
+            return Response({'error': 'reminder_cooldown_hours phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+        reminder_cooldown_hours = max(1, min(reminder_cooldown_hours, 168))
+
+        result = run_pipeline_automation(
+            entity_type=entity_type,
+            trigger=trigger,
+            actor=request.user,
+            remind_overdue=remind_overdue,
+            auto_start_ready=auto_start_ready,
+            reminder_cooldown_hours=reminder_cooldown_hours,
+        )
+        return Response(result)
+
+    @action(detail=False, methods=['get'], url_path='automation_profiles')
+    def automation_profiles(self, request):
+        """
+        Lấy cấu hình kịch bản tự động theo entity/trigger của user.
+        """
+        entity_type = (request.query_params.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.query_params.get('trigger') or 'SUBMIT').strip()
+        pref = self._get_automation_pref()
+        config = pref.config if isinstance(pref.config, dict) else {}
+        key = f'{entity_type}:{trigger}'
+        from .workflow_services import merge_automation_profiles
+        saved = config.get(key) if isinstance(config.get(key), dict) else {}
+        merged_profiles = merge_automation_profiles(saved)
+        return Response({
+            'entity_type': entity_type,
+            'trigger': trigger,
+            'profiles': merged_profiles,
+        })
+
+    @automation_profiles.mapping.post
+    def save_automation_profiles(self, request):
+        """
+        Lưu cấu hình profile theo entity/trigger.
+        Body: { entity_type, trigger, profiles: {MORNING|MIDDAY|EOD|CUSTOM: {...}} }
+        """
+        entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.data.get('trigger') or 'SUBMIT').strip()
+        profiles = request.data.get('profiles') or {}
+        if not isinstance(profiles, dict):
+            return Response({'error': 'profiles phải là object.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        normalized_profiles = {}
+        defaults = self._default_automation_profiles()
+        for profile_key in defaults.keys():
+            raw = profiles.get(profile_key)
+            if raw is not None and not isinstance(raw, dict):
+                return Response({'error': f'Profile {profile_key} không hợp lệ.'}, status=status.HTTP_400_BAD_REQUEST)
+            data = raw if isinstance(raw, dict) else {}
+            try:
+                cooldown = int(data.get('reminder_cooldown_hours') or defaults[profile_key]['reminder_cooldown_hours'])
+            except (TypeError, ValueError):
+                return Response({'error': f'reminder_cooldown_hours của {profile_key} phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+            normalized_profiles[profile_key] = {
+                'name': str(data.get('name') or defaults[profile_key]['name']).strip() or defaults[profile_key]['name'],
+                'remind_overdue': self._to_bool(data.get('remind_overdue'), default=defaults[profile_key]['remind_overdue']),
+                'auto_start_ready': self._to_bool(data.get('auto_start_ready'), default=defaults[profile_key]['auto_start_ready']),
+                'reminder_cooldown_hours': max(1, min(168, cooldown)),
+            }
+
+        pref = self._get_automation_pref()
+        config = pref.config if isinstance(pref.config, dict) else {}
+        key = f'{entity_type}:{trigger}'
+        config[key] = normalized_profiles
+        pref.config = config
+        pref.save(update_fields=['config', 'updated_at'])
+        return Response({
+            'success': True,
+            'entity_type': entity_type,
+            'trigger': trigger,
+            'profiles': normalized_profiles,
+        })
+
+    @action(detail=False, methods=['post'], url_path='run_automation_profile')
+    def run_automation_profile(self, request):
+        """
+        Chạy tự động hóa theo profile đã lưu.
+        Body: { entity_type, trigger, profile_key }
+        """
+        from .workflow_services import execute_automation_profile, merge_automation_profiles
+
+        entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.data.get('trigger') or 'SUBMIT').strip()
+        profile_key = str(request.data.get('profile_key') or 'MORNING').strip().upper()
+        defaults = self._default_automation_profiles()
+        if profile_key not in defaults:
+            return Response({'error': 'profile_key không hợp lệ.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        pref = self._get_automation_pref()
+        config = pref.config if isinstance(pref.config, dict) else {}
+        key = f'{entity_type}:{trigger}'
+        profile = merge_automation_profiles(config.get(key)).get(profile_key, defaults[profile_key])
+        result = execute_automation_profile(
+            entity_type=entity_type,
+            trigger=trigger,
+            profile_key=profile_key,
+            profile=profile,
+            actor=request.user,
+            run_mode='MANUAL_PROFILE',
+        )
+        return Response({
+            'success': True,
+            'profile_key': profile_key,
+            'profile': profile,
+            'result': result,
+        })
+
+    @action(detail=False, methods=['get'], url_path='automation_run_history')
+    def automation_run_history(self, request):
+        """
+        Lịch sử chạy profile tự động hóa.
+        """
+        entity_type = (request.query_params.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.query_params.get('trigger') or 'SUBMIT').strip()
+        run_mode = str(request.query_params.get('run_mode') or 'ALL').strip().upper()
+        try:
+            limit = int(request.query_params.get('limit') or 20)
+        except (TypeError, ValueError):
+            return Response({'error': 'limit phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+        limit = max(1, min(limit, 100))
+        key = f'{entity_type}:{trigger}'
+        logs = (
+            AuditLog.objects
+            .select_related('user')
+            .filter(entity_type='WorkflowAutomation', entity_id_str=key)
+            .order_by('-created_at', '-id')[:limit]
+        )
+        items = []
+        for log in logs:
+            payload = log.new_values or {}
+            if run_mode != 'ALL' and str(payload.get('run_mode') or '').upper() != run_mode:
+                continue
+            items.append({
+                'id': log.id,
+                'actor': log.user.username if log.user else '',
+                'profile_key': payload.get('profile_key') or '',
+                'run_mode': payload.get('run_mode') or 'MANUAL_PROFILE',
+                'auto_started_count': int(payload.get('auto_started_count') or 0),
+                'overdue_reminded_count': int(payload.get('overdue_reminded_count') or 0),
+                'notifications_sent': int(payload.get('notifications_sent') or 0),
+                'message': payload.get('message') or '',
+                'created_at': log.created_at,
+            })
+        return Response({'items': items, 'total': len(items)})
+
+    @action(detail=False, methods=['get'], url_path='automation_schedule')
+    def automation_schedule(self, request):
+        """
+        Lấy cấu hình scheduler theo entity/trigger.
+        """
+        entity_type = (request.query_params.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.query_params.get('trigger') or 'SUBMIT').strip()
+        pref, _ = UserPreferences.objects.get_or_create(
+            user=request.user,
+            page='workflow-automation-scheduler',
+            defaults={'config': {}},
+        )
+        config = pref.config if isinstance(pref.config, dict) else {}
+        key = f'{entity_type}:{trigger}'
+        current = config.get(key) if isinstance(config.get(key), dict) else {}
+        slots = current.get('slots') if isinstance(current.get('slots'), list) else [
+            {'profile_key': 'MORNING', 'time': '08:00', 'active': True},
+            {'profile_key': 'MIDDAY', 'time': '13:00', 'active': False},
+            {'profile_key': 'EOD', 'time': '17:30', 'active': True},
+        ]
+        return Response({
+            'entity_type': entity_type,
+            'trigger': trigger,
+            'enabled': bool(current.get('enabled', False)),
+            'slots': slots,
+        })
+
+    @automation_schedule.mapping.post
+    def save_automation_schedule(self, request):
+        """
+        Lưu cấu hình scheduler.
+        Body: {entity_type, trigger, enabled, slots:[{profile_key,time,active}]}
+        """
+        entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.data.get('trigger') or 'SUBMIT').strip()
+        enabled = self._to_bool(request.data.get('enabled'), default=False)
+        raw_slots = request.data.get('slots') or []
+        if not isinstance(raw_slots, list):
+            return Response({'error': 'slots phải là danh sách.'}, status=status.HTTP_400_BAD_REQUEST)
+        valid_keys = set(self._default_automation_profiles().keys())
+        slots = []
+        for raw in raw_slots:
+            if not isinstance(raw, dict):
+                continue
+            key = str(raw.get('profile_key') or '').strip().upper()
+            time_str = str(raw.get('time') or '').strip()
+            active = self._to_bool(raw.get('active'), default=True)
+            if key not in valid_keys:
+                return Response({'error': f'profile_key không hợp lệ: {key}'}, status=status.HTTP_400_BAD_REQUEST)
+            if len(time_str) != 5 or time_str[2] != ':' or not time_str.replace(':', '').isdigit():
+                return Response({'error': f'time không hợp lệ: {time_str}'}, status=status.HTTP_400_BAD_REQUEST)
+            hh = int(time_str[:2])
+            mm = int(time_str[3:])
+            if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+                return Response({'error': f'time không hợp lệ: {time_str}'}, status=status.HTTP_400_BAD_REQUEST)
+            slots.append({'profile_key': key, 'time': f'{hh:02d}:{mm:02d}', 'active': bool(active)})
+
+        pref, _ = UserPreferences.objects.get_or_create(
+            user=request.user,
+            page='workflow-automation-scheduler',
+            defaults={'config': {}},
+        )
+        config = pref.config if isinstance(pref.config, dict) else {}
+        key = f'{entity_type}:{trigger}'
+        old = config.get(key) if isinstance(config.get(key), dict) else {}
+        last_marks = old.get('last_run_marks') if isinstance(old.get('last_run_marks'), dict) else {}
+        config[key] = {'enabled': bool(enabled), 'slots': slots, 'last_run_marks': last_marks}
+        pref.config = config
+        pref.save(update_fields=['config', 'updated_at'])
+        return Response({
+            'success': True,
+            'entity_type': entity_type,
+            'trigger': trigger,
+            'enabled': bool(enabled),
+            'slots': slots,
+        })
+
+    @action(detail=False, methods=['post'], url_path='run_due_automation_schedule')
+    def run_due_automation_schedule(self, request):
+        """
+        Chạy scheduler theo mốc thời gian hiện tại cho user hiện tại.
+        Body: {dry_run?: bool}
+        """
+        from .workflow_services import run_due_automation_schedules_for_user
+        dry_run = self._to_bool(request.data.get('dry_run'), default=False)
+        entity_type = (request.data.get('entity_type') or '').strip()
+        trigger = (request.data.get('trigger') or '').strip()
+        result = run_due_automation_schedules_for_user(
+            user=request.user,
+            now=django_timezone.now(),
+            dry_run=dry_run,
+            only_entity_type=entity_type,
+            only_trigger=trigger,
+        )
+        return Response(result)
+
+    @action(detail=False, methods=['get'], url_path='scheduler_job_status')
+    def scheduler_job_status(self, request):
+        """
+        Trạng thái global scheduler job (Django Q).
+        """
+        try:
+            from django_q.models import Schedule
+        except Exception:
+            return Response({'error': 'Django Q chưa sẵn sàng.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        schedule = Schedule.objects.filter(name=self.SCHEDULER_JOB_NAME).first()
+        if not schedule:
+            return Response({
+                'enabled': False,
+                'name': self.SCHEDULER_JOB_NAME,
+                'interval_minutes': 5,
+                'next_run': None,
+                'schedule_id': None,
+                'lock_active': cache.get('workflow_automation_scheduler_job_lock') is not None,
+            })
+        return Response({
+            'enabled': bool(schedule.repeats != 0),
+            'name': schedule.name,
+            'interval_minutes': int(schedule.minutes or 5),
+            'next_run': schedule.next_run,
+            'schedule_id': schedule.id,
+            'lock_active': cache.get('workflow_automation_scheduler_job_lock') is not None,
+        })
+
+    @scheduler_job_status.mapping.post
+    def save_scheduler_job_status(self, request):
+        """
+        Bật/tắt và cấu hình chu kỳ chạy scheduler job.
+        Body: {enabled, interval_minutes}
+        """
+        try:
+            from django_q.models import Schedule
+        except Exception:
+            return Response({'error': 'Django Q chưa sẵn sàng.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        enabled = self._to_bool(request.data.get('enabled'), default=True)
+        try:
+            interval_minutes = int(request.data.get('interval_minutes') or 5)
+        except (TypeError, ValueError):
+            return Response({'error': 'interval_minutes phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+        interval_minutes = max(1, min(interval_minutes, 120))
+
+        schedule, _created = Schedule.objects.get_or_create(
+            name=self.SCHEDULER_JOB_NAME,
+            defaults={
+                'func': 'core.workflow_services.run_due_automation_schedules_job',
+                'schedule_type': Schedule.MINUTES,
+                'minutes': interval_minutes,
+                'repeats': -1,
+                'next_run': django_timezone.now(),
+                'cluster': 'default',
+            },
+        )
+        if enabled:
+            schedule.func = 'core.workflow_services.run_due_automation_schedules_job'
+            schedule.schedule_type = Schedule.MINUTES
+            schedule.minutes = interval_minutes
+            schedule.repeats = -1
+            if not schedule.next_run:
+                schedule.next_run = django_timezone.now()
+        else:
+            schedule.repeats = 0
+            schedule.minutes = interval_minutes
+        schedule.save()
+        return Response({
+            'success': True,
+            'enabled': enabled,
+            'name': schedule.name,
+            'interval_minutes': int(schedule.minutes or interval_minutes),
+            'next_run': schedule.next_run,
+            'schedule_id': schedule.id,
+            'lock_active': cache.get('workflow_automation_scheduler_job_lock') is not None,
+        })
+
+    @action(detail=False, methods=['get'], url_path='scheduler_health')
+    def scheduler_health(self, request):
+        """
+        Health metrics cho scheduler job (global).
+        """
+        from .workflow_services import get_scheduler_policy
+
+        try:
+            hours = int(request.query_params.get('hours') or 24)
+        except (TypeError, ValueError):
+            return Response({'error': 'hours phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+        hours = max(1, min(hours, 168))
+        since_dt = django_timezone.now() - timedelta(hours=hours)
+
+        logs = list(
+            AuditLog.objects
+            .filter(entity_type='WorkflowAutomationJob')
+            .order_by('-created_at', '-id')[:300]
+        )
+        recent_logs = [log for log in logs if log.created_at and log.created_at >= since_dt]
+
+        status_counts = {'SUCCESS': 0, 'FAILED': 0, 'SKIPPED_LOCKED': 0}
+        durations = []
+        recent_errors = []
+        for log in recent_logs:
+            payload = log.new_values or {}
+            status_value = str(payload.get('status') or '').upper()
+            if status_value in status_counts:
+                status_counts[status_value] += 1
+            if status_value == 'SUCCESS':
+                duration = payload.get('duration_ms')
+                if isinstance(duration, (int, float)):
+                    durations.append(int(duration))
+            if status_value == 'FAILED':
+                recent_errors.append({
+                    'created_at': log.created_at,
+                    'message': str(payload.get('message') or ''),
+                })
+
+        last_status = ''
+        last_run_at = None
+        if logs:
+            payload = logs[0].new_values or {}
+            last_status = str(payload.get('status') or '').upper()
+            last_run_at = logs[0].created_at
+
+        consecutive_failures = 0
+        for log in logs:
+            status_value = str((log.new_values or {}).get('status') or '').upper()
+            if status_value == 'FAILED':
+                consecutive_failures += 1
+                continue
+            if status_value == 'SUCCESS':
+                break
+
+        avg_success_duration_ms = int(sum(durations) / len(durations)) if durations else 0
+        scheduler_enabled = None
+        try:
+            from django_q.models import Schedule
+            schedule = Schedule.objects.filter(name=self.SCHEDULER_JOB_NAME).first()
+            scheduler_enabled = bool(schedule and schedule.repeats != 0)
+        except Exception:
+            scheduler_enabled = None
+
+        policy = get_scheduler_policy()
+        failure_threshold = int(policy.get('failure_threshold') or 3)
+        latest_error_msg = recent_errors[0]['message'] if recent_errors else ''
+        recommended_actions = []
+        if status_counts['FAILED'] > 0:
+            recommended_actions.append('Kiểm tra chi tiết lỗi gần nhất trong timeline sự cố.')
+        if 'lock' in latest_error_msg.lower():
+            recommended_actions.append('Dùng nút khôi phục scheduler với tùy chọn xóa lock.')
+        if consecutive_failures >= failure_threshold:
+            recommended_actions.append('Scheduler đã/tới ngưỡng tự tắt. Khôi phục sau khi xử lý root-cause.')
+        if status_counts['FAILED'] > 0 and avg_success_duration_ms > 0:
+            recommended_actions.append('Cân nhắc tăng chu kỳ job scheduler để giảm tải tức thời.')
+
+        return Response({
+            'hours_window': hours,
+            'status_counts': status_counts,
+            'last_status': last_status,
+            'last_run_at': last_run_at,
+            'consecutive_failures': consecutive_failures,
+            'failure_threshold': failure_threshold,
+            'auto_disabled': consecutive_failures >= failure_threshold and scheduler_enabled is False,
+            'scheduler_enabled': scheduler_enabled,
+            'avg_success_duration_ms': avg_success_duration_ms,
+            'recent_errors': recent_errors[:5],
+            'lock_active': cache.get('workflow_automation_scheduler_job_lock') is not None,
+            'recommended_actions': recommended_actions,
+        })
+
+    @action(detail=False, methods=['post'], url_path='scheduler_recover')
+    def scheduler_recover(self, request):
+        """
+        Khôi phục scheduler sau khi auto-disable.
+        Body: {interval_minutes?, clear_lock?}
+        """
+        try:
+            from django_q.models import Schedule
+        except Exception:
+            return Response({'error': 'Django Q chưa sẵn sàng.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        try:
+            interval_minutes = int(request.data.get('interval_minutes') or 5)
+        except (TypeError, ValueError):
+            return Response({'error': 'interval_minutes phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+        interval_minutes = max(1, min(interval_minutes, 120))
+        clear_lock = self._to_bool(request.data.get('clear_lock'), default=False)
+        if clear_lock:
+            cache.delete('workflow_automation_scheduler_job_lock')
+
+        schedule, _created = Schedule.objects.get_or_create(
+            name=self.SCHEDULER_JOB_NAME,
+            defaults={
+                'func': 'core.workflow_services.run_due_automation_schedules_job',
+                'schedule_type': Schedule.MINUTES,
+                'minutes': interval_minutes,
+                'repeats': -1,
+                'next_run': django_timezone.now(),
+                'cluster': 'default',
+            },
+        )
+        schedule.func = 'core.workflow_services.run_due_automation_schedules_job'
+        schedule.schedule_type = Schedule.MINUTES
+        schedule.minutes = interval_minutes
+        schedule.repeats = -1
+        schedule.next_run = django_timezone.now()
+        schedule.save()
+        AuditLog.objects.create(
+            user=request.user,
+            action='UPDATE',
+            entity_type='WorkflowAutomationJob',
+            entity_id=0,
+            entity_id_str='global',
+            entity_code='WORKFLOW_AUTOMATION_JOB',
+            changed_fields=['recover'],
+            old_values={},
+            new_values={
+                'status': 'SUCCESS',
+                'enabled': True,
+                'interval_minutes': interval_minutes,
+                'clear_lock': clear_lock,
+                'message': 'Scheduler recovered manually.',
+            },
+        )
+        return Response({
+            'success': True,
+            'enabled': True,
+            'interval_minutes': interval_minutes,
+            'next_run': schedule.next_run,
+            'lock_active': cache.get('workflow_automation_scheduler_job_lock') is not None,
+        })
+
+    @action(detail=False, methods=['get'], url_path='scheduler_policy')
+    def scheduler_policy(self, request):
+        """
+        Lấy policy tự phục hồi scheduler.
+        """
+        from .workflow_services import get_scheduler_policy, get_scheduler_policy_presets
+        return Response({
+            **get_scheduler_policy(),
+            'presets': get_scheduler_policy_presets(),
+        })
+
+    @scheduler_policy.mapping.post
+    def save_scheduler_policy(self, request):
+        """
+        Lưu policy tự phục hồi scheduler.
+        Body: {failure_threshold}
+        """
+        try:
+            failure_threshold = int(request.data.get('failure_threshold') or 3)
+        except (TypeError, ValueError):
+            return Response({'error': 'failure_threshold phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+        failure_threshold = max(1, min(failure_threshold, 20))
+
+        old_row = Setting.objects.filter(key='WORKFLOW_AUTOMATION_FAILURE_THRESHOLD').first()
+        old_threshold = int(old_row.value) if old_row and str(old_row.value).isdigit() else None
+        Setting.objects.update_or_create(
+            key='WORKFLOW_AUTOMATION_FAILURE_THRESHOLD',
+            defaults={
+                'value': str(failure_threshold),
+                'data_type': 'integer',
+                'description': 'Ngưỡng fail liên tiếp để tự tắt scheduler workflow automation.',
+                'is_active': True,
+            },
+        )
+        AuditLog.objects.create(
+            user=request.user,
+            action='UPDATE',
+            entity_type='WorkflowAutomationJob',
+            entity_id=0,
+            entity_id_str='global',
+            entity_code='WORKFLOW_AUTOMATION_JOB',
+            changed_fields=['policy_update'],
+            old_values={'failure_threshold': old_threshold},
+            new_values={
+                'failure_threshold': failure_threshold,
+                'message': 'Cập nhật policy scheduler thủ công.',
+                'run_mode': 'MANUAL_POLICY',
+                'status': 'SUCCESS',
+            },
+        )
+        return Response({
+            'success': True,
+            'failure_threshold': failure_threshold,
+        })
+
+    @action(detail=False, methods=['post'], url_path='scheduler_apply_policy_preset')
+    def scheduler_apply_policy_preset(self, request):
+        """
+        Áp dụng preset policy nhanh.
+        Body: {preset_key: CONSERVATIVE|BALANCED|AGGRESSIVE}
+        """
+        from .workflow_services import get_scheduler_policy_presets
+
+        preset_key = str(request.data.get('preset_key') or '').strip().upper()
+        presets = get_scheduler_policy_presets()
+        if preset_key not in presets:
+            return Response({'error': 'preset_key không hợp lệ.'}, status=status.HTTP_400_BAD_REQUEST)
+        profile = presets[preset_key]
+        failure_threshold = int(profile.get('failure_threshold') or 3)
+        old_row = Setting.objects.filter(key='WORKFLOW_AUTOMATION_FAILURE_THRESHOLD').first()
+        old_threshold = int(old_row.value) if old_row and str(old_row.value).isdigit() else None
+        Setting.objects.update_or_create(
+            key='WORKFLOW_AUTOMATION_FAILURE_THRESHOLD',
+            defaults={
+                'value': str(failure_threshold),
+                'data_type': 'integer',
+                'description': 'Ngưỡng fail liên tiếp để tự tắt scheduler workflow automation.',
+                'is_active': True,
+            },
+        )
+        AuditLog.objects.create(
+            user=request.user,
+            action='UPDATE',
+            entity_type='WorkflowAutomationJob',
+            entity_id=0,
+            entity_id_str='global',
+            entity_code='WORKFLOW_AUTOMATION_JOB',
+            changed_fields=['policy_preset'],
+            old_values={'failure_threshold': old_threshold},
+            new_values={
+                'failure_threshold': failure_threshold,
+                'preset_key': preset_key,
+                'message': f'Áp dụng preset policy {preset_key}.',
+                'run_mode': 'MANUAL_POLICY',
+                'status': 'SUCCESS',
+            },
+        )
+        return Response({
+            'success': True,
+            'preset_key': preset_key,
+            'failure_threshold': failure_threshold,
+        })
+
+    @action(detail=False, methods=['post'], url_path='scheduler_notify_admins')
+    def scheduler_notify_admins(self, request):
+        """
+        Gửi cảnh báo thủ công tới admin/staff.
+        Body: {message}
+        """
+        from .workflow_services import notify_scheduler_admins
+
+        message_text = str(request.data.get('message') or '').strip()
+        if not message_text:
+            message_text = 'Cảnh báo thủ công từ dashboard scheduler.'
+        result = notify_scheduler_admins(message=message_text, actor=request.user)
+        return Response(result)
+
+    @action(detail=False, methods=['get'], url_path='scheduler_incidents')
+    def scheduler_incidents(self, request):
+        """
+        Timeline sự cố/recovery của scheduler.
+        """
+        status_filter = str(request.query_params.get('status') or 'ALL').strip().upper()
+        try:
+            limit = int(request.query_params.get('limit') or 30)
+        except (TypeError, ValueError):
+            return Response({'error': 'limit phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+        limit = max(1, min(limit, 200))
+        logs = (
+            AuditLog.objects
+            .select_related('user')
+            .filter(entity_type='WorkflowAutomationJob')
+            .order_by('-created_at', '-id')
+        )
+        items = []
+        for log in logs[: max(limit * 3, limit)]:
+            payload = log.new_values or {}
+            status_value = str(payload.get('status') or '').upper()
+            if status_filter != 'ALL' and status_value != status_filter:
+                continue
+            event_type = 'JOB_RUN'
+            changed_fields = log.changed_fields or []
+            if 'recover' in changed_fields:
+                event_type = 'RECOVERY'
+            elif 'policy_update' in changed_fields:
+                event_type = 'POLICY_UPDATE'
+            elif 'policy_preset' in changed_fields:
+                event_type = 'POLICY_PRESET'
+            elif str(payload.get('run_mode') or '').upper() == 'MANUAL_SIMULATION':
+                event_type = 'SIMULATION'
+            items.append({
+                'id': log.id,
+                'status': status_value,
+                'event_type': event_type,
+                'actor': log.user.username if log.user else '',
+                'message': str(payload.get('message') or ''),
+                'run_mode': str(payload.get('run_mode') or ''),
+                'duration_ms': int(payload.get('duration_ms') or 0),
+                'policy_diff': {
+                    'old_failure_threshold': (log.old_values or {}).get('failure_threshold'),
+                    'new_failure_threshold': payload.get('failure_threshold'),
+                },
+                'created_at': log.created_at,
+            })
+            if len(items) >= limit:
+                break
+        return Response({'items': items, 'total': len(items)})
+
+    @action(detail=False, methods=['post'], url_path='scheduler_simulate_failure')
+    def scheduler_simulate_failure(self, request):
+        """
+        Mô phỏng lỗi scheduler để diễn tập (admin/staff).
+        Body: {reason}
+        """
+        from .workflow_services import simulate_scheduler_failure
+
+        if not (request.user.is_staff or request.user.is_superuser):
+            return Response({'error': 'Chỉ admin/staff được phép mô phỏng lỗi scheduler.'}, status=status.HTTP_403_FORBIDDEN)
+        reason = str(request.data.get('reason') or '').strip() or 'Manual failure simulation from dashboard.'
+        result = simulate_scheduler_failure(reason=reason, actor=request.user)
+        return Response(result)
+
+    @action(detail=False, methods=['post'], url_path='execute_insight_action')
+    def execute_insight_action(self, request):
+        """
+        Thực thi hành động gợi ý từ insight và ghi log truy vết.
+        Body: {entity_type, trigger, insight_type, suggested_action}
+        """
+        from .workflow_services import execute_insight_action
+
+        entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.data.get('trigger') or 'SUBMIT').strip()
+        insight_type = (request.data.get('insight_type') or '').strip()
+        suggested_action = (request.data.get('suggested_action') or '').strip()
+        if not insight_type or not suggested_action:
+            return Response({'error': 'insight_type và suggested_action là bắt buộc.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = execute_insight_action(
+            entity_type=entity_type,
+            trigger=trigger,
+            insight_type=insight_type,
+            suggested_action=suggested_action,
+            actor=request.user,
+        )
+        if not result.get('success'):
+            return Response({'error': result.get('error') or 'Không thể thực thi gợi ý.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
+
+    @action(detail=False, methods=['post'], url_path='execute_insight_batch')
+    def execute_insight_batch(self, request):
+        """
+        Thực thi nhiều insight actions một lần.
+        Body: {
+          entity_type, trigger,
+          stop_on_error?: bool,
+          items: [{insight_type, suggested_action}]
+        }
+        """
+        from .workflow_services import execute_insight_actions_batch
+
+        entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.data.get('trigger') or 'SUBMIT').strip()
+        raw_items = request.data.get('items') or []
+        stop_on_error = self._to_bool(request.data.get('stop_on_error'), default=False)
+        if not isinstance(raw_items, list):
+            return Response({'error': 'items phải là danh sách.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = execute_insight_actions_batch(
+            entity_type=entity_type,
+            trigger=trigger,
+            items=raw_items,
+            actor=request.user,
+            stop_on_error=stop_on_error,
+        )
+        if not result.get('success'):
+            return Response({'error': result.get('error') or 'Không thể thực thi gợi ý hàng loạt.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
+
+    @action(detail=False, methods=['get'], url_path='insight_execution_history')
+    def insight_execution_history(self, request):
+        """
+        Lấy lịch sử thực thi gợi ý theo entity/trigger.
+        GET .../insight_execution_history/?entity_type=SalesOrder&trigger=SUBMIT&limit=20
+        """
+        from .workflow_services import get_insight_action_history
+
+        entity_type = (request.query_params.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.query_params.get('trigger') or 'SUBMIT').strip()
+        actor_query = (request.query_params.get('actor_query') or '').strip()
+        suggested_action = (request.query_params.get('suggested_action') or '').strip()
+        success_raw = request.query_params.get('success')
+        success = None
+        if success_raw is not None:
+            lowered = str(success_raw).strip().lower()
+            if lowered in ('1', 'true', 'yes'):
+                success = True
+            elif lowered in ('0', 'false', 'no'):
+                success = False
+            else:
+                return Response({'error': 'success phải là true/false.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            limit = int(request.query_params.get('limit') or 20)
+        except (TypeError, ValueError):
+            return Response({'error': 'limit phải là số nguyên.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        data = get_insight_action_history(
+            entity_type=entity_type,
+            trigger=trigger,
+            limit=limit,
+            actor_query=actor_query,
+            suggested_action=suggested_action,
+            success=success,
+        )
+        return Response(data)
+
+    @action(detail=False, methods=['get'], url_path='playbook_suggestions')
+    def playbook_suggestions(self, request):
+        """
+        Lay bo goi y workflow playbook.
+        GET .../playbook_suggestions/?entity_type=SalesOrder&scenario=STANDARD_ORDER
+        """
+        from .workflow_services import get_workflow_playbook_suggestions
+
+        entity_type = (request.query_params.get('entity_type') or 'SalesOrder').strip()
+        scenario = (request.query_params.get('scenario') or '').strip() or None
+        data = get_workflow_playbook_suggestions(entity_type=entity_type, scenario=scenario)
+        return Response(data)
+
+    @action(detail=False, methods=['post'], url_path='apply_playbook')
+    def apply_playbook(self, request):
+        """
+        Ap dung bo playbook vao template workflow.
+        Body: {entity_type, scenario, overwrite_existing}
+        """
+        from .workflow_services import apply_workflow_playbook
+
+        entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
+        scenario = (request.data.get('scenario') or '').strip() or None
+        overwrite_existing = self._to_bool(request.data.get('overwrite_existing'), default=False)
+
+        result = apply_workflow_playbook(
+            entity_type=entity_type,
+            scenario=scenario,
+            actor=request.user,
+            overwrite_existing=overwrite_existing,
+        )
+        if not result.get('success'):
+            return Response({'error': result.get('error') or 'Khong the ap dung playbook.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
+
+    @action(detail=False, methods=['post'], url_path='bulk_pipeline_action')
+    def bulk_pipeline_action(self, request):
+        """
+        Thao tác pipeline hàng loạt.
+        Body: {entity_type, trigger, action, note, items:[{entity_id, entity_code}]}
+        """
+        from .workflow_services import bulk_pipeline_action
+
+        entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
+        trigger = (request.data.get('trigger') or 'SUBMIT').strip()
+        action_name = (request.data.get('action') or '').strip()
+        note = (request.data.get('note') or '').strip()
+        items = request.data.get('items') or []
+        if not isinstance(items, list):
+            return Response({'error': 'items phải là danh sách.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = bulk_pipeline_action(
+            entity_type=entity_type,
+            trigger=trigger,
+            action=action_name,
+            items=items,
+            actor=request.user,
+            note=note,
+        )
+        if not result.get('success'):
+            return Response({'error': result.get('error') or 'Không thể thao tác hàng loạt.'}, status=status.HTTP_400_BAD_REQUEST)
         return Response(result)

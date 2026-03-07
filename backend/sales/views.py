@@ -8,6 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 import django_filters
+from datetime import timedelta
 from django.utils import timezone
 from django.db.models import Q
 
@@ -20,6 +21,7 @@ from sales.filters import SalesOrderFilter
 from sales.services import (
     get_next_sales_order_code,
     post_sales_order,
+    sync_sales_order_delivery_tasks,
     workflow_can_transition,
     workflow_get_next_states,
 )
@@ -50,7 +52,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         qs = SalesOrder.objects.select_related(
             'customer', 'owner', 'team', 'created_by', 'updated_by',
             'submitted_by', 'approved_by', 'rejected_by', 'posted_by', 'voided_by',
-        ).prefetch_related('lines', 'lines__product')
+        ).prefetch_related('lines', 'lines__product', 'lines__delivery_plans')
         user = self.request.user
         if user.is_superuser:
             return qs
@@ -62,18 +64,20 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         order_date = serializer.validated_data.get('order_date') or timezone.now().date()
         code = get_next_sales_order_code(order_date)
-        serializer.save(
+        order = serializer.save(
             code=code,
             created_by=self.request.user,
             updated_by=self.request.user,
             owner=self.request.user,
         )
+        sync_sales_order_delivery_tasks(actor=self.request.user, order_ids=[order.id], days_ahead=14)
 
     def perform_update(self, serializer):
         if not can_edit_sales_order(self.request.user, serializer.instance):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied('Chỉ được sửa đơn ở trạng thái Nháp.')
-        serializer.save(updated_by=self.request.user)
+        order = serializer.save(updated_by=self.request.user)
+        sync_sales_order_delivery_tasks(actor=self.request.user, order_ids=[order.id], days_ahead=14)
 
     def perform_destroy(self, instance):
         if instance.status != SalesOrderStatus.DRAFT:
@@ -219,3 +223,47 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         order = self.get_object()
         next_states = workflow_get_next_states('SalesOrder', order.status)
         return Response({'current': order.status, 'next_states': next_states})
+
+    @action(detail=True, methods=['get'])
+    def delivery_overview(self, request, pk=None):
+        order = self.get_object()
+        today = timezone.localdate()
+        try:
+            due_soon_days = int(request.query_params.get('due_soon_days', 3) or 3)
+        except (TypeError, ValueError):
+            due_soon_days = 3
+        due_soon_days = max(0, min(due_soon_days, 30))
+        due_soon_until = today + timedelta(days=due_soon_days)
+        items = []
+        for line in order.lines.all().order_by('line_number'):
+            for plan in line.delivery_plans.all().order_by('delivery_date', 'id'):
+                items.append({
+                    'delivery_plan_id': plan.id,
+                    'line_id': line.id,
+                    'line_number': line.line_number,
+                    'product_id': line.product_id,
+                    'product_code': getattr(line.product, 'code', None),
+                    'product_name': getattr(line.product, 'name', None),
+                    'delivery_date': plan.delivery_date,
+                    'qty': plan.qty,
+                    'delivered_qty': plan.delivered_qty,
+                    'remaining_qty': plan.remaining_qty,
+                    'is_completed': plan.is_completed,
+                    'is_overdue': (not plan.is_completed) and (plan.delivery_date < today),
+                    'is_due_soon': (not plan.is_completed) and (today <= plan.delivery_date <= due_soon_until),
+                    'note': plan.note,
+                })
+        return Response({'count': len(items), 'results': items})
+
+    @action(detail=False, methods=['post'])
+    def sync_delivery_tasks(self, request):
+        days_ahead = request.data.get('days_ahead', 7)
+        ids = request.data.get('order_ids')
+        if not isinstance(ids, list):
+            ids = None
+        result = sync_sales_order_delivery_tasks(
+            actor=request.user,
+            order_ids=ids,
+            days_ahead=days_ahead,
+        )
+        return Response(result)

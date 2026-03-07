@@ -53,3 +53,15 @@ export const PRODUCT_STATUS_LABELS = {
   ACTIVE: 'Đang bán',
   DISCONTINUED: 'Ngừng SX',
 };
+
+export const ENTITY_TYPE_LABELS: Record<string, string> = {
+  SalesOrder: 'Đơn hàng',
+  Product: 'Sản phẩm',
+  Customer: 'Khách hàng',
+  Task: 'Nhiệm vụ',
+};
+
+export const getEntityTypeLabel = (entityType: string | null | undefined): string => {
+  if (!entityType) return 'Đối tượng';
+  return ENTITY_TYPE_LABELS[entityType] ?? entityType;
+};

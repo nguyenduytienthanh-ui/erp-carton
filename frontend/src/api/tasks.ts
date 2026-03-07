@@ -101,6 +101,52 @@ export interface TaskMySummary {
   overdue: number;
 }
 
+export interface TaskBulkActionItemResult {
+  task_id: number;
+  success: boolean;
+  message: string;
+  sent_count?: number;
+}
+
+export interface TaskBulkActionResult {
+  success: boolean;
+  action: 'START' | 'COMPLETE' | 'REMIND_OVERDUE';
+  total_requested: number;
+  processed_count: number;
+  success_count: number;
+  failed_count: number;
+  reminder_sent_count: number;
+  items: TaskBulkActionItemResult[];
+}
+
+export interface TaskBulkHistoryItem {
+  id: string;
+  action: 'START' | 'COMPLETE' | 'REMIND_OVERDUE' | string;
+  action_label: string;
+  selected_count: number;
+  processed_count: number;
+  success_count: number;
+  failed_count: number;
+  reminder_sent_count: number;
+  failed_items?: Array<{ task_id: number; message: string }>;
+  actor?: string | null;
+  created_at: string;
+}
+
+export interface TaskBulkHistoryResponse {
+  items: TaskBulkHistoryItem[];
+  total: number;
+}
+
+export interface TaskLiveUpdatesResponse {
+  has_changes: boolean;
+  latest_at: string | null;
+  server_time: string;
+  task_changed_count: number;
+  bulk_changed_count: number;
+  audit_changed_count: number;
+}
+
 export const tasksApi = {
   list(params: {
     entity_type?: string;
@@ -119,11 +165,20 @@ export const tasksApi = {
     q?: string;
     tag?: string;
   }) {
+    const toFlag = (value?: boolean) => (value ? '1' : undefined);
     return axiosInstance
       .get<TaskItem[] | { results: TaskItem[]; count: number }>('/tasks/', {
         params: {
           ...params,
-          mine: params.mine ? '1' : undefined,
+          mine: toFlag(params.mine),
+          created_by_me: toFlag(params.created_by_me),
+          watching: toFlag(params.watching),
+          team_members: toFlag(params.team_members),
+          is_open: toFlag(params.is_open),
+          needs_help: toFlag(params.needs_help),
+          is_blocking: toFlag(params.is_blocking),
+          is_overdue: toFlag(params.is_overdue),
+          dependency_blocked: toFlag(params.dependency_blocked),
           page_size: 200,
         },
       })
@@ -193,5 +248,57 @@ export const tasksApi = {
 
   mySummary() {
     return axiosInstance.get<TaskMySummary>('/tasks/my_summary/').then((r) => r.data);
+  },
+
+  bulkAction(params: {
+    action: 'START' | 'COMPLETE' | 'REMIND_OVERDUE';
+    task_ids: number[];
+  }) {
+    return axiosInstance.post<TaskBulkActionResult>('/tasks/bulk_action/', params).then((r) => r.data);
+  },
+
+  bulkHistory(params?: {
+    action?: 'ALL' | 'START' | 'COMPLETE' | 'REMIND_OVERDUE';
+    result?: 'ALL' | 'SUCCESS' | 'HAS_ERROR';
+    limit?: number;
+  }) {
+    return axiosInstance
+      .get<TaskBulkHistoryResponse>('/tasks/bulk_history/', { params })
+      .then((r) => r.data);
+  },
+
+  clearBulkHistory(params?: {
+    include_all?: boolean;
+  }) {
+    return axiosInstance
+      .post<{ success: boolean; deleted_count: number; scope: 'ALL' | 'MINE' }>('/tasks/clear_bulk_history/', params ?? {})
+      .then((r) => r.data);
+  },
+
+  liveUpdates(params: {
+    since?: string;
+    mine?: boolean;
+    created_by_me?: boolean;
+    watching?: boolean;
+    team_members?: boolean;
+    is_overdue?: boolean;
+    is_open?: boolean;
+    q?: string;
+    ordering_mode?: 'quick_queue';
+  }) {
+    const toFlag = (value?: boolean) => (value ? '1' : undefined);
+    return axiosInstance
+      .get<TaskLiveUpdatesResponse>('/tasks/live_updates/', {
+        params: {
+          ...params,
+          mine: toFlag(params.mine),
+          created_by_me: toFlag(params.created_by_me),
+          watching: toFlag(params.watching),
+          team_members: toFlag(params.team_members),
+          is_overdue: toFlag(params.is_overdue),
+          is_open: toFlag(params.is_open),
+        },
+      })
+      .then((r) => r.data);
   },
 };
