@@ -1,4 +1,5 @@
-import { Card, Col, Row, Statistic, Progress, Tag, Space } from 'antd';
+import { useMemo } from 'react';
+import { Button, Card, Col, Row, Statistic, Progress, Tag, Space, Spin, message } from 'antd';
 import {
   AppstoreOutlined,
   TagsOutlined,
@@ -8,11 +9,49 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
 } from '@ant-design/icons';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { financeApi } from '../api/finance';
+import { useUserPreferences } from '../hooks/useUserPreferences';
+import { canManageFinanceData } from '../utils/authz';
+import { PAGES } from '../utils/constants';
 import { theme } from '../styles/theme';
 
 const Dashboard = () => {
+  const [messageApi, contextHolder] = message.useMessage();
+  const canManageFinance = canManageFinanceData();
+  const { config, saveConfig } = useUserPreferences(PAGES.DASHBOARD);
+  const overdueOverviewQuery = useQuery({
+    queryKey: ['dashboard-overdue-overview'],
+    queryFn: () => financeApi.getAdvanceOverdueOverview(),
+    enabled: canManageFinance,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+  });
+  const remindMutation = useMutation({
+    mutationFn: () => financeApi.remindOverdueAdvances({ threshold_days: 90 }),
+    onSuccess: (data) => {
+      messageApi.success(`Đã gửi nhắc quá hạn: ${data.sent_count} người nhận`);
+    },
+    onError: () => {
+      messageApi.error('Gửi nhắc quá hạn thất bại');
+    },
+  });
+  const bucket90 = useMemo(
+    () => overdueOverviewQuery.data?.buckets?.find((bucket) => bucket.threshold_days === 90),
+    [overdueOverviewQuery.data?.buckets]
+  );
+  const overdue90Count = bucket90?.count ?? 0;
+  const overdue90Amount = bucket90?.total_remaining ?? '0';
+  const overdue90Signature = `${overdueOverviewQuery.data?.as_of || ''}|${overdue90Count}|${overdue90Amount}`;
+  const ackData = (config as Record<string, unknown>)?.financeOverdueAck as
+    | { signature?: string; ackedAt?: string }
+    | undefined;
+  const isAcked = overdue90Count > 0 && ackData?.signature === overdue90Signature;
+
   return (
     <div>
+      {contextHolder}
       {/* Welcome Header */}
       <Card
         bordered={false}
@@ -45,6 +84,70 @@ const Dashboard = () => {
           </p>
         </div>
       </Card>
+
+      {canManageFinance && (
+        <Card
+          bordered={false}
+          style={{
+            marginBottom: theme.spacing.lg,
+            borderRadius: theme.borderRadius.lg,
+            boxShadow: theme.shadows.sm,
+            border: `1px solid ${overdue90Count > 0 ? '#ffccc7' : '#d9f7be'}`,
+          }}
+        >
+          {overdueOverviewQuery.isLoading ? (
+            <div style={{ textAlign: 'center', padding: theme.spacing.md }}>
+              <Spin />
+            </div>
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: theme.typography.fontSize.lg, fontWeight: theme.typography.fontWeight.semibold }}>
+                  {'Cảnh báo tạm ứng quá hạn >= 90 ngày'}
+                </div>
+                <div style={{ color: theme.colors.textSecondary }}>
+                  {`Số phiếu: ${overdue90Count} | Tổng còn phải quyết toán: ${Number(overdue90Amount).toLocaleString('vi-VN')} đ`}
+                </div>
+                <div style={{ marginTop: 6 }}>
+                  {overdue90Count <= 0 ? (
+                    <Tag color="success">Không có rủi ro mức 90 ngày</Tag>
+                  ) : isAcked ? (
+                    <Tag color="blue">Đã xác nhận xử lý hôm nay</Tag>
+                  ) : (
+                    <Tag color="red">Chưa xác nhận xử lý</Tag>
+                  )}
+                </div>
+              </div>
+              <Space>
+                <Button
+                  disabled={overdue90Count <= 0}
+                  onClick={async () => {
+                    await saveConfig({
+                      ...(config as Record<string, unknown>),
+                      financeOverdueAck: {
+                        signature: overdue90Signature,
+                        ackedAt: new Date().toISOString(),
+                      },
+                    });
+                    messageApi.success('Đã xác nhận đã xử lý cảnh báo quá hạn');
+                  }}
+                >
+                  Đã xử lý
+                </Button>
+                <Button
+                  type="primary"
+                  danger={overdue90Count > 0}
+                  loading={remindMutation.isPending}
+                  disabled={overdue90Count <= 0}
+                  onClick={() => remindMutation.mutate()}
+                >
+                  Gửi nhắc ngay
+                </Button>
+              </Space>
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Statistics Cards */}
       <Row gutter={[16, 16]} style={{ marginBottom: theme.spacing.lg }}>

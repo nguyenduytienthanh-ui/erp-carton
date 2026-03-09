@@ -44,15 +44,13 @@ import { customersApi, type ActivityItem } from '../../api/customers';
 import type { Customer, CustomerStatus, ApprovalHistoryItem } from '../../types/customer';
 import { CUSTOMER_STATUS_LABELS } from '../../types/customer';
 import { theme } from '../../styles/theme';
-import {
-  EmptyState,
-  ImportModal,
-  ColumnChooser,
-  QuickClearIcon,
-  FilterSelect,
-  ListSearchInput,
-  CommentBox,
-} from '../../components';
+import EmptyState from '../../components/EmptyState';
+import ImportModal from '../../components/ImportModal';
+import ColumnChooser from '../../components/ColumnChooser';
+import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
+import FilterSelect from '../../components/FilterSelect';
+import ListSearchInput from '../../components/ListSearchInput';
+import CommentBox from '../../components/CommentBox/CommentBox';
 import CustomerForm from './CustomerForm';
 import { useColumnSettings } from '../../hooks/useColumnSettings';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';

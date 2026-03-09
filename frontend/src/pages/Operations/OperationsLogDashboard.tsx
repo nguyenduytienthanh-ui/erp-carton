@@ -5,8 +5,10 @@ import { ReloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { operationsApi, type OperationLogItem, type OperationSource, type OperationSuccessFilter } from '../../api/operations';
-import { QuickClearIcon } from '../../components';
+import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { storage } from '../../utils/storage';
+import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
+import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
 const { Text, Title } = Typography;
 
@@ -35,7 +37,7 @@ function canViewAllLogs(): boolean {
 
 export default function OperationsLogDashboard() {
   const queryClient = useQueryClient();
-  const [q, setQ] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [actorQuery, setActorQuery] = useState('');
   const [actionFilter, setActionFilter] = useState('ALL');
   const [sourceFilter, setSourceFilter] = useState<OperationSource>('ALL');
@@ -43,41 +45,90 @@ export default function OperationsLogDashboard() {
   const [liveSync, setLiveSync] = useState(true);
   const [includeAll, setIncludeAll] = useState(canViewAllLogs());
   const liveSinceRef = useRef<string | null>(null);
+  const {
+    intentSearch,
+    intentFilters,
+  } = useSearchFilterIntent({
+    searchInput,
+    filterValues: { actorQuery, actionFilter, sourceFilter, successFilter, includeAll },
+    searchDebounceMs: 650,
+    filterDebounceMs: 300,
+    serializeFilters: (f) => JSON.stringify(f),
+    parseFilters: (raw) => {
+      try {
+        const parsed = JSON.parse(raw) as {
+          actorQuery?: string;
+          actionFilter?: string;
+          sourceFilter?: OperationSource;
+          successFilter?: OperationSuccessFilter;
+          includeAll?: boolean;
+        };
+        return {
+          actorQuery: parsed.actorQuery ?? '',
+          actionFilter: parsed.actionFilter ?? 'ALL',
+          sourceFilter: parsed.sourceFilter ?? 'ALL',
+          successFilter: parsed.successFilter ?? 'ALL',
+          includeAll: parsed.includeAll === true,
+        };
+      } catch {
+        return {
+          actorQuery: '',
+          actionFilter: 'ALL',
+          sourceFilter: 'ALL' as OperationSource,
+          successFilter: 'ALL' as OperationSuccessFilter,
+          includeAll: canViewAllLogs(),
+        };
+      }
+    },
+  });
+  const livePollingInterval = useRealtimePollingInterval({
+    enabled: liveSync,
+    activeMs: 4_000,
+    hiddenMs: false,
+  });
 
   const logsQuery = useQuery({
-    queryKey: ['operations-log', q, actorQuery, actionFilter, sourceFilter, successFilter, includeAll],
+    queryKey: ['operations-log', intentSearch, intentFilters.actorQuery, intentFilters.actionFilter, intentFilters.sourceFilter, intentFilters.successFilter, intentFilters.includeAll],
     queryFn: () => operationsApi.list({
-      q: q.trim() || undefined,
-      actor_query: actorQuery.trim() || undefined,
-      action: actionFilter,
-      source: sourceFilter,
-      success: successFilter,
-      include_all: includeAll,
+      q: intentSearch.trim() || undefined,
+      actor_query: intentFilters.actorQuery.trim() || undefined,
+      action: intentFilters.actionFilter,
+      source: intentFilters.sourceFilter,
+      success: intentFilters.successFilter,
+      include_all: intentFilters.includeAll,
       limit: 200,
     }),
     staleTime: 5_000,
   });
 
   const liveQuery = useQuery({
-    queryKey: ['operations-log-live', liveSync, q, actorQuery, actionFilter, sourceFilter, successFilter, includeAll],
+    queryKey: ['operations-log-live', liveSync, intentSearch, intentFilters.actorQuery, intentFilters.actionFilter, intentFilters.sourceFilter, intentFilters.successFilter, intentFilters.includeAll],
     queryFn: () => operationsApi.liveUpdates({
       since: liveSinceRef.current || undefined,
-      q: q.trim() || undefined,
-      actor_query: actorQuery.trim() || undefined,
-      action: actionFilter,
-      source: sourceFilter,
-      success: successFilter,
-      include_all: includeAll,
+      q: intentSearch.trim() || undefined,
+      actor_query: intentFilters.actorQuery.trim() || undefined,
+      action: intentFilters.actionFilter,
+      source: intentFilters.sourceFilter,
+      success: intentFilters.successFilter,
+      include_all: intentFilters.includeAll,
     }),
     enabled: liveSync,
-    refetchInterval: 4_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: livePollingInterval,
+    refetchIntervalInBackground: false,
     staleTime: 0,
   });
 
   useEffect(() => {
     liveSinceRef.current = null;
-  }, [q, actorQuery, actionFilter, sourceFilter, successFilter, includeAll, liveSync]);
+  }, [
+    intentSearch,
+    intentFilters.actorQuery,
+    intentFilters.actionFilter,
+    intentFilters.sourceFilter,
+    intentFilters.successFilter,
+    intentFilters.includeAll,
+    liveSync,
+  ]);
 
   useEffect(() => {
     const payload = liveQuery.data;
@@ -179,19 +230,18 @@ export default function OperationsLogDashboard() {
           <Title level={4} style={{ margin: 0 }}>Nhật ký vận hành</Title>
           <Space wrap>
             <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Tìm nội dung/nguồn/hành động"
-              allowClear
               style={{ width: 280 }}
-              suffix={q ? <QuickClearIcon onClear={() => setQ('')} title="Xóa tìm kiếm" /> : undefined}
+              suffix={searchInput ? <QuickClearIcon onClear={() => setSearchInput('')} title="Xóa tìm kiếm" /> : undefined}
             />
             <Input
               value={actorQuery}
               onChange={(e) => setActorQuery(e.target.value)}
               placeholder="Lọc theo người thao tác"
-              allowClear
               style={{ width: 220 }}
+              suffix={actorQuery ? <QuickClearIcon onClear={() => setActorQuery('')} title="Xóa người thao tác" /> : undefined}
             />
             <Select<string>
               value={actionFilter}

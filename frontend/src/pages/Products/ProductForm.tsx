@@ -8,7 +8,7 @@ import { App, Modal, Button, Checkbox, Alert } from 'antd';
 import { DeleteOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { productsApi } from '../../api/products';
-import { FormInputWithClear } from '../../components';
+import FormInputWithClear from '../../components/FormInputWithClear';
 import type { Product, ProductFormData, ProductChildFormData } from '../../types/product';
 import { WATERPROOF_OPTIONS } from '../../types/product';
 import { useQuickEntryKeys } from '../../hooks/useQuickEntryKeys';

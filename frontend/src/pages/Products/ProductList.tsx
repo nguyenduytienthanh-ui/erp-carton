@@ -40,17 +40,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { productsApi, type ActivityItem, type PriceChangeRecord } from '../../api/products';
 import type { Product } from '../../types/product';
 import { theme } from '../../styles/theme';
-import {
-  FormattedPrice,
-  EmptyState,
-  ImportModal,
-  ColumnChooser,
-  QuickClearIcon,
-  FilterSelect,
-  ListSearchInput,
-  CommentBox,
-  TaskWorkspaceModal,
-} from '../../components';
+import FormattedPrice from '../../components/FormattedPrice';
+import EmptyState from '../../components/EmptyState';
+import ImportModal from '../../components/ImportModal';
+import ColumnChooser from '../../components/ColumnChooser';
+import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
+import FilterSelect from '../../components/FilterSelect';
+import ListSearchInput from '../../components/ListSearchInput';
+import CommentBox from '../../components/CommentBox/CommentBox';
+import TaskWorkspaceModal from '../../components/TaskWorkspaceModal/TaskWorkspaceModal';
 import ProductForm from './ProductForm';
 import {
   useProductsListFilter,

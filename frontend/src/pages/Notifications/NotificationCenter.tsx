@@ -6,8 +6,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { notificationsApi, type NotificationItem } from '../../api/notifications';
-import { QuickClearIcon } from '../../components';
+import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { useRowSelection } from '../../hooks/useRowSelection';
+import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
+import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
 const { Text, Title } = Typography;
 
@@ -35,19 +37,41 @@ function typeColor(type: string): string {
 export default function NotificationCenter() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [q, setQ] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
   const [readFilter, setReadFilter] = useState<ReadFilter>('ALL');
   const [liveSync, setLiveSync] = useState(true);
   const liveSinceRef = useRef<string | null>(null);
   const { selectedIds, rowSelection, clearSelection } = useRowSelection<NotificationItem>();
+  const {
+    intentSearch,
+    intentFilters,
+  } = useSearchFilterIntent({
+    searchInput,
+    filterValues: { typeFilter, readFilter },
+    searchDebounceMs: 650,
+    filterDebounceMs: 300,
+    serializeFilters: (f) => `${f.typeFilter}|${f.readFilter}`,
+    parseFilters: (raw) => {
+      const [type, read] = raw.split('|');
+      return {
+        typeFilter: type || 'ALL',
+        readFilter: (read === 'UNREAD' || read === 'READ' ? read : 'ALL') as ReadFilter,
+      };
+    },
+  });
+  const livePollingInterval = useRealtimePollingInterval({
+    enabled: liveSync,
+    activeMs: 4_000,
+    hiddenMs: false,
+  });
 
   const listQuery = useQuery({
-    queryKey: ['notifications-list', q, typeFilter, readFilter],
+    queryKey: ['notifications-list', intentSearch, intentFilters.typeFilter, intentFilters.readFilter],
     queryFn: () => notificationsApi.list({
-      q: q.trim() || undefined,
-      type: typeFilter !== 'ALL' ? typeFilter : undefined,
-      unread: readFilter === 'UNREAD' ? true : undefined,
+      q: intentSearch.trim() || undefined,
+      type: intentFilters.typeFilter !== 'ALL' ? intentFilters.typeFilter : undefined,
+      unread: intentFilters.readFilter === 'UNREAD' ? true : undefined,
       page_size: 200,
     }),
     staleTime: 5_000,
@@ -60,22 +84,22 @@ export default function NotificationCenter() {
   });
 
   const liveQuery = useQuery({
-    queryKey: ['notifications-live-updates', liveSync, q, typeFilter, readFilter],
+    queryKey: ['notifications-live-updates', liveSync, intentSearch, intentFilters.typeFilter, intentFilters.readFilter],
     queryFn: () => notificationsApi.liveUpdates({
       since: liveSinceRef.current || undefined,
-      q: q.trim() || undefined,
-      type: typeFilter !== 'ALL' ? typeFilter : undefined,
-      unread: readFilter === 'UNREAD' ? true : undefined,
+      q: intentSearch.trim() || undefined,
+      type: intentFilters.typeFilter !== 'ALL' ? intentFilters.typeFilter : undefined,
+      unread: intentFilters.readFilter === 'UNREAD' ? true : undefined,
     }),
     enabled: liveSync,
-    refetchInterval: 4_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: livePollingInterval,
+    refetchIntervalInBackground: false,
     staleTime: 0,
   });
 
   useEffect(() => {
     liveSinceRef.current = null;
-  }, [q, typeFilter, readFilter, liveSync]);
+  }, [intentSearch, intentFilters.typeFilter, intentFilters.readFilter, liveSync]);
 
   useEffect(() => {
     const payload = liveQuery.data;
@@ -118,9 +142,9 @@ export default function NotificationCenter() {
 
   const data = useMemo(() => {
     const raw = listQuery.data ?? [];
-    if (readFilter === 'READ') return raw.filter((x) => x.is_read);
+    if (intentFilters.readFilter === 'READ') return raw.filter((x) => x.is_read);
     return raw;
-  }, [listQuery.data, readFilter]);
+  }, [intentFilters.readFilter, listQuery.data]);
 
   const openRelated = (item: NotificationItem) => {
     const eType = (item.entity_type || '').toLowerCase();
@@ -191,12 +215,11 @@ export default function NotificationCenter() {
           </Space>
           <Space wrap>
             <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Tìm theo tiêu đề/nội dung"
-              allowClear
               style={{ width: 320 }}
-              suffix={q ? <QuickClearIcon onClear={() => setQ('')} title="Xóa tìm kiếm" /> : undefined}
+              suffix={searchInput ? <QuickClearIcon onClear={() => setSearchInput('')} title="Xóa tìm kiếm" /> : undefined}
             />
             <Select
               value={typeFilter}

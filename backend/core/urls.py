@@ -18,6 +18,21 @@ from products.views import (
     ProductViewSet,
 )
 from sales.views import SalesOrderViewSet
+from workforce.views import (
+    AttendanceRecordViewSet,
+    BonusPenaltyRecordViewSet,
+    EmployeeViewSet,
+    PayrollRecordViewSet,
+    SalaryAdvanceRecordViewSet,
+)
+from finance.views import (
+    AdvanceSettlementViewSet,
+    AdvanceTransactionViewSet,
+    BankAccountViewSet,
+    CashAccountViewSet,
+    CashTransactionViewSet,
+    TransactionCategoryViewSet,
+)
 
 router = DefaultRouter()
 router.register(r'column-permissions', ColumnPermissionViewSet, basename='column-permission')
@@ -43,6 +58,17 @@ router.register(r'products/products', ProductViewSet, basename='product')
 router.register(r'sales/orders', SalesOrderViewSet, basename='salesorder')
 router.register(r'tasks', TaskViewSet, basename='task')
 router.register(r'workflow-task-templates', WorkflowTaskTemplateViewSet, basename='workflowtasktemplate')
+router.register(r'workforce/employees', EmployeeViewSet, basename='workforce-employee')
+router.register(r'workforce/attendance-records', AttendanceRecordViewSet, basename='workforce-attendance-record')
+router.register(r'workforce/bonus-penalty-records', BonusPenaltyRecordViewSet, basename='workforce-bonus-penalty-record')
+router.register(r'workforce/salary-advances', SalaryAdvanceRecordViewSet, basename='workforce-salary-advance')
+router.register(r'workforce/payroll-records', PayrollRecordViewSet, basename='workforce-payroll-record')
+router.register(r'finance/bank-accounts', BankAccountViewSet, basename='finance-bank-account')
+router.register(r'finance/transaction-categories', TransactionCategoryViewSet, basename='finance-transaction-category')
+router.register(r'finance/cash-accounts', CashAccountViewSet, basename='finance-cash-account')
+router.register(r'finance/cash-transactions', CashTransactionViewSet, basename='finance-cash-transaction')
+router.register(r'finance/advance-transactions', AdvanceTransactionViewSet, basename='finance-advance-transaction')
+router.register(r'finance/advance-settlements', AdvanceSettlementViewSet, basename='finance-advance-settlement')
 
 urlpatterns = [
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),

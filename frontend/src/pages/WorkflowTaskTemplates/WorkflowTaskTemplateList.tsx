@@ -32,7 +32,8 @@ import {
   type WftTrigger,
 } from '../../api/workflowTaskTemplates';
 import { TASK_PRIORITY_LABELS, TASK_PRIORITY_COLORS, type TaskPriority } from '../../api/tasks';
-import { ColumnChooser, QuickClearIcon } from '../../components';
+import ColumnChooser from '../../components/ColumnChooser';
+import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { useColumnSettings } from '../../hooks/useColumnSettings';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { getEntityTypeLabel } from '../../utils/constants';
@@ -281,7 +282,7 @@ export default function WorkflowTaskTemplateList() {
       trigger: record.trigger,
       title_template: record.title_template,
       description_template: record.description_template,
-      assign_rule: record.assign_rule,
+      assign_rule: (record.assign_rule ?? {}) as Record<string, {} | undefined>,
       due_in_days: record.due_in_days,
       priority: record.priority,
       is_blocking: record.is_blocking,
@@ -528,7 +529,6 @@ export default function WorkflowTaskTemplateList() {
 
         <Select
           placeholder="Loại đối tượng"
-          allowClear={false}
           value={filterValues.entity_type || undefined}
           onChange={(v) => handleFilterChange('entity_type', v ?? '')}
           options={ENTITY_TYPE_OPTIONS}
@@ -542,7 +542,6 @@ export default function WorkflowTaskTemplateList() {
 
         <Select
           placeholder="Sự kiện kích hoạt"
-          allowClear={false}
           value={filterValues.trigger || undefined}
           onChange={(v) => handleFilterChange('trigger', v ?? '')}
           options={TRIGGER_OPTIONS}
@@ -556,7 +555,6 @@ export default function WorkflowTaskTemplateList() {
 
         <Select
           placeholder="Kích hoạt"
-          allowClear={false}
           value={filterValues.is_active || undefined}
           onChange={(v) => handleFilterChange('is_active', v ?? '')}
           options={[

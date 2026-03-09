@@ -14,8 +14,10 @@ import {
   type WorkflowInsightExecutionHistoryItem,
   type WorkflowPipelineStepMetric,
 } from '../../api/workflowTaskTemplates';
+import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { getEntityTypeLabel } from '../../utils/constants';
 import { storage } from '../../utils/storage';
+import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
 const { Text } = Typography;
 
@@ -71,6 +73,11 @@ export default function WorkflowAnalyticsDashboard() {
   const [historySuccessFilter, setHistorySuccessFilter] = useState<'ALL' | 'SUCCESS' | 'FAILED'>('ALL');
   const queryClient = useQueryClient();
   const isSchedulerAdmin = useMemo(() => canManageSchedulerAdmin(), []);
+  const analyticsPollingInterval = useRealtimePollingInterval({
+    enabled: true,
+    activeMs: 30_000,
+    hiddenMs: false,
+  });
 
   const templatesQuery = useQuery({
     queryKey: ['workflow-active-templates-for-analytics'],
@@ -115,8 +122,8 @@ export default function WorkflowAnalyticsDashboard() {
         days,
       }),
     staleTime: 15_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: analyticsPollingInterval,
+    refetchIntervalInBackground: false,
   });
 
   const insightHistoryQuery = useQuery({
@@ -138,8 +145,8 @@ export default function WorkflowAnalyticsDashboard() {
         success: historySuccessFilter === 'ALL' ? undefined : historySuccessFilter === 'SUCCESS',
       }),
     staleTime: 10_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: analyticsPollingInterval,
+    refetchIntervalInBackground: false,
   });
   const automationProfilesQuery = useQuery({
     queryKey: ['workflow-automation-profiles', effectiveEntityType, effectiveTrigger],
@@ -158,8 +165,8 @@ export default function WorkflowAnalyticsDashboard() {
       run_mode: schedulerHistoryMode,
     }),
     staleTime: 10_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: analyticsPollingInterval,
+    refetchIntervalInBackground: false,
   });
   const automationScheduleQuery = useQuery({
     queryKey: ['workflow-automation-schedule', effectiveEntityType, effectiveTrigger],
@@ -173,15 +180,15 @@ export default function WorkflowAnalyticsDashboard() {
     queryKey: ['workflow-scheduler-job-status'],
     queryFn: () => workflowTaskTemplatesApi.getSchedulerJobStatus(),
     staleTime: 20_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: analyticsPollingInterval,
+    refetchIntervalInBackground: false,
   });
   const schedulerHealthQuery = useQuery({
     queryKey: ['workflow-scheduler-health', schedulerHealthHours],
     queryFn: () => workflowTaskTemplatesApi.getSchedulerHealth({ hours: schedulerHealthHours }),
     staleTime: 10_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: analyticsPollingInterval,
+    refetchIntervalInBackground: false,
   });
   const schedulerPolicyQuery = useQuery({
     queryKey: ['workflow-scheduler-policy'],
@@ -195,8 +202,8 @@ export default function WorkflowAnalyticsDashboard() {
       limit: 20,
     }),
     staleTime: 10_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: analyticsPollingInterval,
+    refetchIntervalInBackground: false,
   });
 
   const runAutomationMutation = useMutation({
@@ -630,7 +637,7 @@ export default function WorkflowAnalyticsDashboard() {
             <Button icon={<ReloadOutlined />} loading={analyticsQuery.isFetching} onClick={() => analyticsQuery.refetch()}>
               Tải lại
             </Button>
-            <Button type="primary" loading={runAutomationMutation.isPending} onClick={() => runAutomationMutation.mutate()}>
+            <Button type="primary" loading={runAutomationMutation.isPending} onClick={() => runAutomationMutation.mutate(undefined)}>
               Chạy tự động hóa
             </Button>
           </Space>
@@ -1022,7 +1029,7 @@ export default function WorkflowAnalyticsDashboard() {
                         onChange={(e) => setSchedulerNotifyMessage(e.target.value)}
                         placeholder="Nội dung cảnh báo gửi admin"
                         style={{ width: 420 }}
-                        allowClear
+                        suffix={schedulerNotifyMessage ? <QuickClearIcon onClear={() => setSchedulerNotifyMessage('')} title="Xóa nội dung" /> : undefined}
                       />
                       <Button
                         disabled={!isSchedulerAdmin}
@@ -1038,7 +1045,7 @@ export default function WorkflowAnalyticsDashboard() {
                         onChange={(e) => setSchedulerSimulateReason(e.target.value)}
                         placeholder="Lý do mô phỏng lỗi (admin)"
                         style={{ width: 320 }}
-                        allowClear
+                        suffix={schedulerSimulateReason ? <QuickClearIcon onClear={() => setSchedulerSimulateReason('')} title="Xóa lý do" /> : undefined}
                       />
                       <Button
                         danger
@@ -1254,18 +1261,12 @@ export default function WorkflowAnalyticsDashboard() {
                   { value: 'FAILED', label: 'Thất bại' },
                 ]}
               />
-              <Select<string>
+              <Input
                 value={historyActorQuery}
-                onChange={(v) => setHistoryActorQuery(v ?? '')}
+                onChange={(e) => setHistoryActorQuery(e.target.value)}
                 style={{ width: 220 }}
-                showSearch
-                allowClear
                 placeholder="Lọc theo username"
-                options={[
-                  ...Array.from(
-                    new Set((insightHistoryQuery.data?.items ?? []).map((x) => x.actor_username).filter(Boolean))
-                  ).map((username) => ({ value: username, label: username })),
-                ]}
+                suffix={historyActorQuery ? <QuickClearIcon onClear={() => setHistoryActorQuery('')} title="Xóa username" /> : undefined}
               />
               <Button onClick={exportInsightHistoryCsv}>Xuất CSV</Button>
             </div>

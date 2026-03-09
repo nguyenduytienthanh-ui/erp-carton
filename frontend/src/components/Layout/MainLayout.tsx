@@ -1,5 +1,7 @@
-import { useState, useCallback, useEffect } from 'react';
-import { Layout, Menu, Button, Popover, Space, message, Divider, Drawer } from 'antd';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import type { ReactNode } from 'react';
+import { Layout, Menu, Button, Popover, Space, message, Divider, Drawer, Badge } from 'antd';
+import type { MenuProps } from 'antd';
 import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -9,6 +11,7 @@ import {
   ToolOutlined,
   DollarOutlined,
   ProjectOutlined,
+  ControlOutlined,
   ThunderboltOutlined,
   ApartmentOutlined,
   BarChartOutlined,
@@ -18,6 +21,8 @@ import {
   LogoutOutlined,
   BellOutlined,
   FileSearchOutlined,
+  SafetyOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -25,8 +30,51 @@ import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { storage } from '../../utils/storage';
 import TaskQuickLauncher from '../TaskQuickLauncher/TaskQuickLauncher';
 import { notificationsApi } from '../../api/notifications';
+import { financeApi } from '../../api/finance';
+import { canAccessOpsModules, canManageFinanceData, canManageModulePermissionSettings } from '../../utils/authz';
+import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
 const { Header, Sider, Content } = Layout;
+
+type ConnectionLike = {
+  saveData?: boolean;
+  effectiveType?: string;
+};
+
+function shouldSkipRouteChunkPrefetch(): boolean {
+  const connection = (globalThis.navigator as Navigator & { connection?: ConnectionLike }).connection;
+  if (!connection) return false;
+  if (connection.saveData) return true;
+  return connection.effectiveType === 'slow-2g' || connection.effectiveType === '2g';
+}
+
+const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
+  '/': () => import('../../pages/Dashboard'),
+  '/products': () => import('../../pages/Products/ProductList'),
+  '/categories': () => import('../../pages/Categories/CategoryList'),
+  '/units': () => import('../../pages/Units/UnitList'),
+  '/customers': () => import('../../pages/Customers/CustomerList'),
+  '/task-inbox': () => import('../../pages/Tasks/TaskInbox'),
+  '/executive-cockpit': () => import('../../pages/Management/ExecutiveCockpit'),
+  '/task-operations': () => import('../../pages/Tasks/TaskOperationsBoard'),
+  '/workflow-task-templates': () => import('../../pages/WorkflowTaskTemplates/WorkflowTaskTemplateList'),
+  '/workflow-pipeline': () => import('../../pages/WorkflowPipeline/WorkflowPipelineBoard'),
+  '/workflow-analytics': () => import('../../pages/WorkflowPipeline/WorkflowAnalyticsDashboard'),
+  '/notifications': () => import('../../pages/Notifications/NotificationCenter'),
+  '/operations-log': () => import('../../pages/Operations/OperationsLogDashboard'),
+  '/employees': () => import('../../pages/Workforce/EmployeeList'),
+  '/attendance': () => import('../../pages/Workforce/AttendanceList'),
+  '/bonus-penalty': () => import('../../pages/Workforce/BonusPenaltyList'),
+  '/payroll': () => import('../../pages/Workforce/PayrollList'),
+  '/salary-advance': () => import('../../pages/Workforce/SalaryAdvanceList'),
+  '/transaction-categories': () => import('../../pages/Finance/TransactionCategoryList'),
+  '/bank-accounts': () => import('../../pages/Finance/BankAccountList'),
+  '/cash-book': () => import('../../pages/Finance/CashBook'),
+  '/advance-transactions': () => import('../../pages/Finance/AdvanceTransactionList'),
+  '/finance-summary': () => import('../../pages/Finance/FinanceSummary'),
+  '/admin/module-permissions': () => import('../../pages/Admin/ModulePermissionSettings'),
+  '/admin/module-permissions-history': () => import('../../pages/Admin/ModulePermissionHistory'),
+};
 
 const MainLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
@@ -37,12 +85,34 @@ const MainLayout = () => {
   const user = storage.getUser();
   const desktopControlSize = 40;
   const queryClient = useQueryClient();
+  const prefetchedRoutesRef = useRef<Set<string>>(new Set());
+  const canAccessOps = canAccessOpsModules();
+  const canManageFinance = canManageFinanceData();
+  const canManageModulePermissions = canManageModulePermissionSettings();
+  const headerNotificationInterval = useRealtimePollingInterval({
+    enabled: true,
+    activeMs: 15_000,
+    hiddenMs: false,
+  });
   const unreadQuery = useQuery({
     queryKey: ['header-notifications-unread'],
     queryFn: () => notificationsApi.unread(),
     staleTime: 5_000,
-    refetchInterval: 15_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: headerNotificationInterval,
+    refetchIntervalInBackground: false,
+  });
+  const financeOverdueInterval = useRealtimePollingInterval({
+    enabled: canManageFinance,
+    activeMs: 60_000,
+    hiddenMs: false,
+  });
+  const overdueOverviewQuery = useQuery({
+    queryKey: ['layout-finance-overdue-overview'],
+    queryFn: () => financeApi.getAdvanceOverdueOverview(),
+    enabled: canManageFinance,
+    staleTime: 30_000,
+    refetchInterval: financeOverdueInterval,
+    refetchIntervalInBackground: false,
   });
   const markReadMutation = useMutation({
     mutationFn: (id: number) => notificationsApi.markRead(id),
@@ -77,72 +147,173 @@ const MainLayout = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const menuItems = [
+  const prefetchRouteChunk = useCallback((routePath: string) => {
+    if (shouldSkipRouteChunkPrefetch()) return;
+    if (routePath === location.pathname) return;
+    if (prefetchedRoutesRef.current.has(routePath)) return;
+    const prefetcher = routeChunkPrefetchers[routePath];
+    if (!prefetcher) return;
+    prefetchedRoutesRef.current.add(routePath);
+    void prefetcher().catch(() => {
+      prefetchedRoutesRef.current.delete(routePath);
+    });
+  }, [location.pathname]);
+
+  const renderMenuLabel = useCallback(
+    (routePath: string, label: ReactNode) => (
+      <span
+        onMouseEnter={() => prefetchRouteChunk(routePath)}
+        onFocus={() => prefetchRouteChunk(routePath)}
+      >
+        {label}
+      </span>
+    ),
+    [prefetchRouteChunk]
+  );
+
+  const overdue90Count =
+    overdueOverviewQuery.data?.buckets?.find((bucket) => bucket.threshold_days === 90)?.count ?? 0;
+
+  const menuItems: MenuProps['items'] = [
     {
       key: '/',
       icon: <DashboardOutlined />,
-      label: 'Tổng quan',
+      label: renderMenuLabel('/', 'Tổng quan'),
     },
     {
       key: '/products',
       icon: <AppstoreOutlined />,
-      label: 'Sản phẩm',
+      label: renderMenuLabel('/products', 'Sản phẩm'),
     },
     {
       key: '/categories',
       icon: <TagsOutlined />,
-      label: 'Danh mục',
+      label: renderMenuLabel('/categories', 'Danh mục'),
     },
     {
       key: '/units',
       icon: <ToolOutlined />,
-      label: 'Đơn vị tính',
+      label: renderMenuLabel('/units', 'Đơn vị tính'),
     },
     {
       key: '/customers',
       icon: <TeamOutlined />,
-      label: 'Khách hàng',
+      label: renderMenuLabel('/customers', 'Khách hàng'),
     },
     {
       key: '/pricings',
       icon: <DollarOutlined />,
-      label: 'Bảng giá',
+      label: renderMenuLabel('/pricings', 'Bảng giá'),
+    },
+    {
+      key: 'workforce-group',
+      icon: <UserOutlined />,
+      label: 'Nhân sự',
+      children: [
+        {
+          key: '/employees',
+          label: renderMenuLabel('/employees', 'Nhân viên'),
+        },
+        {
+          key: '/attendance',
+          label: renderMenuLabel('/attendance', 'Chấm công'),
+        },
+        {
+          key: '/bonus-penalty',
+          label: renderMenuLabel('/bonus-penalty', 'Thưởng phạt'),
+        },
+        {
+          key: '/payroll',
+          label: renderMenuLabel('/payroll', 'Bảng lương'),
+        },
+        {
+          key: '/salary-advance',
+          label: renderMenuLabel('/salary-advance', 'Ứng lương'),
+        },
+      ],
+    },
+    {
+      key: 'finance-group',
+      icon: <DollarOutlined />,
+      label: 'Tài chính',
+      children: [
+        {
+          key: '/transaction-categories',
+          label: renderMenuLabel('/transaction-categories', 'Loại thu chi'),
+        },
+        {
+          key: '/bank-accounts',
+          label: renderMenuLabel('/bank-accounts', 'Ngân hàng'),
+        },
+        {
+          key: '/cash-book',
+          label: renderMenuLabel('/cash-book', 'Sổ quỹ'),
+        },
+        {
+          key: '/advance-transactions',
+          label: renderMenuLabel(
+            '/advance-transactions',
+            <span>
+              Tạm ứng {overdue90Count > 0 ? <Badge count={overdue90Count} size="small" overflowCount={99} /> : null}
+            </span>
+          ),
+        },
+        {
+          key: '/finance-summary',
+          label: renderMenuLabel('/finance-summary', 'Báo cáo tài chính'),
+        },
+      ],
     },
     {
       key: '/task-inbox',
       icon: <InboxOutlined />,
-      label: 'Nhiệm vụ của tôi',
+      label: renderMenuLabel('/task-inbox', 'Nhiệm vụ của tôi'),
     },
-    {
+    canAccessOps ? {
+      key: '/executive-cockpit',
+      icon: <ControlOutlined />,
+      label: renderMenuLabel('/executive-cockpit', 'Điều hành tổng hợp'),
+    } : null,
+    canAccessOps ? {
       key: '/task-operations',
       icon: <ProjectOutlined />,
-      label: 'Điều hành nhiệm vụ',
-    },
-    {
+      label: renderMenuLabel('/task-operations', 'Điều hành nhiệm vụ'),
+    } : null,
+    canAccessOps ? {
       key: '/workflow-task-templates',
       icon: <ThunderboltOutlined />,
-      label: 'Mẫu nhiệm vụ',
-    },
-    {
+      label: renderMenuLabel('/workflow-task-templates', 'Mẫu nhiệm vụ'),
+    } : null,
+    canAccessOps ? {
       key: '/workflow-pipeline',
       icon: <ApartmentOutlined />,
-      label: 'Luồng công việc',
-    },
-    {
+      label: renderMenuLabel('/workflow-pipeline', 'Luồng công việc'),
+    } : null,
+    canAccessOps ? {
       key: '/workflow-analytics',
       icon: <BarChartOutlined />,
-      label: 'Phân tích quy trình',
-    },
+      label: renderMenuLabel('/workflow-analytics', 'Phân tích quy trình'),
+    } : null,
     {
       key: '/notifications',
       icon: <BellOutlined />,
-      label: 'Thông báo',
+      label: renderMenuLabel('/notifications', 'Thông báo'),
     },
-    {
+    canAccessOps ? {
       key: '/operations-log',
       icon: <FileSearchOutlined />,
-      label: 'Nhật ký vận hành',
-    },
+      label: renderMenuLabel('/operations-log', 'Nhật ký vận hành'),
+    } : null,
+    canManageModulePermissions ? {
+      key: '/admin/module-permissions',
+      icon: <SafetyOutlined />,
+      label: renderMenuLabel('/admin/module-permissions', 'Phân quyền module'),
+    } : null,
+    canManageModulePermissions ? {
+      key: '/admin/module-permissions-history',
+      icon: <HistoryOutlined />,
+      label: renderMenuLabel('/admin/module-permissions-history', 'Lịch sử phân quyền'),
+    } : null,
   ];
 
   const handleLogout = useCallback(() => {
@@ -233,11 +404,12 @@ const MainLayout = () => {
   );
 
   const handleMenuClick = useCallback(({ key }: { key: string }) => {
+    prefetchRouteChunk(key);
     navigate(key);
     if (isMobile) {
       setMobileMenuVisible(false);
     }
-  }, [navigate, isMobile]);
+  }, [navigate, isMobile, prefetchRouteChunk]);
 
   const menuContent = (
     <Menu

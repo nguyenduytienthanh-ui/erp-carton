@@ -1,4 +1,3 @@
-import { CloseCircleFilled } from '@ant-design/icons';
 import type { CSSProperties } from 'react';
 
 /**
@@ -84,7 +83,16 @@ const QuickClearIcon = ({
         }
       }}
     >
-      <CloseCircleFilled style={{ fontSize: 'inherit', color: 'inherit' }} />
+      <svg
+        viewBox="0 0 1024 1024"
+        width="1em"
+        height="1em"
+        aria-hidden="true"
+        focusable="false"
+        style={{ display: 'block', fill: 'currentColor' }}
+      >
+        <path d="M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm173.3 594.6a32 32 0 01-45.3 45.3L512 557.3 384 703.9a32 32 0 01-45.3-45.3L466.7 512 338.7 365.4a32 32 0 0145.3-45.3L512 466.7l128-146.6a32 32 0 0145.3 45.3L557.3 512l128 146.6z" />
+      </svg>
     </span>
   );
 };

@@ -6,11 +6,12 @@ import django_filters
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.http import HttpResponse
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Count, DateTimeField, Exists, IntegerField, OuterRef, Subquery
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Cast
 from datetime import datetime
 from datetime import timedelta
+import uuid
 from django.utils.dateparse import parse_datetime
 from django.core.cache import cache
 from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, AuditLog, UserSession, UserPreferences, ColumnPermission, Task, WorkflowTaskTemplate, TaskWatcher, WorkflowPipelineEvent
@@ -30,6 +31,11 @@ from .permissions import check_action_permission
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+
+    @action(detail=False, methods=['get'])
+    def me(self, request):
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)
 
     @action(detail=False, methods=['post'])
     def bulk_activate(self, request):
@@ -150,6 +156,38 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         return super().get_queryset().filter(deleted_at__isnull=True)
 
+    @staticmethod
+    def _can_manage_module_permissions(user):
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+            return True
+        return check_action_permission(user, 'CORE', 'MANAGE_RBAC', strict=True)
+
+    @staticmethod
+    def _get_module_permission_map():
+        perms = Permission.objects.filter(
+            models.Q(resource='WORKFORCE', action='MANAGE')
+            | models.Q(resource='FINANCE', action='MANAGE')
+            | models.Q(resource='CORE', action='MANAGE_RBAC')
+        )
+        return {f'{perm.resource}:{perm.action}': perm for perm in perms}
+
+    @staticmethod
+    def _freeze_cache_key(user_id):
+        return f'rbac:module-freeze:user:{int(user_id)}'
+
+    @staticmethod
+    def _freeze_prepare_cache_key(token):
+        return f'rbac:module-freeze:prepare:{token}'
+
+    @classmethod
+    def _get_freeze_payload(cls, user_id):
+        if not user_id:
+            return None
+        payload = cache.get(cls._freeze_cache_key(user_id))
+        return payload if isinstance(payload, dict) else None
+
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user, updated_by=self.request.user)
 
@@ -179,6 +217,751 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         now = django_timezone.now()
         Role.objects.filter(id__in=ids).update(deleted_at=now, deleted_by=request.user)
         return Response({'message': f'Đã xóa (soft) {len(ids)} role'})
+
+    @action(detail=False, methods=['get'])
+    def module_permissions(self, request):
+        if not self._can_manage_module_permissions(request.user):
+            return Response({'error': 'Bạn không có quyền xem cấu hình quyền module.'}, status=403)
+
+        perm_map = self._get_module_permission_map()
+        workforce_perm = perm_map.get('WORKFORCE:MANAGE')
+        finance_perm = perm_map.get('FINANCE:MANAGE')
+        rbac_perm = perm_map.get('CORE:MANAGE_RBAC')
+
+        roles = (
+            Role.objects
+            .filter(deleted_at__isnull=True)
+            .prefetch_related('permissions')
+            .order_by('sort_order', 'name')
+        )
+        items = []
+        for role in roles:
+            assigned_ids = {perm.id for perm in role.permissions.all()}
+            items.append({
+                'role_id': role.id,
+                'role_code': role.code,
+                'role_name': role.name,
+                'is_active': role.is_active,
+                'workforce_manage': bool(workforce_perm and workforce_perm.id in assigned_ids),
+                'finance_manage': bool(finance_perm and finance_perm.id in assigned_ids),
+                'rbac_manage': bool(rbac_perm and rbac_perm.id in assigned_ids),
+            })
+        return Response({'items': items})
+
+    @module_permissions.mapping.post
+    def update_module_permissions(self, request):
+        if not self._can_manage_module_permissions(request.user):
+            return Response({'error': 'Bạn không có quyền cập nhật cấu hình quyền module.'}, status=403)
+        freeze_payload = self._get_freeze_payload(request.user.id)
+        if freeze_payload:
+            frozen_until = freeze_payload.get('frozen_until') or ''
+            reason = str(freeze_payload.get('reason') or '').strip()
+            msg = f'Tài khoản đang bị đóng băng quyền thay đổi phân quyền đến {frozen_until}.'
+            if reason:
+                msg = f'{msg} Lý do: {reason}'
+            return Response({'error': msg}, status=403)
+
+        raw_items = request.data.get('items', [])
+        if not isinstance(raw_items, list) or not raw_items:
+            return Response({'error': 'items là bắt buộc và phải là mảng.'}, status=400)
+
+        perm_map = self._get_module_permission_map()
+        workforce_perm = perm_map.get('WORKFORCE:MANAGE')
+        finance_perm = perm_map.get('FINANCE:MANAGE')
+        rbac_perm = perm_map.get('CORE:MANAGE_RBAC')
+        if not workforce_perm or not finance_perm or not rbac_perm:
+            return Response({'error': 'Thiếu permission hệ thống, vui lòng chạy migration mới nhất.'}, status=400)
+
+        role_ids = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            role_id = item.get('role_id')
+            if isinstance(role_id, int):
+                role_ids.append(role_id)
+        if not role_ids:
+            return Response({'error': 'Không có role_id hợp lệ.'}, status=400)
+
+        roles = {r.id: r for r in Role.objects.filter(id__in=role_ids, deleted_at__isnull=True).prefetch_related('permissions')}
+        existing_rbac_ids = set(
+            Role.objects.filter(
+                deleted_at__isnull=True,
+                permissions=rbac_perm,
+            ).values_list('id', flat=True)
+        )
+        next_rbac_ids = set(existing_rbac_ids)
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            role_id = item.get('role_id')
+            if not isinstance(role_id, int) or role_id not in roles:
+                continue
+            if bool(item.get('rbac_manage')):
+                next_rbac_ids.add(role_id)
+            else:
+                next_rbac_ids.discard(role_id)
+        has_active_rbac = Role.objects.filter(
+            id__in=next_rbac_ids,
+            deleted_at__isnull=True,
+            is_active=True,
+        ).exists()
+        if not has_active_rbac:
+            return Response(
+                {'error': 'Phải có ít nhất 1 vai trò đang hoạt động có quyền quản trị phân quyền.'},
+                status=400,
+            )
+
+        changed_rows = []
+        updated = 0
+        with transaction.atomic():
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                role_id = item.get('role_id')
+                if not isinstance(role_id, int) or role_id not in roles:
+                    continue
+                role = roles[role_id]
+                assigned_ids = {perm.id for perm in role.permissions.all()}
+                old_workforce = workforce_perm.id in assigned_ids
+                old_finance = finance_perm.id in assigned_ids
+                old_rbac = rbac_perm.id in assigned_ids
+
+                workforce_manage = bool(item.get('workforce_manage'))
+                finance_manage = bool(item.get('finance_manage'))
+                rbac_manage = bool(item.get('rbac_manage'))
+
+                if workforce_manage:
+                    role.permissions.add(workforce_perm)
+                else:
+                    role.permissions.remove(workforce_perm)
+
+                if finance_manage:
+                    role.permissions.add(finance_perm)
+                else:
+                    role.permissions.remove(finance_perm)
+
+                if rbac_manage:
+                    role.permissions.add(rbac_perm)
+                else:
+                    role.permissions.remove(rbac_perm)
+                if (
+                    old_workforce != workforce_manage
+                    or old_finance != finance_manage
+                    or old_rbac != rbac_manage
+                ):
+                    changed_rows.append({
+                        'role_id': role.id,
+                        'role_code': role.code,
+                        'role_name': role.name,
+                        'old': {
+                            'workforce_manage': old_workforce,
+                            'finance_manage': old_finance,
+                            'rbac_manage': old_rbac,
+                        },
+                        'new': {
+                            'workforce_manage': workforce_manage,
+                            'finance_manage': finance_manage,
+                            'rbac_manage': rbac_manage,
+                        },
+                    })
+                updated += 1
+
+        if changed_rows:
+            AuditLog.objects.create(
+                user=request.user,
+                action='UPDATE',
+                entity_type='RoleModulePermission',
+                entity_id=0,
+                entity_id_str='role-module-permissions',
+                entity_code='ROLE_MODULE_PERMISSIONS',
+                old_values={'items': [row['old'] | {'role_id': row['role_id'], 'role_code': row['role_code'], 'role_name': row['role_name']} for row in changed_rows]},
+                new_values={'items': [row['new'] | {'role_id': row['role_id'], 'role_code': row['role_code'], 'role_name': row['role_name']} for row in changed_rows]},
+                changed_fields=['module_permissions'],
+                ip_address=request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0] or request.META.get('REMOTE_ADDR'),
+                user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+            )
+
+            # Realtime anomaly alert for unusually high permission-change activity (24h window).
+            now = django_timezone.now()
+            recent_logs = AuditLog.objects.filter(
+                entity_type='RoleModulePermission',
+                user=request.user,
+                created_at__gte=now - timedelta(hours=24),
+            ).order_by('-created_at')
+            recent_events = recent_logs.count()
+            recent_role_changes = 0
+            for log in recent_logs:
+                items = (log.new_values or {}).get('items') if isinstance(log.new_values, dict) else []
+                if isinstance(items, list):
+                    recent_role_changes += len([item for item in items if isinstance(item, dict)])
+
+            if recent_events >= 20 or recent_role_changes >= 40:
+                title = 'Canh bao bat thuong thay doi quyen module'
+                actor_name = request.user.get_full_name() or request.user.username
+                message = (
+                    f'Nguoi dung {actor_name} da thay doi quyen module {recent_events} lan '
+                    f'va tac dong {recent_role_changes} role trong 24 gio qua.'
+                )
+                recipients = (
+                    User.objects
+                    .filter(is_active=True)
+                    .filter(
+                        models.Q(is_superuser=True)
+                        | models.Q(is_staff=True)
+                        | models.Q(roles__permissions=rbac_perm)
+                    )
+                    .exclude(id=request.user.id)
+                    .distinct()
+                )
+                for recipient in recipients:
+                    already_notified = Notification.objects.filter(
+                        recipient=recipient,
+                        notification_type='system',
+                        entity_type='RoleModulePermission',
+                        actor=request.user,
+                        title=title,
+                        created_at__gte=now - timedelta(hours=6),
+                    ).exists()
+                    if already_notified:
+                        continue
+                    Notification.objects.create(
+                        recipient=recipient,
+                        notification_type='system',
+                        title=title,
+                        message=message,
+                        entity_type='RoleModulePermission',
+                        entity_id=0,
+                        actor=request.user,
+                    )
+
+        return Response({'success': True, 'updated': updated})
+
+    @action(detail=False, methods=['post'])
+    def module_permissions_freeze_prepare(self, request):
+        if not self._can_manage_module_permissions(request.user):
+            return Response({'error': 'Bạn không có quyền chuẩn bị đóng băng user.'}, status=403)
+        user_id = request.data.get('user_id')
+        if not isinstance(user_id, int):
+            return Response({'error': 'user_id phải là số nguyên.'}, status=400)
+        target = User.objects.filter(id=user_id, is_active=True).first()
+        if not target:
+            return Response({'error': 'Không tìm thấy user hợp lệ.'}, status=404)
+        hours = request.data.get('hours', 24)
+        try:
+            hours = int(hours)
+        except (TypeError, ValueError):
+            return Response({'error': 'hours phải là số nguyên.'}, status=400)
+        hours = max(1, min(168, hours))
+        reason = str(request.data.get('reason') or '').strip()
+        token = uuid.uuid4().hex
+        cache.set(
+            self._freeze_prepare_cache_key(token),
+            {
+                'prepared_by': request.user.id,
+                'target_user_id': target.id,
+                'hours': hours,
+                'reason': reason,
+            },
+            timeout=600,
+        )
+        return Response({
+            'success': True,
+            'prepare_token': token,
+            'target_user': {
+                'id': target.id,
+                'username': target.username,
+                'full_name': f'{target.first_name} {target.last_name}'.strip(),
+            },
+            'hours': hours,
+        })
+
+    @action(detail=False, methods=['post'])
+    def module_permissions_freeze_apply(self, request):
+        if not self._can_manage_module_permissions(request.user):
+            return Response({'error': 'Bạn không có quyền đóng băng user.'}, status=403)
+        prepare_token = str(request.data.get('prepare_token') or '').strip()
+        confirm_text = str(request.data.get('confirm_text') or '').strip().upper()
+        if not prepare_token:
+            return Response({'error': 'prepare_token là bắt buộc.'}, status=400)
+        if confirm_text != 'FREEZE':
+            return Response({'error': 'confirm_text phải là FREEZE.'}, status=400)
+        payload = cache.get(self._freeze_prepare_cache_key(prepare_token))
+        if not isinstance(payload, dict):
+            return Response({'error': 'Token chuẩn bị không hợp lệ hoặc đã hết hạn.'}, status=400)
+        if payload.get('prepared_by') != request.user.id:
+            return Response({'error': 'Token chuẩn bị không thuộc phiên của bạn.'}, status=403)
+        target_user_id = int(payload.get('target_user_id') or 0)
+        target = User.objects.filter(id=target_user_id, is_active=True).first()
+        if not target:
+            return Response({'error': 'User mục tiêu không còn hợp lệ.'}, status=404)
+
+        hours = int(payload.get('hours') or 24)
+        reason = str(payload.get('reason') or '').strip()
+        now = django_timezone.now()
+        frozen_until_dt = now + timedelta(hours=hours)
+        freeze_data = {
+            'frozen_by': request.user.id,
+            'frozen_by_username': request.user.username,
+            'frozen_at': now.isoformat(),
+            'frozen_until': frozen_until_dt.isoformat(),
+            'reason': reason,
+            'hours': hours,
+        }
+        cache.set(self._freeze_cache_key(target.id), freeze_data, timeout=max(60, hours * 3600))
+        cache.delete(self._freeze_prepare_cache_key(prepare_token))
+
+        AuditLog.objects.create(
+            user=request.user,
+            action='LOCK',
+            entity_type='RoleModulePermissionFreeze',
+            entity_id=target.id,
+            entity_id_str=str(target.id),
+            entity_code=target.username,
+            old_values={},
+            new_values=freeze_data,
+            changed_fields=['freeze_module_permissions'],
+            ip_address=request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0] or request.META.get('REMOTE_ADDR'),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        Notification.objects.create(
+            recipient=target,
+            notification_type='system',
+            title='Quyen thay doi phan quyen module da bi dong bang tam thoi',
+            message=(
+                f'Tai khoan cua ban bi dong bang quyen thay doi phan quyen trong {hours} gio.'
+                + (f' Ly do: {reason}' if reason else '')
+            ),
+            entity_type='RoleModulePermissionFreeze',
+            entity_id=target.id,
+            actor=request.user,
+        )
+
+        return Response({
+            'success': True,
+            'user_id': target.id,
+            'frozen_until': freeze_data['frozen_until'],
+        })
+
+    @action(detail=False, methods=['post'])
+    def module_permissions_unfreeze_actor(self, request):
+        if not self._can_manage_module_permissions(request.user):
+            return Response({'error': 'Bạn không có quyền gỡ đóng băng user.'}, status=403)
+        user_id = request.data.get('user_id')
+        confirm_text = str(request.data.get('confirm_text') or '').strip().upper()
+        if not isinstance(user_id, int):
+            return Response({'error': 'user_id phải là số nguyên.'}, status=400)
+        if confirm_text != 'UNFREEZE':
+            return Response({'error': 'confirm_text phải là UNFREEZE.'}, status=400)
+        target = User.objects.filter(id=user_id).first()
+        if not target:
+            return Response({'error': 'Không tìm thấy user.'}, status=404)
+        key = self._freeze_cache_key(target.id)
+        old_data = cache.get(key)
+        cache.delete(key)
+
+        AuditLog.objects.create(
+            user=request.user,
+            action='ACTIVATE',
+            entity_type='RoleModulePermissionFreeze',
+            entity_id=target.id,
+            entity_id_str=str(target.id),
+            entity_code=target.username,
+            old_values=old_data if isinstance(old_data, dict) else {},
+            new_values={'unfrozen_at': django_timezone.now().isoformat()},
+            changed_fields=['unfreeze_module_permissions'],
+            ip_address=request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0] or request.META.get('REMOTE_ADDR'),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response({'success': True, 'user_id': target.id})
+
+    @action(detail=False, methods=['get'])
+    def module_permissions_freeze_history(self, request):
+        if not self._can_manage_module_permissions(request.user):
+            return Response({'error': 'Bạn không có quyền xem lịch sử đóng băng quyền module.'}, status=403)
+
+        queryset = (
+            AuditLog.objects
+            .filter(entity_type='RoleModulePermissionFreeze')
+            .select_related('user')
+            .order_by('-created_at', '-id')
+        )
+
+        q = (request.query_params.get('q') or '').strip()
+        if q:
+            queryset = queryset.filter(
+                models.Q(user__username__icontains=q)
+                | models.Q(user__first_name__icontains=q)
+                | models.Q(user__last_name__icontains=q)
+                | models.Q(entity_code__icontains=q)
+            )
+
+        action_type = (request.query_params.get('action_type') or '').strip().upper()
+        if action_type in {'LOCK', 'ACTIVATE'}:
+            queryset = queryset.filter(action=action_type)
+
+        total = queryset.count()
+        page = request.query_params.get('page', '1')
+        page_size = request.query_params.get('page_size', '20')
+        try:
+            page_int = max(1, int(page))
+        except ValueError:
+            page_int = 1
+        try:
+            page_size_int = max(1, min(200, int(page_size)))
+        except ValueError:
+            page_size_int = 20
+
+        start = (page_int - 1) * page_size_int
+        end = start + page_size_int
+        rows = list(queryset[start:end])
+        target_ids = [row.entity_id for row in rows if isinstance(row.entity_id, int) and row.entity_id > 0]
+        target_user_map = {u.id: u for u in User.objects.filter(id__in=target_ids)}
+        results = []
+        for row in rows:
+            target_user = target_user_map.get(row.entity_id) if isinstance(row.entity_id, int) else None
+            freeze_payload = self._get_freeze_payload(target_user.id if target_user else None)
+            results.append({
+                'id': row.id,
+                'created_at': row.created_at.isoformat() if row.created_at else None,
+                'action': row.action,
+                'entity_code': row.entity_code,
+                'old_values': row.old_values or {},
+                'new_values': row.new_values or {},
+                'actor': {
+                    'id': row.user_id,
+                    'username': row.user.username if row.user else None,
+                    'full_name': f'{row.user.first_name} {row.user.last_name}'.strip() if row.user else '',
+                },
+                'target_user': {
+                    'id': target_user.id if target_user else row.entity_id,
+                    'username': target_user.username if target_user else row.entity_code,
+                    'full_name': (f'{target_user.first_name} {target_user.last_name}'.strip() if target_user else ''),
+                    'is_active_freeze': bool(freeze_payload),
+                    'frozen_until': (freeze_payload or {}).get('frozen_until') if isinstance(freeze_payload, dict) else None,
+                },
+            })
+        return Response({'count': total, 'results': results})
+
+    @action(detail=False, methods=['get'])
+    def module_permissions_history(self, request):
+        if not self._can_manage_module_permissions(request.user):
+            return Response({'error': 'Bạn không có quyền xem lịch sử phân quyền module.'}, status=403)
+
+        queryset = (
+            AuditLog.objects
+            .filter(entity_type='RoleModulePermission')
+            .select_related('user')
+            .annotate(
+                old_values_text=Cast('old_values', output_field=models.TextField()),
+                new_values_text=Cast('new_values', output_field=models.TextField()),
+            )
+            .order_by('-created_at', '-id')
+        )
+
+        q = (request.query_params.get('q') or '').strip()
+        if q:
+            queryset = queryset.filter(
+                models.Q(user__username__icontains=q)
+                | models.Q(user__first_name__icontains=q)
+                | models.Q(user__last_name__icontains=q)
+                | models.Q(entity_code__icontains=q)
+                | models.Q(old_values_text__icontains=q)
+                | models.Q(new_values_text__icontains=q)
+            )
+
+        user_id = (request.query_params.get('user_id') or '').strip()
+        if user_id.isdigit():
+            queryset = queryset.filter(user_id=int(user_id))
+
+        date_from = (request.query_params.get('date_from') or '').strip()
+        if date_from:
+            dt_from = parse_datetime(date_from)
+            if dt_from is not None:
+                queryset = queryset.filter(created_at__gte=dt_from)
+
+        date_to = (request.query_params.get('date_to') or '').strip()
+        if date_to:
+            dt_to = parse_datetime(date_to)
+            if dt_to is not None:
+                queryset = queryset.filter(created_at__lte=dt_to)
+
+        role_code = (request.query_params.get('role_code') or '').strip().lower()
+        changed_type = (request.query_params.get('changed_type') or '').strip().lower()
+
+        rows_all = list(queryset)
+        if role_code or changed_type in {'workforce', 'finance', 'rbac'}:
+            filtered_rows = []
+            for row in rows_all:
+                old_items = (row.old_values or {}).get('items') if isinstance(row.old_values, dict) else []
+                new_items = (row.new_values or {}).get('items') if isinstance(row.new_values, dict) else []
+                if not isinstance(old_items, list):
+                    old_items = []
+                if not isinstance(new_items, list):
+                    new_items = []
+                old_by_role_id = {
+                    int(item.get('role_id')): item
+                    for item in old_items
+                    if isinstance(item, dict) and str(item.get('role_id', '')).isdigit()
+                }
+                matched = False
+                for item in new_items:
+                    if not isinstance(item, dict):
+                        continue
+                    role_id_raw = item.get('role_id')
+                    if not str(role_id_raw).isdigit():
+                        continue
+                    role_id = int(role_id_raw)
+                    role_code_value = str(item.get('role_code') or '').strip().lower()
+                    if role_code and role_code not in role_code_value:
+                        continue
+                    if changed_type in {'workforce', 'finance', 'rbac'}:
+                        old_item = old_by_role_id.get(role_id, {})
+                        field_name = f'{changed_type}_manage'
+                        if bool(old_item.get(field_name)) == bool(item.get(field_name)):
+                            continue
+                    matched = True
+                    break
+                if matched:
+                    filtered_rows.append(row)
+            rows_all = filtered_rows
+
+        export = (request.query_params.get('export') or '').strip().lower()
+        if export == 'excel':
+            from openpyxl import Workbook
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = 'ModulePermissionHistory'
+            ws.append([
+                'Thoi gian',
+                'Nguoi thao tac',
+                'Username',
+                'Role code',
+                'Role name',
+                'Workforce (cu -> moi)',
+                'Finance (cu -> moi)',
+                'RBAC (cu -> moi)',
+                'IP',
+            ])
+            for row in rows_all:
+                old_items = (row.old_values or {}).get('items') if isinstance(row.old_values, dict) else []
+                new_items = (row.new_values or {}).get('items') if isinstance(row.new_values, dict) else []
+                if not isinstance(old_items, list):
+                    old_items = []
+                if not isinstance(new_items, list):
+                    new_items = []
+                old_by_role_id = {
+                    int(item.get('role_id')): item
+                    for item in old_items
+                    if isinstance(item, dict) and str(item.get('role_id', '')).isdigit()
+                }
+                for item in new_items:
+                    if not isinstance(item, dict):
+                        continue
+                    role_id_raw = item.get('role_id')
+                    if not str(role_id_raw).isdigit():
+                        continue
+                    role_id = int(role_id_raw)
+                    old_item = old_by_role_id.get(role_id, {})
+                    role_code_value = str(item.get('role_code') or '')
+                    if role_code and role_code not in role_code_value.strip().lower():
+                        continue
+                    if changed_type in {'workforce', 'finance', 'rbac'}:
+                        field_name = f'{changed_type}_manage'
+                        if bool(old_item.get(field_name)) == bool(item.get(field_name)):
+                            continue
+                    ws.append([
+                        row.created_at.isoformat() if row.created_at else '',
+                        f'{row.user.first_name} {row.user.last_name}'.strip() if row.user else '',
+                        row.user.username if row.user else '',
+                        role_code_value,
+                        str(item.get('role_name') or ''),
+                        f'{"Bật" if bool(old_item.get("workforce_manage")) else "Tắt"} -> {"Bật" if bool(item.get("workforce_manage")) else "Tắt"}',
+                        f'{"Bật" if bool(old_item.get("finance_manage")) else "Tắt"} -> {"Bật" if bool(item.get("finance_manage")) else "Tắt"}',
+                        f'{"Bật" if bool(old_item.get("rbac_manage")) else "Tắt"} -> {"Bật" if bool(item.get("rbac_manage")) else "Tắt"}',
+                        row.ip_address or '',
+                    ])
+            response = HttpResponse(
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = 'attachment; filename="module_permission_history.xlsx"'
+            wb.save(response)
+            return response
+
+        summary_total_events = len(rows_all)
+        summary_total_role_changes = 0
+        summary_by_changed_type = {'workforce': 0, 'finance': 0, 'rbac': 0}
+        actor_stats = {}
+        for row in rows_all:
+            old_items = (row.old_values or {}).get('items') if isinstance(row.old_values, dict) else []
+            new_items = (row.new_values or {}).get('items') if isinstance(row.new_values, dict) else []
+            if not isinstance(old_items, list):
+                old_items = []
+            if not isinstance(new_items, list):
+                new_items = []
+            old_by_role_id = {
+                int(item.get('role_id')): item
+                for item in old_items
+                if isinstance(item, dict) and str(item.get('role_id', '')).isdigit()
+            }
+
+            username = row.user.username if row.user else 'system'
+            actor_key = row.user_id or 0
+            actor = actor_stats.get(actor_key)
+            if actor is None:
+                actor = {
+                    'user_id': row.user_id,
+                    'username': username,
+                    'full_name': (
+                        f'{row.user.first_name} {row.user.last_name}'.strip()
+                        if row.user else ''
+                    ),
+                    'events': 0,
+                    'role_changes': 0,
+                }
+                actor_stats[actor_key] = actor
+            actor['events'] += 1
+
+            for item in new_items:
+                if not isinstance(item, dict):
+                    continue
+                role_id_raw = item.get('role_id')
+                if not str(role_id_raw).isdigit():
+                    continue
+                role_id = int(role_id_raw)
+                old_item = old_by_role_id.get(role_id, {})
+                changed_any = False
+                if bool(old_item.get('workforce_manage')) != bool(item.get('workforce_manage')):
+                    summary_by_changed_type['workforce'] += 1
+                    changed_any = True
+                if bool(old_item.get('finance_manage')) != bool(item.get('finance_manage')):
+                    summary_by_changed_type['finance'] += 1
+                    changed_any = True
+                if bool(old_item.get('rbac_manage')) != bool(item.get('rbac_manage')):
+                    summary_by_changed_type['rbac'] += 1
+                    changed_any = True
+                if changed_any:
+                    summary_total_role_changes += 1
+                    actor['role_changes'] += 1
+
+        top_actors = sorted(
+            actor_stats.values(),
+            key=lambda x: (-int(x['events']), -int(x['role_changes']), str(x['username'])),
+        )[:5]
+
+        # Trend 12 months (based on currently filtered rows, before pagination).
+        now = django_timezone.now()
+        y = now.year
+        m = now.month
+        month_keys = []
+        for _ in range(12):
+            month_keys.append(f'{y}-{str(m).zfill(2)}')
+            m -= 1
+            if m == 0:
+                y -= 1
+                m = 12
+        month_keys.reverse()
+        trend_map = {k: {'month': k, 'events': 0, 'role_changes': 0} for k in month_keys}
+        for row in rows_all:
+            if not row.created_at:
+                continue
+            key = row.created_at.strftime('%Y-%m')
+            if key not in trend_map:
+                continue
+            trend_map[key]['events'] += 1
+            new_items = (row.new_values or {}).get('items') if isinstance(row.new_values, dict) else []
+            if isinstance(new_items, list):
+                trend_map[key]['role_changes'] += len([item for item in new_items if isinstance(item, dict)])
+        trend_12m = [trend_map[k] for k in month_keys]
+
+        # Anomaly detection: heavy change activity in the last 24 hours.
+        recent_cutoff = now - timedelta(hours=24)
+        recent_actor_counts = {}
+        for row in rows_all:
+            if not row.created_at or row.created_at < recent_cutoff:
+                continue
+            actor_key = row.user_id or 0
+            actor = recent_actor_counts.get(actor_key)
+            if actor is None:
+                actor = {
+                    'user_id': row.user_id,
+                    'username': row.user.username if row.user else 'system',
+                    'full_name': (
+                        f'{row.user.first_name} {row.user.last_name}'.strip()
+                        if row.user else ''
+                    ),
+                    'events_24h': 0,
+                    'role_changes_24h': 0,
+                }
+                recent_actor_counts[actor_key] = actor
+            actor['events_24h'] += 1
+            new_items = (row.new_values or {}).get('items') if isinstance(row.new_values, dict) else []
+            if isinstance(new_items, list):
+                actor['role_changes_24h'] += len([item for item in new_items if isinstance(item, dict)])
+        anomalies = []
+        for actor in recent_actor_counts.values():
+            events_24h = int(actor['events_24h'])
+            role_changes_24h = int(actor['role_changes_24h'])
+            if events_24h >= 10 or role_changes_24h >= 20:
+                severity = 'high' if (events_24h >= 20 or role_changes_24h >= 40) else 'medium'
+                freeze_payload = self._get_freeze_payload(actor.get('user_id'))
+                anomalies.append({
+                    **actor,
+                    'severity': severity,
+                    'is_frozen': bool(freeze_payload),
+                    'frozen_until': (freeze_payload or {}).get('frozen_until') if isinstance(freeze_payload, dict) else None,
+                })
+        anomalies.sort(key=lambda x: (-int(x['events_24h']), -int(x['role_changes_24h']), str(x['username'])))
+        anomalies = anomalies[:10]
+
+        total = len(rows_all)
+        page = request.query_params.get('page', '1')
+        page_size = request.query_params.get('page_size', '20')
+        try:
+            page_int = max(1, int(page))
+        except ValueError:
+            page_int = 1
+        try:
+            page_size_int = max(1, min(200, int(page_size)))
+        except ValueError:
+            page_size_int = 20
+
+        start = (page_int - 1) * page_size_int
+        end = start + page_size_int
+        rows = rows_all[start:end]
+        results = []
+        for row in rows:
+            results.append({
+                'id': row.id,
+                'created_at': row.created_at.isoformat() if row.created_at else None,
+                'action': row.action,
+                'entity_type': row.entity_type,
+                'entity_code': row.entity_code,
+                'changed_fields': row.changed_fields or [],
+                'old_values': row.old_values or {},
+                'new_values': row.new_values or {},
+                'ip_address': row.ip_address,
+                'user': {
+                    'id': row.user_id,
+                    'username': row.user.username if row.user else None,
+                    'full_name': (
+                        f'{row.user.first_name} {row.user.last_name}'.strip()
+                        if row.user else ''
+                    ),
+                },
+            })
+        return Response({
+            'count': total,
+            'results': results,
+            'summary': {
+                'total_events': summary_total_events,
+                'total_role_changes': summary_total_role_changes,
+                'by_changed_type': summary_by_changed_type,
+                'top_actors': top_actors,
+                'trend_12m': trend_12m,
+                'anomalies_24h': anomalies,
+            },
+        })
 
     def get_export_sheet_title(self):
         return 'Role'

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card, Checkbox, Drawer, Empty, Input, List, Modal, Switch, message, Segmented, Select, Space, Spin, Tag, Typography } from 'antd';
 import { ReloadOutlined, ProjectOutlined, SwapRightOutlined, WarningOutlined, HistoryOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -10,12 +10,14 @@ import {
   type WorkflowPipelineCard,
   type WorkflowPipelineTimelineItem,
 } from '../../api/workflowTaskTemplates';
-import { QuickClearIcon, TaskWorkspaceModal } from '../../components';
+import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { getEntityTypeLabel } from '../../utils/constants';
 import { storage } from '../../utils/storage';
+import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
 const { Text } = Typography;
+const TaskWorkspaceModalLazy = lazy(() => import('../../components/TaskWorkspaceModal/TaskWorkspaceModal'));
 
 function normalizeStepTitle(raw: string): string {
   if (!raw) return '';
@@ -98,6 +100,12 @@ export default function WorkflowPipelineBoard() {
   const [liveSync, setLiveSync] = useState(true);
   const queryClient = useQueryClient();
   const liveSinceRef = useRef<string | null>(null);
+  const deferredSearch = useDeferredValue(search);
+  const livePollingInterval = useRealtimePollingInterval({
+    enabled: liveSync,
+    activeMs: 4_000,
+    hiddenMs: false,
+  });
 
   const templatesQuery = useQuery({
     queryKey: ['workflow-active-templates'],
@@ -162,8 +170,8 @@ export default function WorkflowPipelineBoard() {
       since: liveSinceRef.current || undefined,
     }),
     enabled: liveSync,
-    refetchInterval: 4_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: livePollingInterval,
+    refetchIntervalInBackground: false,
     staleTime: 0,
   });
   useEffect(() => {
@@ -267,7 +275,7 @@ export default function WorkflowPipelineBoard() {
 
   const columns = useMemo(() => {
     const data = boardQuery.data?.columns ?? [];
-    const q = search.trim().toLowerCase();
+    const q = deferredSearch.trim().toLowerCase();
     if (!q) return data;
     return data.map((col) => ({
       ...col,
@@ -275,7 +283,7 @@ export default function WorkflowPipelineBoard() {
         `${card.entity_code} ${card.current_step} ${card.owner} ${card.team}`.toLowerCase().includes(q)
       ),
     }));
-  }, [boardQuery.data?.columns, search]);
+  }, [boardQuery.data?.columns, deferredSearch]);
 
   const filteredColumns = useMemo(() => {
     const userRaw = storage.getUser() as unknown;
@@ -858,14 +866,16 @@ export default function WorkflowPipelineBoard() {
         </div>
       )}
 
-      <TaskWorkspaceModal
-        open={!!selectedCard}
-        onClose={() => setSelectedCard(null)}
-        entityType={effectiveEntityType}
-        entityId={selectedCard?.entity_id ?? null}
-        entityCode={selectedCard?.entity_code}
-        titlePrefix="Luồng công việc"
-      />
+      <Suspense fallback={null}>
+        <TaskWorkspaceModalLazy
+          open={!!selectedCard}
+          onClose={() => setSelectedCard(null)}
+          entityType={effectiveEntityType}
+          entityId={selectedCard?.entity_id ?? null}
+          entityCode={selectedCard?.entity_code}
+          titlePrefix="Luồng công việc"
+        />
+      </Suspense>
 
       <Drawer
         title={timelineCard ? `Lịch sử luồng - ${timelineCard.entity_code}` : 'Lịch sử luồng'}

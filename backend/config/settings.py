@@ -46,6 +46,8 @@ INSTALLED_APPS = [
     'core.apps.CoreConfig',
     'products',
     'sales',
+    'workforce.apps.WorkforceConfig',
+    'finance.apps.FinanceConfig',
     'django_q',
 ]
 

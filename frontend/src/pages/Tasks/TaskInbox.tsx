@@ -1,15 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Badge, Button, Card, Empty, Input, Modal, Segmented, Select, Space, Spin, Switch, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { EyeOutlined, InboxOutlined, StarFilled, StarOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { TASK_PRIORITY_LABELS, tasksApi, type TaskItem, type TaskPriority, type TaskStatus } from '../../api/tasks';
-import { QuickClearIcon, TaskWorkspaceModal } from '../../components';
+import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { useRowSelection } from '../../hooks/useRowSelection';
 import { getEntityTypeLabel } from '../../utils/constants';
 import { storage } from '../../utils/storage';
+import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
+import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
 const { Text } = Typography;
 
@@ -42,6 +44,7 @@ type BulkHistoryItem = {
   created_at: string;
 };
 type BulkHistoryResultFilter = 'ALL' | 'SUCCESS' | 'HAS_ERROR';
+const TaskWorkspaceModalLazy = lazy(() => import('../../components/TaskWorkspaceModal/TaskWorkspaceModal'));
 
 function canManageBulkByRole(): boolean {
   const user = storage.getUser() as unknown;
@@ -79,6 +82,31 @@ export default function TaskInbox() {
   const { config: savedConfig, saveConfig } = useUserPreferences('task-inbox');
   const queryClient = useQueryClient();
   const liveSinceRef = useRef<string | null>(null);
+  const {
+    intentSearch,
+    intentFilters,
+  } = useSearchFilterIntent({
+    searchInput: q,
+    filterValues: { tab },
+    searchDebounceMs: 650,
+    filterDebounceMs: 300,
+    serializeFilters: (f) => f.tab,
+    parseFilters: (v) => ({
+      tab: (v === 'ASSIGNED' || v === 'CREATED' || v === 'WATCHING' || v === 'TEAM' || v === 'OVERDUE'
+        ? v
+        : 'ASSIGNED') as InboxTab,
+    }),
+  });
+  const autoRefreshPollingInterval = useRealtimePollingInterval({
+    enabled: autoRefresh && !liveSync,
+    activeMs: 15_000,
+    hiddenMs: false,
+  });
+  const livePollingInterval = useRealtimePollingInterval({
+    enabled: liveSync,
+    activeMs: 4_000,
+    hiddenMs: false,
+  });
 
   const summaryQuery = useQuery({
     queryKey: ['task-inbox-summary'],
@@ -87,49 +115,49 @@ export default function TaskInbox() {
   });
 
   const tasksQuery = useQuery({
-    queryKey: ['task-inbox-list', tab, q],
+    queryKey: ['task-inbox-list', intentFilters.tab, intentSearch],
     queryFn: () => {
       const baseParams = {
         is_open: true,
-        q: q.trim() || undefined,
+        q: intentSearch.trim() || undefined,
         ordering_mode: 'quick_queue' as const,
       };
-      if (tab === 'ASSIGNED') return tasksApi.list({ ...baseParams, mine: true });
-      if (tab === 'CREATED') return tasksApi.list({ ...baseParams, created_by_me: true });
-      if (tab === 'WATCHING') return tasksApi.list({ ...baseParams, watching: true });
-      if (tab === 'TEAM') return tasksApi.list({ ...baseParams, team_members: true });
+      if (intentFilters.tab === 'ASSIGNED') return tasksApi.list({ ...baseParams, mine: true });
+      if (intentFilters.tab === 'CREATED') return tasksApi.list({ ...baseParams, created_by_me: true });
+      if (intentFilters.tab === 'WATCHING') return tasksApi.list({ ...baseParams, watching: true });
+      if (intentFilters.tab === 'TEAM') return tasksApi.list({ ...baseParams, team_members: true });
       return tasksApi.list({ ...baseParams, is_overdue: true });
     },
     staleTime: 5_000,
-    refetchInterval: autoRefresh && !liveSync ? 15_000 : false,
-    refetchIntervalInBackground: true,
+    refetchInterval: autoRefreshPollingInterval,
+    refetchIntervalInBackground: false,
   });
   const liveQueryParams = useMemo(() => {
     const base = {
       is_open: true,
-      q: q.trim() || undefined,
+      q: intentSearch.trim() || undefined,
       ordering_mode: 'quick_queue' as const,
     };
-    if (tab === 'ASSIGNED') return { ...base, mine: true };
-    if (tab === 'CREATED') return { ...base, created_by_me: true };
-    if (tab === 'WATCHING') return { ...base, watching: true };
-    if (tab === 'TEAM') return { ...base, team_members: true };
+    if (intentFilters.tab === 'ASSIGNED') return { ...base, mine: true };
+    if (intentFilters.tab === 'CREATED') return { ...base, created_by_me: true };
+    if (intentFilters.tab === 'WATCHING') return { ...base, watching: true };
+    if (intentFilters.tab === 'TEAM') return { ...base, team_members: true };
     return { ...base, is_overdue: true };
-  }, [tab, q]);
+  }, [intentFilters.tab, intentSearch]);
   const taskLiveUpdatesQuery = useQuery({
-    queryKey: ['task-live-updates', liveSync, tab, q],
+    queryKey: ['task-live-updates', liveSync, intentFilters.tab, intentSearch],
     queryFn: () => tasksApi.liveUpdates({
       ...liveQueryParams,
       since: liveSinceRef.current || undefined,
     }),
     enabled: liveSync,
-    refetchInterval: 4_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: livePollingInterval,
+    refetchIntervalInBackground: false,
     staleTime: 0,
   });
   useEffect(() => {
     liveSinceRef.current = null;
-  }, [tab, q, liveSync]);
+  }, [intentFilters.tab, intentSearch, liveSync]);
   useEffect(() => {
     const payload = taskLiveUpdatesQuery.data;
     if (!payload) return;
@@ -179,10 +207,11 @@ export default function TaskInbox() {
     }
     return arr;
   }, [data, tab, statusFilter, priorityFilter, sortMode]);
+  const deferredFilteredData = useDeferredValue(filteredData);
   const selectedEffectiveIds = useMemo(() => {
-    const idSet = new Set(filteredData.map((x) => x.id));
+    const idSet = new Set(deferredFilteredData.map((x) => x.id));
     return selectedIds.filter((id) => idSet.has(id));
-  }, [filteredData, selectedIds]);
+  }, [deferredFilteredData, selectedIds]);
   const namedPresets = useMemo(() => {
     const raw = savedConfig?.inbox_saved_views;
     if (!Array.isArray(raw)) return [] as InboxNamedPreset[];
@@ -911,21 +940,23 @@ export default function TaskInbox() {
             rowKey="id"
             size="small"
             columns={columns}
-            dataSource={filteredData}
+            dataSource={deferredFilteredData}
             rowSelection={rowSelection}
             pagination={{ pageSize: 20, showSizeChanger: true }}
           />
         )}
       </Card>
 
-      <TaskWorkspaceModal
-        open={!!selected}
-        onClose={() => setSelected(null)}
-        entityType={selected?.entity_type || 'Product'}
-        entityId={selected?.entity_id ?? null}
-        entityCode={selected?.entity_code}
-        titlePrefix="Nhiệm vụ của tôi"
-      />
+      <Suspense fallback={null}>
+        <TaskWorkspaceModalLazy
+          open={!!selected}
+          onClose={() => setSelected(null)}
+          entityType={selected?.entity_type || 'Product'}
+          entityId={selected?.entity_id ?? null}
+          entityCode={selected?.entity_code}
+          titlePrefix="Nhiệm vụ của tôi"
+        />
+      </Suspense>
       <Modal
         title="Lưu mẫu lọc cá nhân"
         open={isPresetModalOpen}

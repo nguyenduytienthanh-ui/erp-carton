@@ -1,38 +1,57 @@
-import { useMemo, useState } from 'react';
+import { Suspense, lazy, useMemo, useState } from 'react';
 import { Button, Card, Descriptions, Drawer, Empty, Input, Select, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { AlertOutlined, ClockCircleOutlined, LockOutlined, ProjectOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { tasksApi, type TaskItem } from '../../api/tasks';
 import { productsApi } from '../../api/products';
 import type { Product } from '../../types/product';
-import TaskWorkspaceModal from '../../components/TaskWorkspaceModal/TaskWorkspaceModal';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
+import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 
 const { Text } = Typography;
 
 type BoardFilter = 'ALL' | 'BLOCKING' | 'HELP' | 'OVERDUE' | 'DEPENDENCY';
+const TaskWorkspaceModalLazy = lazy(() => import('../../components/TaskWorkspaceModal/TaskWorkspaceModal'));
 
 export default function TaskOperationsBoard() {
-  const [q, setQ] = useState('');
+  const navigate = useNavigate();
+  const [searchInput, setSearchInput] = useState('');
   const [filter, setFilter] = useState<BoardFilter>('ALL');
   const [selected, setSelected] = useState<TaskItem | null>(null);
   const [quickViewProductId, setQuickViewProductId] = useState<number | null>(null);
   const [selectedProductForTask, setSelectedProductForTask] = useState<Product | null>(null);
 
+  const {
+    intentSearch,
+    intentFilters,
+  } = useSearchFilterIntent({
+    searchInput,
+    filterValues: { filter },
+    searchDebounceMs: 650,
+    filterDebounceMs: 300,
+    serializeFilters: (f) => f.filter,
+    parseFilters: (v) => ({
+      filter: (v === 'ALL' || v === 'BLOCKING' || v === 'HELP' || v === 'OVERDUE' || v === 'DEPENDENCY'
+        ? v
+        : 'ALL') as BoardFilter,
+    }),
+  });
+
   const tasksQuery = useQuery({
-    queryKey: ['task-operations-board', q, filter],
+    queryKey: ['task-operations-board', intentSearch, intentFilters.filter],
     queryFn: () =>
       tasksApi.list({
         entity_type: 'Product',
         is_open: true,
-        is_blocking: filter === 'BLOCKING' ? true : undefined,
-        needs_help: filter === 'HELP' ? true : undefined,
-        is_overdue: filter === 'OVERDUE' ? true : undefined,
-        dependency_blocked: filter === 'DEPENDENCY' ? true : undefined,
+        is_blocking: intentFilters.filter === 'BLOCKING' ? true : undefined,
+        needs_help: intentFilters.filter === 'HELP' ? true : undefined,
+        is_overdue: intentFilters.filter === 'OVERDUE' ? true : undefined,
+        dependency_blocked: intentFilters.filter === 'DEPENDENCY' ? true : undefined,
         ordering_mode: 'quick_queue',
-        q: q.trim() || undefined,
+        q: intentSearch.trim() || undefined,
       }),
     staleTime: 10_000,
   });
@@ -136,13 +155,13 @@ export default function TaskOperationsBoard() {
           </Space>
           <Space wrap>
             <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Tìm theo mã hàng, tiêu đề task..."
               style={{ width: 260 }}
               suffix={
-                q
-                  ? <QuickClearIcon onClear={() => setQ('')} title="Xóa tìm kiếm" />
+                searchInput
+                  ? <QuickClearIcon onClear={() => setSearchInput('')} title="Xóa tìm kiếm" />
                   : undefined
               }
             />
@@ -178,15 +197,17 @@ export default function TaskOperationsBoard() {
         )}
       </Card>
 
-      <TaskWorkspaceModal
-        open={!!selected || !!selectedProductForTask}
-        onClose={() => { setSelected(null); setSelectedProductForTask(null); }}
-        entityType="Product"
-        entityId={selectedProductForTask?.id ?? selected?.entity_id ?? null}
-        entityCode={selectedProductForTask?.code ?? selected?.entity_code}
-        blockingCount={selectedProductForTask?.blocking_tasks_count ?? (selected?.is_blocking ? 1 : 0)}
-        titlePrefix="Điều hành nhiệm vụ"
-      />
+      <Suspense fallback={null}>
+        <TaskWorkspaceModalLazy
+          open={!!selected || !!selectedProductForTask}
+          onClose={() => { setSelected(null); setSelectedProductForTask(null); }}
+          entityType="Product"
+          entityId={selectedProductForTask?.id ?? selected?.entity_id ?? null}
+          entityCode={selectedProductForTask?.code ?? selected?.entity_code}
+          blockingCount={selectedProductForTask?.blocking_tasks_count ?? (selected?.is_blocking ? 1 : 0)}
+          titlePrefix="Điều hành nhiệm vụ"
+        />
+      </Suspense>
 
       <Drawer
         title={quickViewProduct ? `Mã hàng: ${quickViewProduct.code}` : 'Thông tin mã hàng'}
@@ -216,7 +237,7 @@ export default function TaskOperationsBoard() {
             <Button
               type="primary"
               onClick={() => {
-                window.location.href = `/products?searchInput=${encodeURIComponent(quickViewProduct.code)}&search=${encodeURIComponent(quickViewProduct.code)}`;
+                navigate(`/products?searchInput=${encodeURIComponent(quickViewProduct.code)}&search=${encodeURIComponent(quickViewProduct.code)}`);
               }}
             >
               Mở trang Sản phẩm với mã này

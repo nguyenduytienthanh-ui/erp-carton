@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Form, Input, Button, Card, message } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { authApi } from '../api/auth';
+import { usersApi } from '../api/users';
 import { storage } from '../utils/storage';
 
 const Login = () => {
@@ -19,14 +20,20 @@ const Login = () => {
       storage.setAccessToken(response.access);
       storage.setRefreshToken(response.refresh);
 
-      // Lưu user info (tạm thời lưu username)
-      storage.setUser({ username: values.username });
+      // Lưu profile người dùng thật (bao gồm roles) để authz hoạt động chính xác.
+      try {
+        const profile = await usersApi.me();
+        storage.setUser(profile);
+      } catch {
+        storage.setUser({ username: values.username });
+      }
 
       message.success('Đăng nhập thành công!');
       navigate('/');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string } } };
       console.error('Login error:', error);
-      message.error(error.response?.data?.detail || 'Đăng nhập thất bại!');
+      message.error(err.response?.data?.detail || 'Đăng nhập thất bại!');
     } finally {
       setLoading(false);
     }
