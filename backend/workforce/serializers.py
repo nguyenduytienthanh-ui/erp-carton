@@ -158,13 +158,40 @@ class SalaryAdvanceRecordSerializer(serializers.ModelSerializer):
             'approved_by_name',
             'note',
             'status',
+            'approval_status',
+            'required_approval_level',
+            'submitted_at',
+            'submitted_by',
+            'approved_level1_at',
+            'approved_level1_by',
+            'approved_level2_at',
+            'approved_level2_by',
+            'rejected_at',
+            'rejected_by',
+            'rejection_reason',
             'is_active',
             'created_by',
             'updated_by',
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']
+        read_only_fields = [
+            'created_by',
+            'updated_by',
+            'created_at',
+            'updated_at',
+            'approval_status',
+            'required_approval_level',
+            'submitted_at',
+            'submitted_by',
+            'approved_level1_at',
+            'approved_level1_by',
+            'approved_level2_at',
+            'approved_level2_by',
+            'rejected_at',
+            'rejected_by',
+            'rejection_reason',
+        ]
 
 
 class PayrollRecordSerializer(serializers.ModelSerializer):

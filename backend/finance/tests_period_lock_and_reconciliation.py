@@ -87,3 +87,29 @@ class FinancePeriodLockAndReconciliationTest(TestCase):
         self.assertEqual(data['posted_total'], '9000000.00')
         self.assertEqual(data['delta'], '1000000.00')
         self.assertFalse(data['is_balanced'])
+
+    def test_unlock_month_requires_force_when_data_exists(self):
+        lock_resp = self.client.post('/api/finance/cash-transactions/lock_month/', {'month': '2026-03'}, format='json')
+        self.assertEqual(lock_resp.status_code, 200)
+        category = TransactionCategory.objects.create(
+            code='LOCK_CHECK',
+            name='Kiem tra mo khoa',
+            category_type=TransactionCategory.TYPE_EXPENSE,
+            is_system=False,
+            is_active=True,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        CashTransaction.objects.create(
+            transaction_type=CashTransaction.TYPE_EXPENSE,
+            source_type=CashTransaction.SOURCE_CASH,
+            source_cash_account=self.cash,
+            category=category,
+            transaction_date=date(2026, 3, 20),
+            amount=Decimal('50000'),
+            reason='Du lieu thang khoa',
+            object_name='Test',
+            created_by=self.user,
+        )
+        unlock_denied = self.client.post('/api/finance/cash-transactions/unlock_month/', {'month': '2026-03'}, format='json')
+        self.assertEqual(unlock_denied.status_code, 400)

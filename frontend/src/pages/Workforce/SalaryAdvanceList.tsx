@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, message } from 'antd';
+import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -8,6 +8,7 @@ import type {
   Employee,
   SalaryAdvanceRecord,
   SalaryAdvanceRecordPayload,
+  SalaryAdvanceApprovalStatus,
   SalaryAdvanceStatus,
 } from '../../types/workforce';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
@@ -18,6 +19,7 @@ import { canManageWorkforceData } from '../../utils/authz';
 type SalaryAdvanceFilters = {
   month: string;
   status: '' | SalaryAdvanceStatus;
+  approval_status: '' | SalaryAdvanceApprovalStatus;
 };
 
 const today = new Date();
@@ -27,6 +29,13 @@ const currentDate = today.toISOString().slice(0, 10);
 const STATUS_OPTIONS: Array<{ value: SalaryAdvanceStatus; label: string }> = [
   { value: 'UNDEDUCTED', label: 'Chưa trừ' },
   { value: 'DEDUCTED', label: 'Đã trừ' },
+];
+const APPROVAL_STATUS_OPTIONS: Array<{ value: SalaryAdvanceApprovalStatus; label: string }> = [
+  { value: 'DRAFT', label: 'Nháp' },
+  { value: 'PENDING_L1', label: 'Chờ duyệt L1' },
+  { value: 'PENDING_L2', label: 'Chờ duyệt L2' },
+  { value: 'APPROVED', label: 'Đã duyệt' },
+  { value: 'REJECTED', label: 'Từ chối' },
 ];
 
 function serializeFilters(filters: SalaryAdvanceFilters): string {
@@ -39,9 +48,17 @@ function parseFilters(raw: string): SalaryAdvanceFilters {
     return {
       month: typeof parsed.month === 'string' && parsed.month ? parsed.month : currentMonth,
       status: parsed.status === 'UNDEDUCTED' || parsed.status === 'DEDUCTED' ? parsed.status : '',
+      approval_status:
+        parsed.approval_status === 'DRAFT' ||
+        parsed.approval_status === 'PENDING_L1' ||
+        parsed.approval_status === 'PENDING_L2' ||
+        parsed.approval_status === 'APPROVED' ||
+        parsed.approval_status === 'REJECTED'
+          ? parsed.approval_status
+          : '',
     };
   } catch {
-    return { month: currentMonth, status: '' };
+    return { month: currentMonth, status: '', approval_status: '' };
   }
 }
 
@@ -73,7 +90,7 @@ export default function SalaryAdvanceList() {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState('');
-  const [filters, setFilters] = useState<SalaryAdvanceFilters>({ month: currentMonth, status: '' });
+  const [filters, setFilters] = useState<SalaryAdvanceFilters>({ month: currentMonth, status: '', approval_status: '' });
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<SalaryAdvanceRecord | null>(null);
   const [openModal, setOpenModal] = useState(false);
@@ -102,12 +119,23 @@ export default function SalaryAdvanceList() {
     if (intentSearch.trim()) p.q = intentSearch.trim();
     if (intentFilters.month) p.month = intentFilters.month;
     if (intentFilters.status) p.status = intentFilters.status;
+    if (intentFilters.approval_status) p.approval_status = intentFilters.approval_status;
     return p;
   }, [intentSearch, intentFilters, page, pageSize]);
 
   const listQuery = useQuery({
     queryKey: ['workforce-salary-advances', params],
     queryFn: () => workforceApi.getSalaryAdvances(params),
+  });
+  const approvalQueueQuery = useQuery({
+    queryKey: ['workforce-salary-advances-approval-queue'],
+    queryFn: () => workforceApi.getSalaryAdvanceApprovalQueue(),
+    enabled: canManage,
+  });
+  const approvalSlaOverviewQuery = useQuery({
+    queryKey: ['workforce-salary-advances-approval-sla-overview'],
+    queryFn: () => workforceApi.getSalaryAdvanceApprovalSlaOverview(),
+    enabled: canManage,
   });
 
   const createMutation = useMutation({
@@ -130,6 +158,45 @@ export default function SalaryAdvanceList() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
       messageApi.success('Đã xóa ứng lương');
+    },
+  });
+  const submitApprovalMutation = useMutation({
+    mutationFn: (id: number) => workforceApi.submitSalaryAdvanceApproval(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
+      await approvalQueueQuery.refetch();
+      messageApi.success('Đã gửi duyệt ứng lương');
+    },
+  });
+  const approveLevel1Mutation = useMutation({
+    mutationFn: (id: number) => workforceApi.approveSalaryAdvanceLevel1(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
+      await approvalQueueQuery.refetch();
+      messageApi.success('Đã duyệt L1 ứng lương');
+    },
+  });
+  const approveLevel2Mutation = useMutation({
+    mutationFn: (id: number) => workforceApi.approveSalaryAdvanceLevel2(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
+      await approvalQueueQuery.refetch();
+      messageApi.success('Đã duyệt L2 ứng lương');
+    },
+  });
+  const rejectApprovalMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: number; reason: string }) => workforceApi.rejectSalaryAdvanceApproval(id, reason),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
+      await approvalQueueQuery.refetch();
+      messageApi.success('Đã từ chối duyệt ứng lương');
+    },
+  });
+  const remindPendingApprovalsMutation = useMutation({
+    mutationFn: () => workforceApi.remindSalaryAdvancePendingApprovals({ dry_run: false }),
+    onSuccess: async (data) => {
+      messageApi.success(`Đã gửi nhắc SLA duyệt ứng lương: ${data.sent_count} người nhận`);
+      await approvalSlaOverviewQuery.refetch();
     },
   });
 
@@ -168,16 +235,65 @@ export default function SalaryAdvanceList() {
       render: (status: SalaryAdvanceStatus) => STATUS_OPTIONS.find((item) => item.value === status)?.label ?? status,
     },
     {
+      title: 'Duyệt',
+      dataIndex: 'approval_status',
+      width: 130,
+      render: (approvalStatus: SalaryAdvanceApprovalStatus) => {
+        const label = APPROVAL_STATUS_OPTIONS.find((item) => item.value === approvalStatus)?.label ?? approvalStatus;
+        const color =
+          approvalStatus === 'APPROVED'
+            ? 'green'
+            : approvalStatus === 'REJECTED'
+              ? 'red'
+              : approvalStatus === 'PENDING_L1' || approvalStatus === 'PENDING_L2'
+                ? 'gold'
+                : 'default';
+        return <Tag color={color}>{label}</Tag>;
+      },
+    },
+    {
       title: 'Thao tác',
       key: 'actions',
-      width: 170,
+      width: 360,
       fixed: 'right',
       render: (_, row) => (
         <Space>
           {canManage && (
             <>
+              {(row.approval_status === 'DRAFT' || row.approval_status === 'REJECTED') && (
+                <Button size="small" onClick={() => submitApprovalMutation.mutate(row.id)} loading={submitApprovalMutation.isPending}>
+                  Gửi duyệt
+                </Button>
+              )}
+              {row.approval_status === 'PENDING_L1' && (
+                <Button size="small" onClick={() => approveLevel1Mutation.mutate(row.id)} loading={approveLevel1Mutation.isPending}>
+                  Duyệt L1
+                </Button>
+              )}
+              {row.approval_status === 'PENDING_L2' && (
+                <Button size="small" type="primary" onClick={() => approveLevel2Mutation.mutate(row.id)} loading={approveLevel2Mutation.isPending}>
+                  Duyệt L2
+                </Button>
+              )}
+              {(row.approval_status === 'PENDING_L1' || row.approval_status === 'PENDING_L2') && (
+                <Button
+                  size="small"
+                  danger
+                  onClick={() => {
+                    const reason = window.prompt('Nhập lý do từ chối:', '');
+                    if (!reason || !reason.trim()) {
+                      return;
+                    }
+                    rejectApprovalMutation.mutate({ id: row.id, reason: reason.trim() });
+                  }}
+                  loading={rejectApprovalMutation.isPending}
+                >
+                  Từ chối
+                </Button>
+              )}
               <Button
                 size="small"
+                disabled={row.approval_status === 'PENDING_L1' || row.approval_status === 'PENDING_L2' || row.approval_status === 'APPROVED'}
                 onClick={() => {
                   setEditing(row);
                   form.setFieldsValue({
@@ -199,6 +315,7 @@ export default function SalaryAdvanceList() {
               <Button
                 size="small"
                 danger
+                disabled={row.approval_status === 'PENDING_L1' || row.approval_status === 'PENDING_L2' || row.approval_status === 'APPROVED'}
                 onClick={() =>
                   Modal.confirm({
                     title: 'Xóa ứng lương này?',
@@ -292,16 +409,61 @@ export default function SalaryAdvanceList() {
             setPage(1);
           }}
         />
+        <Select
+          value={filters.approval_status || undefined}
+          options={APPROVAL_STATUS_OPTIONS}
+          placeholder="Trạng thái duyệt"
+          style={{ width: 180 }}
+          onChange={(value) => {
+            setFilters((prev) => ({ ...prev, approval_status: (value ?? '') as '' | SalaryAdvanceApprovalStatus }));
+            setPage(1);
+          }}
+        />
         <Button
           onClick={() => {
             setSearchInput('');
-            setFilters({ month: currentMonth, status: '' });
+            setFilters({ month: currentMonth, status: '', approval_status: '' });
             setPage(1);
           }}
         >
           Xóa bộ lọc
         </Button>
       </div>
+
+      {canManage && (
+        <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12 }}>
+          <div style={{ color: '#8c8c8c', marginBottom: 8 }}>
+            {`Hàng đợi duyệt ứng lương - Chờ L1: ${approvalQueueQuery.data?.pending_l1_count ?? 0} | Chờ L2: ${approvalQueueQuery.data?.pending_l2_count ?? 0}`}
+          </div>
+          <div style={{ color: '#8c8c8c', marginBottom: 8 }}>
+            {`SLA quá hạn - L1: ${approvalSlaOverviewQuery.data?.overdue_l1_count ?? 0} | L2: ${approvalSlaOverviewQuery.data?.overdue_l2_count ?? 0} | Escalation L1: ${approvalSlaOverviewQuery.data?.escalation_l1_count ?? 0} | Escalation L2: ${approvalSlaOverviewQuery.data?.escalation_l2_count ?? 0} | Lead time TB: ${Number(approvalSlaOverviewQuery.data?.avg_lead_hours ?? 0).toFixed(2)}h`}
+          </div>
+          <Button
+            size="small"
+            loading={remindPendingApprovalsMutation.isPending}
+            onClick={() => remindPendingApprovalsMutation.mutate()}
+          >
+            Nhắc SLA duyệt ngay
+          </Button>
+          <div style={{ marginTop: 8 }}>
+            <div style={{ color: '#8c8c8c', marginBottom: 4 }}>Top người tạo phiếu đang tắc nghẽn</div>
+            {(approvalSlaOverviewQuery.data?.top_blocked_submitters ?? []).length === 0 ? (
+              <div style={{ color: '#bfbfbf' }}>Không có dữ liệu.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {(approvalSlaOverviewQuery.data?.top_blocked_submitters ?? []).map((row) => (
+                  <div key={row.username} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 170px 120px', gap: 8 }}>
+                    <div>{row.username}</div>
+                    <div>{`SL: ${row.pending_count}`}</div>
+                    <div>{`Tổng tiền: ${Number(row.total_amount || 0).toLocaleString('vi-VN')} đ`}</div>
+                    <div>{`Max wait: ${row.max_wait_hours}h`}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
         <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>

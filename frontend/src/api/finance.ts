@@ -2,10 +2,16 @@ import axiosInstance from './axios';
 import { API_ENDPOINTS } from '../utils/constants';
 import type {
   AdvanceOverdueOverviewResponse,
+  AdvanceApprovalQueueResponse,
+  AdvanceApprovalSlaOverviewResponse,
   AdvanceReminderPolicy,
   AdvanceReminderPolicyHistoryResponse,
   AdvanceReminderPolicySimulationResponse,
   AdvanceReminderHistoryResponse,
+  ExecutiveKpiResponse,
+  ExecutiveAutoPolicy,
+  ExecutiveAutoHistoryResponse,
+  ExecutiveAutoGovernanceResponse,
   AdvanceOverdueReportResponse,
   AdvanceSettlement,
   AdvanceTransaction,
@@ -32,6 +38,17 @@ type AdvanceTransactionPayload = Omit<
   | 'total_spent'
   | 'total_refund'
   | 'remaining_amount'
+  | 'approval_status'
+  | 'required_approval_level'
+  | 'submitted_at'
+  | 'submitted_by'
+  | 'approved_level1_at'
+  | 'approved_level1_by'
+  | 'approved_level2_at'
+  | 'approved_level2_by'
+  | 'rejected_at'
+  | 'rejected_by'
+  | 'rejection_reason'
 >;
 type AdvanceSettlementPayload = Omit<
   AdvanceSettlement,
@@ -132,6 +149,95 @@ export const financeApi = {
   },
   deleteAdvanceTransaction: async (id: number): Promise<void> => {
     await axiosInstance.delete(`${API_ENDPOINTS.FINANCE_ADVANCE_TRANSACTIONS}${id}/`);
+  },
+  getAdvanceApprovalQueue: async (): Promise<AdvanceApprovalQueueResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_QUEUE);
+    return response.data as AdvanceApprovalQueueResponse;
+  },
+  getAdvanceApprovalSlaOverview: async (): Promise<AdvanceApprovalSlaOverviewResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_SLA_OVERVIEW);
+    return response.data as AdvanceApprovalSlaOverviewResponse;
+  },
+  remindAdvancePendingApprovals: async (payload?: { dry_run?: boolean }): Promise<{
+    success: boolean;
+    dry_run: boolean;
+    sent_count: number;
+    sent_usernames: string[];
+    overview: AdvanceApprovalSlaOverviewResponse;
+  }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_ADVANCE_REMIND_PENDING_APPROVALS, payload || {});
+    return response.data as {
+      success: boolean;
+      dry_run: boolean;
+      sent_count: number;
+      sent_usernames: string[];
+      overview: AdvanceApprovalSlaOverviewResponse;
+    };
+  },
+  getExecutiveKpi: async (): Promise<ExecutiveKpiResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_KPI);
+    return response.data as ExecutiveKpiResponse;
+  },
+  getExecutiveAutoPolicy: async (): Promise<ExecutiveAutoPolicy> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_POLICY);
+    return response.data as ExecutiveAutoPolicy;
+  },
+  saveExecutiveAutoPolicy: async (payload: Partial<ExecutiveAutoPolicy>): Promise<{ success: boolean; policy: ExecutiveAutoPolicy }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_POLICY, payload);
+    return response.data as { success: boolean; policy: ExecutiveAutoPolicy };
+  },
+  runExecutiveAutoExecute: async (payload?: { force?: boolean }): Promise<{
+    success: boolean;
+    skipped: boolean;
+    reason?: string;
+    policy?: ExecutiveAutoPolicy;
+    finance_result?: { sent_count?: number };
+    workforce_result?: { sent_count?: number };
+  }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_EXECUTE, payload || {});
+    return response.data as {
+      success: boolean;
+      skipped: boolean;
+      reason?: string;
+      policy?: ExecutiveAutoPolicy;
+      finance_result?: { sent_count?: number };
+      workforce_result?: { sent_count?: number };
+    };
+  },
+  getExecutiveAutoHistory: async (params?: { limit?: number }): Promise<ExecutiveAutoHistoryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_HISTORY, { params });
+    return response.data as ExecutiveAutoHistoryResponse;
+  },
+  getExecutiveAutoGovernance: async (params?: { days?: number; group_by?: 'day' | 'week' }): Promise<ExecutiveAutoGovernanceResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_GOVERNANCE, { params });
+    return response.data as ExecutiveAutoGovernanceResponse;
+  },
+  exportExecutiveAutoGovernanceExcel: async (params?: { days?: number; group_by?: 'day' | 'week' }): Promise<Blob> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_GOVERNANCE, {
+      params: { ...(params || {}), export: 'excel' },
+      responseType: 'blob',
+    });
+    return response.data as Blob;
+  },
+  submitAdvanceApproval: async (id: number): Promise<{ success: boolean; approval_status: string; required_approval_level: number }> => {
+    const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_SUBMIT_APPROVAL.replace('{id}', String(id));
+    const response = await axiosInstance.post(endpoint, {});
+    return response.data as { success: boolean; approval_status: string; required_approval_level: number };
+  },
+  approveAdvanceLevel1: async (id: number): Promise<{ success: boolean; approval_status: string }> => {
+    const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_APPROVE_LEVEL1.replace('{id}', String(id));
+    const response = await axiosInstance.post(endpoint, {});
+    return response.data as { success: boolean; approval_status: string };
+  },
+  approveAdvanceLevel2: async (id: number): Promise<{ success: boolean; approval_status: string }> => {
+    const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_APPROVE_LEVEL2.replace('{id}', String(id));
+    const response = await axiosInstance.post(endpoint, {});
+    return response.data as { success: boolean; approval_status: string };
+  },
+  rejectAdvanceApproval: async (id: number, reason: string): Promise<{ success: boolean; approval_status: string }> => {
+    const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_REJECT_APPROVAL.replace('{id}', String(id));
+    const response = await axiosInstance.post(endpoint, { reason });
+    return response.data as { success: boolean; approval_status: string };
   },
 
   getAdvanceSettlements: async (params?: Record<string, unknown>): Promise<PaginatedResponse<AdvanceSettlement>> => {

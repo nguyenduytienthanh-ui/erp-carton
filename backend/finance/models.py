@@ -333,6 +333,18 @@ class AdvanceTransaction(SearchTextModelMixin):
         (STATUS_SETTLED, 'Đã quyết toán'),
         (STATUS_CANCELLED, 'Đã hủy'),
     ]
+    APPROVAL_DRAFT = 'DRAFT'
+    APPROVAL_PENDING_L1 = 'PENDING_L1'
+    APPROVAL_PENDING_L2 = 'PENDING_L2'
+    APPROVAL_APPROVED = 'APPROVED'
+    APPROVAL_REJECTED = 'REJECTED'
+    APPROVAL_STATUS_CHOICES = [
+        (APPROVAL_DRAFT, 'Nháp'),
+        (APPROVAL_PENDING_L1, 'Chờ duyệt cấp 1'),
+        (APPROVAL_PENDING_L2, 'Chờ duyệt cấp 2'),
+        (APPROVAL_APPROVED, 'Đã duyệt'),
+        (APPROVAL_REJECTED, 'Từ chối'),
+    ]
 
     SOURCE_CASH = 'CASH'
     SOURCE_BANK = 'BANK'
@@ -366,6 +378,46 @@ class AdvanceTransaction(SearchTextModelMixin):
     purpose = models.CharField(max_length=255, blank=True, default='', verbose_name='Mục đích')
     note = models.TextField(blank=True, default='', verbose_name='Ghi chú')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_OPEN, verbose_name='Trạng thái')
+    approval_status = models.CharField(
+        max_length=20,
+        choices=APPROVAL_STATUS_CHOICES,
+        default=APPROVAL_DRAFT,
+        verbose_name='Trạng thái duyệt',
+    )
+    required_approval_level = models.PositiveSmallIntegerField(default=1, verbose_name='Số cấp duyệt yêu cầu')
+    submitted_at = models.DateTimeField(null=True, blank=True, verbose_name='Thời điểm gửi duyệt')
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_advance_transactions_submitted',
+    )
+    approved_level1_at = models.DateTimeField(null=True, blank=True, verbose_name='Thời điểm duyệt cấp 1')
+    approved_level1_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_advance_transactions_approved_l1',
+    )
+    approved_level2_at = models.DateTimeField(null=True, blank=True, verbose_name='Thời điểm duyệt cấp 2')
+    approved_level2_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_advance_transactions_approved_l2',
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True, verbose_name='Thời điểm từ chối')
+    rejected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_advance_transactions_rejected',
+    )
+    rejection_reason = models.CharField(max_length=255, blank=True, default='', verbose_name='Lý do từ chối')
     is_active = models.BooleanField(default=True, verbose_name='Đang dùng')
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -392,6 +444,7 @@ class AdvanceTransaction(SearchTextModelMixin):
             models.Index(fields=['advance_date']),
             models.Index(fields=['advance_type']),
             models.Index(fields=['status']),
+            models.Index(fields=['approval_status']),
             models.Index(fields=['is_active']),
         ]
 
@@ -422,6 +475,9 @@ class AdvanceTransaction(SearchTextModelMixin):
             dict(self.TYPE_CHOICES).get(self.advance_type, ''),
             self.status,
             dict(self.STATUS_CHOICES).get(self.status, ''),
+            self.approval_status,
+            dict(self.APPROVAL_STATUS_CHOICES).get(self.approval_status, ''),
+            str(self.required_approval_level),
             self.advance_date.isoformat() if self.advance_date else '',
             self.recipient_name,
             self.source_type,

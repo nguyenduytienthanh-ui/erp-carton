@@ -31,7 +31,8 @@ import { storage } from '../../utils/storage';
 import TaskQuickLauncher from '../TaskQuickLauncher/TaskQuickLauncher';
 import { notificationsApi } from '../../api/notifications';
 import { financeApi } from '../../api/finance';
-import { canAccessOpsModules, canManageFinanceData, canManageModulePermissionSettings } from '../../utils/authz';
+import { workforceApi } from '../../api/workforce';
+import { canAccessOpsModules, canManageFinanceData, canManageModulePermissionSettings, canManageWorkforceData } from '../../utils/authz';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
 const { Header, Sider, Content } = Layout;
@@ -88,6 +89,7 @@ const MainLayout = () => {
   const prefetchedRoutesRef = useRef<Set<string>>(new Set());
   const canAccessOps = canAccessOpsModules();
   const canManageFinance = canManageFinanceData();
+  const canManageWorkforce = canManageWorkforceData();
   const canManageModulePermissions = canManageModulePermissionSettings();
   const headerNotificationInterval = useRealtimePollingInterval({
     enabled: true,
@@ -112,6 +114,19 @@ const MainLayout = () => {
     enabled: canManageFinance,
     staleTime: 30_000,
     refetchInterval: financeOverdueInterval,
+    refetchIntervalInBackground: false,
+  });
+  const workforceApprovalInterval = useRealtimePollingInterval({
+    enabled: canManageWorkforce,
+    activeMs: 60_000,
+    hiddenMs: false,
+  });
+  const salaryAdvanceApprovalQueueQuery = useQuery({
+    queryKey: ['layout-workforce-salary-advance-approval-queue'],
+    queryFn: () => workforceApi.getSalaryAdvanceApprovalQueue(),
+    enabled: canManageWorkforce,
+    staleTime: 30_000,
+    refetchInterval: workforceApprovalInterval,
     refetchIntervalInBackground: false,
   });
   const markReadMutation = useMutation({
@@ -173,6 +188,9 @@ const MainLayout = () => {
 
   const overdue90Count =
     overdueOverviewQuery.data?.buckets?.find((bucket) => bucket.threshold_days === 90)?.count ?? 0;
+  const salaryAdvancePendingCount =
+    (salaryAdvanceApprovalQueueQuery.data?.pending_l1_count ?? 0) +
+    (salaryAdvanceApprovalQueueQuery.data?.pending_l2_count ?? 0);
 
   const menuItems: MenuProps['items'] = [
     {
@@ -228,7 +246,12 @@ const MainLayout = () => {
         },
         {
           key: '/salary-advance',
-          label: renderMenuLabel('/salary-advance', 'Ứng lương'),
+          label: renderMenuLabel(
+            '/salary-advance',
+            <span>
+              Ứng lương {salaryAdvancePendingCount > 0 ? <Badge count={salaryAdvancePendingCount} size="small" overflowCount={99} /> : null}
+            </span>
+          ),
         },
       ],
     },

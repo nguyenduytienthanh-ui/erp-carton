@@ -5,6 +5,7 @@ export type CashTransactionSourceType = 'CASH' | 'BANK';
 export type AdvanceTransactionType = 'PURCHASE' | 'SALARY' | 'OTHER';
 export type AdvanceTransactionStatus = 'OPEN' | 'PARTIAL' | 'SETTLED' | 'CANCELLED';
 export type AdvanceTransactionSourceType = 'CASH' | 'BANK';
+export type AdvanceApprovalStatus = 'DRAFT' | 'PENDING_L1' | 'PENDING_L2' | 'APPROVED' | 'REJECTED';
 
 export interface BankAccount {
   id: number;
@@ -80,6 +81,17 @@ export interface AdvanceTransaction {
   purpose: string;
   note: string;
   status: AdvanceTransactionStatus;
+  approval_status: AdvanceApprovalStatus;
+  required_approval_level: number;
+  submitted_at?: string | null;
+  submitted_by?: number | null;
+  approved_level1_at?: string | null;
+  approved_level1_by?: number | null;
+  approved_level2_at?: string | null;
+  approved_level2_by?: number | null;
+  rejected_at?: string | null;
+  rejected_by?: number | null;
+  rejection_reason: string;
   is_active: boolean;
   total_spent: string;
   total_refund: string;
@@ -274,4 +286,177 @@ export interface AdvanceReminderPolicySimulationResponse {
     threshold_days: number | null;
     count_by_threshold: Record<string, number>;
   };
+}
+
+export interface AdvanceApprovalQueueItem {
+  id: number;
+  code: string;
+  recipient_name: string;
+  amount: string;
+  advance_date: string;
+  approval_status: AdvanceApprovalStatus;
+  required_approval_level: number;
+}
+
+export interface AdvanceApprovalQueueResponse {
+  pending_l1_count: number;
+  pending_l2_count: number;
+  items: AdvanceApprovalQueueItem[];
+}
+
+export interface AdvanceApprovalSlaPolicy {
+  sla_hours_l1: number;
+  sla_hours_l2: number;
+  remind_every_hours: number;
+  window_days: number;
+}
+
+export interface AdvanceApprovalSlaOverviewResponse {
+  policy: AdvanceApprovalSlaPolicy;
+  pending_l1_count: number;
+  pending_l2_count: number;
+  overdue_l1_count: number;
+  overdue_l2_count: number;
+  escalation_l1_count?: number;
+  escalation_l2_count?: number;
+  approved_window_days: number;
+  approved_count: number;
+  avg_lead_hours: number;
+  top_blocked_submitters?: Array<{
+    username: string;
+    pending_count: number;
+    total_amount: string;
+    max_wait_hours: number;
+  }>;
+}
+
+export interface ExecutiveKpiResponse {
+  as_of: string;
+  finance_sla: AdvanceApprovalSlaOverviewResponse;
+  workforce_sla: {
+    pending_l1_count: number;
+    pending_l2_count: number;
+    overdue_l1_count: number;
+    overdue_l2_count: number;
+    escalation_l1_count?: number;
+    escalation_l2_count?: number;
+    avg_lead_hours: number;
+  };
+  finance_overdue_90: {
+    as_of: string;
+    threshold_days: number;
+    count: number;
+    total_remaining: string;
+    max_days_overdue: number;
+  };
+  trend_6m: Array<{
+    month: string;
+    finance_pending: number;
+    workforce_pending: number;
+  }>;
+  risk_score: number;
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH';
+  risk_contributors: Array<{
+    key: string;
+    label: string;
+    count: number;
+    weight: number;
+    impact_score: number;
+  }>;
+  recommendations: Array<{
+    code: string;
+    title: string;
+    priority: 'P0' | 'P1' | 'P2' | 'P3';
+    description: string;
+  }>;
+  risk_trend: {
+    mom_delta_pending: number;
+    wow_delta_pending: number;
+    current_pending_total: number;
+    previous_month_pending_total: number;
+    previous_week_pending_total: number;
+  };
+  early_warning: {
+    is_triggered: boolean;
+    score_to_next_level: number;
+    target_level: 'MEDIUM' | 'HIGH';
+    hint: string;
+  };
+  priority_queue: Array<{
+    code: string;
+    title: string;
+    owner: string;
+    impact_score: number;
+    quick_action: string;
+  }>;
+  auto_policy: ExecutiveAutoPolicy;
+}
+
+export interface ExecutiveAutoPolicy {
+  enabled: boolean;
+  cooldown_minutes: number;
+  auto_run_finance_sla: boolean;
+  auto_run_workforce_sla: boolean;
+  only_when_early_warning: boolean;
+  last_run_at: string;
+}
+
+export interface ExecutiveAutoHistoryItem {
+  id: number;
+  created_at: string;
+  username: string;
+  source: string;
+  force_run: boolean;
+  success: boolean;
+  skipped: boolean;
+  reason: string;
+  finance_sent_count: number;
+  workforce_sent_count: number;
+}
+
+export interface ExecutiveAutoHistoryResponse {
+  count: number;
+  items: ExecutiveAutoHistoryItem[];
+}
+
+export interface ExecutiveAutoGovernanceSummary {
+  total_runs: number;
+  success_runs: number;
+  skipped_runs: number;
+  failed_runs: number;
+  finance_sent_total: number;
+  workforce_sent_total: number;
+  sent_total: number;
+  success_rate: number;
+  skipped_rate: number;
+  failed_rate: number;
+  avg_sent_per_run: number;
+}
+
+export interface ExecutiveAutoGovernancePeriodItem extends ExecutiveAutoGovernanceSummary {
+  period_key: string;
+  period_start: string;
+  period_end: string;
+}
+
+export interface ExecutiveAutoGovernanceSkipReasonItem {
+  reason: string;
+  count: number;
+}
+
+export interface ExecutiveAutoGovernanceActionItem extends ExecutiveAutoGovernanceSummary {
+  action: 'BOTH' | 'FINANCE_ONLY' | 'WORKFORCE_ONLY' | 'NO_SENT';
+}
+
+export interface ExecutiveAutoGovernanceResponse {
+  filters: {
+    days: number;
+    group_by: 'day' | 'week';
+    from_date: string;
+    to_date: string;
+  };
+  summary: ExecutiveAutoGovernanceSummary;
+  by_period: ExecutiveAutoGovernancePeriodItem[];
+  skip_reasons: ExecutiveAutoGovernanceSkipReasonItem[];
+  action_effectiveness: ExecutiveAutoGovernanceActionItem[];
 }

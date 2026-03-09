@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Button, Card, Col, Row, Statistic, Progress, Tag, Space, Spin, message } from 'antd';
 import {
   AppstoreOutlined,
@@ -18,6 +18,31 @@ import { theme } from '../styles/theme';
 
 const Dashboard = () => {
   const [messageApi, contextHolder] = message.useMessage();
+  const actionThrottleLockRef = useRef<boolean>(false);
+  const actionThrottleTimerRef = useRef<number | null>(null);
+  const runActionWithThrottle = (action: () => void): void => {
+    if (actionThrottleLockRef.current) {
+      return;
+    }
+    actionThrottleLockRef.current = true;
+    if (actionThrottleTimerRef.current) {
+      window.clearTimeout(actionThrottleTimerRef.current);
+    }
+    actionThrottleTimerRef.current = window.setTimeout(() => {
+      actionThrottleLockRef.current = false;
+      actionThrottleTimerRef.current = null;
+    }, 500);
+    action();
+  };
+  useEffect(() => {
+    return () => {
+      if (actionThrottleTimerRef.current) {
+        window.clearTimeout(actionThrottleTimerRef.current);
+        actionThrottleTimerRef.current = null;
+      }
+      actionThrottleLockRef.current = false;
+    };
+  }, []);
   const canManageFinance = canManageFinanceData();
   const { config, saveConfig } = useUserPreferences(PAGES.DASHBOARD);
   const overdueOverviewQuery = useQuery({
@@ -121,15 +146,23 @@ const Dashboard = () => {
               <Space>
                 <Button
                   disabled={overdue90Count <= 0}
-                  onClick={async () => {
-                    await saveConfig({
-                      ...(config as Record<string, unknown>),
-                      financeOverdueAck: {
-                        signature: overdue90Signature,
-                        ackedAt: new Date().toISOString(),
-                      },
+                  onClick={() => {
+                    runActionWithThrottle(() => {
+                      void (async () => {
+                        try {
+                          await saveConfig({
+                            ...(config as Record<string, unknown>),
+                            financeOverdueAck: {
+                              signature: overdue90Signature,
+                              ackedAt: new Date().toISOString(),
+                            },
+                          });
+                          messageApi.success('Đã xác nhận đã xử lý cảnh báo quá hạn');
+                        } catch {
+                          messageApi.error('Lưu trạng thái xác nhận thất bại');
+                        }
+                      })();
                     });
-                    messageApi.success('Đã xác nhận đã xử lý cảnh báo quá hạn');
                   }}
                 >
                   Đã xử lý
@@ -139,7 +172,7 @@ const Dashboard = () => {
                   danger={overdue90Count > 0}
                   loading={remindMutation.isPending}
                   disabled={overdue90Count <= 0}
-                  onClick={() => remindMutation.mutate()}
+                  onClick={() => runActionWithThrottle(() => remindMutation.mutate())}
                 >
                   Gửi nhắc ngay
                 </Button>

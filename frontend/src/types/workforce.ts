@@ -137,3 +137,114 @@ export interface BonusPenaltyRecordPayload {
   is_active: boolean;
 }
 
+export type SalaryAdvanceStatus = 'UNDEDUCTED' | 'DEDUCTED';
+export type SalaryAdvanceApprovalStatus = 'DRAFT' | 'PENDING_L1' | 'PENDING_L2' | 'APPROVED' | 'REJECTED';
+
+export interface SalaryAdvanceRecord {
+  id: number;
+  employee: number;
+  employee_code: string;
+  employee_name: string;
+  advance_date: string;
+  month: string;
+  amount: string;
+  reason: string;
+  approved_by_name: string;
+  note: string;
+  status: SalaryAdvanceStatus;
+  approval_status: SalaryAdvanceApprovalStatus;
+  required_approval_level: number;
+  submitted_at?: string | null;
+  submitted_by?: number | null;
+  approved_level1_at?: string | null;
+  approved_level1_by?: number | null;
+  approved_level2_at?: string | null;
+  approved_level2_by?: number | null;
+  rejected_at?: string | null;
+  rejected_by?: number | null;
+  rejection_reason: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SalaryAdvanceRecordPayload {
+  employee: number;
+  advance_date: string;
+  month: string;
+  amount: number;
+  reason: string;
+  approved_by_name: string;
+  note: string;
+  status: SalaryAdvanceStatus;
+  is_active: boolean;
+}
+
+export interface SalaryAdvanceApprovalQueueItem {
+  id: number;
+  employee_code: string;
+  employee_name: string;
+  amount: string;
+  month: string;
+  approval_status: SalaryAdvanceApprovalStatus;
+  required_approval_level: number;
+}
+
+export interface SalaryAdvanceApprovalQueueResponse {
+  pending_l1_count: number;
+  pending_l2_count: number;
+  items: SalaryAdvanceApprovalQueueItem[];
+}
+
+export interface SalaryAdvanceApprovalSlaPolicy {
+  sla_hours_l1: number;
+  sla_hours_l2: number;
+  remind_every_hours: number;
+  window_days: number;
+}
+
+export interface SalaryAdvanceApprovalSlaOverviewResponse {
+  policy: SalaryAdvanceApprovalSlaPolicy;
+  pending_l1_count: number;
+  pending_l2_count: number;
+  overdue_l1_count: number;
+  overdue_l2_count: number;
+  escalation_l1_count?: number;
+  escalation_l2_count?: number;
+  approved_window_days: number;
+  approved_count: number;
+  avg_lead_hours: number;
+  top_blocked_submitters?: Array<{
+    username: string;
+    pending_count: number;
+    total_amount: string;
+    max_wait_hours: number;
+  }>;
+}
+
+export type PayrollStatus = 'UNLOCKED' | 'LOCKED';
+
+export interface PayrollRecord {
+  id: number;
+  employee: number;
+  employee_code: string;
+  employee_name: string;
+  employee_department: string;
+  employee_position: string;
+  month: string;
+  standard_days: string;
+  actual_days: string;
+  basic_salary: string;
+  salary_by_attendance: string;
+  overtime_pay: string;
+  total_bonus: string;
+  total_penalty: string;
+  advance_deduction: string;
+  total_income: string;
+  total_deductions: string;
+  net_pay: string;
+  status: PayrollStatus;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}

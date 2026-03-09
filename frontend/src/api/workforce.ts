@@ -9,6 +9,8 @@ import type {
   EmployeePayload,
   PaginatedResponse,
   PayrollRecord,
+  SalaryAdvanceApprovalSlaOverviewResponse,
+  SalaryAdvanceApprovalQueueResponse,
   SalaryAdvanceRecord,
   SalaryAdvanceRecordPayload,
 } from '../types/workforce';
@@ -99,6 +101,46 @@ export const workforceApi = {
 
   deleteSalaryAdvance: async (id: number): Promise<void> => {
     await axiosInstance.delete(`${API_ENDPOINTS.WORKFORCE_SALARY_ADVANCES}${id}/`);
+  },
+  getSalaryAdvanceApprovalQueue: async (): Promise<SalaryAdvanceApprovalQueueResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.WORKFORCE_SALARY_ADVANCE_APPROVAL_QUEUE);
+    return response.data as SalaryAdvanceApprovalQueueResponse;
+  },
+  getSalaryAdvanceApprovalSlaOverview: async (): Promise<SalaryAdvanceApprovalSlaOverviewResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.WORKFORCE_SALARY_ADVANCE_APPROVAL_SLA_OVERVIEW);
+    return response.data as SalaryAdvanceApprovalSlaOverviewResponse;
+  },
+  remindSalaryAdvancePendingApprovals: async (payload?: { dry_run?: boolean }): Promise<{
+    success: boolean;
+    dry_run: boolean;
+    sent_count: number;
+    sent_usernames: string[];
+    overview: SalaryAdvanceApprovalSlaOverviewResponse;
+  }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.WORKFORCE_SALARY_ADVANCE_REMIND_PENDING_APPROVALS, payload || {});
+    return response.data as {
+      success: boolean;
+      dry_run: boolean;
+      sent_count: number;
+      sent_usernames: string[];
+      overview: SalaryAdvanceApprovalSlaOverviewResponse;
+    };
+  },
+  submitSalaryAdvanceApproval: async (id: number): Promise<{ success: boolean; approval_status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_SALARY_ADVANCES}${id}/submit_approval/`);
+    return response.data as { success: boolean; approval_status: string };
+  },
+  approveSalaryAdvanceLevel1: async (id: number): Promise<{ success: boolean; approval_status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_SALARY_ADVANCES}${id}/approve_level1/`);
+    return response.data as { success: boolean; approval_status: string };
+  },
+  approveSalaryAdvanceLevel2: async (id: number): Promise<{ success: boolean; approval_status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_SALARY_ADVANCES}${id}/approve_level2/`);
+    return response.data as { success: boolean; approval_status: string };
+  },
+  rejectSalaryAdvanceApproval: async (id: number, reason: string): Promise<{ success: boolean; approval_status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_SALARY_ADVANCES}${id}/reject_approval/`, { reason });
+    return response.data as { success: boolean; approval_status: string };
   },
 
   getPayrollRecords: async (params?: Record<string, unknown>): Promise<PaginatedResponse<PayrollRecord>> => {

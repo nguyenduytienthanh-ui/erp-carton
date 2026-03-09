@@ -183,6 +183,16 @@ export default function FinanceSummary() {
         unread_only: historyUnreadOnly || undefined,
       }),
   });
+  const approvalQueueQuery = useQuery({
+    queryKey: ['finance-advance-approval-queue'],
+    queryFn: () => financeApi.getAdvanceApprovalQueue(),
+    enabled: canManage,
+  });
+  const approvalSlaOverviewQuery = useQuery({
+    queryKey: ['finance-advance-approval-sla-overview'],
+    queryFn: () => financeApi.getAdvanceApprovalSlaOverview(),
+    enabled: canManage,
+  });
   const reminderPolicyQuery = useQuery({
     queryKey: ['finance-reminder-policy'],
     queryFn: () => financeApi.getAdvanceReminderPolicy(),
@@ -264,6 +274,41 @@ export default function FinanceSummary() {
       messageApi.success('Đã xuất Excel lịch sử nhắc quá hạn');
     },
     onError: () => messageApi.error('Xuất Excel lịch sử nhắc thất bại'),
+  });
+  const approveAdvanceLevel1Mutation = useMutation({
+    mutationFn: (id: number) => financeApi.approveAdvanceLevel1(id),
+    onSuccess: async () => {
+      messageApi.success('Đã duyệt cấp 1 phiếu tạm ứng');
+      await approvalQueueQuery.refetch();
+      await overdueOverviewQuery.refetch();
+    },
+    onError: () => messageApi.error('Duyệt cấp 1 thất bại'),
+  });
+  const approveAdvanceLevel2Mutation = useMutation({
+    mutationFn: (id: number) => financeApi.approveAdvanceLevel2(id),
+    onSuccess: async () => {
+      messageApi.success('Đã duyệt cấp 2 phiếu tạm ứng');
+      await approvalQueueQuery.refetch();
+      await overdueOverviewQuery.refetch();
+    },
+    onError: () => messageApi.error('Duyệt cấp 2 thất bại'),
+  });
+  const rejectAdvanceApprovalMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: number; reason: string }) => financeApi.rejectAdvanceApproval(id, reason),
+    onSuccess: async () => {
+      messageApi.success('Đã từ chối duyệt phiếu');
+      await approvalQueueQuery.refetch();
+    },
+    onError: () => messageApi.error('Từ chối duyệt thất bại'),
+  });
+  const remindPendingApprovalsMutation = useMutation({
+    mutationFn: () => financeApi.remindAdvancePendingApprovals({ dry_run: false }),
+    onSuccess: async (data) => {
+      messageApi.success(`Đã gửi nhắc SLA duyệt tài chính: ${data.sent_count} người nhận`);
+      await approvalSlaOverviewQuery.refetch();
+      await approvalQueueQuery.refetch();
+    },
+    onError: () => messageApi.error('Gửi nhắc SLA duyệt thất bại'),
   });
   const saveReminderPolicyMutation = useMutation({
     mutationFn: async () => {
@@ -657,6 +702,101 @@ export default function FinanceSummary() {
                   <div style={{ color: '#cf1322' }}>{`${item.days_overdue} ngày - ${money(item.remaining_amount)}`}</div>
                 </div>
               ))}
+            </div>
+          </div>
+          <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12 }}>
+            <div style={{ color: '#8c8c8c', marginBottom: 8 }}>Hàng đợi duyệt tạm ứng</div>
+            <div style={{ marginBottom: 8 }}>
+              {`Chờ L1: ${approvalQueueQuery.data?.pending_l1_count ?? 0} | Chờ L2: ${approvalQueueQuery.data?.pending_l2_count ?? 0}`}
+            </div>
+            <div style={{ marginBottom: 8, color: '#8c8c8c' }}>
+              {`SLA quá hạn - L1: ${approvalSlaOverviewQuery.data?.overdue_l1_count ?? 0} | L2: ${approvalSlaOverviewQuery.data?.overdue_l2_count ?? 0} | Escalation L1: ${approvalSlaOverviewQuery.data?.escalation_l1_count ?? 0} | Escalation L2: ${approvalSlaOverviewQuery.data?.escalation_l2_count ?? 0} | Lead time TB: ${Number(approvalSlaOverviewQuery.data?.avg_lead_hours ?? 0).toFixed(2)}h`}
+            </div>
+            <Button
+              size="small"
+              style={{ marginBottom: 8 }}
+              loading={remindPendingApprovalsMutation.isPending}
+              onClick={() => remindPendingApprovalsMutation.mutate()}
+            >
+              Nhắc SLA duyệt ngay
+            </Button>
+            {(approvalQueueQuery.data?.items ?? []).length === 0 ? (
+              <div style={{ color: '#bfbfbf' }}>Không có phiếu nào đang chờ duyệt.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {(approvalQueueQuery.data?.items ?? []).slice(0, 8).map((item) => (
+                  <div
+                    key={item.id}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '100px 1fr 160px 130px 220px',
+                      gap: 8,
+                      alignItems: 'center',
+                      borderBottom: '1px dashed #f0f0f0',
+                      paddingBottom: 6,
+                    }}
+                  >
+                    <div>{item.code}</div>
+                    <div>{item.recipient_name}</div>
+                    <div style={{ textAlign: 'right' }}>{money(item.amount)}</div>
+                    <div>{item.approval_status}</div>
+                    <Space>
+                      {item.approval_status === 'PENDING_L1' ? (
+                        <Button
+                          size="small"
+                          loading={approveAdvanceLevel1Mutation.isPending}
+                          onClick={() => approveAdvanceLevel1Mutation.mutate(item.id)}
+                        >
+                          Duyệt L1
+                        </Button>
+                      ) : null}
+                      {item.approval_status === 'PENDING_L2' ? (
+                        <Button
+                          size="small"
+                          type="primary"
+                          loading={approveAdvanceLevel2Mutation.isPending}
+                          onClick={() => approveAdvanceLevel2Mutation.mutate(item.id)}
+                        >
+                          Duyệt L2
+                        </Button>
+                      ) : null}
+                      {(item.approval_status === 'PENDING_L1' || item.approval_status === 'PENDING_L2') ? (
+                        <Button
+                          size="small"
+                          danger
+                          loading={rejectAdvanceApprovalMutation.isPending}
+                          onClick={() => {
+                            const reason = window.prompt(`Nhập lý do từ chối phiếu ${item.code}:`, '');
+                            if (!reason || !reason.trim()) {
+                              return;
+                            }
+                            rejectAdvanceApprovalMutation.mutate({ id: item.id, reason: reason.trim() });
+                          }}
+                        >
+                          Từ chối
+                        </Button>
+                      ) : null}
+                    </Space>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ marginTop: 8 }}>
+              <div style={{ color: '#8c8c8c', marginBottom: 4 }}>Top người tạo phiếu đang tắc nghẽn</div>
+              {(approvalSlaOverviewQuery.data?.top_blocked_submitters ?? []).length === 0 ? (
+                <div style={{ color: '#bfbfbf' }}>Không có dữ liệu.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {(approvalSlaOverviewQuery.data?.top_blocked_submitters ?? []).map((row) => (
+                    <div key={row.username} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 170px 120px', gap: 8 }}>
+                      <div>{row.username}</div>
+                      <div>{`SL: ${row.pending_count}`}</div>
+                      <div>{`Tổng tiền: ${money(row.total_amount)}`}</div>
+                      <div>{`Max wait: ${row.max_wait_hours}h`}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
           <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12 }}>

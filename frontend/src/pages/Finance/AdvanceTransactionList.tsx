@@ -18,6 +18,7 @@ import { PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { financeApi } from '../../api/finance';
 import type {
+  AdvanceApprovalStatus,
   AdvanceSettlement,
   AdvanceTransaction,
   AdvanceTransactionSourceType,
@@ -36,6 +37,7 @@ type ViewMode = 'advances' | 'settlements';
 type AdvanceFilters = {
   month: string;
   status: '' | AdvanceTransactionStatus;
+  approval_status: '' | AdvanceApprovalStatus;
 };
 
 type AdvanceForm = {
@@ -71,6 +73,13 @@ const STATUS_OPTIONS: Array<{ value: AdvanceTransactionStatus; label: string }> 
   { value: 'SETTLED', label: 'Đã quyết toán' },
   { value: 'CANCELLED', label: 'Đã hủy' },
 ];
+const APPROVAL_STATUS_OPTIONS: Array<{ value: AdvanceApprovalStatus; label: string }> = [
+  { value: 'DRAFT', label: 'Nháp' },
+  { value: 'PENDING_L1', label: 'Chờ duyệt L1' },
+  { value: 'PENDING_L2', label: 'Chờ duyệt L2' },
+  { value: 'APPROVED', label: 'Đã duyệt' },
+  { value: 'REJECTED', label: 'Từ chối' },
+];
 
 const ADVANCE_TYPE_OPTIONS: Array<{ value: AdvanceTransactionType; label: string }> = [
   { value: 'PURCHASE', label: 'Tạm ứng mua hàng' },
@@ -94,9 +103,17 @@ function parseFilters(raw: string): AdvanceFilters {
         parsed.status === 'CANCELLED'
           ? parsed.status
           : '',
+      approval_status:
+        parsed.approval_status === 'DRAFT' ||
+        parsed.approval_status === 'PENDING_L1' ||
+        parsed.approval_status === 'PENDING_L2' ||
+        parsed.approval_status === 'APPROVED' ||
+        parsed.approval_status === 'REJECTED'
+          ? parsed.approval_status
+          : '',
     };
   } catch {
-    return { month: currentMonth, status: '' };
+    return { month: currentMonth, status: '', approval_status: '' };
   }
 }
 
@@ -130,12 +147,19 @@ function statusColor(status: AdvanceTransactionStatus): string {
   return 'default';
 }
 
+function approvalColor(status: AdvanceApprovalStatus): string {
+  if (status === 'APPROVED') return 'green';
+  if (status === 'PENDING_L1' || status === 'PENDING_L2') return 'gold';
+  if (status === 'REJECTED') return 'red';
+  return 'default';
+}
+
 export default function AdvanceTransactionList() {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
   const [viewMode, setViewMode] = useState<ViewMode>('advances');
   const [searchInput, setSearchInput] = useState('');
-  const [filters, setFilters] = useState<AdvanceFilters>({ month: currentMonth, status: '' });
+  const [filters, setFilters] = useState<AdvanceFilters>({ month: currentMonth, status: '', approval_status: '' });
   const [advancesPage, setAdvancesPage] = useState(1);
   const [settlementsPage, setSettlementsPage] = useState(1);
   const [openAdvanceModal, setOpenAdvanceModal] = useState(false);
@@ -162,6 +186,7 @@ export default function AdvanceTransactionList() {
     if (intentSearch.trim()) p.q = intentSearch.trim();
     if (intentFilters.month) p.month = intentFilters.month;
     if (intentFilters.status) p.status = intentFilters.status;
+    if (intentFilters.approval_status) p.approval_status = intentFilters.approval_status;
     return p;
   }, [intentSearch, intentFilters, advancesPage, pageSize]);
 
@@ -218,6 +243,34 @@ export default function AdvanceTransactionList() {
       messageApi.success('Đã xóa phiếu tạm ứng');
     },
   });
+  const submitAdvanceApprovalMutation = useMutation({
+    mutationFn: (id: number) => financeApi.submitAdvanceApproval(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
+      messageApi.success('Đã gửi duyệt phiếu tạm ứng');
+    },
+  });
+  const approveAdvanceLevel1Mutation = useMutation({
+    mutationFn: (id: number) => financeApi.approveAdvanceLevel1(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
+      messageApi.success('Đã duyệt cấp 1');
+    },
+  });
+  const approveAdvanceLevel2Mutation = useMutation({
+    mutationFn: (id: number) => financeApi.approveAdvanceLevel2(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
+      messageApi.success('Đã duyệt cấp 2');
+    },
+  });
+  const rejectAdvanceApprovalMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: number; reason: string }) => financeApi.rejectAdvanceApproval(id, reason),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
+      messageApi.success('Đã từ chối phiếu');
+    },
+  });
 
   const createSettlementMutation = useMutation({
     mutationFn: financeApi.createAdvanceSettlement,
@@ -254,7 +307,9 @@ export default function AdvanceTransactionList() {
   const settlementTotal = settlementsQuery.data?.count ?? 0;
   const cashAccounts = cashAccountsQuery.data?.results ?? [];
   const bankAccounts = bankAccountsQuery.data?.results ?? [];
-  const advanceOptions = (advanceSelectQuery.data?.results ?? []).filter((item) => item.status !== 'CANCELLED');
+  const advanceOptions = (advanceSelectQuery.data?.results ?? []).filter(
+    (item) => item.status !== 'CANCELLED' && item.approval_status === 'APPROVED'
+  );
 
   const summary = useMemo(() => {
     const totalAdvance = advances.reduce((acc, item) => acc + Number(item.amount), 0);
@@ -313,16 +368,69 @@ export default function AdvanceTransactionList() {
       },
     },
     {
+      title: 'Duyệt',
+      dataIndex: 'approval_status',
+      width: 140,
+      render: (value: AdvanceApprovalStatus) => {
+        const label = APPROVAL_STATUS_OPTIONS.find((item) => item.value === value)?.label ?? value;
+        return <Tag color={approvalColor(value)}>{label}</Tag>;
+      },
+    },
+    {
       title: 'Thao tác',
       key: 'actions',
-      width: 170,
+      width: 350,
       fixed: 'right',
       render: (_, row) => (
         <Space>
           {canManage && (
             <>
+              {(row.approval_status === 'DRAFT' || row.approval_status === 'REJECTED') && (
+                <Button
+                  size="small"
+                  onClick={() => submitAdvanceApprovalMutation.mutate(row.id)}
+                  loading={submitAdvanceApprovalMutation.isPending}
+                >
+                  Gửi duyệt
+                </Button>
+              )}
+              {row.approval_status === 'PENDING_L1' && (
+                <Button
+                  size="small"
+                  onClick={() => approveAdvanceLevel1Mutation.mutate(row.id)}
+                  loading={approveAdvanceLevel1Mutation.isPending}
+                >
+                  Duyệt L1
+                </Button>
+              )}
+              {row.approval_status === 'PENDING_L2' && (
+                <Button
+                  size="small"
+                  onClick={() => approveAdvanceLevel2Mutation.mutate(row.id)}
+                  loading={approveAdvanceLevel2Mutation.isPending}
+                >
+                  Duyệt L2
+                </Button>
+              )}
+              {(row.approval_status === 'PENDING_L1' || row.approval_status === 'PENDING_L2') && (
+                <Button
+                  size="small"
+                  danger
+                  onClick={() => {
+                    const reason = window.prompt('Nhập lý do từ chối duyệt:', '');
+                    if (!reason || !reason.trim()) {
+                      return;
+                    }
+                    rejectAdvanceApprovalMutation.mutate({ id: row.id, reason: reason.trim() });
+                  }}
+                  loading={rejectAdvanceApprovalMutation.isPending}
+                >
+                  Từ chối
+                </Button>
+              )}
               <Button
                 size="small"
+                disabled={row.approval_status === 'PENDING_L1' || row.approval_status === 'PENDING_L2' || row.approval_status === 'APPROVED'}
                 onClick={() => {
                   setEditingAdvance(row);
                   advanceForm.setFieldsValue({
@@ -347,6 +455,7 @@ export default function AdvanceTransactionList() {
               <Button
                 size="small"
                 danger
+                disabled={row.approval_status === 'PENDING_L1' || row.approval_status === 'PENDING_L2' || row.approval_status === 'APPROVED'}
                 onClick={() =>
                   Modal.confirm({
                     title: `Xóa phiếu tạm ứng ${row.code}?`,
@@ -564,10 +673,22 @@ export default function AdvanceTransactionList() {
             }}
           />
         )}
+        {viewMode === 'advances' && (
+          <Select
+            value={filters.approval_status || undefined}
+            placeholder="Trạng thái duyệt"
+            style={{ width: 180 }}
+            options={APPROVAL_STATUS_OPTIONS}
+            onChange={(value) => {
+              setFilters((prev) => ({ ...prev, approval_status: (value ?? '') as '' | AdvanceApprovalStatus }));
+              setAdvancesPage(1);
+            }}
+          />
+        )}
         <Button
           onClick={() => {
             setSearchInput('');
-            setFilters({ month: currentMonth, status: '' });
+            setFilters({ month: currentMonth, status: '', approval_status: '' });
             setAdvancesPage(1);
             setSettlementsPage(1);
           }}

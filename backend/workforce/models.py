@@ -339,6 +339,18 @@ class SalaryAdvanceRecord(SearchTextModelMixin):
         (STATUS_UNDEDUCTED, 'Chưa trừ'),
         (STATUS_DEDUCTED, 'Đã trừ'),
     ]
+    APPROVAL_DRAFT = 'DRAFT'
+    APPROVAL_PENDING_L1 = 'PENDING_L1'
+    APPROVAL_PENDING_L2 = 'PENDING_L2'
+    APPROVAL_APPROVED = 'APPROVED'
+    APPROVAL_REJECTED = 'REJECTED'
+    APPROVAL_STATUS_CHOICES = [
+        (APPROVAL_DRAFT, 'Nháp'),
+        (APPROVAL_PENDING_L1, 'Chờ duyệt cấp 1'),
+        (APPROVAL_PENDING_L2, 'Chờ duyệt cấp 2'),
+        (APPROVAL_APPROVED, 'Đã duyệt'),
+        (APPROVAL_REJECTED, 'Từ chối'),
+    ]
 
     employee = models.ForeignKey(
         Employee,
@@ -353,6 +365,46 @@ class SalaryAdvanceRecord(SearchTextModelMixin):
     approved_by_name = models.CharField(max_length=120, blank=True, default='', verbose_name='Người duyệt')
     note = models.TextField(blank=True, default='', verbose_name='Ghi chú')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_UNDEDUCTED, verbose_name='Trạng thái')
+    approval_status = models.CharField(
+        max_length=20,
+        choices=APPROVAL_STATUS_CHOICES,
+        default=APPROVAL_APPROVED,
+        verbose_name='Trạng thái duyệt',
+    )
+    required_approval_level = models.PositiveSmallIntegerField(default=1, verbose_name='Số cấp duyệt yêu cầu')
+    submitted_at = models.DateTimeField(null=True, blank=True, verbose_name='Thời điểm gửi duyệt')
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='workforce_salary_advance_submitted',
+    )
+    approved_level1_at = models.DateTimeField(null=True, blank=True, verbose_name='Thời điểm duyệt cấp 1')
+    approved_level1_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='workforce_salary_advance_approved_l1',
+    )
+    approved_level2_at = models.DateTimeField(null=True, blank=True, verbose_name='Thời điểm duyệt cấp 2')
+    approved_level2_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='workforce_salary_advance_approved_l2',
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True, verbose_name='Thời điểm từ chối')
+    rejected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='workforce_salary_advance_rejected',
+    )
+    rejection_reason = models.CharField(max_length=255, blank=True, default='', verbose_name='Lý do từ chối')
     is_active = models.BooleanField(default=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -378,6 +430,7 @@ class SalaryAdvanceRecord(SearchTextModelMixin):
             models.Index(fields=['month']),
             models.Index(fields=['employee', 'month']),
             models.Index(fields=['status']),
+            models.Index(fields=['approval_status']),
             models.Index(fields=['is_active']),
         ]
 
@@ -396,6 +449,9 @@ class SalaryAdvanceRecord(SearchTextModelMixin):
             self.note,
             self.status,
             dict(self.STATUS_CHOICES).get(self.status, ''),
+            self.approval_status,
+            dict(self.APPROVAL_STATUS_CHOICES).get(self.approval_status, ''),
+            str(self.required_approval_level),
             'Đang dùng' if self.is_active else 'Ngừng dùng',
         ]
 

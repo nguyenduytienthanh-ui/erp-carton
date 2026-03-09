@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Button, Card, Col, Empty, List, Modal, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Button, Card, Col, Empty, InputNumber, List, Modal, Progress, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -7,7 +7,11 @@ import { tasksApi, type TaskItem } from '../../api/tasks';
 import { operationsApi, type OperationLogItem } from '../../api/operations';
 import { notificationsApi } from '../../api/notifications';
 import { usersApi, getUserDisplayName } from '../../api/users';
+import { financeApi } from '../../api/finance';
+import { workforceApi } from '../../api/workforce';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
+import { useUserPreferences } from '../../hooks/useUserPreferences';
+import { PAGES } from '../../utils/constants';
 
 const { Text, Title } = Typography;
 
@@ -53,7 +57,10 @@ type ExecutiveActionType =
   | 'EXPORT_REPORT'
   | 'COPY_HANDOVER'
   | 'QUICK_ASSIGN'
-  | 'REBALANCE_APPLY';
+  | 'REBALANCE_APPLY'
+  | 'P0_BUNDLE_EXECUTE'
+  | 'P0_BUNDLE_PRECHECK'
+  | 'P0_FALLBACK_AUTO_ONLY';
 
 type ExecutiveActionLogItem = {
   id: string;
@@ -105,6 +112,16 @@ type RebalanceSuggestionItem = {
   bucket: ShiftPriorityBucket;
 };
 
+type P0BundlePrecheckResult = {
+  generatedAt: string;
+  financeDryRunSent: number;
+  workforceDryRunSent: number;
+  totalDryRunSent: number;
+  note: string;
+};
+
+const P0_PRECHECK_TTL_MINUTES = 10;
+
 const REPORT_WINDOW_OPTIONS: Array<{ value: ReportWindow; label: string }> = [
   { value: 'TODAY', label: 'Hôm nay' },
   { value: '7D', label: '7 ngày' },
@@ -153,6 +170,9 @@ const EXEC_ACTION_LABELS: Record<ExecutiveActionType, string> = {
   COPY_HANDOVER: 'Copy bàn giao ca',
   QUICK_ASSIGN: 'Giao việc nhanh',
   REBALANCE_APPLY: 'Điều phối cân bằng tải',
+  P0_BUNDLE_EXECUTE: 'P0 bundle execute',
+  P0_BUNDLE_PRECHECK: 'P0 bundle pre-check',
+  P0_FALLBACK_AUTO_ONLY: 'P0 fallback auto-only',
 };
 
 const SHIFT_BUCKET_LABELS: Record<ShiftPriorityBucket, string> = {
@@ -301,8 +321,21 @@ function calcRiskScore(tasks: TaskItem[]): number {
 }
 
 export default function ExecutiveCockpit() {
+  const { config: cockpitConfig, saveConfig: saveCockpitConfig } = useUserPreferences(PAGES.EXECUTIVE_COCKPIT);
   const [liveSync, setLiveSync] = useState(true);
   const [reportWindow, setReportWindow] = useState<ReportWindow>('TODAY');
+  const [autoGovernanceDays, setAutoGovernanceDays] = useState<number>(30);
+  const [autoGovernanceGroupBy, setAutoGovernanceGroupBy] = useState<'day' | 'week'>('day');
+  const [isExportingAutoGovernance, setIsExportingAutoGovernance] = useState(false);
+  const [isGovernanceActionCooldown, setIsGovernanceActionCooldown] = useState(false);
+  const [isP0BundleRunning, setIsP0BundleRunning] = useState(false);
+  const [p0BundleStep, setP0BundleStep] = useState<'IDLE' | 'AUTO' | 'FINANCE' | 'WORKFORCE'>('IDLE');
+  const [p0BundleLastSummary, setP0BundleLastSummary] = useState('');
+  const [isP0PrecheckOpen, setIsP0PrecheckOpen] = useState(false);
+  const [isP0PrecheckLoading, setIsP0PrecheckLoading] = useState(false);
+  const [p0PrecheckResult, setP0PrecheckResult] = useState<P0BundlePrecheckResult | null>(null);
+  const [allowZeroImpactP0Execute, setAllowZeroImpactP0Execute] = useState(false);
+  const [prefsHydrated, setPrefsHydrated] = useState(false);
   const [shiftFilter, setShiftFilter] = useState<ShiftFilter>('ALL');
   const [escalationPreset, setEscalationPreset] = useState<EscalationPreset>('STANDARD');
   const [playbookScope, setPlaybookScope] = useState<PlaybookApplyScope>('L2_PLUS');
@@ -315,7 +348,39 @@ export default function ExecutiveCockpit() {
   const [quickAssignBulkDuePlan, setQuickAssignBulkDuePlan] = useState<QuickAssignDuePlan>('KEEP');
   const [rebalanceModalOpen, setRebalanceModalOpen] = useState(false);
   const [selectedRebalanceTaskIds, setSelectedRebalanceTaskIds] = useState<number[]>([]);
+  const governanceActionCooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queryClient = useQueryClient();
+  const cockpitConfigObj = useMemo(
+    () => ((cockpitConfig as Record<string, unknown>) || {}),
+    [cockpitConfig]
+  );
+  useEffect(() => {
+    if (prefsHydrated) return;
+    const savedDays = Number(cockpitConfigObj.autoGovernanceDays);
+    const savedGroupBy = String(cockpitConfigObj.autoGovernanceGroupBy || '').toLowerCase();
+    if (Number.isFinite(savedDays) && savedDays >= 7 && savedDays <= 365) {
+      setAutoGovernanceDays(Math.round(savedDays));
+    }
+    if (savedGroupBy === 'day' || savedGroupBy === 'week') {
+      setAutoGovernanceGroupBy(savedGroupBy);
+    }
+    setPrefsHydrated(true);
+  }, [cockpitConfigObj, prefsHydrated]);
+
+  useEffect(() => {
+    if (!prefsHydrated) return;
+    void saveCockpitConfig({
+      ...cockpitConfigObj,
+      autoGovernanceDays,
+      autoGovernanceGroupBy,
+    });
+  }, [autoGovernanceDays, autoGovernanceGroupBy, cockpitConfigObj, prefsHydrated, saveCockpitConfig]);
+  useEffect(() => () => {
+    if (governanceActionCooldownTimerRef.current) {
+      clearTimeout(governanceActionCooldownTimerRef.current);
+      governanceActionCooldownTimerRef.current = null;
+    }
+  }, []);
   const pollingInterval = useRealtimePollingInterval({
     enabled: liveSync,
     activeMs: 20_000,
@@ -360,9 +425,99 @@ export default function ExecutiveCockpit() {
     queryFn: () => usersApi.list(),
     staleTime: 60_000,
   });
+  const executiveKpiQuery = useQuery({
+    queryKey: ['executive-cockpit-finance-workforce-kpi'],
+    queryFn: () => financeApi.getExecutiveKpi(),
+    staleTime: 30_000,
+    refetchInterval: pollingInterval,
+    refetchIntervalInBackground: false,
+  });
+  const executiveAutoHistoryQuery = useQuery({
+    queryKey: ['executive-cockpit-auto-history'],
+    queryFn: () => financeApi.getExecutiveAutoHistory({ limit: 20 }),
+    staleTime: 20_000,
+    refetchInterval: pollingInterval,
+    refetchIntervalInBackground: false,
+  });
+  const executiveAutoGovernanceQuery = useQuery({
+    queryKey: ['executive-cockpit-auto-governance', autoGovernanceDays, autoGovernanceGroupBy],
+    queryFn: () =>
+      financeApi.getExecutiveAutoGovernance({
+        days: autoGovernanceDays,
+        group_by: autoGovernanceGroupBy,
+      }),
+    staleTime: 20_000,
+    refetchInterval: pollingInterval,
+    refetchIntervalInBackground: false,
+  });
+  const governanceTrendData = useMemo(() => {
+    const rows = (executiveAutoGovernanceQuery.data?.by_period ?? []).slice(-10);
+    const maxRuns = rows.reduce((acc, row) => Math.max(acc, Number(row.total_runs || 0)), 0);
+    const maxSent = rows.reduce((acc, row) => Math.max(acc, Number(row.sent_total || 0)), 0);
+    return {
+      rows,
+      maxRuns: Math.max(1, maxRuns),
+      maxSent: Math.max(1, maxSent),
+    };
+  }, [executiveAutoGovernanceQuery.data?.by_period]);
+  const governanceDeltaSummary = useMemo(() => {
+    const rows = executiveAutoGovernanceQuery.data?.by_period ?? [];
+    if (rows.length < 2) {
+      return null;
+    }
+    const current = rows[rows.length - 1];
+    const previous = rows[rows.length - 2];
+    const currentSent = Number(current.sent_total || 0);
+    const previousSent = Number(previous.sent_total || 0);
+    const currentSuccessRate = Number(current.success_rate || 0);
+    const previousSuccessRate = Number(previous.success_rate || 0);
+    return {
+      currentKey: current.period_key,
+      previousKey: previous.period_key,
+      sentDelta: currentSent - previousSent,
+      successRateDelta: Number((currentSuccessRate - previousSuccessRate).toFixed(2)),
+    };
+  }, [executiveAutoGovernanceQuery.data?.by_period]);
+  const governanceRiskSignal = useMemo(() => {
+    const rows = executiveAutoGovernanceQuery.data?.by_period ?? [];
+    if (rows.length < 3) {
+      return null;
+    }
+    const latest = rows[rows.length - 1];
+    const prev1 = rows[rows.length - 2];
+    const prev2 = rows[rows.length - 3];
+    const sentDeltaLatest = Number(latest.sent_total || 0) - Number(prev1.sent_total || 0);
+    const sentDeltaPrev = Number(prev1.sent_total || 0) - Number(prev2.sent_total || 0);
+    const successDeltaLatest = Number(latest.success_rate || 0) - Number(prev1.success_rate || 0);
+    const successDeltaPrev = Number(prev1.success_rate || 0) - Number(prev2.success_rate || 0);
+    const sentDownTwoPeriods = sentDeltaLatest < 0 && sentDeltaPrev < 0;
+    const successDownTwoPeriods = successDeltaLatest < 0 && successDeltaPrev < 0;
+    const skipUpTwoPeriods =
+      Number(latest.skipped_rate || 0) > Number(prev1.skipped_rate || 0)
+      && Number(prev1.skipped_rate || 0) > Number(prev2.skipped_rate || 0);
 
-  const taskData = openTasksQuery.data ?? [];
-  const failedOps = failedOpsQuery.data?.items ?? [];
+    if (!(sentDownTwoPeriods || successDownTwoPeriods || skipUpTwoPeriods)) {
+      return null;
+    }
+    const reasons: string[] = [];
+    if (sentDownTwoPeriods) reasons.push('sent_total giảm liên tiếp 2 kỳ');
+    if (successDownTwoPeriods) reasons.push('success_rate giảm liên tiếp 2 kỳ');
+    if (skipUpTwoPeriods) reasons.push('skipped_rate tăng liên tiếp 2 kỳ');
+    const severity = (successDownTwoPeriods && skipUpTwoPeriods) || reasons.length >= 2 ? 'high' : 'medium';
+    const actionCodes =
+      severity === 'high'
+        ? ['P0: Force chạy auto-execute', 'P0: Chạy SLA reminder Finance + Workforce', 'P1: Review policy cooldown/early-warning']
+        : ['P1: Chạy auto-execute theo policy', 'P1: Rà soát top skip reasons', 'P2: Tối ưu cadence/cooldown'];
+    return {
+      severity,
+      reasons,
+      actionCodes,
+      window: `${prev2.period_key} -> ${latest.period_key}`,
+    };
+  }, [executiveAutoGovernanceQuery.data?.by_period]);
+
+  const taskData = useMemo(() => openTasksQuery.data ?? [], [openTasksQuery.data]);
+  const failedOps = useMemo(() => failedOpsQuery.data?.items ?? [], [failedOpsQuery.data?.items]);
   const appendActionLog = (entry: {
     actionType: ExecutiveActionType;
     detail: string;
@@ -421,6 +576,240 @@ export default function ExecutiveCockpit() {
       message.error('Không thể chạy nhắc quá hạn hàng loạt.');
     },
   });
+  const triggerFinanceSlaReminderMutation = useMutation({
+    mutationFn: () => financeApi.remindAdvancePendingApprovals({ dry_run: false }),
+    onSuccess: (res) => {
+      message.success(`Đã gửi nhắc SLA Finance: ${res.sent_count} người nhận`);
+      void executiveKpiQuery.refetch();
+      void executiveAutoHistoryQuery.refetch();
+      void executiveAutoGovernanceQuery.refetch();
+    },
+    onError: () => message.error('Không thể gửi nhắc SLA Finance'),
+  });
+  const triggerWorkforceSlaReminderMutation = useMutation({
+    mutationFn: () => workforceApi.remindSalaryAdvancePendingApprovals({ dry_run: false }),
+    onSuccess: (res) => {
+      message.success(`Đã gửi nhắc SLA Workforce: ${res.sent_count} người nhận`);
+      void executiveKpiQuery.refetch();
+      void executiveAutoHistoryQuery.refetch();
+      void executiveAutoGovernanceQuery.refetch();
+    },
+    onError: () => message.error('Không thể gửi nhắc SLA Workforce'),
+  });
+  const saveAutoPolicyMutation = useMutation({
+    mutationFn: (payload: {
+      enabled?: boolean;
+      cooldown_minutes?: number;
+      auto_run_finance_sla?: boolean;
+      auto_run_workforce_sla?: boolean;
+      only_when_early_warning?: boolean;
+      last_run_at?: string;
+    }) => financeApi.saveExecutiveAutoPolicy(payload),
+    onSuccess: () => {
+      message.success('Đã cập nhật policy auto-execute');
+      void executiveKpiQuery.refetch();
+      void executiveAutoHistoryQuery.refetch();
+    },
+    onError: () => message.error('Không thể cập nhật policy auto-execute'),
+  });
+  const runAutoExecuteMutation = useMutation({
+    mutationFn: (force: boolean) => financeApi.runExecutiveAutoExecute({ force }),
+    onSuccess: (res) => {
+      if (res.success) {
+        message.success(
+          `Auto-execute xong: Fin ${res.finance_result?.sent_count ?? 0}, WF ${res.workforce_result?.sent_count ?? 0}`
+        );
+      } else if (res.skipped) {
+        message.info(`Auto-execute bỏ qua: ${res.reason || 'SKIPPED'}`);
+      } else {
+        message.warning('Auto-execute không thành công');
+      }
+      void executiveKpiQuery.refetch();
+      void executiveAutoHistoryQuery.refetch();
+      void executiveAutoGovernanceQuery.refetch();
+    },
+    onError: () => message.error('Không thể chạy auto-execute'),
+  });
+  const isGovernanceActionBusy =
+    isGovernanceActionCooldown
+    || isP0BundleRunning
+    || runAutoExecuteMutation.isPending
+    || triggerFinanceSlaReminderMutation.isPending
+    || triggerWorkforceSlaReminderMutation.isPending;
+  const runGovernanceActionWithGuard = (
+    runner: () => void,
+    cooldownMs = 900,
+  ) => {
+    if (isGovernanceActionBusy) {
+      message.info('Thao tác governance đang chạy hoặc vừa chạy, vui lòng đợi một chút.');
+      return;
+    }
+    runner();
+    setIsGovernanceActionCooldown(true);
+    if (governanceActionCooldownTimerRef.current) {
+      clearTimeout(governanceActionCooldownTimerRef.current);
+    }
+    governanceActionCooldownTimerRef.current = setTimeout(() => {
+      setIsGovernanceActionCooldown(false);
+      governanceActionCooldownTimerRef.current = null;
+    }, Math.max(500, cooldownMs));
+  };
+  const runGovernanceP0Bundle = async (forceAuto: boolean) => {
+    if (isGovernanceActionBusy) {
+      message.info('Governance action đang bận, vui lòng đợi trước khi chạy P0 bundle.');
+      return;
+    }
+    setIsP0BundleRunning(true);
+    setP0BundleStep('AUTO');
+    setP0BundleLastSummary('');
+    const precheckSnapshot = p0PrecheckResult;
+    try {
+      const autoRes = await runAutoExecuteMutation.mutateAsync(forceAuto);
+      setP0BundleStep('FINANCE');
+      const financeRes = await triggerFinanceSlaReminderMutation.mutateAsync();
+      setP0BundleStep('WORKFORCE');
+      const workforceRes = await triggerWorkforceSlaReminderMutation.mutateAsync();
+      const summary = `Auto(${autoRes.success ? 'OK' : autoRes.skipped ? `SKIP:${autoRes.reason || '-'}` : 'FAIL'}) | Fin sent ${financeRes.sent_count} | WF sent ${workforceRes.sent_count}`;
+      const precheckText = precheckSnapshot
+        ? ` | Pre-check Fin ${precheckSnapshot.financeDryRunSent}, WF ${precheckSnapshot.workforceDryRunSent}, Total ${precheckSnapshot.totalDryRunSent}`
+        : '';
+      setP0BundleLastSummary(summary);
+      message.success(`P0 bundle hoàn tất. ${summary}`);
+      appendActionLog({
+        actionType: 'P0_BUNDLE_EXECUTE',
+        detail: `P0 bundle: ${summary}${precheckText}`,
+        relatedCount: 3,
+      });
+      void executiveKpiQuery.refetch();
+      void executiveAutoHistoryQuery.refetch();
+      void executiveAutoGovernanceQuery.refetch();
+    } catch {
+      message.error('P0 bundle thất bại, vui lòng kiểm tra log và thử lại.');
+      appendActionLog({
+        actionType: 'P0_BUNDLE_EXECUTE',
+        detail: `P0 bundle thất bại tại bước ${p0BundleStep}`,
+        relatedCount: 0,
+      });
+    } finally {
+      setP0BundleStep('IDLE');
+      setIsP0BundleRunning(false);
+      setIsGovernanceActionCooldown(true);
+      if (governanceActionCooldownTimerRef.current) {
+        clearTimeout(governanceActionCooldownTimerRef.current);
+      }
+      governanceActionCooldownTimerRef.current = setTimeout(() => {
+        setIsGovernanceActionCooldown(false);
+        governanceActionCooldownTimerRef.current = null;
+      }, 1200);
+    }
+  };
+  const runGovernanceFallbackAutoOnly = async () => {
+    if (isGovernanceActionBusy) {
+      message.info('Governance action đang bận, vui lòng đợi trước khi chạy fallback.');
+      return;
+    }
+    const precheckSnapshot = p0PrecheckResult;
+    try {
+      const autoRes = await runAutoExecuteMutation.mutateAsync(true);
+      const summary = `Fallback auto-only: Auto(${autoRes.success ? 'OK' : autoRes.skipped ? `SKIP:${autoRes.reason || '-'}` : 'FAIL'})`;
+      const precheckText = precheckSnapshot
+        ? ` | Pre-check Fin ${precheckSnapshot.financeDryRunSent}, WF ${precheckSnapshot.workforceDryRunSent}, Total ${precheckSnapshot.totalDryRunSent}`
+        : '';
+      setP0BundleLastSummary(summary);
+      message.success(`Đã chạy fallback auto-only. ${summary}`);
+      appendActionLog({
+        actionType: 'P0_FALLBACK_AUTO_ONLY',
+        detail: `${summary}${precheckText}`,
+        relatedCount: 1,
+      });
+      void executiveKpiQuery.refetch();
+      void executiveAutoHistoryQuery.refetch();
+      void executiveAutoGovernanceQuery.refetch();
+      setIsP0PrecheckOpen(false);
+      setAllowZeroImpactP0Execute(false);
+    } catch {
+      message.error('Fallback auto-only thất bại, vui lòng kiểm tra và thử lại.');
+      appendActionLog({
+        actionType: 'P0_FALLBACK_AUTO_ONLY',
+        detail: 'Fallback auto-only thất bại.',
+        relatedCount: 0,
+      });
+    } finally {
+      setIsGovernanceActionCooldown(true);
+      if (governanceActionCooldownTimerRef.current) {
+        clearTimeout(governanceActionCooldownTimerRef.current);
+      }
+      governanceActionCooldownTimerRef.current = setTimeout(() => {
+        setIsGovernanceActionCooldown(false);
+        governanceActionCooldownTimerRef.current = null;
+      }, 1000);
+    }
+  };
+  const openGovernanceP0Precheck = async () => {
+    if (isGovernanceActionBusy) {
+      message.info('Governance action đang bận, vui lòng đợi trước khi pre-check.');
+      return;
+    }
+    setIsP0PrecheckOpen(true);
+    setIsP0PrecheckLoading(true);
+    setP0PrecheckResult(null);
+    setAllowZeroImpactP0Execute(false);
+    try {
+      const [financeDryRun, workforceDryRun] = await Promise.all([
+        financeApi.remindAdvancePendingApprovals({ dry_run: true }),
+        workforceApi.remindSalaryAdvancePendingApprovals({ dry_run: true }),
+      ]);
+      const financeDryRunSent = Number(financeDryRun.sent_count || 0);
+      const workforceDryRunSent = Number(workforceDryRun.sent_count || 0);
+      const totalDryRunSent = financeDryRunSent + workforceDryRunSent;
+      const generatedAt = dayjs().toISOString();
+      setP0PrecheckResult({
+        generatedAt,
+        financeDryRunSent,
+        workforceDryRunSent,
+        totalDryRunSent,
+        note: 'Dry-run chỉ ước lượng nhắc SLA. Bước Force Auto Execute sẽ chạy thật sau khi bạn xác nhận.',
+      });
+      appendActionLog({
+        actionType: 'P0_BUNDLE_PRECHECK',
+        detail: `Pre-check dry-run: Fin ${financeDryRunSent}, WF ${workforceDryRunSent}, Total ${totalDryRunSent} (${dayjs(generatedAt).format('DD/MM HH:mm:ss')}).`,
+        relatedCount: totalDryRunSent,
+      });
+    } catch {
+      message.error('Không thể chạy pre-check P0 bundle.');
+    } finally {
+      setIsP0PrecheckLoading(false);
+    }
+  };
+  const p0PrecheckAgeMinutes = useMemo(() => {
+    if (!p0PrecheckResult?.generatedAt) return null;
+    const ageSeconds = dayjs().diff(dayjs(p0PrecheckResult.generatedAt), 'second');
+    if (!Number.isFinite(ageSeconds) || ageSeconds < 0) return null;
+    return Number((ageSeconds / 60).toFixed(1));
+  }, [p0PrecheckResult?.generatedAt]);
+  const isP0PrecheckExpired = useMemo(() => {
+    if (p0PrecheckAgeMinutes == null) return false;
+    return p0PrecheckAgeMinutes > P0_PRECHECK_TTL_MINUTES;
+  }, [p0PrecheckAgeMinutes]);
+  const isP0PrecheckZeroImpact = useMemo(() => {
+    return Number(p0PrecheckResult?.totalDryRunSent || 0) <= 0;
+  }, [p0PrecheckResult?.totalDryRunSent]);
+  const updateAutoPolicyField = <K extends 'enabled' | 'cooldown_minutes' | 'auto_run_finance_sla' | 'auto_run_workforce_sla' | 'only_when_early_warning'>(
+    key: K,
+    value: boolean | number
+  ) => {
+    const base = executiveKpiQuery.data?.auto_policy;
+    if (!base) return;
+    saveAutoPolicyMutation.mutate({
+      enabled: base.enabled,
+      cooldown_minutes: base.cooldown_minutes,
+      auto_run_finance_sla: base.auto_run_finance_sla,
+      auto_run_workforce_sla: base.auto_run_workforce_sla,
+      only_when_early_warning: base.only_when_early_warning,
+      last_run_at: base.last_run_at,
+      [key]: value,
+    });
+  };
 
   const taskSummary = useMemo(() => {
     const overdue = taskData.filter((t) => t.due_date && dayjs(t.due_date).isBefore(dayjs(), 'day')).length;
@@ -1069,6 +1458,29 @@ export default function ExecutiveCockpit() {
     });
   };
 
+  const exportAutoGovernanceExcel = async () => {
+    try {
+      setIsExportingAutoGovernance(true);
+      const blob = await financeApi.exportExecutiveAutoGovernanceExcel({
+        days: autoGovernanceDays,
+        group_by: autoGovernanceGroupBy,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `executive_auto_governance_${autoGovernanceGroupBy}_${autoGovernanceDays}d_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      message.success('Đã xuất báo cáo SLA governance (Excel).');
+    } catch {
+      message.error('Không thể xuất báo cáo SLA governance.');
+    } finally {
+      setIsExportingAutoGovernance(false);
+    }
+  };
+
   const copyHandoverBrief = async () => {
     const reportWindowLabel = REPORT_WINDOW_OPTIONS.find((x) => x.value === reportWindow)?.label || reportWindow;
     const shiftLabel = SHIFT_OPTIONS.find((x) => x.value === shiftFilter)?.label || shiftFilter;
@@ -1209,6 +1621,431 @@ export default function ExecutiveCockpit() {
           <Col xs={8}><Statistic title="SLA vàng" value={slaHealth.warning} valueStyle={{ color: '#d48806' }} /></Col>
           <Col xs={8}><Statistic title="SLA đỏ" value={slaHealth.breached} valueStyle={{ color: '#cf1322' }} /></Col>
         </Row>
+      </Card>
+      <Card size="small">
+        <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+          <Text strong>KPI liên phòng ban Finance ↔ Workforce</Text>
+          <Tag color={executiveKpiQuery.data?.risk_level === 'HIGH' ? 'red' : executiveKpiQuery.data?.risk_level === 'MEDIUM' ? 'gold' : 'green'}>
+            {`Risk ${executiveKpiQuery.data?.risk_level || 'LOW'} - ${executiveKpiQuery.data?.risk_score ?? 0}`}
+          </Tag>
+        </Space>
+        <Row gutter={[12, 12]} style={{ marginTop: 10 }}>
+          <Col xs={12} md={8} lg={4}>
+            <Statistic title="Fin overdue L1/L2" value={`${executiveKpiQuery.data?.finance_sla?.overdue_l1_count ?? 0}/${executiveKpiQuery.data?.finance_sla?.overdue_l2_count ?? 0}`} />
+          </Col>
+          <Col xs={12} md={8} lg={4}>
+            <Statistic title="WF overdue L1/L2" value={`${executiveKpiQuery.data?.workforce_sla?.overdue_l1_count ?? 0}/${executiveKpiQuery.data?.workforce_sla?.overdue_l2_count ?? 0}`} />
+          </Col>
+          <Col xs={12} md={8} lg={4}>
+            <Statistic title="Advance >=90d" value={executiveKpiQuery.data?.finance_overdue_90?.count ?? 0} />
+          </Col>
+          <Col xs={12} md={8} lg={4}>
+            <Statistic title="Fin lead time (h)" value={Number(executiveKpiQuery.data?.finance_sla?.avg_lead_hours ?? 0).toFixed(2)} />
+          </Col>
+          <Col xs={12} md={8} lg={4}>
+            <Statistic title="WF lead time (h)" value={Number(executiveKpiQuery.data?.workforce_sla?.avg_lead_hours ?? 0).toFixed(2)} />
+          </Col>
+          <Col xs={12} md={8} lg={4}>
+            <Statistic title="As of" value={executiveKpiQuery.data?.as_of || '-'} />
+          </Col>
+        </Row>
+        {(executiveKpiQuery.data?.trend_6m ?? []).length > 0 && (
+          <Space wrap style={{ marginTop: 10 }}>
+            {(executiveKpiQuery.data?.trend_6m ?? []).map((point) => (
+              <Tag key={point.month} color="blue">{`${point.month}: Fin ${point.finance_pending} | WF ${point.workforce_pending}`}</Tag>
+            ))}
+          </Space>
+        )}
+        {(executiveKpiQuery.data?.risk_contributors ?? []).length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <Text type="secondary">Risk contributors</Text>
+            <Space wrap style={{ marginTop: 6 }}>
+              {(executiveKpiQuery.data?.risk_contributors ?? []).map((row) => (
+                <Tag key={row.key} color={row.impact_score >= 10 ? 'red' : row.impact_score >= 5 ? 'gold' : 'blue'}>
+                  {`${row.label}: ${row.count} x${row.weight} = ${row.impact_score}`}
+                </Tag>
+              ))}
+            </Space>
+          </div>
+        )}
+        {executiveKpiQuery.data?.risk_trend && (
+          <div style={{ marginTop: 10 }}>
+            <Text type="secondary">Risk trend</Text>
+            <Space wrap style={{ marginTop: 6 }}>
+              <Tag color={(executiveKpiQuery.data?.risk_trend?.mom_delta_pending ?? 0) > 0 ? 'red' : 'green'}>
+                {`MoM pending: ${executiveKpiQuery.data?.risk_trend?.mom_delta_pending ?? 0}`}
+              </Tag>
+              <Tag color={(executiveKpiQuery.data?.risk_trend?.wow_delta_pending ?? 0) > 0 ? 'red' : 'green'}>
+                {`WoW pending: ${executiveKpiQuery.data?.risk_trend?.wow_delta_pending ?? 0}`}
+              </Tag>
+              <Tag>{`Current: ${executiveKpiQuery.data?.risk_trend?.current_pending_total ?? 0}`}</Tag>
+              <Tag>{`Prev month: ${executiveKpiQuery.data?.risk_trend?.previous_month_pending_total ?? 0}`}</Tag>
+              <Tag>{`Prev week: ${executiveKpiQuery.data?.risk_trend?.previous_week_pending_total ?? 0}`}</Tag>
+            </Space>
+          </div>
+        )}
+        {executiveKpiQuery.data?.early_warning && (
+          <div style={{ marginTop: 10 }}>
+            <Tag color={executiveKpiQuery.data?.early_warning?.is_triggered ? 'red' : 'green'}>
+              {executiveKpiQuery.data?.early_warning?.is_triggered
+                ? `Early warning: còn ${executiveKpiQuery.data?.early_warning?.score_to_next_level ?? 0} điểm tới ${executiveKpiQuery.data?.early_warning?.target_level ?? 'HIGH'}`
+                : 'Early warning: ổn định'}
+            </Tag>
+            <div>
+              <Text type="secondary">{executiveKpiQuery.data?.early_warning?.hint || ''}</Text>
+            </div>
+          </div>
+        )}
+        {(executiveKpiQuery.data?.priority_queue ?? []).length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <Text type="secondary">Auto-priority queue</Text>
+            <List
+              size="small"
+              dataSource={executiveKpiQuery.data?.priority_queue ?? []}
+              renderItem={(item) => (
+                <List.Item>
+                  <Space direction="vertical" size={1} style={{ width: '100%' }}>
+                    <Space wrap>
+                      <Tag color={item.impact_score >= 10 ? 'red' : item.impact_score >= 5 ? 'gold' : 'blue'}>
+                        {`Impact ${item.impact_score}`}
+                      </Tag>
+                      <Text strong>{item.title}</Text>
+                    </Space>
+                    <Text type="secondary">{`Owner: ${item.owner} | Action: ${item.quick_action}`}</Text>
+                  </Space>
+                </List.Item>
+              )}
+            />
+          </div>
+        )}
+        {(executiveKpiQuery.data?.recommendations ?? []).length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <Text type="secondary">Khuyến nghị hành động</Text>
+            <List
+              size="small"
+              dataSource={executiveKpiQuery.data?.recommendations ?? []}
+              renderItem={(item) => (
+                <List.Item
+                  actions={[
+                    item.code === 'RUN_FINANCE_SLA_REMINDER' ? (
+                      <Button
+                        key="run-finance"
+                        size="small"
+                        type="primary"
+                        disabled={isGovernanceActionBusy}
+                        loading={triggerFinanceSlaReminderMutation.isPending}
+                        onClick={() => runGovernanceActionWithGuard(() => triggerFinanceSlaReminderMutation.mutate())}
+                      >
+                        Chạy ngay
+                      </Button>
+                    ) : null,
+                    item.code === 'RUN_WORKFORCE_SLA_REMINDER' ? (
+                      <Button
+                        key="run-workforce"
+                        size="small"
+                        type="primary"
+                        disabled={isGovernanceActionBusy}
+                        loading={triggerWorkforceSlaReminderMutation.isPending}
+                        onClick={() => runGovernanceActionWithGuard(() => triggerWorkforceSlaReminderMutation.mutate())}
+                      >
+                        Chạy ngay
+                      </Button>
+                    ) : null,
+                  ].filter(Boolean)}
+                >
+                  <Space direction="vertical" size={1} style={{ width: '100%' }}>
+                    <Space wrap>
+                      <Tag color={item.priority === 'P0' ? 'red' : item.priority === 'P1' ? 'volcano' : item.priority === 'P2' ? 'gold' : 'blue'}>
+                        {item.priority}
+                      </Tag>
+                      <Text strong>{item.title}</Text>
+                    </Space>
+                    <Text type="secondary">{item.description}</Text>
+                  </Space>
+                </List.Item>
+              )}
+            />
+          </div>
+        )}
+        {executiveKpiQuery.data?.auto_policy && (
+          <div style={{ marginTop: 10, borderTop: '1px solid #f0f0f0', paddingTop: 10 }}>
+            <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+              <Text strong>Auto-execute policy</Text>
+              <Space wrap>
+                <Button
+                  size="small"
+                  disabled={isGovernanceActionBusy}
+                  loading={runAutoExecuteMutation.isPending}
+                  onClick={() => runGovernanceActionWithGuard(() => runAutoExecuteMutation.mutate(false))}
+                >
+                  Chạy theo policy
+                </Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  disabled={isGovernanceActionBusy}
+                  loading={runAutoExecuteMutation.isPending}
+                  onClick={() => runGovernanceActionWithGuard(() => runAutoExecuteMutation.mutate(true))}
+                >
+                  Force chạy ngay
+                </Button>
+              </Space>
+            </Space>
+            <Space wrap style={{ marginTop: 8 }}>
+              <Tag>Enabled</Tag>
+              <Switch
+                checked={!!executiveKpiQuery.data?.auto_policy?.enabled}
+                loading={saveAutoPolicyMutation.isPending}
+                onChange={(checked) => updateAutoPolicyField('enabled', checked)}
+              />
+              <Tag>Only early warning</Tag>
+              <Switch
+                checked={!!executiveKpiQuery.data?.auto_policy?.only_when_early_warning}
+                loading={saveAutoPolicyMutation.isPending}
+                onChange={(checked) => updateAutoPolicyField('only_when_early_warning', checked)}
+              />
+              <Tag>Finance SLA</Tag>
+              <Switch
+                checked={!!executiveKpiQuery.data?.auto_policy?.auto_run_finance_sla}
+                loading={saveAutoPolicyMutation.isPending}
+                onChange={(checked) => updateAutoPolicyField('auto_run_finance_sla', checked)}
+              />
+              <Tag>Workforce SLA</Tag>
+              <Switch
+                checked={!!executiveKpiQuery.data?.auto_policy?.auto_run_workforce_sla}
+                loading={saveAutoPolicyMutation.isPending}
+                onChange={(checked) => updateAutoPolicyField('auto_run_workforce_sla', checked)}
+              />
+              <Tag>Cooldown (phút)</Tag>
+              <InputNumber
+                min={5}
+                max={1440}
+                value={Number(executiveKpiQuery.data?.auto_policy?.cooldown_minutes ?? 60)}
+                onChange={(value) => {
+                  const next = Number(value ?? 60);
+                  if (!Number.isFinite(next)) return;
+                  updateAutoPolicyField('cooldown_minutes', next);
+                }}
+              />
+              <Tag>{`Last run: ${executiveKpiQuery.data?.auto_policy?.last_run_at || '-'}`}</Tag>
+            </Space>
+            <div style={{ marginTop: 10 }}>
+              <Text type="secondary">Lịch sử auto-execute gần đây</Text>
+              <List
+                size="small"
+                dataSource={executiveAutoHistoryQuery.data?.items ?? []}
+                locale={{ emptyText: 'Chưa có lịch sử auto-execute.' }}
+                renderItem={(item) => (
+                  <List.Item>
+                    <Space direction="vertical" size={1} style={{ width: '100%' }}>
+                      <Space wrap>
+                        <Tag color={item.success ? 'green' : item.skipped ? 'gold' : 'red'}>
+                          {item.success ? 'SUCCESS' : item.skipped ? 'SKIPPED' : 'FAILED'}
+                        </Tag>
+                        <Tag>{item.source || 'api'}</Tag>
+                        {item.force_run ? <Tag color="volcano">FORCE</Tag> : null}
+                        <Text type="secondary">{dayjs(item.created_at).format('DD/MM HH:mm:ss')}</Text>
+                      </Space>
+                      <Text type="secondary">
+                        {`Fin sent: ${item.finance_sent_count} | WF sent: ${item.workforce_sent_count} | reason: ${item.reason || '-'}`}
+                      </Text>
+                    </Space>
+                  </List.Item>
+                )}
+              />
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+                <Text type="secondary">SLA governance report (auto-execute)</Text>
+                <Space wrap>
+                  {isGovernanceActionCooldown ? <Tag color="processing">Action cooldown...</Tag> : null}
+                  <Select<'day' | 'week'>
+                    value={autoGovernanceGroupBy}
+                    style={{ width: 110 }}
+                    options={[
+                      { value: 'day', label: 'Theo ngày' },
+                      { value: 'week', label: 'Theo tuần' },
+                    ]}
+                    onChange={setAutoGovernanceGroupBy}
+                  />
+                  <InputNumber
+                    min={7}
+                    max={365}
+                    value={autoGovernanceDays}
+                    onChange={(value) => {
+                      const next = Number(value ?? 30);
+                      if (!Number.isFinite(next)) return;
+                      setAutoGovernanceDays(Math.max(7, Math.min(365, Math.round(next))));
+                    }}
+                  />
+                  <Button
+                    size="small"
+                    loading={isExportingAutoGovernance}
+                    onClick={() => void exportAutoGovernanceExcel()}
+                  >
+                    Export Excel
+                  </Button>
+                </Space>
+              </Space>
+              {executiveAutoGovernanceQuery.isFetching ? (
+                <div style={{ marginTop: 10, textAlign: 'center' }}>
+                  <Spin size="small" />
+                </div>
+              ) : (
+                <Space direction="vertical" size={6} style={{ width: '100%', marginTop: 8 }}>
+                  <Space wrap>
+                    <Tag>{`Runs: ${executiveAutoGovernanceQuery.data?.summary?.total_runs ?? 0}`}</Tag>
+                    <Tag color="green">{`Success: ${executiveAutoGovernanceQuery.data?.summary?.success_rate ?? 0}%`}</Tag>
+                    <Tag color="gold">{`Skipped: ${executiveAutoGovernanceQuery.data?.summary?.skipped_rate ?? 0}%`}</Tag>
+                    <Tag color="red">{`Failed: ${executiveAutoGovernanceQuery.data?.summary?.failed_rate ?? 0}%`}</Tag>
+                    <Tag color="blue">{`Avg sent/run: ${executiveAutoGovernanceQuery.data?.summary?.avg_sent_per_run ?? 0}`}</Tag>
+                  </Space>
+                  {governanceDeltaSummary ? (
+                    <Space wrap>
+                      <Text type="secondary">
+                        {`Delta ${governanceDeltaSummary.previousKey} -> ${governanceDeltaSummary.currentKey}:`}
+                      </Text>
+                      <Tag color={governanceDeltaSummary.sentDelta >= 0 ? 'green' : 'red'}>
+                        {`Sent ${governanceDeltaSummary.sentDelta >= 0 ? '+' : ''}${governanceDeltaSummary.sentDelta}`}
+                      </Tag>
+                      <Tag color={governanceDeltaSummary.successRateDelta >= 0 ? 'green' : 'red'}>
+                        {`Success rate ${governanceDeltaSummary.successRateDelta >= 0 ? '+' : ''}${governanceDeltaSummary.successRateDelta}%`}
+                      </Tag>
+                    </Space>
+                  ) : null}
+                  {governanceRiskSignal ? (
+                    <Alert
+                      type={governanceRiskSignal.severity === 'high' ? 'error' : 'warning'}
+                      showIcon
+                      message={`Early risk signal (${governanceRiskSignal.window})`}
+                      description={
+                        <Space direction="vertical" size={2}>
+                          <Text type="secondary">{`Dấu hiệu: ${governanceRiskSignal.reasons.join(' | ')}`}</Text>
+                          <Text type="secondary">{`Khuyến nghị: ${governanceRiskSignal.actionCodes.join(' | ')}`}</Text>
+                          <Space wrap>
+                            <Button
+                              size="small"
+                              type="primary"
+                              disabled={isGovernanceActionBusy}
+                              loading={isP0BundleRunning}
+                              onClick={() => {
+                                void openGovernanceP0Precheck();
+                              }}
+                            >
+                              P0 Bundle pre-check
+                            </Button>
+                            <Button
+                              size="small"
+                              type="primary"
+                              danger={governanceRiskSignal.severity === 'high'}
+                              disabled={isGovernanceActionBusy}
+                              loading={runAutoExecuteMutation.isPending}
+                              onClick={() =>
+                                runGovernanceActionWithGuard(
+                                  () => runAutoExecuteMutation.mutate(governanceRiskSignal.severity === 'high')
+                                )
+                              }
+                            >
+                              {governanceRiskSignal.severity === 'high' ? 'P0: Force auto-execute' : 'P1: Run auto-execute'}
+                            </Button>
+                            <Button
+                              size="small"
+                              disabled={isGovernanceActionBusy}
+                              loading={triggerFinanceSlaReminderMutation.isPending}
+                              onClick={() => runGovernanceActionWithGuard(() => triggerFinanceSlaReminderMutation.mutate())}
+                            >
+                              Run Finance SLA
+                            </Button>
+                            <Button
+                              size="small"
+                              disabled={isGovernanceActionBusy}
+                              loading={triggerWorkforceSlaReminderMutation.isPending}
+                              onClick={() => runGovernanceActionWithGuard(() => triggerWorkforceSlaReminderMutation.mutate())}
+                            >
+                              Run Workforce SLA
+                            </Button>
+                          </Space>
+                          {isP0BundleRunning || p0BundleLastSummary ? (
+                            <Space wrap>
+                              {isP0BundleRunning ? <Tag color="processing">{`P0 bundle step: ${p0BundleStep}`}</Tag> : null}
+                              {p0BundleLastSummary ? <Text type="secondary">{p0BundleLastSummary}</Text> : null}
+                            </Space>
+                          ) : null}
+                        </Space>
+                      }
+                    />
+                  ) : null}
+                  <List
+                    size="small"
+                    header={<Text type="secondary">Top lý do skip</Text>}
+                    dataSource={executiveAutoGovernanceQuery.data?.skip_reasons ?? []}
+                    locale={{ emptyText: 'Không có skip reason trong kỳ.' }}
+                    renderItem={(item) => (
+                      <List.Item>
+                        <Text>{`${item.reason}: ${item.count}`}</Text>
+                      </List.Item>
+                    )}
+                  />
+                  <List
+                    size="small"
+                    header={<Text type="secondary">Hiệu quả sent_count theo action</Text>}
+                    dataSource={executiveAutoGovernanceQuery.data?.action_effectiveness ?? []}
+                    renderItem={(item) => (
+                      <List.Item>
+                        <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+                          <Text>{item.action}</Text>
+                          <Text type="secondary">
+                            {`runs ${item.total_runs} | success ${item.success_rate}% | sent ${item.sent_total} | avg ${item.avg_sent_per_run}`}
+                          </Text>
+                        </Space>
+                      </List.Item>
+                    )}
+                  />
+                  <List
+                    size="small"
+                    header={<Text type="secondary">{`Trend ${autoGovernanceGroupBy === 'day' ? 'theo ngày' : 'theo tuần'} (run + sent)`}</Text>}
+                    dataSource={governanceTrendData.rows.slice().reverse()}
+                    locale={{ emptyText: 'Chưa có dữ liệu trend trong kỳ.' }}
+                    renderItem={(item) => {
+                      const runPercent = Math.round((Number(item.total_runs || 0) / governanceTrendData.maxRuns) * 100);
+                      const sentPercent = Math.round((Number(item.sent_total || 0) / governanceTrendData.maxSent) * 100);
+                      return (
+                        <List.Item>
+                          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                            <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+                              <Text>{item.period_key}</Text>
+                              <Text type="secondary">
+                                {`run ${item.total_runs} | success ${item.success_rate}% | skipped ${item.skipped_rate}% | sent ${item.sent_total}`}
+                              </Text>
+                            </Space>
+                            <Space style={{ width: '100%' }} direction="vertical" size={0}>
+                              <Text type="secondary">Run volume</Text>
+                              <Progress
+                                percent={runPercent}
+                                showInfo={false}
+                                strokeColor="#1677ff"
+                                trailColor="#f0f0f0"
+                                size="small"
+                              />
+                              <Text type="secondary">Sent volume</Text>
+                              <Progress
+                                percent={sentPercent}
+                                showInfo={false}
+                                strokeColor="#52c41a"
+                                trailColor="#f0f0f0"
+                                size="small"
+                              />
+                            </Space>
+                          </Space>
+                        </List.Item>
+                      );
+                    }}
+                  />
+                </Space>
+              )}
+            </div>
+          </div>
+        )}
       </Card>
 
       {isLoading ? (
@@ -1795,6 +2632,121 @@ export default function ExecutiveCockpit() {
           </Row>
         </>
       )}
+      <Modal
+        title="P0 bundle pre-check"
+        open={isP0PrecheckOpen}
+        onCancel={() => {
+          if (isP0BundleRunning) return;
+          setIsP0PrecheckOpen(false);
+          setAllowZeroImpactP0Execute(false);
+        }}
+        confirmLoading={isP0BundleRunning}
+        onOk={() => {
+          if (isP0PrecheckExpired) {
+            message.warning('Pre-check đã hết hạn, vui lòng chạy lại pre-check trước khi xác nhận.');
+            return;
+          }
+          if (!p0PrecheckResult) {
+            message.info('Vui lòng chạy pre-check trước khi xác nhận.');
+            return;
+          }
+          if (isP0PrecheckZeroImpact && !allowZeroImpactP0Execute) {
+            message.warning('Dry-run sent = 0. Bật xác nhận "vẫn chạy P0 bundle" nếu bạn muốn tiếp tục.');
+            return;
+          }
+          void runGovernanceP0Bundle(true);
+          setIsP0PrecheckOpen(false);
+          setAllowZeroImpactP0Execute(false);
+        }}
+        okButtonProps={{
+          disabled: isP0PrecheckLoading
+            || !p0PrecheckResult
+            || isP0PrecheckExpired
+            || (isP0PrecheckZeroImpact && !allowZeroImpactP0Execute),
+        }}
+        okText="Xác nhận chạy P0 bundle"
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          {isP0PrecheckLoading ? (
+            <div style={{ textAlign: 'center', padding: 12 }}>
+              <Spin size="small" />
+            </div>
+          ) : (
+            <>
+              <Text type="secondary">
+                Ước lượng theo dry-run cho SLA reminders trước khi chạy thật.
+              </Text>
+              <Space wrap>
+                <Tag color="blue">{`Fin dry-run sent: ${p0PrecheckResult?.financeDryRunSent ?? 0}`}</Tag>
+                <Tag color="purple">{`WF dry-run sent: ${p0PrecheckResult?.workforceDryRunSent ?? 0}`}</Tag>
+                <Tag color="gold">{`Total dry-run sent: ${p0PrecheckResult?.totalDryRunSent ?? 0}`}</Tag>
+              </Space>
+              {p0PrecheckResult?.generatedAt ? (
+                <Text type="secondary">{`Pre-check time: ${dayjs(p0PrecheckResult.generatedAt).format('DD/MM/YYYY HH:mm:ss')}`}</Text>
+              ) : null}
+              {p0PrecheckAgeMinutes != null ? (
+                <Text type="secondary">{`Age: ${p0PrecheckAgeMinutes} phút (TTL ${P0_PRECHECK_TTL_MINUTES} phút)`}</Text>
+              ) : null}
+              <Alert
+                type="warning"
+                showIcon
+                message="Lưu ý trước khi chạy"
+                description={p0PrecheckResult?.note || 'Force Auto Execute sẽ chạy thật khi xác nhận.'}
+              />
+              {isP0PrecheckExpired ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="Pre-check đã hết hạn"
+                  description="Dữ liệu pre-check đã cũ. Vui lòng chạy lại pre-check để đảm bảo số liệu gần thời điểm execute."
+                />
+              ) : null}
+              {isP0PrecheckZeroImpact ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Minimum impact guard: dry-run sent = 0"
+                  description="Không có người nhận trong dry-run SLA. Mặc định hệ thống chặn execute full bundle để tránh chạy reminder rỗng."
+                />
+              ) : null}
+              {isP0PrecheckZeroImpact ? (
+                <Button
+                  size="small"
+                  type="primary"
+                  disabled={isGovernanceActionBusy}
+                  loading={runAutoExecuteMutation.isPending}
+                  onClick={() => {
+                    void runGovernanceFallbackAutoOnly();
+                  }}
+                >
+                  Fallback: Force Auto only
+                </Button>
+              ) : null}
+              {isP0PrecheckZeroImpact ? (
+                <Space wrap>
+                  <Text type="secondary">Vẫn chạy P0 bundle dù dry-run sent = 0</Text>
+                  <Switch
+                    checked={allowZeroImpactP0Execute}
+                    disabled={isP0PrecheckLoading || isP0BundleRunning}
+                    onChange={setAllowZeroImpactP0Execute}
+                  />
+                </Space>
+              ) : null}
+              <Button
+                size="small"
+                loading={isP0PrecheckLoading}
+                disabled={isP0BundleRunning}
+                onClick={() => {
+                  void openGovernanceP0Precheck();
+                }}
+              >
+                Chạy lại pre-check
+              </Button>
+              {p0BundleLastSummary ? <Text type="secondary">{`Lần chạy gần nhất: ${p0BundleLastSummary}`}</Text> : null}
+            </>
+          )}
+        </Space>
+      </Modal>
       <Modal
         title="Giao việc nhanh từ điều hành"
         open={quickAssignTask != null}

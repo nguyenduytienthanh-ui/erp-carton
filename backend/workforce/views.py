@@ -4,6 +4,7 @@ import json
 
 from django.db import transaction
 from django.db.models import Q, Sum
+from django.utils import timezone
 from rest_framework import filters, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -12,7 +13,7 @@ from rest_framework.response import Response
 from unidecode import unidecode
 
 from core.permissions import check_action_permission
-from core.models import Setting
+from core.models import AuditLog, Setting
 from finance.models import CashAccount, CashTransaction, TransactionCategory
 
 from .models import (
@@ -28,6 +29,12 @@ from .serializers import (
     EmployeeSerializer,
     PayrollRecordSerializer,
     SalaryAdvanceRecordSerializer,
+)
+from .reminders import (
+    build_salary_advance_approval_sla_overview,
+    get_approval_sla_policy as get_salary_advance_approval_sla_policy,
+    run_salary_advance_approval_sla_reminder_job,
+    save_approval_sla_policy as save_salary_advance_approval_sla_policy,
 )
 
 
@@ -66,6 +73,7 @@ def _can_manage_workforce(user):
 
 
 WORKFORCE_LOCKED_MONTHS_KEY = 'WORKFORCE_LOCKED_PAYROLL_MONTHS'
+WORKFORCE_SALARY_ADVANCE_APPROVAL_LEVEL2_THRESHOLD_KEY = 'WORKFORCE_SALARY_ADVANCE_APPROVAL_LEVEL2_THRESHOLD'
 
 
 def _normalize_month(value: str) -> str:
@@ -115,6 +123,50 @@ def _ensure_workforce_month_unlocked(month: str, message: str):
         return
     if normalized in _get_locked_workforce_months():
         raise PermissionDenied(message)
+
+
+def _log_workforce_audit(user, action: str, entity_type: str, entity_id: int, entity_code: str, old_values: dict, new_values: dict, changed_fields: list[str]):
+    AuditLog.objects.create(
+        user=user,
+        action=action,
+        entity_type=entity_type,
+        entity_id=int(entity_id or 0),
+        entity_id_str=str(entity_id or ''),
+        entity_code=str(entity_code or ''),
+        old_values=old_values if isinstance(old_values, dict) else {},
+        new_values=new_values if isinstance(new_values, dict) else {},
+        changed_fields=changed_fields if isinstance(changed_fields, list) else [],
+    )
+
+
+def _can_approve_workforce_level2(user) -> bool:
+    if getattr(user, 'is_superuser', False):
+        return True
+    role_names = _user_role_names(user)
+    l2_roles = {
+        'admin',
+        'manager',
+        'hr-manager',
+        'payroll-manager',
+        'giam-doc',
+        'pho-giam-doc',
+    }
+    return any(role in l2_roles for role in role_names)
+
+
+def _get_salary_advance_level2_threshold() -> Decimal:
+    row = Setting.objects.filter(key=WORKFORCE_SALARY_ADVANCE_APPROVAL_LEVEL2_THRESHOLD_KEY, is_active=True).first()
+    if not row:
+        return Decimal('5000000')
+    try:
+        raw = Decimal(str(row.value or '5000000'))
+        return raw if raw > 0 else Decimal('5000000')
+    except Exception:
+        return Decimal('5000000')
+
+
+def _salary_advance_required_level(amount: Decimal) -> int:
+    return 2 if Decimal(str(amount or 0)) >= _get_salary_advance_level2_threshold() else 1
 
 
 class SearchTextMixin:
@@ -329,6 +381,9 @@ class SalaryAdvanceRecordViewSet(SearchTextMixin, viewsets.ModelViewSet):
         status_param = (params.get('status') or '').strip()
         if status_param:
             queryset = queryset.filter(status=status_param)
+        approval_status = (params.get('approval_status') or '').strip()
+        if approval_status:
+            queryset = queryset.filter(approval_status=approval_status)
 
         employee_id = (params.get('employee') or '').strip()
         if employee_id.isdigit():
@@ -343,12 +398,40 @@ class SalaryAdvanceRecordViewSet(SearchTextMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if not _can_manage_workforce(self.request.user):
             raise PermissionDenied('Bạn không có quyền tạo dữ liệu ứng lương.')
-        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        month_value = serializer.validated_data.get('month', '')
+        _ensure_workforce_month_unlocked(month_value, 'Tháng lương đã khóa kỳ, không thể tạo ứng lương.')
+        amount = Decimal(str(serializer.validated_data.get('amount') or 0))
+        required_level = _salary_advance_required_level(amount)
+        record = serializer.save(
+            created_by=self.request.user,
+            updated_by=self.request.user,
+            approval_status=SalaryAdvanceRecord.APPROVAL_DRAFT,
+            required_approval_level=required_level,
+        )
+        _log_workforce_audit(
+            self.request.user,
+            action='CREATE',
+            entity_type='WorkforceSalaryAdvanceApproval',
+            entity_id=int(record.id),
+            entity_code=str(record.id),
+            old_values={},
+            new_values={'approval_status': record.approval_status, 'required_approval_level': record.required_approval_level},
+            changed_fields=['approval_status', 'required_approval_level'],
+        )
 
     def perform_update(self, serializer):
         if not _can_manage_workforce(self.request.user):
             raise PermissionDenied('Bạn không có quyền cập nhật dữ liệu ứng lương.')
-        serializer.save(updated_by=self.request.user)
+        month_value = serializer.validated_data.get('month', serializer.instance.month)
+        _ensure_workforce_month_unlocked(month_value, 'Tháng lương đã khóa kỳ, không thể cập nhật ứng lương.')
+        if serializer.instance.approval_status in {
+            SalaryAdvanceRecord.APPROVAL_PENDING_L1,
+            SalaryAdvanceRecord.APPROVAL_PENDING_L2,
+            SalaryAdvanceRecord.APPROVAL_APPROVED,
+        }:
+            raise PermissionDenied('Ứng lương đã gửi duyệt/đã duyệt, không thể chỉnh sửa trực tiếp.')
+        amount = Decimal(str(serializer.validated_data.get('amount', serializer.instance.amount) or 0))
+        serializer.save(updated_by=self.request.user, required_approval_level=_salary_advance_required_level(amount))
 
     @action(detail=False, methods=['post'])
     def bulk_delete(self, request):
@@ -357,13 +440,220 @@ class SalaryAdvanceRecordViewSet(SearchTextMixin, viewsets.ModelViewSet):
         ids = request.data.get('ids', [])
         if not isinstance(ids, list) or not ids:
             return Response({'error': 'No IDs provided'}, status=400)
-        deleted_count, _ = SalaryAdvanceRecord.objects.filter(id__in=ids).delete()
+        rows = SalaryAdvanceRecord.objects.filter(id__in=ids)
+        for row in rows:
+            _ensure_workforce_month_unlocked(row.month, 'Tháng lương đã khóa kỳ, không thể xóa ứng lương.')
+            if row.approval_status in {
+                SalaryAdvanceRecord.APPROVAL_PENDING_L1,
+                SalaryAdvanceRecord.APPROVAL_PENDING_L2,
+                SalaryAdvanceRecord.APPROVAL_APPROVED,
+            }:
+                return Response({'error': f'Ứng lương #{row.id} đã gửi duyệt/đã duyệt, không thể xóa.'}, status=400)
+        deleted_count, _ = rows.delete()
         return Response({'success': True, 'count': deleted_count})
 
     def destroy(self, request, *args, **kwargs):
         if not _can_manage_workforce(request.user):
             return Response({'error': 'Bạn không có quyền xóa dữ liệu ứng lương.'}, status=403)
+        row = self.get_object()
+        _ensure_workforce_month_unlocked(row.month, 'Tháng lương đã khóa kỳ, không thể xóa ứng lương.')
+        if row.approval_status in {
+            SalaryAdvanceRecord.APPROVAL_PENDING_L1,
+            SalaryAdvanceRecord.APPROVAL_PENDING_L2,
+            SalaryAdvanceRecord.APPROVAL_APPROVED,
+        }:
+            return Response({'error': 'Ứng lương đã gửi duyệt/đã duyệt, không thể xóa.'}, status=400)
         return super().destroy(request, *args, **kwargs)
+
+    @action(detail=False, methods=['get'])
+    def approval_queue(self, request):
+        if not _can_manage_workforce(request.user):
+            return Response({'error': 'Bạn không có quyền xem hàng đợi duyệt ứng lương.'}, status=403)
+        pending_l1 = SalaryAdvanceRecord.objects.filter(approval_status=SalaryAdvanceRecord.APPROVAL_PENDING_L1, is_active=True)
+        pending_l2 = SalaryAdvanceRecord.objects.filter(approval_status=SalaryAdvanceRecord.APPROVAL_PENDING_L2, is_active=True)
+        if not _can_approve_workforce_level2(request.user):
+            pending_l2 = pending_l2.none()
+        rows = []
+        for row in list(pending_l1.select_related('employee').order_by('-advance_date', '-id')[:10]) + list(pending_l2.select_related('employee').order_by('-advance_date', '-id')[:10]):
+            rows.append({
+                'id': int(row.id),
+                'employee_code': row.employee.code if row.employee_id else '',
+                'employee_name': row.employee.name if row.employee_id else '',
+                'amount': str(row.amount),
+                'month': row.month,
+                'approval_status': row.approval_status,
+                'required_approval_level': int(row.required_approval_level or 1),
+            })
+        return Response({
+            'pending_l1_count': int(pending_l1.count()),
+            'pending_l2_count': int(pending_l2.count()),
+            'items': rows,
+        })
+
+    @action(detail=True, methods=['post'])
+    def submit_approval(self, request, pk=None):
+        if not _can_manage_workforce(request.user):
+            return Response({'error': 'Bạn không có quyền gửi duyệt ứng lương.'}, status=403)
+        row = self.get_object()
+        _ensure_workforce_month_unlocked(row.month, 'Tháng lương đã khóa kỳ, không thể gửi duyệt ứng lương.')
+        if row.approval_status in {
+            SalaryAdvanceRecord.APPROVAL_PENDING_L1,
+            SalaryAdvanceRecord.APPROVAL_PENDING_L2,
+            SalaryAdvanceRecord.APPROVAL_APPROVED,
+        }:
+            return Response({'error': 'Ứng lương đang chờ duyệt hoặc đã duyệt.'}, status=400)
+        old_status = row.approval_status
+        row.approval_status = SalaryAdvanceRecord.APPROVAL_PENDING_L1
+        row.submitted_at = timezone.now()
+        row.submitted_by = request.user
+        row.rejected_at = None
+        row.rejected_by = None
+        row.rejection_reason = ''
+        row.required_approval_level = _salary_advance_required_level(Decimal(str(row.amount or 0)))
+        row.updated_by = request.user
+        row.save(update_fields=[
+            'approval_status',
+            'submitted_at',
+            'submitted_by',
+            'rejected_at',
+            'rejected_by',
+            'rejection_reason',
+            'required_approval_level',
+            'updated_by',
+            'updated_at',
+            'search_text',
+        ])
+        _log_workforce_audit(
+            request.user,
+            action='UPDATE',
+            entity_type='WorkforceSalaryAdvanceApproval',
+            entity_id=int(row.id),
+            entity_code=str(row.id),
+            old_values={'approval_status': old_status},
+            new_values={'approval_status': row.approval_status, 'required_approval_level': row.required_approval_level},
+            changed_fields=['approval_status', 'required_approval_level'],
+        )
+        return Response({'success': True, 'approval_status': row.approval_status, 'required_approval_level': row.required_approval_level})
+
+    @action(detail=True, methods=['post'])
+    def approve_level1(self, request, pk=None):
+        if not _can_manage_workforce(request.user):
+            return Response({'error': 'Bạn không có quyền duyệt cấp 1 ứng lương.'}, status=403)
+        row = self.get_object()
+        _ensure_workforce_month_unlocked(row.month, 'Tháng lương đã khóa kỳ, không thể duyệt ứng lương.')
+        if row.approval_status != SalaryAdvanceRecord.APPROVAL_PENDING_L1:
+            return Response({'error': 'Ứng lương không ở trạng thái chờ duyệt cấp 1.'}, status=400)
+        old_status = row.approval_status
+        row.approval_status = SalaryAdvanceRecord.APPROVAL_APPROVED if int(row.required_approval_level or 1) <= 1 else SalaryAdvanceRecord.APPROVAL_PENDING_L2
+        row.approved_level1_at = timezone.now()
+        row.approved_level1_by = request.user
+        row.updated_by = request.user
+        row.save(update_fields=['approval_status', 'approved_level1_at', 'approved_level1_by', 'updated_by', 'updated_at', 'search_text'])
+        _log_workforce_audit(
+            request.user,
+            action='UPDATE',
+            entity_type='WorkforceSalaryAdvanceApproval',
+            entity_id=int(row.id),
+            entity_code=str(row.id),
+            old_values={'approval_status': old_status},
+            new_values={'approval_status': row.approval_status},
+            changed_fields=['approval_status', 'approved_level1_at'],
+        )
+        return Response({'success': True, 'approval_status': row.approval_status})
+
+    @action(detail=True, methods=['post'])
+    def approve_level2(self, request, pk=None):
+        if not _can_manage_workforce(request.user) or not _can_approve_workforce_level2(request.user):
+            return Response({'error': 'Bạn không có quyền duyệt cấp 2 ứng lương.'}, status=403)
+        row = self.get_object()
+        _ensure_workforce_month_unlocked(row.month, 'Tháng lương đã khóa kỳ, không thể duyệt ứng lương.')
+        if row.approval_status != SalaryAdvanceRecord.APPROVAL_PENDING_L2:
+            return Response({'error': 'Ứng lương không ở trạng thái chờ duyệt cấp 2.'}, status=400)
+        old_status = row.approval_status
+        row.approval_status = SalaryAdvanceRecord.APPROVAL_APPROVED
+        row.approved_level2_at = timezone.now()
+        row.approved_level2_by = request.user
+        row.updated_by = request.user
+        row.save(update_fields=['approval_status', 'approved_level2_at', 'approved_level2_by', 'updated_by', 'updated_at', 'search_text'])
+        _log_workforce_audit(
+            request.user,
+            action='UPDATE',
+            entity_type='WorkforceSalaryAdvanceApproval',
+            entity_id=int(row.id),
+            entity_code=str(row.id),
+            old_values={'approval_status': old_status},
+            new_values={'approval_status': row.approval_status},
+            changed_fields=['approval_status', 'approved_level2_at'],
+        )
+        return Response({'success': True, 'approval_status': row.approval_status})
+
+    @action(detail=True, methods=['post'])
+    def reject_approval(self, request, pk=None):
+        if not _can_manage_workforce(request.user):
+            return Response({'error': 'Bạn không có quyền từ chối duyệt ứng lương.'}, status=403)
+        row = self.get_object()
+        _ensure_workforce_month_unlocked(row.month, 'Tháng lương đã khóa kỳ, không thể từ chối duyệt ứng lương.')
+        if row.approval_status not in {SalaryAdvanceRecord.APPROVAL_PENDING_L1, SalaryAdvanceRecord.APPROVAL_PENDING_L2}:
+            return Response({'error': 'Ứng lương không ở trạng thái chờ duyệt.'}, status=400)
+        reason = str(request.data.get('reason') or '').strip()
+        if not reason:
+            return Response({'error': 'reason là bắt buộc khi từ chối.'}, status=400)
+        old_status = row.approval_status
+        row.approval_status = SalaryAdvanceRecord.APPROVAL_REJECTED
+        row.rejected_at = timezone.now()
+        row.rejected_by = request.user
+        row.rejection_reason = reason[:255]
+        row.updated_by = request.user
+        row.save(update_fields=['approval_status', 'rejected_at', 'rejected_by', 'rejection_reason', 'updated_by', 'updated_at', 'search_text'])
+        _log_workforce_audit(
+            request.user,
+            action='UPDATE',
+            entity_type='WorkforceSalaryAdvanceApproval',
+            entity_id=int(row.id),
+            entity_code=str(row.id),
+            old_values={'approval_status': old_status},
+            new_values={'approval_status': row.approval_status, 'rejection_reason': row.rejection_reason},
+            changed_fields=['approval_status', 'rejection_reason'],
+        )
+        return Response({'success': True, 'approval_status': row.approval_status})
+
+    @action(detail=False, methods=['get'])
+    def approval_sla_overview(self, request):
+        if not _can_manage_workforce(request.user):
+            return Response({'error': 'Bạn không có quyền xem SLA duyệt ứng lương.'}, status=403)
+        return Response(build_salary_advance_approval_sla_overview())
+
+    @action(detail=False, methods=['post'])
+    def remind_pending_approvals(self, request):
+        if not _can_manage_workforce(request.user):
+            return Response({'error': 'Bạn không có quyền gửi nhắc SLA duyệt ứng lương.'}, status=403)
+        dry_run = str(request.data.get('dry_run') or '').strip().lower() in {'1', 'true', 'yes'}
+        return Response(run_salary_advance_approval_sla_reminder_job(dry_run=dry_run))
+
+    @action(detail=False, methods=['get'])
+    def approval_sla_policy(self, request):
+        if not _can_manage_workforce(request.user):
+            return Response({'error': 'Bạn không có quyền xem policy SLA duyệt ứng lương.'}, status=403)
+        return Response(get_salary_advance_approval_sla_policy())
+
+    @approval_sla_policy.mapping.post
+    def save_approval_sla_policy_action(self, request):
+        if not _can_manage_workforce(request.user):
+            return Response({'error': 'Bạn không có quyền cập nhật policy SLA duyệt ứng lương.'}, status=403)
+        payload = request.data if isinstance(request.data, dict) else {}
+        old_policy = get_salary_advance_approval_sla_policy()
+        policy = save_salary_advance_approval_sla_policy(payload)
+        _log_workforce_audit(
+            request.user,
+            action='UPDATE',
+            entity_type='WorkforceSalaryAdvanceApprovalSlaPolicy',
+            entity_id=0,
+            entity_code='WORKFORCE_SALARY_ADVANCE_APPROVAL_SLA_POLICY',
+            old_values=old_policy,
+            new_values=policy,
+            changed_fields=['sla_hours_l1', 'sla_hours_l2', 'remind_every_hours', 'window_days'],
+        )
+        return Response({'success': True, 'policy': policy})
 
 
 class PayrollRecordViewSet(SearchTextMixin, viewsets.ModelViewSet):
@@ -537,6 +827,7 @@ class PayrollRecordViewSet(SearchTextMixin, viewsets.ModelViewSet):
                         month=month,
                         is_active=True,
                         status=SalaryAdvanceRecord.STATUS_UNDEDUCTED,
+                        approval_status=SalaryAdvanceRecord.APPROVAL_APPROVED,
                     )
                     .aggregate(total=Sum('amount'))
                     .get('total') or Decimal('0')
@@ -573,6 +864,7 @@ class PayrollRecordViewSet(SearchTextMixin, viewsets.ModelViewSet):
             SalaryAdvanceRecord.objects.filter(
                 month=month,
                 status=SalaryAdvanceRecord.STATUS_UNDEDUCTED,
+                approval_status=SalaryAdvanceRecord.APPROVAL_APPROVED,
                 is_active=True,
                 employee__is_active=True,
             ).update(status=SalaryAdvanceRecord.STATUS_DEDUCTED, updated_by=request.user)
