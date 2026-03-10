@@ -12,6 +12,9 @@ import type {
   ExecutiveAutoPolicy,
   ExecutiveAutoHistoryResponse,
   ExecutiveAutoGovernanceResponse,
+  CrossModuleBootstrapResponse,
+  CrossModuleBootstrapHistoryResponse,
+  CrossModuleReadinessResponse,
   AdvanceOverdueReportResponse,
   AdvanceSettlement,
   AdvanceTransaction,
@@ -177,6 +180,25 @@ export const financeApi = {
   getExecutiveKpi: async (): Promise<ExecutiveKpiResponse> => {
     const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_KPI);
     return response.data as ExecutiveKpiResponse;
+  },
+  getCrossModuleReadiness: async (): Promise<CrossModuleReadinessResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CROSS_MODULE_READINESS);
+    return response.data as CrossModuleReadinessResponse;
+  },
+  runCrossModuleBootstrap: async (payload?: { dry_run?: boolean }): Promise<CrossModuleBootstrapResponse> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_CROSS_MODULE_BOOTSTRAP, payload || {});
+    return response.data as CrossModuleBootstrapResponse;
+  },
+  getCrossModuleBootstrapHistory: async (params?: { limit?: number; days?: number; username?: string; dry_run?: 'true' | 'false' }): Promise<CrossModuleBootstrapHistoryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CROSS_MODULE_BOOTSTRAP_HISTORY, { params });
+    return response.data as CrossModuleBootstrapHistoryResponse;
+  },
+  exportCrossModuleBootstrapHistoryExcel: async (params?: { days?: number; username?: string; dry_run?: 'true' | 'false' }): Promise<Blob> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CROSS_MODULE_BOOTSTRAP_HISTORY, {
+      params: { ...(params || {}), export: 'excel' },
+      responseType: 'blob',
+    });
+    return response.data as Blob;
   },
   getExecutiveAutoPolicy: async (): Promise<ExecutiveAutoPolicy> => {
     const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_POLICY);

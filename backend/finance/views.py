@@ -15,8 +15,8 @@ from unidecode import unidecode
 from openpyxl import Workbook
 
 from core.permissions import check_action_permission
-from core.models import AuditLog, Notification, Setting
-from workforce.models import PayrollRecord
+from core.models import AuditLog, Notification, Permission, Role, Setting, User, WorkflowPipelineEvent
+from workforce.models import Employee, PayrollRecord
 
 from .models import (
     AdvanceSettlement,
@@ -85,6 +85,8 @@ def _can_manage_finance(user):
 FINANCE_LOCKED_MONTHS_KEY = 'FINANCE_LOCKED_MONTHS'
 ADVANCE_APPROVAL_LEVEL2_THRESHOLD_KEY = 'FINANCE_ADVANCE_APPROVAL_LEVEL2_THRESHOLD'
 FINANCE_EXECUTIVE_AUTO_POLICY_KEY = 'FINANCE_EXECUTIVE_AUTO_POLICY'
+CROSS_MODULE_BOOTSTRAP_AUDIT_ENTITY_TYPE = 'CrossModuleBootstrapRun'
+CROSS_MODULE_BOOTSTRAP_AUDIT_ENTITY_CODE = 'CROSS_MODULE_BOOTSTRAP'
 
 
 def _normalize_month(value: str) -> str:
@@ -393,6 +395,150 @@ def _executive_auto_period_info(dt: datetime, group_by: str) -> tuple[str, str, 
         return (f'{iso_year}-W{str(iso_week).zfill(2)}', start_date.isoformat(), end_date.isoformat())
     text = value_date.isoformat()
     return (text, text, text)
+
+
+def _cross_module_bootstrap_history_qs():
+    return (
+        AuditLog.objects
+        .filter(
+            entity_type=CROSS_MODULE_BOOTSTRAP_AUDIT_ENTITY_TYPE,
+            entity_code=CROSS_MODULE_BOOTSTRAP_AUDIT_ENTITY_CODE,
+        )
+        .select_related('user')
+    )
+
+
+def _serialize_cross_module_bootstrap_history_row(row: AuditLog) -> dict:
+    payload = row.new_values if isinstance(row.new_values, dict) else {}
+    readiness_before = payload.get('readiness_before') if isinstance(payload.get('readiness_before'), dict) else {}
+    readiness_after = payload.get('readiness_after') if isinstance(payload.get('readiness_after'), dict) else {}
+    before_score = int(readiness_before.get('readiness_score') or 0)
+    after_score = int(readiness_after.get('readiness_score') or 0)
+    readiness_delta = int(after_score - before_score)
+    level_before = str(readiness_before.get('readiness_level') or '')
+    level_after = str(readiness_after.get('readiness_level') or '')
+    return {
+        'id': int(row.id),
+        'created_at': row.created_at.isoformat() if row.created_at else '',
+        'username': str(row.user.username) if row.user else '',
+        'dry_run': bool(payload.get('dry_run')),
+        'created_total': int(payload.get('created_total') or 0),
+        'skipped_total': int(payload.get('skipped_total') or 0),
+        'created': payload.get('created') if isinstance(payload.get('created'), dict) else {},
+        'skipped': payload.get('skipped') if isinstance(payload.get('skipped'), dict) else {},
+        'readiness_before': readiness_before,
+        'readiness_after': readiness_after,
+        'readiness_delta': readiness_delta,
+        'improved': bool(readiness_delta > 0),
+        'level_before': level_before,
+        'level_after': level_after,
+        'notes': payload.get('notes') if isinstance(payload.get('notes'), list) else [],
+    }
+
+
+def _build_cross_module_readiness_payload() -> dict:
+    finance_advances_total = int(AdvanceTransaction.objects.count())
+    finance_advances_active = int(AdvanceTransaction.objects.filter(is_active=True).count())
+    workforce_salary_advances_total = int(SalaryAdvanceRecord.objects.count())
+    payroll_records_total = int(PayrollRecord.objects.count())
+    roles_total = int(Role.objects.filter(deleted_at__isnull=True).count())
+    users_total = int(User.objects.count())
+    users_staff_total = int(User.objects.filter(is_staff=True).count())
+    role_permission_audits_total = int(AuditLog.objects.filter(entity_type='RoleModulePermission').count())
+    operations_log_total = int(
+        AuditLog.objects.filter(entity_type__in=['TaskBulk', 'WorkflowAnalytics', 'Task', 'WorkflowAutomation']).count()
+    )
+    pipeline_events_total = int(WorkflowPipelineEvent.objects.count())
+
+    checks = [
+        {
+            'code': 'roles_configured',
+            'label': 'Đã cấu hình role RBAC',
+            'ok': roles_total > 0,
+            'current': roles_total,
+            'recommended_min': 1,
+            'weight': 25,
+            'hint': 'Tạo ít nhất 1 role để phân quyền module và tránh màn lịch sử phân quyền trống.',
+        },
+        {
+            'code': 'module_permission_history',
+            'label': 'Có lịch sử thay đổi phân quyền module',
+            'ok': role_permission_audits_total > 0,
+            'current': role_permission_audits_total,
+            'recommended_min': 1,
+            'weight': 20,
+            'hint': 'Thực hiện ít nhất 1 lần cập nhật phân quyền module để sinh lịch sử audit.',
+        },
+        {
+            'code': 'finance_advances_data',
+            'label': 'Có dữ liệu tạm ứng Tài chính',
+            'ok': finance_advances_total > 0,
+            'current': finance_advances_total,
+            'recommended_min': 1,
+            'weight': 15,
+            'hint': 'Tạo/nhập dữ liệu tạm ứng để dashboard Finance hiển thị đầy đủ.',
+        },
+        {
+            'code': 'workforce_salary_advances_data',
+            'label': 'Có dữ liệu ứng lương Nhân sự',
+            'ok': workforce_salary_advances_total > 0,
+            'current': workforce_salary_advances_total,
+            'recommended_min': 1,
+            'weight': 15,
+            'hint': 'Tạo/nhập dữ liệu ứng lương để SLA Workforce và KPI điều hành có số liệu.',
+        },
+        {
+            'code': 'payroll_data',
+            'label': 'Có dữ liệu bảng lương',
+            'ok': payroll_records_total > 0,
+            'current': payroll_records_total,
+            'recommended_min': 1,
+            'weight': 10,
+            'hint': 'Tạo kỳ lương đầu tiên để kích hoạt đối soát payroll-finance.',
+        },
+        {
+            'code': 'operations_log_data',
+            'label': 'Có dữ liệu nhật ký vận hành',
+            'ok': (operations_log_total + pipeline_events_total) > 0,
+            'current': int(operations_log_total + pipeline_events_total),
+            'recommended_min': 1,
+            'weight': 15,
+            'hint': 'Thực hiện một số thao tác workflow/bulk để nhật ký vận hành có dữ liệu.',
+        },
+    ]
+
+    readiness_score = 0
+    warnings = []
+    for check in checks:
+        if bool(check.get('ok')):
+            readiness_score += int(check.get('weight') or 0)
+        else:
+            warnings.append({
+                'code': check['code'],
+                'label': check['label'],
+                'hint': check['hint'],
+            })
+    readiness_score = max(0, min(int(readiness_score), 100))
+    readiness_level = 'READY' if readiness_score >= 85 else ('PARTIAL' if readiness_score >= 50 else 'BOOTSTRAP_NEEDED')
+    return {
+        'as_of': timezone.now().isoformat(),
+        'readiness_score': readiness_score,
+        'readiness_level': readiness_level,
+        'checks': checks,
+        'warnings': warnings,
+        'summary': {
+            'users_total': users_total,
+            'users_staff_total': users_staff_total,
+            'roles_total': roles_total,
+            'finance_advances_total': finance_advances_total,
+            'finance_advances_active': finance_advances_active,
+            'workforce_salary_advances_total': workforce_salary_advances_total,
+            'payroll_records_total': payroll_records_total,
+            'role_permission_audits_total': role_permission_audits_total,
+            'operations_log_total': operations_log_total,
+            'pipeline_events_total': pipeline_events_total,
+        },
+    }
 
 
 class SearchTextMixin:
@@ -1304,6 +1450,447 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
         })
 
     @action(detail=False, methods=['get'])
+    def cross_module_readiness(self, request):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem readiness vận hành.'}, status=403)
+        return Response(_build_cross_module_readiness_payload())
+
+    @action(detail=False, methods=['post'])
+    def cross_module_bootstrap(self, request):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền bootstrap dữ liệu vận hành.'}, status=403)
+
+        dry_run = str(request.data.get('dry_run') or '').strip().lower() in {'1', 'true', 'yes'}
+        actor = request.user
+        readiness_before = _build_cross_module_readiness_payload()
+        today = timezone.localdate()
+        month = f'{today.year}-{str(today.month).zfill(2)}'
+        result = {
+            'dry_run': bool(dry_run),
+            'created': {
+                'permissions': 0,
+                'roles': 0,
+                'employees': 0,
+                'finance_advances': 0,
+                'workforce_advances': 0,
+                'payroll_records': 0,
+                'role_permission_audits': 0,
+                'operations_audits': 0,
+                'pipeline_events': 0,
+            },
+            'skipped': {
+                'permissions': 0,
+                'roles': 0,
+                'employees': 0,
+                'finance_advances': 0,
+                'workforce_advances': 0,
+                'payroll_records': 0,
+                'role_permission_audits': 0,
+                'operations_audits': 0,
+                'pipeline_events': 0,
+            },
+            'notes': [],
+        }
+
+        perm_specs = [
+            {'resource': 'WORKFORCE', 'action': 'MANAGE', 'code': 'WORKFORCE_MANAGE', 'name': 'Workforce Manage'},
+            {'resource': 'FINANCE', 'action': 'MANAGE', 'code': 'FINANCE_MANAGE', 'name': 'Finance Manage'},
+            {'resource': 'CORE', 'action': 'MANAGE_RBAC', 'code': 'CORE_MANAGE_RBAC', 'name': 'RBAC Manage'},
+        ]
+        perm_map = {}
+        for spec in perm_specs:
+            existing = Permission.objects.filter(resource=spec['resource'], action=spec['action']).first()
+            if existing:
+                perm_map[f"{spec['resource']}:{spec['action']}"] = existing
+                result['skipped']['permissions'] += 1
+                continue
+            if dry_run:
+                result['created']['permissions'] += 1
+                continue
+            row, created = Permission.objects.get_or_create(
+                resource=spec['resource'],
+                action=spec['action'],
+                defaults={'name': spec['name'], 'code': spec['code'], 'description': f"Permission {spec['code']}"},
+            )
+            perm_map[f"{spec['resource']}:{spec['action']}"] = row
+            if created:
+                result['created']['permissions'] += 1
+            else:
+                result['skipped']['permissions'] += 1
+
+        role_specs = [
+            {'code': 'MANAGER', 'name': 'Manager', 'sort_order': 10, 'perms': ['WORKFORCE:MANAGE', 'FINANCE:MANAGE', 'CORE:MANAGE_RBAC']},
+            {'code': 'FINANCE_MANAGER', 'name': 'Finance Manager', 'sort_order': 20, 'perms': ['FINANCE:MANAGE']},
+            {'code': 'HR_MANAGER', 'name': 'HR Manager', 'sort_order': 30, 'perms': ['WORKFORCE:MANAGE']},
+        ]
+        role_rows = []
+        for spec in role_specs:
+            existing = Role.objects.filter(code=spec['code'], deleted_at__isnull=True).first()
+            if existing:
+                role_rows.append(existing)
+                result['skipped']['roles'] += 1
+                continue
+            if dry_run:
+                result['created']['roles'] += 1
+                continue
+            role_row = Role.objects.create(
+                code=spec['code'],
+                name=spec['name'],
+                description='Bootstrap seed role',
+                is_active=True,
+                sort_order=spec['sort_order'],
+                created_by=actor,
+                updated_by=actor,
+            )
+            role_rows.append(role_row)
+            result['created']['roles'] += 1
+
+        if not dry_run:
+            role_map = {r.code: r for r in role_rows}
+            for spec in role_specs:
+                role_row = role_map.get(spec['code'])
+                if not role_row:
+                    continue
+                for perm_key in spec['perms']:
+                    perm_row = perm_map.get(perm_key)
+                    if perm_row:
+                        role_row.permissions.add(perm_row)
+
+        cash_account = None
+        cash_account = CashAccount.objects.filter(account_type=CashAccount.TYPE_CASH, is_active=True).order_by('id').first()
+        if not cash_account and not dry_run:
+            cash_account = CashAccount.objects.create(
+                name='Quy bootstrap',
+                account_type=CashAccount.TYPE_CASH,
+                balance=Decimal('50000000'),
+                note='Seed by cross_module_bootstrap',
+                is_active=True,
+                created_by=actor,
+                updated_by=actor,
+            )
+
+        employee_specs = [
+            {'code': 'EMP-DEMO-01', 'name': 'Nhan vien Demo 01', 'salary_basic': Decimal('9000000')},
+            {'code': 'EMP-DEMO-02', 'name': 'Nhan vien Demo 02', 'salary_basic': Decimal('10500000')},
+        ]
+        employee_rows = []
+        for spec in employee_specs:
+            existing = Employee.objects.filter(code=spec['code']).first()
+            if existing:
+                employee_rows.append(existing)
+                result['skipped']['employees'] += 1
+                continue
+            if dry_run:
+                result['created']['employees'] += 1
+                continue
+            emp = Employee.objects.create(
+                code=spec['code'],
+                name=spec['name'],
+                status=Employee.STATUS_ACTIVE,
+                salary_basic=spec['salary_basic'],
+                start_date=today,
+                is_active=True,
+                created_by=actor,
+                updated_by=actor,
+            )
+            employee_rows.append(emp)
+            result['created']['employees'] += 1
+
+        finance_advance_specs = [
+            {'code': 'ADV-DEMO-001', 'recipient_name': 'Nguoi nhan demo 01', 'amount': Decimal('2000000'), 'approval_status': AdvanceTransaction.APPROVAL_PENDING_L1},
+            {'code': 'ADV-DEMO-002', 'recipient_name': 'Nguoi nhan demo 02', 'amount': Decimal('65000000'), 'approval_status': AdvanceTransaction.APPROVAL_PENDING_L2},
+        ]
+        for spec in finance_advance_specs:
+            existing = AdvanceTransaction.objects.filter(code=spec['code']).first()
+            if existing:
+                result['skipped']['finance_advances'] += 1
+                continue
+            if dry_run:
+                result['created']['finance_advances'] += 1
+                continue
+            if not cash_account:
+                result['notes'].append('Không có tài khoản quỹ đang dùng để tạo phiếu tạm ứng demo.')
+                result['skipped']['finance_advances'] += 1
+                continue
+            required_level = _required_approval_level_for_amount(spec['amount'])
+            submitted_at = timezone.now() - timedelta(hours=12 if spec['approval_status'] == AdvanceTransaction.APPROVAL_PENDING_L1 else 30)
+            AdvanceTransaction.objects.create(
+                code=spec['code'],
+                advance_type=AdvanceTransaction.TYPE_OTHER,
+                advance_date=today,
+                recipient_name=spec['recipient_name'],
+                source_type=AdvanceTransaction.SOURCE_CASH,
+                source_cash_account=cash_account,
+                amount=spec['amount'],
+                purpose='Bootstrap demo advance',
+                status=AdvanceTransaction.STATUS_OPEN,
+                approval_status=spec['approval_status'],
+                required_approval_level=required_level,
+                submitted_at=submitted_at,
+                submitted_by=actor,
+                is_active=True,
+                created_by=actor,
+                updated_by=actor,
+            )
+            result['created']['finance_advances'] += 1
+
+        if not employee_rows:
+            employee_rows = list(Employee.objects.filter(code__in=[item['code'] for item in employee_specs]))
+        for idx, emp in enumerate(employee_rows[:2]):
+            existing = SalaryAdvanceRecord.objects.filter(
+                employee=emp,
+                advance_date=today,
+                month=month,
+                amount=Decimal('1500000') + Decimal(str(idx * 500000)),
+            ).first()
+            if existing:
+                result['skipped']['workforce_advances'] += 1
+            elif dry_run:
+                result['created']['workforce_advances'] += 1
+            else:
+                approval_status = SalaryAdvanceRecord.APPROVAL_APPROVED if idx == 0 else SalaryAdvanceRecord.APPROVAL_PENDING_L1
+                SalaryAdvanceRecord.objects.create(
+                    employee=emp,
+                    advance_date=today,
+                    month=month,
+                    amount=Decimal('1500000') + Decimal(str(idx * 500000)),
+                    reason='Bootstrap salary advance',
+                    status=SalaryAdvanceRecord.STATUS_UNDEDUCTED,
+                    approval_status=approval_status,
+                    required_approval_level=1 if idx == 0 else 2,
+                    submitted_at=timezone.now() - timedelta(hours=8),
+                    submitted_by=actor,
+                    is_active=True,
+                    created_by=actor,
+                    updated_by=actor,
+                )
+                result['created']['workforce_advances'] += 1
+
+            existing_payroll = PayrollRecord.objects.filter(employee=emp, month=month).first()
+            if existing_payroll:
+                result['skipped']['payroll_records'] += 1
+            elif dry_run:
+                result['created']['payroll_records'] += 1
+            else:
+                basic_salary = Decimal(str(emp.salary_basic or 0))
+                PayrollRecord.objects.create(
+                    employee=emp,
+                    month=month,
+                    standard_days=Decimal('26'),
+                    actual_days=Decimal('26'),
+                    basic_salary=basic_salary,
+                    salary_by_attendance=basic_salary,
+                    overtime_pay=Decimal('0'),
+                    total_bonus=Decimal('500000'),
+                    total_penalty=Decimal('0'),
+                    advance_deduction=Decimal('0'),
+                    total_income=basic_salary + Decimal('500000'),
+                    total_deductions=Decimal('0'),
+                    net_pay=basic_salary + Decimal('500000'),
+                    status=PayrollRecord.STATUS_UNLOCKED,
+                    note='Bootstrap payroll record',
+                    created_by=actor,
+                    updated_by=actor,
+                )
+                result['created']['payroll_records'] += 1
+
+        if AuditLog.objects.filter(entity_type='RoleModulePermission').exists():
+            result['skipped']['role_permission_audits'] += 1
+        elif dry_run:
+            result['created']['role_permission_audits'] += 1
+        else:
+            role_items = []
+            for role_row in Role.objects.filter(code__in=['MANAGER', 'FINANCE_MANAGER', 'HR_MANAGER'], deleted_at__isnull=True).prefetch_related('permissions'):
+                perm_codes = {f'{p.resource}:{p.action}' for p in role_row.permissions.all()}
+                role_items.append({
+                    'role_id': int(role_row.id),
+                    'role_code': role_row.code,
+                    'role_name': role_row.name,
+                    'is_active': bool(role_row.is_active),
+                    'workforce_manage': 'WORKFORCE:MANAGE' in perm_codes,
+                    'finance_manage': 'FINANCE:MANAGE' in perm_codes,
+                    'rbac_manage': 'CORE:MANAGE_RBAC' in perm_codes,
+                })
+            AuditLog.objects.create(
+                user=actor,
+                action='UPDATE',
+                entity_type='RoleModulePermission',
+                entity_id=0,
+                entity_code='ROLE_MODULE_PERMISSIONS',
+                old_values={'items': []},
+                new_values={'items': role_items, 'source': 'cross_module_bootstrap'},
+                changed_fields=['items'],
+            )
+            result['created']['role_permission_audits'] += 1
+
+        has_ops_seed = AuditLog.objects.filter(entity_type__in=['TaskBulk', 'WorkflowAnalytics', 'Task', 'WorkflowAutomation']).exists()
+        if has_ops_seed:
+            result['skipped']['operations_audits'] += 1
+        elif dry_run:
+            result['created']['operations_audits'] += 1
+        else:
+            AuditLog.objects.create(
+                user=actor,
+                action='UPDATE',
+                entity_type='TaskBulk',
+                entity_id=0,
+                entity_code='TASK_BULK',
+                old_values={},
+                new_values={
+                    'action': 'REMIND_OVERDUE',
+                    'success_count': 4,
+                    'failed_count': 0,
+                    'processed_count': 4,
+                    'total_requested': 4,
+                    'reminder_sent_count': 3,
+                },
+                changed_fields=['bulk_action'],
+            )
+            AuditLog.objects.create(
+                user=actor,
+                action='UPDATE',
+                entity_type='WorkflowAnalytics',
+                entity_id=1,
+                entity_code='ANL-BOOTSTRAP',
+                old_values={},
+                new_values={
+                    'insight_type': 'READINESS_BOOTSTRAP',
+                    'suggested_action': 'RUN_AUTOMATION',
+                    'success': True,
+                    'message': 'Bootstrap readiness data seeded',
+                },
+                changed_fields=['execute_insight'],
+            )
+            result['created']['operations_audits'] += 2
+
+        if WorkflowPipelineEvent.objects.exists():
+            result['skipped']['pipeline_events'] += 1
+        elif dry_run:
+            result['created']['pipeline_events'] += 1
+        else:
+            WorkflowPipelineEvent.objects.create(
+                entity_type='SalesOrder',
+                entity_id=999,
+                entity_code='SO-BOOTSTRAP',
+                trigger='SUBMIT',
+                action=WorkflowPipelineEvent.ACTION_ADVANCE,
+                from_step='NEW',
+                to_step='PLAN',
+                note='Seed pipeline event for operations log',
+                actor=actor,
+            )
+            result['created']['pipeline_events'] += 1
+
+        result['created_total'] = int(sum(int(v) for v in result['created'].values()))
+        result['skipped_total'] = int(sum(int(v) for v in result['skipped'].values()))
+        result['readiness_after'] = _build_cross_module_readiness_payload()
+        _log_finance_audit(
+            actor,
+            action='UPDATE',
+            entity_type=CROSS_MODULE_BOOTSTRAP_AUDIT_ENTITY_TYPE,
+            entity_id=0,
+            entity_code=CROSS_MODULE_BOOTSTRAP_AUDIT_ENTITY_CODE,
+            old_values={},
+            new_values={
+                'dry_run': bool(dry_run),
+                'created': result.get('created') if isinstance(result.get('created'), dict) else {},
+                'skipped': result.get('skipped') if isinstance(result.get('skipped'), dict) else {},
+                'created_total': int(result.get('created_total') or 0),
+                'skipped_total': int(result.get('skipped_total') or 0),
+                'notes': result.get('notes') if isinstance(result.get('notes'), list) else [],
+                'readiness_before': readiness_before,
+                'readiness_after': result.get('readiness_after') if isinstance(result.get('readiness_after'), dict) else {},
+            },
+            changed_fields=['dry_run', 'created_total', 'skipped_total', 'created', 'skipped', 'readiness_before', 'readiness_after'],
+        )
+        return Response(result)
+
+    @action(detail=False, methods=['get'])
+    def cross_module_bootstrap_history(self, request):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem lịch sử bootstrap dữ liệu.'}, status=403)
+        limit_raw = str(request.query_params.get('limit') or '20').strip()
+        days_raw = str(request.query_params.get('days') or '').strip()
+        username_filter = str(request.query_params.get('username') or '').strip()
+        dry_run_raw = str(request.query_params.get('dry_run') or '').strip().lower()
+        try:
+            limit = max(1, min(int(limit_raw), 200))
+        except Exception:
+            limit = 20
+        logs = _cross_module_bootstrap_history_qs()
+        if days_raw:
+            try:
+                days = max(1, min(int(days_raw), 365))
+                cutoff = timezone.localdate() - timedelta(days=days - 1)
+                logs = logs.filter(created_at__date__gte=cutoff)
+            except Exception:
+                pass
+        if username_filter:
+            logs = logs.filter(user__username__icontains=username_filter)
+        if dry_run_raw in {'true', '1', 'yes'}:
+            logs = logs.filter(new_values__dry_run=True)
+        elif dry_run_raw in {'false', '0', 'no'}:
+            logs = logs.filter(new_values__dry_run=False)
+        logs = logs.order_by('-created_at', '-id')
+        items = [_serialize_cross_module_bootstrap_history_row(row) for row in logs]
+        export_excel = str(request.query_params.get('export') or '').strip().lower() == 'excel'
+        if export_excel:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = 'BootstrapHistory'
+            ws.append([
+                'Created At',
+                'Username',
+                'Dry Run',
+                'Created Total',
+                'Skipped Total',
+                'Readiness Before',
+                'Readiness After',
+                'Readiness Delta',
+                'Improved',
+                'Level Before',
+                'Level After',
+                'Notes',
+            ])
+            for row in items:
+                ws.append([
+                    row.get('created_at') or '',
+                    row.get('username') or '',
+                    'Yes' if bool(row.get('dry_run')) else 'No',
+                    int(row.get('created_total') or 0),
+                    int(row.get('skipped_total') or 0),
+                    int((row.get('readiness_before') or {}).get('readiness_score') or 0),
+                    int((row.get('readiness_after') or {}).get('readiness_score') or 0),
+                    int(row.get('readiness_delta') or 0),
+                    'Yes' if bool(row.get('improved')) else 'No',
+                    str(row.get('level_before') or ''),
+                    str(row.get('level_after') or ''),
+                    ' | '.join(str(note) for note in (row.get('notes') or [])),
+                ])
+            response = HttpResponse(
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            filename = f'cross_module_bootstrap_history_{timezone.localdate().isoformat()}.xlsx'
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            wb.save(response)
+            return response
+        items = items[:limit]
+        dry_run_filter_value = ''
+        if dry_run_raw in {'true', '1', 'yes'}:
+            dry_run_filter_value = 'true'
+        elif dry_run_raw in {'false', '0', 'no'}:
+            dry_run_filter_value = 'false'
+        return Response({
+            'count': len(items),
+            'filters': {
+                'days': int(days_raw) if days_raw.isdigit() else None,
+                'username': username_filter,
+                'dry_run': dry_run_filter_value,
+            },
+            'items': items,
+        })
+
+    @action(detail=False, methods=['get'])
     def executive_auto_policy(self, request):
         if not _can_manage_finance(request.user):
             return Response({'error': 'Bạn không có quyền xem policy tự động điều hành.'}, status=403)
@@ -1671,6 +2258,75 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
         dry_run = str(request.data.get('dry_run') or '').strip().lower() in {'1', 'true', 'yes'}
         result = run_finance_approval_sla_reminder_job(dry_run=dry_run)
         return Response(result)
+
+    @action(detail=False, methods=['get'])
+    def approval_sla_reminder_history(self, request):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem lịch sử nhắc SLA duyệt phiếu tạm ứng.'}, status=403)
+        days_raw = str(request.query_params.get('days') or '30').strip()
+        try:
+            days = max(1, min(int(days_raw), 180))
+        except Exception:
+            days = 30
+        cutoff = timezone.now() - timedelta(days=days)
+        qs = (
+            Notification.objects
+            .filter(
+                notification_type='due_date',
+                entity_type='FinanceAdvanceApprovalPending',
+                created_at__gte=cutoff,
+            )
+            .select_related('recipient')
+            .order_by('-created_at', '-id')
+        )
+        grouped = {}
+        for row in qs:
+            level_key = int(row.entity_id or 0)
+            item = grouped.get(level_key)
+            if item is None:
+                level_label = 'ESCALATION' if level_key == 99 else ('L2' if level_key == 2 else 'L1')
+                item = {
+                    'level_key': level_key,
+                    'level_label': level_label,
+                    'latest_created_at': row.created_at,
+                    'sent_count': 0,
+                    'unread_count': 0,
+                    'sample_recipients': [],
+                }
+                grouped[level_key] = item
+            item['sent_count'] += 1
+            if not row.is_read:
+                item['unread_count'] += 1
+            if len(item['sample_recipients']) < 8:
+                item['sample_recipients'].append(str(row.recipient.username))
+            if row.created_at and row.created_at > item['latest_created_at']:
+                item['latest_created_at'] = row.created_at
+
+        items = []
+        total_sent = 0
+        total_unread = 0
+        for item in sorted(grouped.values(), key=lambda x: (-int(x['sent_count']), int(x['level_key']))):
+            sent_count = int(item['sent_count'])
+            unread_count = int(item['unread_count'])
+            read_count = max(0, sent_count - unread_count)
+            item['read_count'] = read_count
+            item['read_rate'] = round((read_count / sent_count) * 100, 2) if sent_count > 0 else 0.0
+            item['latest_created_at'] = item['latest_created_at'].isoformat() if item.get('latest_created_at') else ''
+            total_sent += sent_count
+            total_unread += unread_count
+            items.append(item)
+        total_read = max(0, total_sent - total_unread)
+        overall_read_rate = round((total_read / total_sent) * 100, 2) if total_sent > 0 else 0.0
+        return Response({
+            'days': days,
+            'summary': {
+                'total_sent': total_sent,
+                'total_read': total_read,
+                'total_unread': total_unread,
+                'overall_read_rate': overall_read_rate,
+            },
+            'items': items,
+        })
 
     @action(detail=False, methods=['get'])
     def approval_sla_policy(self, request):

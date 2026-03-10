@@ -88,6 +88,55 @@ class FinanceApprovalSlaTest(TestCase):
         history_payload = history_resp.json()
         self.assertGreaterEqual(int(history_payload.get('count') or 0), 1)
         self.assertIn('items', history_payload)
+        readiness_resp = self.client.get('/api/finance/advance-transactions/cross_module_readiness/')
+        self.assertEqual(readiness_resp.status_code, 200)
+        readiness_payload = readiness_resp.json()
+        self.assertIn('readiness_score', readiness_payload)
+        self.assertIn('readiness_level', readiness_payload)
+        self.assertIn('checks', readiness_payload)
+        self.assertIn('summary', readiness_payload)
+        bootstrap_preview_resp = self.client.post(
+            '/api/finance/advance-transactions/cross_module_bootstrap/',
+            {'dry_run': True},
+            format='json',
+        )
+        self.assertEqual(bootstrap_preview_resp.status_code, 200)
+        bootstrap_preview_payload = bootstrap_preview_resp.json()
+        self.assertTrue(bootstrap_preview_payload.get('dry_run'))
+        self.assertIn('created_total', bootstrap_preview_payload)
+        bootstrap_run_resp = self.client.post(
+            '/api/finance/advance-transactions/cross_module_bootstrap/',
+            {'dry_run': False},
+            format='json',
+        )
+        self.assertEqual(bootstrap_run_resp.status_code, 200)
+        bootstrap_run_payload = bootstrap_run_resp.json()
+        self.assertFalse(bootstrap_run_payload.get('dry_run'))
+        self.assertIn('readiness_after', bootstrap_run_payload)
+        bootstrap_history_resp = self.client.get('/api/finance/advance-transactions/cross_module_bootstrap_history/?limit=5')
+        self.assertEqual(bootstrap_history_resp.status_code, 200)
+        bootstrap_history_payload = bootstrap_history_resp.json()
+        self.assertGreaterEqual(int(bootstrap_history_payload.get('count') or 0), 2)
+        self.assertIn('items', bootstrap_history_payload)
+        bootstrap_history_filtered_resp = self.client.get(
+            '/api/finance/advance-transactions/cross_module_bootstrap_history/?days=30&username=fin_sla_admin&dry_run=true&limit=5'
+        )
+        self.assertEqual(bootstrap_history_filtered_resp.status_code, 200)
+        bootstrap_history_filtered_payload = bootstrap_history_filtered_resp.json()
+        self.assertGreaterEqual(int(bootstrap_history_filtered_payload.get('count') or 0), 1)
+        first_history_item = (bootstrap_history_filtered_payload.get('items') or [{}])[0]
+        self.assertIn('readiness_delta', first_history_item)
+        self.assertIn('improved', first_history_item)
+        self.assertIn('level_before', first_history_item)
+        self.assertIn('level_after', first_history_item)
+        bootstrap_history_excel_resp = self.client.get(
+            '/api/finance/advance-transactions/cross_module_bootstrap_history/?days=30&export=excel'
+        )
+        self.assertEqual(bootstrap_history_excel_resp.status_code, 200)
+        self.assertEqual(
+            bootstrap_history_excel_resp['Content-Type'],
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
         governance_resp = self.client.get('/api/finance/advance-transactions/executive_auto_governance/?days=30&group_by=week')
         self.assertEqual(governance_resp.status_code, 200)
         governance_payload = governance_resp.json()

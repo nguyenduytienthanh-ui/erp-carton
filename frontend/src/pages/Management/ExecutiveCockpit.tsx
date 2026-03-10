@@ -326,7 +326,11 @@ export default function ExecutiveCockpit() {
   const [reportWindow, setReportWindow] = useState<ReportWindow>('TODAY');
   const [autoGovernanceDays, setAutoGovernanceDays] = useState<number>(30);
   const [autoGovernanceGroupBy, setAutoGovernanceGroupBy] = useState<'day' | 'week'>('day');
+  const [bootstrapHistoryDays, setBootstrapHistoryDays] = useState<number>(30);
+  const [bootstrapHistoryUsername, setBootstrapHistoryUsername] = useState<string>('');
+  const [bootstrapHistoryDryRun, setBootstrapHistoryDryRun] = useState<'true' | 'false' | ''>('');
   const [isExportingAutoGovernance, setIsExportingAutoGovernance] = useState(false);
+  const [isExportingBootstrapHistory, setIsExportingBootstrapHistory] = useState(false);
   const [isGovernanceActionCooldown, setIsGovernanceActionCooldown] = useState(false);
   const [isP0BundleRunning, setIsP0BundleRunning] = useState(false);
   const [p0BundleStep, setP0BundleStep] = useState<'IDLE' | 'AUTO' | 'FINANCE' | 'WORKFORCE'>('IDLE');
@@ -358,11 +362,21 @@ export default function ExecutiveCockpit() {
     if (prefsHydrated) return;
     const savedDays = Number(cockpitConfigObj.autoGovernanceDays);
     const savedGroupBy = String(cockpitConfigObj.autoGovernanceGroupBy || '').toLowerCase();
+    const savedBootstrapDays = Number(cockpitConfigObj.bootstrapHistoryDays);
+    const savedBootstrapUsername = String(cockpitConfigObj.bootstrapHistoryUsername || '');
+    const savedBootstrapDryRun = String(cockpitConfigObj.bootstrapHistoryDryRun || '');
     if (Number.isFinite(savedDays) && savedDays >= 7 && savedDays <= 365) {
       setAutoGovernanceDays(Math.round(savedDays));
     }
     if (savedGroupBy === 'day' || savedGroupBy === 'week') {
       setAutoGovernanceGroupBy(savedGroupBy);
+    }
+    if (Number.isFinite(savedBootstrapDays) && savedBootstrapDays >= 1 && savedBootstrapDays <= 365) {
+      setBootstrapHistoryDays(Math.round(savedBootstrapDays));
+    }
+    setBootstrapHistoryUsername(savedBootstrapUsername);
+    if (savedBootstrapDryRun === 'true' || savedBootstrapDryRun === 'false' || savedBootstrapDryRun === '') {
+      setBootstrapHistoryDryRun(savedBootstrapDryRun);
     }
     setPrefsHydrated(true);
   }, [cockpitConfigObj, prefsHydrated]);
@@ -373,8 +387,20 @@ export default function ExecutiveCockpit() {
       ...cockpitConfigObj,
       autoGovernanceDays,
       autoGovernanceGroupBy,
+      bootstrapHistoryDays,
+      bootstrapHistoryUsername,
+      bootstrapHistoryDryRun,
     });
-  }, [autoGovernanceDays, autoGovernanceGroupBy, cockpitConfigObj, prefsHydrated, saveCockpitConfig]);
+  }, [
+    autoGovernanceDays,
+    autoGovernanceGroupBy,
+    bootstrapHistoryDays,
+    bootstrapHistoryUsername,
+    bootstrapHistoryDryRun,
+    cockpitConfigObj,
+    prefsHydrated,
+    saveCockpitConfig,
+  ]);
   useEffect(() => () => {
     if (governanceActionCooldownTimerRef.current) {
       clearTimeout(governanceActionCooldownTimerRef.current);
@@ -432,6 +458,25 @@ export default function ExecutiveCockpit() {
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
   });
+  const crossModuleReadinessQuery = useQuery({
+    queryKey: ['executive-cockpit-cross-module-readiness'],
+    queryFn: () => financeApi.getCrossModuleReadiness(),
+    staleTime: 30_000,
+    refetchInterval: pollingInterval,
+    refetchIntervalInBackground: false,
+  });
+  const crossModuleBootstrapHistoryQuery = useQuery({
+    queryKey: ['executive-cockpit-cross-module-bootstrap-history', bootstrapHistoryDays, bootstrapHistoryUsername, bootstrapHistoryDryRun],
+    queryFn: () => financeApi.getCrossModuleBootstrapHistory({
+      limit: 10,
+      days: bootstrapHistoryDays,
+      username: bootstrapHistoryUsername || undefined,
+      dry_run: bootstrapHistoryDryRun || undefined,
+    }),
+    staleTime: 30_000,
+    refetchInterval: pollingInterval,
+    refetchIntervalInBackground: false,
+  });
   const executiveAutoHistoryQuery = useQuery({
     queryKey: ['executive-cockpit-auto-history'],
     queryFn: () => financeApi.getExecutiveAutoHistory({ limit: 20 }),
@@ -449,6 +494,27 @@ export default function ExecutiveCockpit() {
     staleTime: 20_000,
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
+  });
+  const bootstrapReadinessPreviewMutation = useMutation({
+    mutationFn: () => financeApi.runCrossModuleBootstrap({ dry_run: true }),
+    onSuccess: (res) => {
+      message.success(`Pre-check bootstrap xong. Dự kiến tạo ${res.created_total} mục.`);
+      void crossModuleReadinessQuery.refetch();
+      void crossModuleBootstrapHistoryQuery.refetch();
+    },
+    onError: () => message.error('Không thể chạy pre-check bootstrap dữ liệu.'),
+  });
+  const bootstrapReadinessRunMutation = useMutation({
+    mutationFn: () => financeApi.runCrossModuleBootstrap({ dry_run: false }),
+    onSuccess: (res) => {
+      message.success(`Bootstrap dữ liệu hoàn tất. Tạo ${res.created_total} mục, bỏ qua ${res.skipped_total} mục.`);
+      void crossModuleReadinessQuery.refetch();
+      void crossModuleBootstrapHistoryQuery.refetch();
+      void executiveKpiQuery.refetch();
+      void executiveAutoHistoryQuery.refetch();
+      void executiveAutoGovernanceQuery.refetch();
+    },
+    onError: () => message.error('Không thể bootstrap dữ liệu vận hành.'),
   });
   const governanceTrendData = useMemo(() => {
     const rows = (executiveAutoGovernanceQuery.data?.by_period ?? []).slice(-10);
@@ -1481,6 +1547,30 @@ export default function ExecutiveCockpit() {
     }
   };
 
+  const exportBootstrapHistoryExcel = async () => {
+    try {
+      setIsExportingBootstrapHistory(true);
+      const blob = await financeApi.exportCrossModuleBootstrapHistoryExcel({
+        days: bootstrapHistoryDays,
+        username: bootstrapHistoryUsername || undefined,
+        dry_run: bootstrapHistoryDryRun || undefined,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `cross_module_bootstrap_history_${bootstrapHistoryDays}d_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      message.success('Đã xuất lịch sử bootstrap (Excel).');
+    } catch {
+      message.error('Không thể xuất lịch sử bootstrap.');
+    } finally {
+      setIsExportingBootstrapHistory(false);
+    }
+  };
+
   const copyHandoverBrief = async () => {
     const reportWindowLabel = REPORT_WINDOW_OPTIONS.find((x) => x.value === reportWindow)?.label || reportWindow;
     const shiftLabel = SHIFT_OPTIONS.find((x) => x.value === shiftFilter)?.label || shiftFilter;
@@ -1649,6 +1739,131 @@ export default function ExecutiveCockpit() {
             <Statistic title="As of" value={executiveKpiQuery.data?.as_of || '-'} />
           </Col>
         </Row>
+        {crossModuleReadinessQuery.data ? (
+          <div style={{ marginTop: 10 }}>
+            <Alert
+              type={
+                crossModuleReadinessQuery.data.readiness_level === 'READY'
+                  ? 'success'
+                  : crossModuleReadinessQuery.data.readiness_level === 'PARTIAL'
+                    ? 'warning'
+                    : 'error'
+              }
+              showIcon
+              message={`Readiness ${crossModuleReadinessQuery.data.readiness_level} - ${crossModuleReadinessQuery.data.readiness_score}/100`}
+              description={(
+                <Space direction="vertical" size={4}>
+                  <Space wrap>
+                    <Tag>{`Roles: ${crossModuleReadinessQuery.data.summary.roles_total}`}</Tag>
+                    <Tag>{`Fin advances: ${crossModuleReadinessQuery.data.summary.finance_advances_total}`}</Tag>
+                    <Tag>{`WF advances: ${crossModuleReadinessQuery.data.summary.workforce_salary_advances_total}`}</Tag>
+                    <Tag>{`Payroll: ${crossModuleReadinessQuery.data.summary.payroll_records_total}`}</Tag>
+                    <Tag>{`Ops logs: ${crossModuleReadinessQuery.data.summary.operations_log_total + crossModuleReadinessQuery.data.summary.pipeline_events_total}`}</Tag>
+                  </Space>
+                  {(crossModuleReadinessQuery.data.warnings ?? []).length > 0 ? (
+                    <Text type="secondary">
+                      {`Cần bổ sung: ${(crossModuleReadinessQuery.data.warnings ?? []).map((w) => w.label).join(' | ')}`}
+                    </Text>
+                  ) : (
+                    <Text type="secondary">Dữ liệu vận hành liên phòng ban đã sẵn sàng.</Text>
+                  )}
+                  <Space wrap>
+                    <Button
+                      size="small"
+                      loading={bootstrapReadinessPreviewMutation.isPending}
+                      onClick={() => bootstrapReadinessPreviewMutation.mutate()}
+                    >
+                      Pre-check bootstrap
+                    </Button>
+                    <Button
+                      size="small"
+                      type="primary"
+                      loading={bootstrapReadinessRunMutation.isPending}
+                      onClick={() => bootstrapReadinessRunMutation.mutate()}
+                    >
+                      Bootstrap now
+                    </Button>
+                    <Button
+                      size="small"
+                      loading={isExportingBootstrapHistory}
+                      onClick={() => {
+                        void exportBootstrapHistoryExcel();
+                      }}
+                    >
+                      Export bootstrap history
+                    </Button>
+                  </Space>
+                  <Space wrap>
+                    <Tag>Lịch sử bootstrap</Tag>
+                    <Space>
+                      <Text type="secondary">Days</Text>
+                      <InputNumber
+                        min={1}
+                        max={365}
+                        value={bootstrapHistoryDays}
+                        onChange={(value) => {
+                          const next = Number(value);
+                          if (!Number.isFinite(next)) return;
+                          setBootstrapHistoryDays(Math.max(1, Math.min(365, Math.round(next))));
+                        }}
+                        style={{ width: 96 }}
+                      />
+                    </Space>
+                    <Select
+                      size="small"
+                      style={{ minWidth: 170 }}
+                      value={bootstrapHistoryDryRun}
+                      options={[
+                        { label: 'All run types', value: '' },
+                        { label: 'Dry run only', value: 'true' },
+                        { label: 'Execute only', value: 'false' },
+                      ]}
+                      onChange={(value: 'true' | 'false' | '') => setBootstrapHistoryDryRun(value)}
+                    />
+                    <Select
+                      size="small"
+                      showSearch
+                      allowClear
+                      style={{ minWidth: 190 }}
+                      placeholder="Filter username"
+                      value={bootstrapHistoryUsername || undefined}
+                      options={(activeUsersQuery.data ?? []).map((u) => ({
+                        label: getUserDisplayName(u),
+                        value: u.username,
+                      }))}
+                      onChange={(value) => setBootstrapHistoryUsername(String(value || ''))}
+                    />
+                  </Space>
+                  {(crossModuleBootstrapHistoryQuery.data?.items ?? []).length > 0 && (
+                    <List
+                      size="small"
+                      dataSource={crossModuleBootstrapHistoryQuery.data?.items ?? []}
+                      renderItem={(row) => (
+                        <List.Item>
+                          <Space wrap>
+                            <Tag color={row.dry_run ? 'gold' : 'blue'}>{row.dry_run ? 'DRY RUN' : 'EXECUTE'}</Tag>
+                            <Text type="secondary">{dayjs(row.created_at).format('DD/MM HH:mm')}</Text>
+                            <Tag>{`By: ${row.username || '-'}`}</Tag>
+                            <Tag color="green">{`Created: ${row.created_total}`}</Tag>
+                            <Tag>{`Skipped: ${row.skipped_total}`}</Tag>
+                            <Tag>{`Score: ${Number(row.readiness_before?.readiness_score ?? 0)} -> ${Number(row.readiness_after?.readiness_score ?? 0)}`}</Tag>
+                            <Tag color={Number(row.readiness_delta || 0) > 0 ? 'green' : Number(row.readiness_delta || 0) < 0 ? 'red' : 'default'}>
+                              {`Delta: ${Number(row.readiness_delta || 0) > 0 ? '+' : ''}${Number(row.readiness_delta || 0)}`}
+                            </Tag>
+                            <Tag color={row.improved ? 'success' : 'default'}>
+                              {row.improved ? 'Improved' : 'No gain'}
+                            </Tag>
+                            <Tag>{`Level: ${(row.level_before || '-')} -> ${(row.level_after || '-')}`}</Tag>
+                          </Space>
+                        </List.Item>
+                      )}
+                    />
+                  )}
+                </Space>
+              )}
+            />
+          </div>
+        ) : null}
         {(executiveKpiQuery.data?.trend_6m ?? []).length > 0 && (
           <Space wrap style={{ marginTop: 10 }}>
             {(executiveKpiQuery.data?.trend_6m ?? []).map((point) => (

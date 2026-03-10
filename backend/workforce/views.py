@@ -1,5 +1,5 @@
 from decimal import Decimal, ROUND_HALF_UP
-from datetime import date
+from datetime import date, timedelta
 import json
 
 from django.db import transaction
@@ -13,7 +13,7 @@ from rest_framework.response import Response
 from unidecode import unidecode
 
 from core.permissions import check_action_permission
-from core.models import AuditLog, Setting
+from core.models import AuditLog, Notification, Setting
 from finance.models import CashAccount, CashTransaction, TransactionCategory
 
 from .models import (
@@ -629,6 +629,75 @@ class SalaryAdvanceRecordViewSet(SearchTextMixin, viewsets.ModelViewSet):
             return Response({'error': 'Bạn không có quyền gửi nhắc SLA duyệt ứng lương.'}, status=403)
         dry_run = str(request.data.get('dry_run') or '').strip().lower() in {'1', 'true', 'yes'}
         return Response(run_salary_advance_approval_sla_reminder_job(dry_run=dry_run))
+
+    @action(detail=False, methods=['get'])
+    def approval_sla_reminder_history(self, request):
+        if not _can_manage_workforce(request.user):
+            return Response({'error': 'Bạn không có quyền xem lịch sử nhắc SLA duyệt ứng lương.'}, status=403)
+        days_raw = str(request.query_params.get('days') or '30').strip()
+        try:
+            days = max(1, min(int(days_raw), 180))
+        except Exception:
+            days = 30
+        cutoff = timezone.now() - timedelta(days=days)
+        qs = (
+            Notification.objects
+            .filter(
+                notification_type='due_date',
+                entity_type='WorkforceSalaryAdvanceApprovalPending',
+                created_at__gte=cutoff,
+            )
+            .select_related('recipient')
+            .order_by('-created_at', '-id')
+        )
+        grouped = {}
+        for row in qs:
+            level_key = int(row.entity_id or 0)
+            item = grouped.get(level_key)
+            if item is None:
+                level_label = 'ESCALATION' if level_key == 99 else ('L2' if level_key == 2 else 'L1')
+                item = {
+                    'level_key': level_key,
+                    'level_label': level_label,
+                    'latest_created_at': row.created_at,
+                    'sent_count': 0,
+                    'unread_count': 0,
+                    'sample_recipients': [],
+                }
+                grouped[level_key] = item
+            item['sent_count'] += 1
+            if not row.is_read:
+                item['unread_count'] += 1
+            if len(item['sample_recipients']) < 8:
+                item['sample_recipients'].append(str(row.recipient.username))
+            if row.created_at and row.created_at > item['latest_created_at']:
+                item['latest_created_at'] = row.created_at
+
+        items = []
+        total_sent = 0
+        total_unread = 0
+        for item in sorted(grouped.values(), key=lambda x: (-int(x['sent_count']), int(x['level_key']))):
+            sent_count = int(item['sent_count'])
+            unread_count = int(item['unread_count'])
+            read_count = max(0, sent_count - unread_count)
+            item['read_count'] = read_count
+            item['read_rate'] = round((read_count / sent_count) * 100, 2) if sent_count > 0 else 0.0
+            item['latest_created_at'] = item['latest_created_at'].isoformat() if item.get('latest_created_at') else ''
+            total_sent += sent_count
+            total_unread += unread_count
+            items.append(item)
+        total_read = max(0, total_sent - total_unread)
+        overall_read_rate = round((total_read / total_sent) * 100, 2) if total_sent > 0 else 0.0
+        return Response({
+            'days': days,
+            'summary': {
+                'total_sent': total_sent,
+                'total_read': total_read,
+                'total_unread': total_unread,
+                'overall_read_rate': overall_read_rate,
+            },
+            'items': items,
+        })
 
     @action(detail=False, methods=['get'])
     def approval_sla_policy(self, request):

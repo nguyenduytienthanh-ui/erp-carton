@@ -52,6 +52,7 @@ export const API_ENDPOINTS = {
   WORKFORCE_SALARY_ADVANCE_APPROVAL_QUEUE: '/workforce/salary-advances/approval_queue/',
   WORKFORCE_SALARY_ADVANCE_APPROVAL_SLA_OVERVIEW: '/workforce/salary-advances/approval_sla_overview/',
   WORKFORCE_SALARY_ADVANCE_REMIND_PENDING_APPROVALS: '/workforce/salary-advances/remind_pending_approvals/',
+  WORKFORCE_SALARY_ADVANCE_APPROVAL_SLA_REMINDER_HISTORY: '/workforce/salary-advances/approval_sla_reminder_history/',
   WORKFORCE_SALARY_ADVANCE_APPROVAL_SLA_POLICY: '/workforce/salary-advances/approval_sla_policy/',
 
   // Finance
@@ -72,8 +73,12 @@ export const API_ENDPOINTS = {
   FINANCE_ADVANCE_APPROVAL_QUEUE: '/finance/advance-transactions/approval_queue/',
   FINANCE_ADVANCE_APPROVAL_SLA_OVERVIEW: '/finance/advance-transactions/approval_sla_overview/',
   FINANCE_ADVANCE_REMIND_PENDING_APPROVALS: '/finance/advance-transactions/remind_pending_approvals/',
+  FINANCE_ADVANCE_APPROVAL_SLA_REMINDER_HISTORY: '/finance/advance-transactions/approval_sla_reminder_history/',
   FINANCE_ADVANCE_APPROVAL_SLA_POLICY: '/finance/advance-transactions/approval_sla_policy/',
   FINANCE_EXECUTIVE_KPI: '/finance/advance-transactions/executive_kpi/',
+  FINANCE_CROSS_MODULE_READINESS: '/finance/advance-transactions/cross_module_readiness/',
+  FINANCE_CROSS_MODULE_BOOTSTRAP: '/finance/advance-transactions/cross_module_bootstrap/',
+  FINANCE_CROSS_MODULE_BOOTSTRAP_HISTORY: '/finance/advance-transactions/cross_module_bootstrap_history/',
   FINANCE_EXECUTIVE_AUTO_POLICY: '/finance/advance-transactions/executive_auto_policy/',
   FINANCE_EXECUTIVE_AUTO_EXECUTE: '/finance/advance-transactions/executive_auto_execute/',
   FINANCE_EXECUTIVE_AUTO_HISTORY: '/finance/advance-transactions/executive_auto_history/',

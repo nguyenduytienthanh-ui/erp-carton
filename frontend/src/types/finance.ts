@@ -460,3 +460,75 @@ export interface ExecutiveAutoGovernanceResponse {
   skip_reasons: ExecutiveAutoGovernanceSkipReasonItem[];
   action_effectiveness: ExecutiveAutoGovernanceActionItem[];
 }
+
+export interface CrossModuleReadinessCheck {
+  code: string;
+  label: string;
+  ok: boolean;
+  current: number;
+  recommended_min: number;
+  weight: number;
+  hint: string;
+}
+
+export interface CrossModuleReadinessResponse {
+  as_of: string;
+  readiness_score: number;
+  readiness_level: 'READY' | 'PARTIAL' | 'BOOTSTRAP_NEEDED';
+  checks: CrossModuleReadinessCheck[];
+  warnings: Array<{
+    code: string;
+    label: string;
+    hint: string;
+  }>;
+  summary: {
+    users_total: number;
+    users_staff_total: number;
+    roles_total: number;
+    finance_advances_total: number;
+    finance_advances_active: number;
+    workforce_salary_advances_total: number;
+    payroll_records_total: number;
+    role_permission_audits_total: number;
+    operations_log_total: number;
+    pipeline_events_total: number;
+  };
+}
+
+export interface CrossModuleBootstrapResponse {
+  dry_run: boolean;
+  created: Record<string, number>;
+  skipped: Record<string, number>;
+  notes: string[];
+  created_total: number;
+  skipped_total: number;
+  readiness_after: CrossModuleReadinessResponse;
+}
+
+export interface CrossModuleBootstrapHistoryItem {
+  id: number;
+  created_at: string;
+  username: string;
+  dry_run: boolean;
+  created_total: number;
+  skipped_total: number;
+  created: Record<string, number>;
+  skipped: Record<string, number>;
+  readiness_before: CrossModuleReadinessResponse;
+  readiness_after: CrossModuleReadinessResponse;
+  readiness_delta: number;
+  improved: boolean;
+  level_before: string;
+  level_after: string;
+  notes: string[];
+}
+
+export interface CrossModuleBootstrapHistoryResponse {
+  count: number;
+  filters?: {
+    days?: number;
+    username?: string;
+    dry_run?: 'true' | 'false' | '';
+  };
+  items: CrossModuleBootstrapHistoryItem[];
+}
