@@ -2,18 +2,9 @@ from django.db.models.signals import post_save, post_delete, pre_save
 from django.dispatch import receiver
 from django.contrib.auth import get_user_model
 from .models import Customer, AuditLog, Comment, Notification
-import threading
+from .request_context import get_current_request, set_current_request, clear_current_request, get_current_request_id
 
 User = get_user_model()
-
-# Thread-local storage for current request
-_thread_locals = threading.local()
-
-def get_current_request():
-    return getattr(_thread_locals, 'request', None)
-
-def set_current_request(request):
-    _thread_locals.request = request
 
 def get_client_ip(request):
     """Get client IP from request"""

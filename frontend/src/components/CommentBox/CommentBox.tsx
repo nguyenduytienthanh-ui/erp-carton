@@ -59,10 +59,10 @@ export default function CommentBox({
     },
   });
 
-  const handleSearch = useCallback(async (searchText: string, _prefix: string) => {
+  const handleSearch = useCallback(async (searchText: string) => {
     setIsMentionLoading(true);
     try {
-      const users: UserMention[] = await usersApi.list(searchText);
+      const users: UserMention[] = await usersApi.list({ search: searchText });
       setMentionOptions(
         users.map((u) => ({
           value: u.username,

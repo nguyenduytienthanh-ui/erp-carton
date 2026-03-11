@@ -17,11 +17,19 @@ from products.views import (
     ProductBoxTypeViewSet,
     ProductViewSet,
 )
+from inventory.views import (
+    WarehouseViewSet,
+    WarehouseLocationViewSet,
+    InventoryTransactionViewSet,
+    InventoryReservationViewSet,
+    InventoryStockViewSet,
+)
 from sales.views import SalesOrderViewSet
 from workforce.views import (
     AttendanceRecordViewSet,
     BonusPenaltyRecordViewSet,
     EmployeeViewSet,
+    EmployeeProfileHistoryViewSet,
     PayrollRecordViewSet,
     SalaryAdvanceRecordViewSet,
 )
@@ -55,10 +63,16 @@ router.register(r'products/units', ProductUnitViewSet, basename='productunit')
 router.register(r'products/waves', ProductWaveViewSet, basename='wave')
 router.register(r'products/box-types', ProductBoxTypeViewSet, basename='boxtype')
 router.register(r'products/products', ProductViewSet, basename='product')
+router.register(r'inventory/warehouses', WarehouseViewSet, basename='inventory-warehouse')
+router.register(r'inventory/locations', WarehouseLocationViewSet, basename='inventory-location')
+router.register(r'inventory/transactions', InventoryTransactionViewSet, basename='inventory-transaction')
+router.register(r'inventory/reservations', InventoryReservationViewSet, basename='inventory-reservation')
+router.register(r'inventory/stock', InventoryStockViewSet, basename='inventory-stock')
 router.register(r'sales/orders', SalesOrderViewSet, basename='salesorder')
 router.register(r'tasks', TaskViewSet, basename='task')
 router.register(r'workflow-task-templates', WorkflowTaskTemplateViewSet, basename='workflowtasktemplate')
 router.register(r'workforce/employees', EmployeeViewSet, basename='workforce-employee')
+router.register(r'workforce/employee-profile-histories', EmployeeProfileHistoryViewSet, basename='workforce-employee-profile-history')
 router.register(r'workforce/attendance-records', AttendanceRecordViewSet, basename='workforce-attendance-record')
 router.register(r'workforce/bonus-penalty-records', BonusPenaltyRecordViewSet, basename='workforce-bonus-penalty-record')
 router.register(r'workforce/salary-advances', SalaryAdvanceRecordViewSet, basename='workforce-salary-advance')

@@ -8,8 +8,16 @@ import { App, Modal, Button, Checkbox, Alert } from 'antd';
 import { DeleteOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { productsApi } from '../../api/products';
-import FormInputWithClear from '../../components/FormInputWithClear';
-import type { Product, ProductFormData, ProductChildFormData } from '../../types/product';
+import { FormInputWithClear } from '../../components';
+import type {
+  Product,
+  ProductFormData,
+  ProductChildFormData,
+  ProductBundleDefinition,
+  ProductBundleUpsertPayload,
+  ProductBundlePricingMode,
+  ProductBundleDeliveryRule,
+} from '../../types/product';
 import { WATERPROOF_OPTIONS } from '../../types/product';
 import { useQuickEntryKeys } from '../../hooks/useQuickEntryKeys';
 import { parseApiError } from '../../shared/apiError';
@@ -83,6 +91,10 @@ const defaultChild = (firstUnitId: number | undefined): ProductChildFormData => 
   component_quantity: 1,
   unit: firstUnitId ?? (0 as number),
   category: undefined,
+  cost_price: 0,
+  sale_price: 0,
+  commission_per_unit: undefined,
+  commission_percent: undefined,
   size_order: '',
   size_production: '',
   wave: undefined,
@@ -103,9 +115,43 @@ const defaultChild = (firstUnitId: number | undefined): ProductChildFormData => 
   waterproof: '',
   note_other: '',
   note: '',
+  price_change_reason: '',
   is_active: true,
   status: 'ACTIVE',
 });
+
+interface BundleFormData {
+  pricing_mode: ProductBundlePricingMode;
+  fixed_cost_price: number;
+  fixed_sale_price: number;
+  fixed_commission_per_unit?: number;
+  fixed_commission_percent?: number;
+  delivery_rule: ProductBundleDeliveryRule;
+  note: string;
+}
+
+const defaultBundleConfig = (): BundleFormData => ({
+  pricing_mode: 'PRIMARY_PRODUCT',
+  fixed_cost_price: 0,
+  fixed_sale_price: 0,
+  fixed_commission_per_unit: undefined,
+  fixed_commission_percent: undefined,
+  delivery_rule: 'STRICT_FULL_SET',
+  note: '',
+});
+
+const BUNDLE_PRICING_MODE_OPTIONS: Array<{ value: ProductBundlePricingMode; label: string }> = [
+  { value: 'PRIMARY_PRODUCT', label: 'Lấy theo mẹ/đại diện' },
+  { value: 'FIXED_BUNDLE', label: 'Giá bộ cố định' },
+  { value: 'SUM_COMPONENTS', label: 'Cộng từ thành phần' },
+];
+
+const BUNDLE_DELIVERY_RULE_OPTIONS: Array<{ value: ProductBundleDeliveryRule; label: string }> = [
+  { value: 'STRICT_FULL_SET', label: 'Giao đồng bộ đủ bộ' },
+  { value: 'NON_SYNC', label: 'Giao không đồng bộ' },
+];
+
+const PRICE_CHANGE_REASON_OPTIONS = ['Tăng giá', 'Giảm giá', 'Điều chỉnh giá'];
 
 /** Validate khi bấm Cập nhật; không validate khi đang gõ. */
 function validateMother(m: ProductFormData): string | null {
@@ -115,7 +161,6 @@ function validateMother(m: ProductFormData): string | null {
   const sale = Number(m.sale_price);
   if (Number.isNaN(cost) || cost < 0) return 'Giá vốn không hợp lệ.';
   if (Number.isNaN(sale) || sale < 0) return 'Đơn giá không hợp lệ.';
-  if (cost > sale) return 'Đơn giá phải lớn hơn hoặc bằng giá vốn.';
   if (!m.unit) return 'Vui lòng chọn ĐVT (bắt buộc).';
   if (!m.wave) return 'Vui lòng chọn Sóng (bắt buộc).';
   if (!m.box_type) return 'Vui lòng chọn Kiểu (bắt buộc).';
@@ -126,6 +171,10 @@ function validateChild(c: ProductChildFormData): string | null {
   if (!(c.name ?? '').trim()) return 'Vui lòng nhập Tên hàng (Con).';
   const q = Number(c.component_quantity);
   if (Number.isNaN(q) || q < 1) return 'Số lượng / bộ phải lớn hơn 0.';
+  const cost = Number(c.cost_price ?? 0);
+  const sale = Number(c.sale_price ?? 0);
+  if (Number.isNaN(cost) || cost < 0) return 'Giá vốn hàng con không hợp lệ.';
+  if (Number.isNaN(sale) || sale < 0) return 'Đơn giá hàng con không hợp lệ.';
   if (!c.unit) return 'Vui lòng chọn ĐVT (bắt buộc).';
   if (!c.wave) return 'Vui lòng chọn Sóng (bắt buộc).';
   if (!c.box_type) return 'Vui lòng chọn Kiểu (bắt buộc).';
@@ -137,6 +186,12 @@ function normalizeDateTimeLocal(value: string): string | undefined {
   if (!raw) return undefined;
   if (raw.length === 16) return `${raw}:00`;
   return raw;
+}
+
+function deriveCommissionModeFromPricingMode(pricingMode: ProductBundlePricingMode) {
+  if (pricingMode === 'FIXED_BUNDLE') return 'FIXED_VALUES';
+  if (pricingMode === 'SUM_COMPONENTS') return 'SUM_COMPONENTS';
+  return 'PRIMARY_PRODUCT';
 }
 
 /** Build payload Mẹ để gửi API. */
@@ -159,7 +214,8 @@ function buildMotherPayload(m: ProductFormData, isSet: boolean): ProductFormData
 function buildChildPayload(
   c: ProductChildFormData,
   parentId: number,
-  code: string
+  code: string,
+  skipPriceFloorValidation = false,
 ): ProductFormData & { parent: number } {
   return {
     parent: parentId,
@@ -168,9 +224,11 @@ function buildChildPayload(
     component_quantity: Number(c.component_quantity) || 1,
     unit: c.unit,
     category: c.category,
-    cost_price: 0,
-    sale_price: 0,
+    cost_price: Number(c.cost_price) || 0,
+    sale_price: Number(c.sale_price) || 0,
     min_stock: 0,
+    commission_per_unit: c.commission_per_unit,
+    commission_percent: c.commission_percent,
     status: (c.status as 'DRAFT' | 'ACTIVE' | 'DISCONTINUED') ?? 'ACTIVE',
     size_order: c.size_order ?? '',
     size_production: c.size_production ?? '',
@@ -192,7 +250,22 @@ function buildChildPayload(
     waterproof: c.waterproof ?? '',
     note_other: c.note_other ?? '',
     note: c.note ?? '',
+    price_change_reason: (c.price_change_reason ?? '').trim() || undefined,
+    skip_price_floor_validation: skipPriceFloorValidation,
     is_active: c.is_active ?? true,
+  };
+}
+
+function bundleToFormData(bundle?: ProductBundleDefinition | null): BundleFormData {
+  if (!bundle) return defaultBundleConfig();
+  return {
+    pricing_mode: bundle.pricing_mode ?? 'PRIMARY_PRODUCT',
+    fixed_cost_price: Number(bundle.fixed_cost_price ?? 0),
+    fixed_sale_price: Number(bundle.fixed_sale_price ?? 0),
+    fixed_commission_per_unit: bundle.fixed_commission_per_unit != null ? Number(bundle.fixed_commission_per_unit) : undefined,
+    fixed_commission_percent: bundle.fixed_commission_percent != null ? Number(bundle.fixed_commission_percent) : undefined,
+    delivery_rule: bundle.delivery_rule ?? 'STRICT_FULL_SET',
+    note: bundle.note ?? '',
   };
 }
 
@@ -200,6 +273,8 @@ interface ChildBlockProps {
   index: number;
   motherCode: string;
   child: ProductChildFormData;
+  canEditChildPrice: boolean;
+  canEditChildCommission: boolean;
   onChange: (field: keyof ProductChildFormData, value: unknown) => void;
   onRemove: () => void;
   canRemove: boolean;
@@ -213,6 +288,8 @@ function ChildBlock({
   index,
   motherCode,
   child,
+  canEditChildPrice,
+  canEditChildCommission,
   onChange,
   onRemove,
   canRemove,
@@ -266,6 +343,69 @@ function ChildBlock({
             <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={onRemove}>Xóa</Button>
           </div>
         )}
+      </div>
+      <div className="pf-row">
+        <Field label="Giá vốn" span={1}>
+          <FormInputWithClear
+            type="number"
+            className="pf-input"
+            min={0}
+            value={child.cost_price === 0 ? '' : child.cost_price ?? ''}
+            onChange={(e) => onChange('cost_price', e.target.value === '' ? 0 : Number(e.target.value))}
+            onClear={() => onChange('cost_price', 0)}
+            hasValue={Number(child.cost_price ?? 0) !== 0}
+          />
+        </Field>
+        <Field label="Đơn giá" span={1}>
+          <FormInputWithClear
+            type="number"
+            className="pf-input"
+            min={0}
+            disabled={!canEditChildPrice}
+            value={child.sale_price === 0 ? '' : child.sale_price ?? ''}
+            onChange={(e) => onChange('sale_price', e.target.value === '' ? 0 : Number(e.target.value))}
+            onClear={() => onChange('sale_price', 0)}
+            hasValue={Number(child.sale_price ?? 0) !== 0}
+            style={!canEditChildPrice ? { background: '#f5f5f5' } : undefined}
+          />
+        </Field>
+        <Field label="HHCĐ" span={1}>
+          <FormInputWithClear
+            type="number"
+            className="pf-input"
+            min={0}
+            disabled={!canEditChildCommission}
+            value={child.commission_per_unit ?? ''}
+            onChange={(e) => onChange('commission_per_unit', e.target.value === '' ? undefined : Number(e.target.value))}
+            onClear={() => onChange('commission_per_unit', undefined)}
+            hasValue={child.commission_per_unit != null}
+            style={!canEditChildCommission ? { background: '#f5f5f5' } : undefined}
+          />
+        </Field>
+        <Field label="HH%" span={1}>
+          <FormInputWithClear
+            type="number"
+            className="pf-input"
+            min={0}
+            disabled={!canEditChildCommission}
+            value={child.commission_percent ?? ''}
+            onChange={(e) => onChange('commission_percent', e.target.value === '' ? undefined : Number(e.target.value))}
+            onClear={() => onChange('commission_percent', undefined)}
+            hasValue={child.commission_percent != null}
+            style={!canEditChildCommission ? { background: '#f5f5f5' } : undefined}
+          />
+        </Field>
+        <Field label="Lý do thay đổi giá (Con)" span={4}>
+          <FormInputWithClear
+            type="text"
+            list="price-change-reason-options"
+            placeholder="Nhập tay hoặc chọn gợi ý"
+            className="pf-input"
+            value={child.price_change_reason ?? ''}
+            onChange={(e) => onChange('price_change_reason', e.target.value)}
+            onClear={() => onChange('price_change_reason', '')}
+          />
+        </Field>
       </div>
       <div className="pf-row pf-row-size">
         <Field label="Dài PO" span={1}>
@@ -363,12 +503,12 @@ function ChildBlock({
         <Field label="Khác" span={1}>
           <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_khac ?? ''} onChange={(e) => onChange('process_khac', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_khac', undefined)} hasValue={child.process_khac != null} />
         </Field>
-        <Field label="Ghi chú công đoạn khác" span={4}>
+        <Field label="Ghi chú sản xuất" span={4}>
           <FormInputWithClear type="text" className="pf-input" value={child.note_other ?? ''} onChange={(e) => onChange('note_other', e.target.value)} onClear={() => onChange('note_other', '')} />
         </Field>
       </div>
       <div className="pf-row pf-row-note">
-        <Field label="Ghi chú chung (Con)" span={9}>
+        <Field label="Ghi chú mã hàng" span={9}>
           <FormInputWithClear type="text" className="pf-input" value={child.note ?? ''} onChange={(e) => onChange('note', e.target.value)} onClear={() => onChange('note', '')} />
         </Field>
         <Field label="Trạng thái" span={1}>
@@ -407,6 +547,10 @@ function componentToChildFormData(c: Product, firstUnitId: number | undefined): 
     component_quantity: Number(c.component_quantity) || 1,
     unit: c.unit ?? firstUnitId ?? (0 as number),
     category: c.category ?? undefined,
+    cost_price: c.cost_price != null ? Number(c.cost_price) : 0,
+    sale_price: c.sale_price != null ? Number(c.sale_price) : 0,
+    commission_per_unit: c.commission_per_unit != null ? Number(c.commission_per_unit) : undefined,
+    commission_percent: c.commission_percent != null ? Number(c.commission_percent) : undefined,
     size_order: c.size_order ?? '',
     size_production: c.size_production ?? '',
     wave: c.wave ?? undefined,
@@ -427,6 +571,7 @@ function componentToChildFormData(c: Product, firstUnitId: number | undefined): 
     waterproof: (c.waterproof as string) ?? '',
     note_other: c.note_other ?? '',
     note: c.note ?? '',
+    price_change_reason: '',
     is_active: c.is_active ?? true,
     status: (c.status as 'DRAFT' | 'ACTIVE' | 'DISCONTINUED') ?? (c.is_active !== false ? 'ACTIVE' : 'DISCONTINUED'),
   };
@@ -514,6 +659,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
   const firstUnitId = units[0]?.id;
 
   const [mother, setMother] = useState<ProductFormData>(() => defaultMother(firstUnitId));
+  const [bundleConfig, setBundleConfig] = useState<BundleFormData>(() => defaultBundleConfig());
   const [hasChildren, setHasChildren] = useState(false);
   const [children, setChildren] = useState<ProductChildFormData[]>([]);
   const [priceChangeReason, setPriceChangeReason] = useState('');
@@ -529,12 +675,14 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
       if (productDetail.parent != null) {
         if (parentDetail) {
           setMother(productToMother(parentDetail));
+          setBundleConfig(bundleToFormData(parentDetail.bundle_definition));
           setHasChildren(true);
           setChildren([componentToChildFormData(productDetail, firstUnitId)]);
           originalComponentIdsRef.current = [productDetail.id].filter((id): id is number => id != null);
         }
       } else {
         setMother(productToMother(productDetail));
+        setBundleConfig(bundleToFormData(productDetail.bundle_definition));
         const comps = productDetail.components ?? [];
         setHasChildren(comps.length > 0);
         setChildren(comps.map((c) => componentToChildFormData(c, firstUnitId)));
@@ -542,12 +690,16 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
       }
     } else if (!editingProduct) {
       setMother(defaultMother(firstUnitId));
+      setBundleConfig(defaultBundleConfig());
       setChildren([]);
       setHasChildren(false);
     }
+    if (!editingProduct?.id && !productDetail) {
+      setBundleConfig(defaultBundleConfig());
+    }
     setPriceChangeReason('');
     setPriceEffectiveAt('');
-  }, [visible, editingProduct?.id, productDetail, parentDetail, firstUnitId]);
+  }, [visible, editingProduct, productDetail, parentDetail, firstUnitId]);
 
   const GAP = 8;
   const PADDING_X = 16;
@@ -593,6 +745,19 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
     setMother((prev) => ({ ...prev, [key]: value }));
   };
 
+  const setBundleField = <K extends keyof BundleFormData>(key: K, value: BundleFormData[K]) => {
+    setBundleConfig((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const canEditMotherPrice = !hasChildren || bundleConfig.pricing_mode !== 'FIXED_BUNDLE';
+  const canEditChildPrice = hasChildren && bundleConfig.pricing_mode === 'SUM_COMPONENTS';
+  const requiresFixedBundlePrice = hasChildren && bundleConfig.pricing_mode === 'FIXED_BUNDLE';
+  const canEditMotherCommission = !hasChildren || bundleConfig.pricing_mode !== 'FIXED_BUNDLE';
+  const canEditChildCommission = hasChildren && bundleConfig.pricing_mode === 'SUM_COMPONENTS';
+  const showFixedBundleCommissionFields = hasChildren && bundleConfig.pricing_mode === 'FIXED_BUNDLE';
+  const skipMotherPriceFloorValidation = hasChildren && bundleConfig.pricing_mode === 'FIXED_BUNDLE';
+  const skipChildPriceFloorValidation = hasChildren && bundleConfig.pricing_mode !== 'SUM_COMPONENTS';
+
   const setChild = (index: number, field: keyof ProductChildFormData, value: unknown) => {
     setChildren((prev) => {
       const next = [...prev];
@@ -614,6 +779,50 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
     });
   };
 
+  const syncBundleForMother = async (
+    motherId: number,
+    componentRows: Array<{ id: number; component_quantity: number }>
+  ) => {
+    if (componentRows.length === 0) {
+      try {
+        await productsApi.deleteProductBundle(motherId);
+      } catch {
+        // Ignore when bundle does not exist yet.
+      }
+      return;
+    }
+    const payload: ProductBundleUpsertPayload = {
+      sellable_product: motherId,
+      primary_product: motherId,
+      pricing_mode: bundleConfig.pricing_mode,
+      fixed_cost_price: String(Number(bundleConfig.fixed_cost_price || 0)),
+      fixed_sale_price: String(Number(bundleConfig.fixed_sale_price || 0)),
+      commission_mode: deriveCommissionModeFromPricingMode(bundleConfig.pricing_mode),
+      fixed_commission_per_unit: String(Number(bundleConfig.fixed_commission_per_unit || 0)),
+      fixed_commission_percent: String(Number(bundleConfig.fixed_commission_percent || 0)),
+      delivery_rule: bundleConfig.delivery_rule,
+      note: bundleConfig.note || '',
+      is_active: true,
+      components: [
+        {
+          component_product: motherId,
+          qty_per_bundle: '1',
+          is_required: bundleConfig.delivery_rule === 'STRICT_FULL_SET',
+          sort_order: 0,
+          is_active: true,
+        },
+        ...componentRows.map((item, index) => ({
+          component_product: item.id,
+          qty_per_bundle: String(Number(item.component_quantity || 1)),
+          is_required: bundleConfig.delivery_rule === 'STRICT_FULL_SET',
+          sort_order: index + 1,
+          is_active: true,
+        })),
+      ],
+    };
+    await productsApi.upsertProductBundle(motherId, payload);
+  };
+
   const handleSubmit = async () => {
     if (isViewMode) return;
     setSubmitError(null);
@@ -623,8 +832,52 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
       message.error(errMother);
       return;
     }
+    if (requiresFixedBundlePrice && Number(bundleConfig.fixed_sale_price || 0) <= 0) {
+      const err = 'Khi chọn Giá bộ cố định, bắt buộc nhập Đơn giá bộ lớn hơn 0.';
+      setSubmitError(err);
+      message.error(err);
+      return;
+    }
+    if (hasChildren && bundleConfig.pricing_mode === 'PRIMARY_PRODUCT' && Number(mother.sale_price || 0) <= 0) {
+      const err = 'Khi chọn Lấy theo mẹ/đại diện, mã mẹ phải có Đơn giá lớn hơn 0.';
+      setSubmitError(err);
+      message.error(err);
+      return;
+    }
+    if (hasChildren && bundleConfig.pricing_mode === 'SUM_COMPONENTS' && Number(mother.sale_price || 0) <= 0) {
+      const err = 'Khi chọn Giá từ thành phần, mã mẹ cũng phải có Đơn giá lớn hơn 0.';
+      setSubmitError(err);
+      message.error(err);
+      return;
+    }
+    if (!hasChildren && Number(mother.sale_price || 0) > 0 && Number(mother.cost_price || 0) > Number(mother.sale_price || 0)) {
+      const err = 'Đơn giá phải lớn hơn hoặc bằng giá vốn.';
+      setSubmitError(err);
+      message.error(err);
+      return;
+    }
+    if (canEditMotherPrice && Number(mother.sale_price || 0) > 0 && Number(mother.cost_price || 0) > Number(mother.sale_price || 0)) {
+      const err = 'Đơn giá của mã mẹ phải lớn hơn hoặc bằng giá vốn.';
+      setSubmitError(err);
+      message.error(err);
+      return;
+    }
     if (hasChildren && children.length > 0) {
       for (let i = 0; i < children.length; i++) {
+        if (hasChildren && bundleConfig.pricing_mode === 'SUM_COMPONENTS' && Number(children[i].sale_price || 0) <= 0) {
+          const errMsg = `Con ${i + 1}: Khi chọn Giá từ thành phần, bắt buộc nhập Đơn giá lớn hơn 0.`;
+          setSubmitError(errMsg);
+          message.error(errMsg);
+          return;
+        }
+        if (canEditChildPrice &&
+          Number(children[i].sale_price || 0) > 0 &&
+          Number(children[i].cost_price || 0) > Number(children[i].sale_price || 0)) {
+          const errMsg = `Con ${i + 1}: Đơn giá phải lớn hơn hoặc bằng giá vốn.`;
+          setSubmitError(errMsg);
+          message.error(errMsg);
+          return;
+        }
         const err = validateChild(children[i]);
         if (err) {
           const errMsg = `Con ${i + 1}: ${err}`;
@@ -638,7 +891,10 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
     setSubmitError(null);
     try {
       const isSet = hasChildren && children.length > 0;
-      const motherPayload = buildMotherPayload(mother, isSet);
+      const motherPayload = {
+        ...buildMotherPayload(mother, isSet),
+        skip_price_floor_validation: skipMotherPriceFloorValidation,
+      };
 
       if (editingProduct?.id) {
         if (isEditingChild) {
@@ -646,12 +902,32 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
           if (child && productDetail?.parent != null) {
             const motherId = productDetail.parent;
             const childCode = (productDetail.code ?? '').trim() || `${(mother.code ?? '').trim()}-1`;
-            const fullPayload = buildChildPayload(child, motherId, childCode);
-            const { parent: _p, code: _c, ...updateData } = fullPayload;
+            const fullPayload = buildChildPayload(child, motherId, childCode, skipChildPriceFloorValidation);
+            const updateData = Object.fromEntries(
+              Object.entries(fullPayload).filter(([key]) => key !== 'parent' && key !== 'code'),
+            );
             await updateChildMutation.mutateAsync({ id: editingProduct.id, data: updateData });
+            const remainingChildren = (parentDetail?.components ?? [])
+              .filter((item) => item.id !== editingProduct.id)
+              .map((item) => ({
+                id: item.id,
+                component_quantity: Number(item.component_quantity) || 1,
+              }));
+            await syncBundleForMother(motherId, [
+              ...remainingChildren,
+              { id: editingProduct.id, component_quantity: Number(child.component_quantity) || 1 },
+            ]);
             message.success('Đã cập nhật sản phẩm thành công.');
           } else if (children.length === 0 && productDetail?.parent != null) {
             await deleteChildMutation.mutateAsync(editingProduct.id);
+            const motherId = productDetail.parent;
+            const remainingChildren = (parentDetail?.components ?? [])
+              .filter((item) => item.id !== editingProduct.id)
+              .map((item) => ({
+                id: item.id,
+                component_quantity: Number(item.component_quantity) || 1,
+              }));
+            await syncBundleForMother(motherId, remainingChildren);
             message.success('Đã xóa mã hàng con.');
           }
           queryClient.invalidateQueries({ queryKey: ['product', editingProduct.id] });
@@ -672,19 +948,25 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
           for (const id of idsToDelete) {
             await deleteChildMutation.mutateAsync(id);
           }
+          const bundleRows: Array<{ id: number; component_quantity: number }> = [];
           if (isSet && children.length > 0) {
             for (let i = 0; i < children.length; i++) {
               const child = children[i];
               const childCode = `${motherCode}-${i + 1}`;
-              const fullPayload = buildChildPayload(child, motherId, childCode);
-              const { parent: _p, code: _c, ...updateData } = fullPayload;
+              const fullPayload = buildChildPayload(child, motherId, childCode, skipChildPriceFloorValidation);
+              const updateData = Object.fromEntries(
+                Object.entries(fullPayload).filter(([key]) => key !== 'parent' && key !== 'code'),
+              );
               if (child.id != null) {
                 await updateChildMutation.mutateAsync({ id: child.id, data: updateData });
+                bundleRows.push({ id: child.id, component_quantity: Number(child.component_quantity) || 1 });
               } else {
-                await createChildMutation.mutateAsync(fullPayload);
+                const createdChild = await createChildMutation.mutateAsync(fullPayload);
+                bundleRows.push({ id: createdChild.id, component_quantity: Number(child.component_quantity) || 1 });
               }
             }
           }
+          await syncBundleForMother(motherId, bundleRows);
           queryClient.invalidateQueries({ queryKey: ['product', editingProduct.id] });
           message.success('Đã cập nhật sản phẩm thành công.');
         }
@@ -692,19 +974,28 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
         const created = await createMotherMutation.mutateAsync(motherPayload);
         const motherId = created.id;
         const motherCode = (mother.code ?? '').trim();
+        const bundleRows: Array<{ id: number; component_quantity: number }> = [];
 
         if (isSet && children.length > 0) {
           for (let i = 0; i < children.length; i++) {
-            const childPayload = buildChildPayload(children[i], motherId, `${motherCode}-${i + 1}`);
-            await createChildMutation.mutateAsync(childPayload);
+            const childPayload = buildChildPayload(
+              children[i],
+              motherId,
+              `${motherCode}-${i + 1}`,
+              skipChildPriceFloorValidation,
+            );
+            const createdChild = await createChildMutation.mutateAsync(childPayload);
+            bundleRows.push({ id: createdChild.id, component_quantity: Number(children[i].component_quantity) || 1 });
           }
         }
+        await syncBundleForMother(motherId, bundleRows);
         message.success('Đã thêm sản phẩm thành công.');
       }
 
       setSubmitError(null);
       onClose();
       setMother(defaultMother(firstUnitId));
+      setBundleConfig(defaultBundleConfig());
       setChildren([]);
       setHasChildren(false);
     } catch (e: unknown) {
@@ -768,6 +1059,11 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
             userSelect: isViewMode ? 'none' : 'auto',
           }}
         >
+        <datalist id="price-change-reason-options">
+          {PRICE_CHANGE_REASON_OPTIONS.map((option) => (
+            <option key={option} value={option} />
+          ))}
+        </datalist>
         <section className="pf-section pf-section-mother">
           <div className="pf-row pf-row-price">
             <Field label="Mã hàng (Mẹ)" required span={2}>
@@ -810,10 +1106,12 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 type="number"
                 className="pf-input"
                 min={0}
+                disabled={!canEditMotherPrice}
                 value={mother.sale_price === 0 ? '' : mother.sale_price}
                 onChange={(e) => setMotherField('sale_price', e.target.value === '' ? 0 : Number(e.target.value))}
                 onClear={() => setMotherField('sale_price', 0)}
                 hasValue={mother.sale_price !== 0}
+                style={!canEditMotherPrice ? { background: '#f5f5f5' } : undefined}
               />
             </Field>
             <Field label="HHCĐ" span={1}>
@@ -821,10 +1119,12 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 type="number"
                 className="pf-input"
                 min={0}
+                disabled={!canEditMotherCommission}
                 value={mother.commission_per_unit ?? ''}
                 onChange={(e) => setMotherField('commission_per_unit', e.target.value === '' ? undefined : Number(e.target.value))}
                 onClear={() => setMotherField('commission_per_unit', undefined)}
                 hasValue={mother.commission_per_unit != null}
+                style={!canEditMotherCommission ? { background: '#f5f5f5' } : undefined}
               />
             </Field>
             <Field label="HH%" span={1}>
@@ -832,17 +1132,114 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 type="number"
                 className="pf-input"
                 min={0}
+                disabled={!canEditMotherCommission}
                 value={mother.commission_percent ?? ''}
                 onChange={(e) => setMotherField('commission_percent', e.target.value === '' ? undefined : Number(e.target.value))}
                 onClear={() => setMotherField('commission_percent', undefined)}
                 hasValue={mother.commission_percent != null}
+                style={!canEditMotherCommission ? { background: '#f5f5f5' } : undefined}
               />
             </Field>
           </div>
+          {hasChildren && (
+            <>
+              <div className="pf-row">
+                <Field label="Cách tính giá bộ" span={2}>
+                  <select
+                    className="pf-select"
+                    value={bundleConfig.pricing_mode}
+                    onChange={(e) => setBundleField('pricing_mode', e.target.value as ProductBundlePricingMode)}
+                  >
+                    {BUNDLE_PRICING_MODE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                {requiresFixedBundlePrice && (
+                  <Field label="Đơn giá bộ" span={1} required>
+                    <FormInputWithClear
+                      type="number"
+                      className="pf-input"
+                      min={0}
+                      value={bundleConfig.fixed_sale_price === 0 ? '' : bundleConfig.fixed_sale_price}
+                      onChange={(e) => setBundleField('fixed_sale_price', e.target.value === '' ? 0 : Number(e.target.value))}
+                      onClear={() => setBundleField('fixed_sale_price', 0)}
+                      hasValue={bundleConfig.fixed_sale_price !== 0}
+                    />
+                  </Field>
+                )}
+                <Field label="Hoa hồng bộ" span={2}>
+                  <div
+                    className="pf-input"
+                    style={{
+                      background: '#fafafa',
+                      color: '#595959',
+                      display: 'flex',
+                      alignItems: 'center',
+                      minHeight: 34,
+                    }}
+                  >
+                    Tự đi theo "Cách tính giá bộ"
+                  </div>
+                </Field>
+                {showFixedBundleCommissionFields && (
+                  <>
+                    <Field label="HHCĐ bộ" span={1}>
+                      <FormInputWithClear
+                        type="number"
+                        className="pf-input"
+                        min={0}
+                        value={bundleConfig.fixed_commission_per_unit ?? ''}
+                        onChange={(e) => setBundleField('fixed_commission_per_unit', e.target.value === '' ? undefined : Number(e.target.value))}
+                        onClear={() => setBundleField('fixed_commission_per_unit', undefined)}
+                        hasValue={bundleConfig.fixed_commission_per_unit != null}
+                      />
+                    </Field>
+                    <Field label="HH% bộ" span={1}>
+                      <FormInputWithClear
+                        type="number"
+                        className="pf-input"
+                        min={0}
+                        value={bundleConfig.fixed_commission_percent ?? ''}
+                        onChange={(e) => setBundleField('fixed_commission_percent', e.target.value === '' ? undefined : Number(e.target.value))}
+                        onClear={() => setBundleField('fixed_commission_percent', undefined)}
+                        hasValue={bundleConfig.fixed_commission_percent != null}
+                      />
+                    </Field>
+                  </>
+                )}
+                <Field label="Giao hàng" span={2}>
+                  <select
+                    className="pf-select"
+                    value={bundleConfig.delivery_rule}
+                    onChange={(e) => setBundleField('delivery_rule', e.target.value as ProductBundleDeliveryRule)}
+                  >
+                    {BUNDLE_DELIVERY_RULE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+              <div className="pf-row">
+                <Field label="Ghi chú bán/giao bộ" span={5}>
+                  <FormInputWithClear
+                    type="text"
+                    className="pf-input"
+                    placeholder="Ví dụ: báo giá theo combo, giao đủ bộ hoặc cho phép giao rời theo thành phần"
+                    value={bundleConfig.note}
+                    onChange={(e) => setBundleField('note', e.target.value)}
+                    onClear={() => setBundleField('note', '')}
+                  />
+                </Field>
+              </div>
+            </>
+          )}
           <div className="pf-row">
-            <Field label="Lý do thay đổi giá (nếu có đổi giá)" span={4}>
+            <Field label="Lý do thay đổi giá (Mẹ / mã chính)" span={4}>
               <FormInputWithClear
                 type="text"
+                list="price-change-reason-options"
+                placeholder="Nhập tay hoặc chọn gợi ý"
                 className="pf-input"
                 value={priceChangeReason}
                 onChange={(e) => setPriceChangeReason(e.target.value)}
@@ -954,12 +1351,12 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
             <Field label="Khác" span={1}>
               <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_khac ?? ''} onChange={(e) => setMotherField('process_khac', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_khac', undefined)} hasValue={mother.process_khac != null} />
             </Field>
-            <Field label="Ghi chú công đoạn khác" span={4}>
+        <Field label="Ghi chú sản xuất" span={4}>
               <FormInputWithClear type="text" className="pf-input" value={mother.note_other ?? ''} onChange={(e) => setMotherField('note_other', e.target.value)} onClear={() => setMotherField('note_other', '')} />
             </Field>
           </div>
           <div className="pf-row pf-row-note">
-            <Field label="Ghi chú chung (Mẹ)" span={9}>
+        <Field label="Ghi chú mã hàng" span={9}>
               <FormInputWithClear type="text" className="pf-input" value={mother.note ?? ''} onChange={(e) => setMotherField('note', e.target.value)} onClear={() => setMotherField('note', '')} />
             </Field>
             <Field label="Trạng thái" span={1}>
@@ -1003,6 +1400,8 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
               index={i}
               motherCode={(mother.code ?? '').trim()}
               child={child}
+              canEditChildPrice={canEditChildPrice}
+              canEditChildCommission={canEditChildCommission}
               onChange={(field, value) => setChild(i, field, value)}
               onRemove={() => removeChild(i)}
               canRemove={children.length >= 1}

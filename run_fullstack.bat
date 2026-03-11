@@ -1,7 +1,8 @@
 @echo off
 setlocal
 
-set ROOT_DIR=D:\Projects\erp-carton
+set ROOT_DIR=%~dp0
+if "%ROOT_DIR:~-1%"=="\" set ROOT_DIR=%ROOT_DIR:~0,-1%
 set BACKEND_DIR=%ROOT_DIR%\backend
 set FRONTEND_DIR=%ROOT_DIR%\frontend
 set PYTHON_EXE=%BACKEND_DIR%\.venv\Scripts\python.exe
@@ -19,8 +20,8 @@ start "ERP Backend" cmd /k "cd /d %BACKEND_DIR% && %PYTHON_EXE% manage.py runser
 start "ERP Frontend" cmd /k "cd /d %FRONTEND_DIR% && npm run dev"
 
 timeout /t 3 /nobreak >nul
-start "" http://127.0.0.1:5174
+start "" http://127.0.0.1:5173
 
-echo [ERP Carton] Done. If 5174 is busy, frontend may open another port shown in the frontend window.
+echo [ERP Carton] Done. If 5173 is busy, frontend may open another port shown in the frontend window.
 endlocal
 

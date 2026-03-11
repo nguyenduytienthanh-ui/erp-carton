@@ -98,7 +98,27 @@ function saveTaskActivityReadMap(map: Record<string, string>) {
   }
 }
 
-type UserList = { id: number; username: string; first_name: string; last_name: string; email: string }[];
+type UserList = {
+  id: number;
+  username: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  teams?: Array<{ id: number; code: string; name: string }>;
+  roles?: Array<{ id: number; code: string; name: string }>;
+}[];
+
+interface AssigneeDirectoryState {
+  users: UserList;
+  roles: Array<{ id: number; code: string; name: string }>;
+  teams: Array<{ id: number; code: string; name: string }>;
+  search: string;
+  setSearch: (value: string) => void;
+  roleId?: number;
+  setRoleId: (value?: number) => void;
+  teamId?: number;
+  setTeamId: (value?: number) => void;
+}
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
   TODO: <ClockCircleOutlined style={{ color: '#8c8c8c' }} />,
@@ -121,13 +141,42 @@ function useMentionOptions() {
   const handleSearch = useCallback(async (text: string) => {
     setLoading(true);
     try {
-      const users = await usersApi.list(text);
+      const users = await usersApi.list({ search: text });
       setOpts(users.map((u) => ({ value: u.username, label: `${getUserDisplayName(u)} (@${u.username})` })));
     } finally {
       setLoading(false);
     }
   }, []);
   return { opts, loading, handleSearch };
+}
+
+function renderAssigneeDirectoryFilters(directory: AssigneeDirectoryState) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
+      <Input
+        size="small"
+        value={directory.search}
+        onChange={(event) => directory.setSearch(event.target.value)}
+        placeholder="Tìm người theo tên, username, email..."
+      />
+      <Select
+        size="small"
+        allowClear
+        value={directory.teamId}
+        placeholder="Lọc theo team"
+        onChange={(value) => directory.setTeamId(value ?? undefined)}
+        options={directory.teams.map((team) => ({ value: team.id, label: `${team.code} - ${team.name}` }))}
+      />
+      <Select
+        size="small"
+        allowClear
+        value={directory.roleId}
+        placeholder="Lọc theo vai trò"
+        onChange={(value) => directory.setRoleId(value ?? undefined)}
+        options={directory.roles.map((role) => ({ value: role.id, label: `${role.code} - ${role.name}` }))}
+      />
+    </div>
+  );
 }
 
 // ─── Form fields (render function, không phải component) ──────────────────────
@@ -144,7 +193,11 @@ interface FormValues {
   due_date?: dayjs.Dayjs;
 }
 
-function renderFormFields(users: UserList, tasks: TaskItem[], currentTaskId?: number) {
+function renderFormFields(
+  directory: AssigneeDirectoryState,
+  tasks: TaskItem[],
+  currentTaskId?: number,
+) {
   const dependencyOptions = tasks
     .filter((t) => t.id !== currentTaskId)
     .map((t) => ({
@@ -183,11 +236,24 @@ function renderFormFields(users: UserList, tasks: TaskItem[], currentTaskId?: nu
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
         <Form.Item name="assigned_to" label="Người thực hiện" style={{ marginBottom: 10 }}>
-          <Select
-            showSearch allowClear placeholder="Chọn người..."
-            filterOption={(input, opt) => String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-            options={users.map((u) => ({ value: u.id, label: getUserDisplayName(u) }))}
-          />
+          <div>
+            {renderAssigneeDirectoryFilters(directory)}
+            <Select
+              showSearch
+              allowClear
+              placeholder="Chọn người..."
+              filterOption={false}
+              onSearch={directory.setSearch}
+              options={directory.users.map((u) => ({
+                value: u.id,
+                label: [
+                  getUserDisplayName(u),
+                  u.teams?.[0]?.name,
+                  u.roles?.[0]?.name ? `(${u.roles[0].name})` : '',
+                ].filter(Boolean).join(' - '),
+              }))}
+            />
+          </div>
         </Form.Item>
         <Form.Item name="due_date" label="Hạn hoàn thành" style={{ marginBottom: 10 }}>
           <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} placeholder="Chọn ngày..." />
@@ -445,6 +511,7 @@ function CommentRow({ comment }: { comment: CommentItem }) {
 interface TaskCardProps {
   task: TaskItem;
   users: UserList;
+  assigneeDirectory: AssigneeDirectoryState;
   onRefresh: () => void;
   onEdit: (task: TaskItem) => void;
   lastReadAt?: string;
@@ -452,7 +519,7 @@ interface TaskCardProps {
   queueRank?: number;
 }
 
-function TaskCard({ task, users, onRefresh, onEdit, lastReadAt, onMarkRead, queueRank }: TaskCardProps) {
+function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadAt, onMarkRead, queueRank }: TaskCardProps) {
   const [loading, setLoading] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [helpModalOpen, setHelpModalOpen] = useState(false);
@@ -748,7 +815,14 @@ function TaskCard({ task, users, onRefresh, onEdit, lastReadAt, onMarkRead, queu
           {(isAssigned || canManage) && (
             <Tooltip title="Chuyển nhiệm vụ sang người khác">
               <Button size="small" icon={<SwapOutlined />}
-                onClick={() => { setReassignTo(task.assigned_to); setReassignNote(''); setReassignModalOpen(true); }}
+                onClick={() => {
+                  assigneeDirectory.setSearch('');
+                  assigneeDirectory.setRoleId(undefined);
+                  assigneeDirectory.setTeamId(undefined);
+                  setReassignTo(task.assigned_to);
+                  setReassignNote('');
+                  setReassignModalOpen(true);
+                }}
                 style={{ borderColor: '#722ed1', color: '#722ed1' }}>
                 Chuyển
               </Button>
@@ -844,13 +918,24 @@ function TaskCard({ task, users, onRefresh, onEdit, lastReadAt, onMarkRead, queu
           )}
           <div style={{ marginBottom: 12 }}>
             <Text style={{ display: 'block', marginBottom: 6 }}>Chuyển sang người</Text>
+            {renderAssigneeDirectoryFilters(assigneeDirectory)}
             <Select
-              showSearch allowClear placeholder="Chọn người thực hiện mới..."
+              showSearch
+              allowClear
+              placeholder="Chọn người thực hiện mới..."
               style={{ width: '100%' }}
               value={reassignTo ?? undefined}
               onChange={(v) => setReassignTo(v ?? null)}
-              filterOption={(input, opt) => String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-              options={users.map((u) => ({ value: u.id, label: getUserDisplayName(u) }))}
+              filterOption={false}
+              onSearch={assigneeDirectory.setSearch}
+              options={users.map((u) => ({
+                value: u.id,
+                label: [
+                  getUserDisplayName(u),
+                  u.teams?.[0]?.name,
+                  u.roles?.[0]?.name ? `(${u.roles[0].name})` : '',
+                ].filter(Boolean).join(' - '),
+              }))}
             />
           </div>
           <Text style={{ display: 'block', marginBottom: 6 }}>
@@ -950,10 +1035,18 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
   const [editingTask, setEditingTask] = useState<TaskItem | null>(null);
   const [quickFilter, setQuickFilter] = useState<'ALL' | 'OVERDUE' | 'HELP' | 'BLOCKING' | 'DEPENDENCY'>('ALL');
   const [quickHandleMode, setQuickHandleMode] = useState(false);
+  const [assigneeSearch, setAssigneeSearch] = useState('');
+  const [assigneeRoleId, setAssigneeRoleId] = useState<number | undefined>(undefined);
+  const [assigneeTeamId, setAssigneeTeamId] = useState<number | undefined>(undefined);
   const [createForm] = Form.useForm<FormValues>();
   const [editForm] = Form.useForm<FormValues>();
   const queryClient = useQueryClient();
   const [taskActivityReadMap, setTaskActivityReadMap] = useState<Record<string, string>>(loadTaskActivityReadMap);
+  const resetAssigneeDirectory = useCallback(() => {
+    setAssigneeSearch('');
+    setAssigneeRoleId(undefined);
+    setAssigneeTeamId(undefined);
+  }, []);
 
   const queryKey = useMemo(() => ['tasks', entityType, entityId], [entityType, entityId]);
 
@@ -965,10 +1058,39 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
   });
 
   const { data: users = [] } = useQuery({
-    queryKey: ['users-for-task'],
-    queryFn: () => usersApi.list(),
+    queryKey: ['users-for-task', assigneeSearch, assigneeRoleId ?? null, assigneeTeamId ?? null],
+    queryFn: () => usersApi.list({
+      search: assigneeSearch.trim() || undefined,
+      role: assigneeRoleId,
+      team: assigneeTeamId,
+      is_active: true,
+    }),
     staleTime: 60_000,
   });
+
+  const { data: roleOptions = [] } = useQuery({
+    queryKey: ['task-role-options'],
+    queryFn: () => usersApi.listRoles(),
+    staleTime: 300_000,
+  });
+
+  const { data: teamOptions = [] } = useQuery({
+    queryKey: ['task-team-options'],
+    queryFn: () => usersApi.listTeams(),
+    staleTime: 300_000,
+  });
+
+  const assigneeDirectory = useMemo<AssigneeDirectoryState>(() => ({
+    users,
+    roles: roleOptions,
+    teams: teamOptions,
+    search: assigneeSearch,
+    setSearch: setAssigneeSearch,
+    roleId: assigneeRoleId,
+    setRoleId: setAssigneeRoleId,
+    teamId: assigneeTeamId,
+    setTeamId: setAssigneeTeamId,
+  }), [users, roleOptions, teamOptions, assigneeSearch, assigneeRoleId, assigneeTeamId]);
 
   const invalidate = useCallback(() => {
     void refetch();
@@ -1028,6 +1150,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
   });
 
   const openEditModal = (task: TaskItem) => {
+    resetAssigneeDirectory();
     setEditingTask(task);
     editForm.setFieldsValue({
       title: task.title, description: task.description,
@@ -1216,6 +1339,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
               key={t.id}
               task={t}
               users={users}
+              assigneeDirectory={assigneeDirectory}
               onRefresh={invalidate}
               onEdit={openEditModal}
               lastReadAt={taskActivityReadMap[String(t.id)]}
@@ -1237,6 +1361,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
                   key={t.id}
                   task={t}
                   users={users}
+                  assigneeDirectory={assigneeDirectory}
                   onRefresh={invalidate}
                   onEdit={openEditModal}
                   lastReadAt={taskActivityReadMap[String(t.id)]}
@@ -1259,7 +1384,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
             Tạo nhiệm vụ mới
           </Text>
           <Form form={createForm} layout="vertical" size="small" onFinish={handleCreateFinish}>
-            {renderFormFields(users, tasks)}
+            {renderFormFields(assigneeDirectory, tasks)}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 4 }}>
               <Button size="small" onClick={() => { setShowCreateForm(false); createForm.resetFields(); }}>Hủy</Button>
               <Button size="small" type="primary" htmlType="submit" loading={createMutation.isPending}>
@@ -1270,7 +1395,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
         </div>
       ) : (
         <Button type="dashed" icon={<PlusOutlined />} size="small"
-          onClick={() => setShowCreateForm(true)} style={{ marginTop: 10, width: '100%' }}>
+          onClick={() => { resetAssigneeDirectory(); setShowCreateForm(true); }} style={{ marginTop: 10, width: '100%' }}>
           Thêm nhiệm vụ mới
         </Button>
       )}
@@ -1284,7 +1409,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
       >
         <div style={{ paddingTop: 8 }}>
           <Form form={editForm} layout="vertical" size="small" onFinish={handleEditFinish}>
-            {renderFormFields(users, tasks, editingTask?.id)}
+            {renderFormFields(assigneeDirectory, tasks, editingTask?.id)}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 4 }}>
               <Button size="small" onClick={() => { setEditingTask(null); editForm.resetFields(); }}>Hủy</Button>
               <Button size="small" type="primary" htmlType="submit" loading={editMutation.isPending}>

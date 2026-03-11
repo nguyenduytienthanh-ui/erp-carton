@@ -40,6 +40,69 @@ export interface ProductBoxType {
   updated_at: string;
 }
 
+export type ProductBundlePricingMode = 'PRIMARY_PRODUCT' | 'FIXED_BUNDLE' | 'SUM_COMPONENTS';
+export type ProductBundleCommissionMode = 'PRIMARY_PRODUCT' | 'FIXED_VALUES' | 'SUM_COMPONENTS';
+export type ProductBundleDeliveryRule = 'STRICT_FULL_SET' | 'NON_SYNC';
+
+export interface ProductBundleComponent {
+  id: number;
+  component_product: number;
+  component_product_code?: string;
+  component_product_name?: string;
+  component_product_unit_name?: string | null;
+  qty_per_bundle: string;
+  is_required: boolean;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface ProductBundleComponentInput {
+  component_product: number;
+  qty_per_bundle: string;
+  is_required?: boolean;
+  sort_order?: number;
+  is_active?: boolean;
+}
+
+export interface ProductBundleDefinition {
+  id: number;
+  sellable_product: number;
+  sellable_product_code?: string;
+  primary_product?: number | null;
+  primary_product_name?: string | null;
+  pricing_mode: ProductBundlePricingMode;
+  fixed_cost_price?: string;
+  fixed_sale_price?: string;
+  commission_mode: ProductBundleCommissionMode;
+  fixed_commission_per_unit?: string;
+  fixed_commission_percent?: string;
+  delivery_rule: ProductBundleDeliveryRule;
+  note?: string;
+  is_active: boolean;
+  components: ProductBundleComponent[];
+  resolved_cost_price?: string;
+  resolved_sale_price?: string;
+  resolved_commission_per_unit?: string;
+  resolved_commission_percent?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ProductBundleUpsertPayload {
+  sellable_product: number;
+  primary_product?: number | null;
+  pricing_mode: ProductBundlePricingMode;
+  fixed_cost_price?: string;
+  fixed_sale_price?: string;
+  commission_mode: ProductBundleCommissionMode;
+  fixed_commission_per_unit?: string;
+  fixed_commission_percent?: string;
+  delivery_rule: ProductBundleDeliveryRule;
+  note?: string;
+  is_active?: boolean;
+  components: ProductBundleComponentInput[];
+}
+
 export interface Product {
   id: number;
   code: string;
@@ -106,11 +169,30 @@ export interface Product {
   parent_name?: string;
   component_quantity?: number;
   is_set?: boolean;
+  bundle_id?: number | null;
   components?: Product[];
+  bundle_definition?: ProductBundleDefinition | null;
+  bundle_components?: ProductBundleComponent[];
+  bundle_pricing_mode?: ProductBundlePricingMode | null;
+  bundle_commission_mode?: ProductBundleCommissionMode | null;
+  bundle_delivery_rule?: ProductBundleDeliveryRule | null;
+  bundle_primary_product_id?: number | null;
+  bundle_primary_product_name?: string | null;
+  resolved_bundle_cost_price?: string;
+  resolved_bundle_sale_price?: string;
+  resolved_bundle_commission_per_unit?: string;
+  resolved_bundle_commission_percent?: string;
 
   // ============ TRẠNG THÁI ============
   status: 'DRAFT' | 'ACTIVE' | 'DISCONTINUED';
   has_pending_price_change?: boolean;
+  has_scheduled_price_change?: boolean;
+  price_workflow_status?: 'PENDING_APPROVAL' | 'APPROVED_SCHEDULED' | 'ACTIVE_APPLIED';
+  next_price_effective_at?: string | null;
+  next_price_cost?: string | null;
+  next_price_sale?: string | null;
+  next_price_commission_per_unit?: string | null;
+  next_price_commission_percent?: string | null;
   blocking_tasks_count?: number;
 
   // ============ PHÂN QUYỀN ============
@@ -177,6 +259,7 @@ export interface ProductFormData {
   status: string;
   price_change_reason?: string;
   price_effective_at?: string;
+  skip_price_floor_validation?: boolean;
 }
 
 /** Dữ liệu form một thành phần con (Lót, Khay...) – nhập riêng, không kế thừa Mẹ; code tự sinh Mã Mẹ-1, Mã Mẹ-2... */
@@ -186,6 +269,10 @@ export interface ProductChildFormData {
   component_quantity: number; /* số lượng / bộ, bắt buộc */
   category?: number;
   unit: number; /* ĐVT bắt buộc */
+  cost_price?: number;
+  sale_price?: number;
+  commission_per_unit?: number;
+  commission_percent?: number;
   size_order?: string;
   size_production?: string;
   wave?: number;
@@ -208,6 +295,7 @@ export interface ProductChildFormData {
   waterproof?: string;
   note_other?: string;
   note?: string;
+  price_change_reason?: string;
 
   is_active?: boolean;
   status?: 'DRAFT' | 'ACTIVE' | 'DISCONTINUED';

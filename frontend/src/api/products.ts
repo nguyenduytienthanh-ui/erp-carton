@@ -3,6 +3,8 @@ import { API_ENDPOINTS } from '../utils/constants';
 import type {
   Product,
   ProductCategory,
+  ProductBundleDefinition,
+  ProductBundleUpsertPayload,
   ProductUnit,
   PaginatedResponse,
   ProductFormData,
@@ -19,6 +21,10 @@ export interface PriceChangeRecord {
   new_cost_price?: string | null;
   old_sale_price?: string | null;
   new_sale_price?: string | null;
+  old_commission_per_unit?: string | null;
+  new_commission_per_unit?: string | null;
+  old_commission_percent?: string | null;
+  new_commission_percent?: string | null;
   delta_cost?: string | null;
   delta_sale?: string | null;
   delta_cost_percent?: string | null;
@@ -26,14 +32,64 @@ export interface PriceChangeRecord {
   reason?: string;
   source?: string;
   effective_at?: string | null;
-  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'APPLIED';
+  applied_at?: string | null;
+  batch_code?: string;
+  status: 'PENDING_APPROVAL' | 'APPROVED_SCHEDULED' | 'REJECTED' | 'ACTIVE_APPLIED' | 'SUPERSEDED';
   reject_reason?: string;
+  submitted_by_name?: string | null;
+  approved_by_name?: string | null;
+  approved_at?: string | null;
   created_at: string;
+}
+
+export interface BulkPriceChangeItemInput {
+  product_id: number;
+  new_cost_price?: number | null;
+  new_sale_price?: number | null;
+  new_commission_per_unit?: number | null;
+  new_commission_percent?: number | null;
+}
+
+export interface BulkPriceChangePreviewItem {
+  product_id: number;
+  product_code: string;
+  product_name: string;
+  old_cost_price: string;
+  new_cost_price: string;
+  old_sale_price: string;
+  new_sale_price: string;
+  old_commission_per_unit: string;
+  new_commission_per_unit: string;
+  old_commission_percent: string;
+  new_commission_percent: string;
+  delta_cost: string;
+  delta_cost_percent: string;
+  delta_sale: string;
+  delta_sale_percent: string;
+}
+
+export interface BulkPriceChangeSubmitResult {
+  batch_code: string;
+  total: number;
+  auto_approve: boolean;
+  items: PriceChangeRecord[];
+  preview: BulkPriceChangePreviewItem[];
+}
+
+type QueryParams = Record<string, unknown>;
+
+export interface ProductImportResult {
+  total_rows: number;
+  success_count: number;
+  error_count: number;
+  errors: Array<{ row?: number; error?: string } | string>;
+  log_id?: number;
+  [key: string]: unknown;
 }
 
 export const productsApi = {
   // ===== PRODUCTS CRUD =====
-  getProducts: async (params?: any): Promise<PaginatedResponse<Product>> => {
+  getProducts: async (params?: QueryParams): Promise<PaginatedResponse<Product>> => {
     const response = await axiosInstance.get(API_ENDPOINTS.PRODUCTS, { params });
     return response.data;
   },
@@ -84,8 +140,25 @@ export const productsApi = {
     return response.data.results;
   },
 
+  getProductBundle: async (productId: number): Promise<ProductBundleDefinition> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTS}${productId}/bundle/`);
+    return response.data;
+  },
+
+  upsertProductBundle: async (
+    productId: number,
+    data: ProductBundleUpsertPayload
+  ): Promise<ProductBundleDefinition> => {
+    const response = await axiosInstance.put(`${API_ENDPOINTS.PRODUCTS}${productId}/bundle/`, data);
+    return response.data;
+  },
+
+  deleteProductBundle: async (productId: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.PRODUCTS}${productId}/bundle/`);
+  },
+
   // ===== CATEGORIES =====
-  getCategories: async (params?: any): Promise<PaginatedResponse<ProductCategory>> => {
+  getCategories: async (params?: QueryParams): Promise<PaginatedResponse<ProductCategory>> => {
     const response = await axiosInstance.get(API_ENDPOINTS.CATEGORIES, { params });
     return response.data;
   },
@@ -115,7 +188,7 @@ export const productsApi = {
   },
 
   // ===== UNITS =====
-  getUnits: async (params?: any): Promise<PaginatedResponse<ProductUnit>> => {
+  getUnits: async (params?: QueryParams): Promise<PaginatedResponse<ProductUnit>> => {
     const response = await axiosInstance.get(API_ENDPOINTS.UNITS, { params });
     return response.data;
   },
@@ -152,7 +225,7 @@ export const productsApi = {
   },
 
   // ===== EXPORT / IMPORT =====
-  exportProducts: async (format: 'excel' | 'pdf', params?: any): Promise<Blob> => {
+  exportProducts: async (format: 'excel' | 'pdf', params?: QueryParams): Promise<Blob> => {
     const response = await axiosInstance.get(API_ENDPOINTS.EXPORT_PRODUCTS, {
       params: { format, ...params },
       responseType: 'blob',
@@ -190,7 +263,7 @@ export const productsApi = {
     return response.data as Blob;
   },
 
-  importProducts: async (file: File, options?: { updateIfExists?: boolean }): Promise<any> => {
+  importProducts: async (file: File, options?: { updateIfExists?: boolean }): Promise<ProductImportResult> => {
     const formData = new FormData();
     formData.append('file', file);
     if (options?.updateIfExists) {
@@ -201,7 +274,14 @@ export const productsApi = {
         'Content-Type': 'multipart/form-data',
       },
     });
-    return response.data;
+    const data = response.data as ProductImportResult;
+    return {
+      ...data,
+      total_rows: data.total_rows ?? 0,
+      success_count: data.success_count ?? 0,
+      error_count: data.error_count ?? 0,
+      errors: Array.isArray(data.errors) ? data.errors : [],
+    };
   },
 
   getActivityByEntity: async (entityType: string, entityId: number): Promise<ActivityItem[]> => {
@@ -218,7 +298,15 @@ export const productsApi = {
 
   submitPriceChange: async (
     productId: number,
-    data: { new_cost_price?: number; new_sale_price?: number; reason: string; effective_at?: string }
+    data: {
+      new_cost_price?: number;
+      new_sale_price?: number;
+      new_commission_per_unit?: number;
+      new_commission_percent?: number;
+      reason: string;
+      effective_at?: string;
+      batch_code?: string;
+    }
   ): Promise<PriceChangeRecord> => {
     const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}${productId}/submit_price_change/`, data);
     return response.data;
@@ -234,6 +322,22 @@ export const productsApi = {
       change_id: changeId,
       reject_reason: rejectReason,
     });
+    return response.data;
+  },
+
+  bulkPricePreview: async (items: BulkPriceChangeItemInput[]): Promise<{ total: number; items: BulkPriceChangePreviewItem[] }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}bulk_price_preview/`, { items });
+    return response.data;
+  },
+
+  bulkPriceSubmit: async (payload: {
+    items: BulkPriceChangeItemInput[];
+    reason: string;
+    effective_at?: string;
+    auto_approve?: boolean;
+    batch_code?: string;
+  }): Promise<BulkPriceChangeSubmitResult> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}bulk_price_submit/`, payload);
     return response.data;
   },
 };

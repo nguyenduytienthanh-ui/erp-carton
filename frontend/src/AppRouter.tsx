@@ -8,12 +8,24 @@ import PrivateRoute from './components/PrivateRoute';
 import FeatureRoute from './components/FeatureRoute';
 
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { canAccessOpsModules, canManageModulePermissionSettings } from './utils/authz';
+import {
+  canAccessSalesOrders,
+  canManageModulePermissionSettings,
+  canManageFinanceData,
+  canManageInventoryData,
+  canManageWorkforceData,
+  canViewModulePermissionHistory,
+  canViewOperationsLog,
+  canViewOpsHub,
+  canViewWorkflowData,
+  canManageWorkflowData,
+} from './utils/authz';
 
 const Login = lazy(() => import('./pages/Login'));
 const AuthenticatedShell = lazy(() => import('./components/Layout/AuthenticatedShell'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const ProductList = lazy(() => import('./pages/Products/ProductList'));
+const SalesOrderList = lazy(() => import('./pages/Sales/SalesOrderList'));
 const CategoryList = lazy(() => import('./pages/Categories/CategoryList'));
 const UnitList = lazy(() => import('./pages/Units/UnitList'));
 const CustomerList = lazy(() => import('./pages/Customers/CustomerList'));
@@ -35,12 +47,25 @@ const TransactionCategoryList = lazy(() => import('./pages/Finance/TransactionCa
 const CashBook = lazy(() => import('./pages/Finance/CashBook'));
 const AdvanceTransactionList = lazy(() => import('./pages/Finance/AdvanceTransactionList'));
 const FinanceSummary = lazy(() => import('./pages/Finance/FinanceSummary'));
+const WarehouseList = lazy(() => import('./pages/Inventory/WarehouseList'));
+const WarehouseLocationList = lazy(() => import('./pages/Inventory/WarehouseLocationList'));
+const InventoryStockOverview = lazy(() => import('./pages/Inventory/InventoryStockOverview'));
+const InventoryTransactionList = lazy(() => import('./pages/Inventory/InventoryTransactionList'));
+const InventoryReservationList = lazy(() => import('./pages/Inventory/InventoryReservationList'));
 const ModulePermissionSettings = lazy(() => import('./pages/Admin/ModulePermissionSettings'));
 const ModulePermissionHistory = lazy(() => import('./pages/Admin/ModulePermissionHistory'));
 
 export default function AppRouter() {
-  const canAccessOps = canAccessOpsModules();
+  const canViewOps = canViewOpsHub();
+  const canViewSalesOrders = canAccessSalesOrders();
+  const canViewWorkflow = canViewWorkflowData();
+  const canManageWorkflow = canManageWorkflowData();
+  const canViewOpsLog = canViewOperationsLog();
   const canManageModulePermissions = canManageModulePermissionSettings();
+  const canViewModulePermissionAudit = canViewModulePermissionHistory();
+  const canManageFinance = canManageFinanceData();
+  const canManageInventory = canManageInventoryData();
+  const canManageWorkforce = canManageWorkforceData();
   const [antdLocale, setAntdLocale] = useState<Locale | undefined>(undefined);
   const routeFallback = (
     <div style={{ padding: 24, textAlign: 'center' }}>
@@ -117,28 +142,34 @@ export default function AppRouter() {
             >
               <Route index element={withAsyncBoundary(<Dashboard />)} />
               <Route path="products" element={withAsyncBoundary(<ProductList />)} />
+              <Route path="sales-orders" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<SalesOrderList />)}</FeatureRoute>} />
               <Route path="categories" element={withAsyncBoundary(<CategoryList />)} />
               <Route path="units" element={withAsyncBoundary(<UnitList />)} />
               <Route path="customers" element={withAsyncBoundary(<CustomerList />)} />
-              <Route path="executive-cockpit" element={<FeatureRoute allow={canAccessOps} fallbackTo="/task-inbox">{withAsyncBoundary(<ExecutiveCockpit />)}</FeatureRoute>} />
-              <Route path="task-operations" element={<FeatureRoute allow={canAccessOps} fallbackTo="/task-inbox">{withAsyncBoundary(<TaskOperationsBoard />)}</FeatureRoute>} />
+              <Route path="warehouses" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseList />)}</FeatureRoute>} />
+              <Route path="warehouse-locations" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseLocationList />)}</FeatureRoute>} />
+              <Route path="inventory-stock" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryStockOverview />)}</FeatureRoute>} />
+              <Route path="inventory-transactions" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryTransactionList />)}</FeatureRoute>} />
+              <Route path="inventory-reservations" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryReservationList />)}</FeatureRoute>} />
+              <Route path="executive-cockpit" element={<FeatureRoute allow={canViewOps} fallbackTo="/task-inbox">{withAsyncBoundary(<ExecutiveCockpit />)}</FeatureRoute>} />
+              <Route path="task-operations" element={<FeatureRoute allow={canViewOps} fallbackTo="/task-inbox">{withAsyncBoundary(<TaskOperationsBoard />)}</FeatureRoute>} />
               <Route path="task-inbox" element={withAsyncBoundary(<TaskInbox />)} />
-              <Route path="workflow-task-templates" element={<FeatureRoute allow={canAccessOps} fallbackTo="/task-inbox">{withAsyncBoundary(<WorkflowTaskTemplateList />)}</FeatureRoute>} />
-              <Route path="workflow-pipeline" element={<FeatureRoute allow={canAccessOps} fallbackTo="/task-inbox">{withAsyncBoundary(<WorkflowPipelineBoard />)}</FeatureRoute>} />
-              <Route path="workflow-analytics" element={<FeatureRoute allow={canAccessOps} fallbackTo="/task-inbox">{withAsyncBoundary(<WorkflowAnalyticsDashboard />)}</FeatureRoute>} />
+              <Route path="workflow-task-templates" element={<FeatureRoute allow={canManageWorkflow} fallbackTo="/task-inbox">{withAsyncBoundary(<WorkflowTaskTemplateList />)}</FeatureRoute>} />
+              <Route path="workflow-pipeline" element={<FeatureRoute allow={canViewWorkflow} fallbackTo="/task-inbox">{withAsyncBoundary(<WorkflowPipelineBoard />)}</FeatureRoute>} />
+              <Route path="workflow-analytics" element={<FeatureRoute allow={canViewWorkflow} fallbackTo="/task-inbox">{withAsyncBoundary(<WorkflowAnalyticsDashboard />)}</FeatureRoute>} />
               <Route path="notifications" element={withAsyncBoundary(<NotificationCenter />)} />
-              <Route path="operations-log" element={<FeatureRoute allow={canAccessOps} fallbackTo="/task-inbox">{withAsyncBoundary(<OperationsLogDashboard />)}</FeatureRoute>} />
+              <Route path="operations-log" element={<FeatureRoute allow={canViewOpsLog} fallbackTo="/task-inbox">{withAsyncBoundary(<OperationsLogDashboard />)}</FeatureRoute>} />
               <Route path="pricings" element={<div>Bảng giá sản phẩm (Đang phát triển)</div>} />
-              <Route path="employees" element={withAsyncBoundary(<EmployeeList />)} />
-              <Route path="attendance" element={withAsyncBoundary(<AttendanceList />)} />
-              <Route path="bonus-penalty" element={withAsyncBoundary(<BonusPenaltyList />)} />
-              <Route path="payroll" element={withAsyncBoundary(<PayrollList />)} />
-              <Route path="salary-advance" element={withAsyncBoundary(<SalaryAdvanceList />)} />
-              <Route path="transaction-categories" element={withAsyncBoundary(<TransactionCategoryList />)} />
-              <Route path="bank-accounts" element={withAsyncBoundary(<BankAccountList />)} />
-              <Route path="cash-book" element={withAsyncBoundary(<CashBook />)} />
-              <Route path="advance-transactions" element={withAsyncBoundary(<AdvanceTransactionList />)} />
-              <Route path="finance-summary" element={withAsyncBoundary(<FinanceSummary />)} />
+              <Route path="employees" element={<FeatureRoute allow={canManageWorkforce} fallbackTo="/">{withAsyncBoundary(<EmployeeList />)}</FeatureRoute>} />
+              <Route path="attendance" element={<FeatureRoute allow={canManageWorkforce} fallbackTo="/">{withAsyncBoundary(<AttendanceList />)}</FeatureRoute>} />
+              <Route path="bonus-penalty" element={<FeatureRoute allow={canManageWorkforce} fallbackTo="/">{withAsyncBoundary(<BonusPenaltyList />)}</FeatureRoute>} />
+              <Route path="payroll" element={<FeatureRoute allow={canManageWorkforce} fallbackTo="/">{withAsyncBoundary(<PayrollList />)}</FeatureRoute>} />
+              <Route path="salary-advance" element={<FeatureRoute allow={canManageWorkforce} fallbackTo="/">{withAsyncBoundary(<SalaryAdvanceList />)}</FeatureRoute>} />
+              <Route path="transaction-categories" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<TransactionCategoryList />)}</FeatureRoute>} />
+              <Route path="bank-accounts" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<BankAccountList />)}</FeatureRoute>} />
+              <Route path="cash-book" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<CashBook />)}</FeatureRoute>} />
+              <Route path="advance-transactions" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<AdvanceTransactionList />)}</FeatureRoute>} />
+              <Route path="finance-summary" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<FinanceSummary />)}</FeatureRoute>} />
               <Route
                 path="admin/module-permissions"
                 element={(
@@ -150,7 +181,7 @@ export default function AppRouter() {
               <Route
                 path="admin/module-permissions-history"
                 element={(
-                  <FeatureRoute allow={canManageModulePermissions} fallbackTo="/">
+                  <FeatureRoute allow={canViewModulePermissionAudit} fallbackTo="/">
                     {withAsyncBoundary(<ModulePermissionHistory />)}
                   </FeatureRoute>
                 )}

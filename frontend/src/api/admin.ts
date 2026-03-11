@@ -3,6 +3,7 @@ import { API_ENDPOINTS } from '../utils/constants';
 import type {
   RoleModulePermissionFreezeHistoryResponse,
   RoleModulePermissionHistoryResponse,
+  RoleModulePermissionHistoryMetaResponse,
   RoleModulePermissionResponse,
   RoleModulePermissionUpdatePayload,
 } from '../types/admin';
@@ -24,7 +25,7 @@ export const adminApi = {
     date_from?: string;
     date_to?: string;
     role_code?: string;
-    changed_type?: 'workforce' | 'finance' | 'rbac';
+    changed_type?: string;
     page?: number;
     page_size?: number;
   }): Promise<RoleModulePermissionHistoryResponse> => {
@@ -38,7 +39,7 @@ export const adminApi = {
     date_from?: string;
     date_to?: string;
     role_code?: string;
-    changed_type?: 'workforce' | 'finance' | 'rbac';
+    changed_type?: string;
   }): Promise<Blob> => {
     const response = await axiosInstance.get(API_ENDPOINTS.ROLE_MODULE_PERMISSIONS_HISTORY, {
       params: { ...params, export: 'excel' },
@@ -90,5 +91,10 @@ export const adminApi = {
   }): Promise<RoleModulePermissionFreezeHistoryResponse> => {
     const response = await axiosInstance.get('/roles/module_permissions_freeze_history/', { params });
     return response.data as RoleModulePermissionFreezeHistoryResponse;
+  },
+
+  getRoleModulePermissionHistoryMeta: async (): Promise<RoleModulePermissionHistoryMetaResponse> => {
+    const response = await axiosInstance.get('/roles/module_permissions_history_meta/');
+    return response.data as RoleModulePermissionHistoryMetaResponse;
   },
 };

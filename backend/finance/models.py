@@ -1,5 +1,8 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.db import models
+from django.db.models import Sum
 from unidecode import unidecode
 
 
@@ -192,6 +195,40 @@ class CashAccount(SearchTextModelMixin):
     def save(self, *args, **kwargs):
         self._build_search_text()
         super().save(*args, **kwargs)
+
+    def current_balance_as_of(self, up_to_date=None, exclude_transaction_id: int | None = None):
+        qs = CashTransaction.objects.all()
+        if up_to_date:
+            qs = qs.filter(transaction_date__lte=up_to_date)
+        if exclude_transaction_id:
+            qs = qs.exclude(pk=exclude_transaction_id)
+        income_total = Decimal(str(
+            qs.filter(
+                transaction_type=CashTransaction.TYPE_INCOME,
+                source_type=CashTransaction.SOURCE_CASH,
+                source_cash_account=self,
+            ).aggregate(total=Sum('amount')).get('total') or 0
+        ))
+        expense_total = Decimal(str(
+            qs.filter(
+                transaction_type=CashTransaction.TYPE_EXPENSE,
+                source_type=CashTransaction.SOURCE_CASH,
+                source_cash_account=self,
+            ).aggregate(total=Sum('amount')).get('total') or 0
+        ))
+        transfer_out_total = Decimal(str(
+            qs.filter(
+                transaction_type=CashTransaction.TYPE_TRANSFER,
+                source_cash_account=self,
+            ).aggregate(total=Sum('amount')).get('total') or 0
+        ))
+        transfer_in_total = Decimal(str(
+            qs.filter(
+                transaction_type=CashTransaction.TYPE_TRANSFER,
+                target_cash_account=self,
+            ).aggregate(total=Sum('amount')).get('total') or 0
+        ))
+        return Decimal(str(self.balance or 0)) + income_total + transfer_in_total - expense_total - transfer_out_total
 
 
 class CashTransaction(SearchTextModelMixin):

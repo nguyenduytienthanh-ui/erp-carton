@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Popconfirm, Space, Spin, Switch, Tag, message } from 'antd';
+import { Button, Input, Modal, Popconfirm, Space, Spin, Switch, Tag, message } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import axiosInstance from '../../api/axios';
 import { financeApi } from '../../api/finance';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { canManageFinanceData } from '../../utils/authz';
-import type { AdvanceReminderPolicySimulationResponse } from '../../types/finance';
+import type { AdvanceReminderPolicySimulationResponse, FinanceMonthCloseCheckResponse } from '../../types/finance';
 
 type FinanceMonthlySummary = {
   month: string;
@@ -53,6 +53,54 @@ function money(value: string): string {
 
 const { TextArea } = Input;
 
+function renderFinanceMonthCloseCheck(check: FinanceMonthCloseCheckResponse) {
+  const renderDetailItems = (items: Array<Record<string, unknown>>) => {
+    if (!items.length) return null;
+    return (
+      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {items.slice(0, 5).map((entry, index) => (
+          <div key={index} style={{ fontSize: 12, color: '#595959', padding: 8, borderRadius: 6, background: '#ffffff' }}>
+            {Object.entries(entry).map(([key, value]) => `${key}: ${String(value ?? '-')}`).join(' | ')}
+          </div>
+        ))}
+      </div>
+    );
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {check.blockers.length > 0 ? (
+        <div>
+          <div style={{ fontWeight: 700, color: '#cf1322', marginBottom: 8 }}>Điểm chặn phải xử lý trước</div>
+          {check.blockers.map((item) => (
+            <div key={item.code} style={{ marginBottom: 8, padding: 10, border: '1px solid #ffccc7', borderRadius: 8, background: '#fff2f0' }}>
+              <div style={{ fontWeight: 600 }}>{item.title}{item.count > 0 ? ` (${item.count})` : ''}</div>
+              <div style={{ color: '#595959' }}>{item.message}</div>
+              {renderDetailItems(item.items)}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {check.warnings.length > 0 ? (
+        <div>
+          <div style={{ fontWeight: 700, color: '#d48806', marginBottom: 8 }}>Cảnh báo nên rà soát</div>
+          {check.warnings.map((item) => (
+            <div key={item.code} style={{ marginBottom: 8, padding: 10, border: '1px solid #ffe58f', borderRadius: 8, background: '#fffbe6' }}>
+              <div style={{ fontWeight: 600 }}>{item.title}{item.count > 0 ? ` (${item.count})` : ''}</div>
+              <div style={{ color: '#595959' }}>{item.message}</div>
+              {renderDetailItems(item.items)}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {check.blockers.length === 0 && check.warnings.length === 0 ? (
+        <div style={{ padding: 10, border: '1px solid #b7eb8f', borderRadius: 8, background: '#f6ffed', color: '#389e0d' }}>
+          Tháng này đã đạt điều kiện khóa sổ.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function FinanceSummary() {
   const [messageApi, contextHolder] = message.useMessage();
   const { config, saveConfig } = useUserPreferences('finance-summary');
@@ -79,6 +127,13 @@ export default function FinanceSummary() {
   } | null>(null);
   const policyActionThrottleLockRef = useRef<boolean>(false);
   const policyActionThrottleTimerRef = useRef<number | null>(null);
+  const [forceFinanceUnlock, setForceFinanceUnlock] = useState(false);
+  const [rejectModal, setRejectModal] = useState<{ open: boolean; id: number | null; code: string }>({
+    open: false,
+    id: null,
+    code: '',
+  });
+  const [rejectReason, setRejectReason] = useState('');
   const canManage = canManageFinanceData();
   const runPolicyActionWithThrottle = (action: () => void): void => {
     if (policyActionThrottleLockRef.current) {
@@ -530,13 +585,40 @@ export default function FinanceSummary() {
     onError: () => messageApi.error('Khóa sổ thất bại'),
   });
   const unlockMonthMutation = useMutation({
-    mutationFn: () => financeApi.unlockFinanceMonth(month),
+    mutationFn: () => financeApi.unlockFinanceMonth(month, forceFinanceUnlock),
     onSuccess: () => {
       messageApi.success(`Đã mở khóa sổ tài chính tháng ${month}`);
     },
     onError: () => messageApi.error('Mở khóa sổ thất bại'),
   });
   const isMonthLocked = (lockedMonthsQuery.data?.months ?? []).includes(month);
+
+  const handleLockMonth = async () => {
+    try {
+      const check = await financeApi.getFinanceMonthCloseCheck(month);
+      if (check.blockers.length > 0) {
+        Modal.error({
+          title: `Chưa thể khóa sổ tháng ${month}`,
+          width: 720,
+          content: renderFinanceMonthCloseCheck(check),
+        });
+        return;
+      }
+      Modal.confirm({
+        title: `Khóa sổ tài chính tháng ${month}?`,
+        width: 720,
+        content: renderFinanceMonthCloseCheck(check),
+        okText: 'Khóa sổ tháng',
+        cancelText: 'Hủy',
+        onOk: async () => {
+          await lockMonthMutation.mutateAsync();
+          await lockedMonthsQuery.refetch();
+        },
+      });
+    } catch {
+      messageApi.error('Không thể kiểm tra điều kiện khóa sổ tài chính');
+    }
+  };
 
   const cards = useMemo(() => {
     const data = summaryQuery.data;
@@ -588,10 +670,7 @@ export default function FinanceSummary() {
           <Button
             disabled={!canManage || isMonthLocked}
             loading={lockMonthMutation.isPending}
-            onClick={async () => {
-              await lockMonthMutation.mutateAsync();
-              await lockedMonthsQuery.refetch();
-            }}
+            onClick={() => void handleLockMonth()}
           >
             Khóa sổ tháng
           </Button>
@@ -599,12 +678,16 @@ export default function FinanceSummary() {
             disabled={!canManage || !isMonthLocked}
             loading={unlockMonthMutation.isPending}
             onClick={async () => {
-              await unlockMonthMutation.mutateAsync();
+                await unlockMonthMutation.mutateAsync();
               await lockedMonthsQuery.refetch();
             }}
           >
             Mở khóa sổ
           </Button>
+          <Space>
+            <span style={{ color: '#8c8c8c' }}>Force mở khóa</span>
+            <Switch checked={forceFinanceUnlock} onChange={setForceFinanceUnlock} disabled={!canManage} />
+          </Space>
           {isMonthLocked ? <Tag color="red">Đã khóa sổ tháng này</Tag> : <Tag color="green">Tháng đang mở</Tag>}
         </Space>
       </div>
@@ -766,11 +849,8 @@ export default function FinanceSummary() {
                           danger
                           loading={rejectAdvanceApprovalMutation.isPending}
                           onClick={() => {
-                            const reason = window.prompt(`Nhập lý do từ chối phiếu ${item.code}:`, '');
-                            if (!reason || !reason.trim()) {
-                              return;
-                            }
-                            rejectAdvanceApprovalMutation.mutate({ id: item.id, reason: reason.trim() });
+                            setRejectReason('');
+                            setRejectModal({ open: true, id: item.id, code: item.code });
                           }}
                         >
                           Từ chối
@@ -1100,6 +1180,31 @@ export default function FinanceSummary() {
           </div>
         </>
       )}
+      <Modal
+        title={rejectModal.code ? `Từ chối phiếu ${rejectModal.code}` : 'Từ chối phiếu'}
+        open={rejectModal.open}
+        onCancel={() => {
+          setRejectReason('');
+          setRejectModal({ open: false, id: null, code: '' });
+        }}
+        onOk={() => {
+          if (rejectModal.id !== null && rejectReason.trim()) {
+            rejectAdvanceApprovalMutation.mutate({ id: rejectModal.id, reason: rejectReason.trim() });
+            setRejectReason('');
+            setRejectModal({ open: false, id: null, code: '' });
+          }
+        }}
+        okText="Xác nhận từ chối"
+        okButtonProps={{ danger: true, disabled: !rejectReason.trim() }}
+        confirmLoading={rejectAdvanceApprovalMutation.isPending}
+      >
+        <Input.TextArea
+          rows={4}
+          value={rejectReason}
+          onChange={(e) => setRejectReason(e.target.value)}
+          placeholder="Nhập lý do từ chối duyệt..."
+        />
+      </Modal>
     </div>
   );
 }

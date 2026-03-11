@@ -8,7 +8,7 @@ from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import filters, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from unidecode import unidecode
@@ -147,6 +147,11 @@ def _ensure_finance_month_unlocked(month: str, message: str):
         raise PermissionDenied(message)
 
 
+def _ensure_finance_months_unlocked(months: list[str], message: str):
+    for month in months:
+        _ensure_finance_month_unlocked(month, message)
+
+
 def _log_finance_audit(user, action: str, entity_type: str, entity_id: int, entity_code: str, old_values: dict, new_values: dict, changed_fields: list[str]):
     AuditLog.objects.create(
         user=user,
@@ -159,6 +164,183 @@ def _log_finance_audit(user, action: str, entity_type: str, entity_id: int, enti
         new_values=new_values if isinstance(new_values, dict) else {},
         changed_fields=changed_fields if isinstance(changed_fields, list) else [],
     )
+
+
+def _approved_advance_queryset():
+    return AdvanceTransaction.objects.filter(
+        is_active=True,
+        approval_status=AdvanceTransaction.APPROVAL_APPROVED,
+    )
+
+
+def _validate_settlement_total_under_advance(advance: AdvanceTransaction, spent, refund, exclude_settlement_id: int | None = None) -> str:
+    spent_value = Decimal(str(spent or 0))
+    refund_value = Decimal(str(refund or 0))
+    existing_qs = advance.settlements.all()
+    if exclude_settlement_id:
+        existing_qs = existing_qs.exclude(pk=exclude_settlement_id)
+    existing_totals = existing_qs.aggregate(
+        existing_spent=Sum('spent_amount'),
+        existing_refund=Sum('refund_amount'),
+    )
+    existing_total = Decimal(str(existing_totals.get('existing_spent') or 0)) + Decimal(str(existing_totals.get('existing_refund') or 0))
+    new_total = existing_total + spent_value + refund_value
+    advance_amount = Decimal(str(advance.amount or 0))
+    if new_total > advance_amount:
+        remaining = max(Decimal('0'), advance_amount - existing_total)
+        return (
+            f'Tổng quyết toán ({new_total:,.0f}) vượt quá số tiền tạm ứng ({advance_amount:,.0f}). '
+            f'Còn được quyết toán tối đa: {remaining:,.0f}.'
+        )
+    return ''
+
+
+def _ensure_cash_account_has_available_balance(account: CashAccount | None, amount, *, up_to_date=None, message_prefix: str = 'Quỹ nguồn'):
+    if account is None:
+        return
+    available = account.current_balance_as_of(up_to_date=up_to_date)
+    amount_value = Decimal(str(amount or 0))
+    if amount_value > available:
+        raise ValidationError({'amount': f'{message_prefix} không đủ số dư khả dụng. Khả dụng hiện tại: {available:,.0f}.'})
+
+
+def _finance_close_check_entry(code: str, severity: str, title: str, message: str, count: int = 0, items: list[dict] | None = None) -> dict:
+    return {
+        'code': code,
+        'severity': severity,
+        'title': title,
+        'message': message,
+        'count': int(count or 0),
+        'items': items or [],
+    }
+
+
+def _build_finance_month_close_check(month: str) -> dict:
+    month = _normalize_month(month)
+    blockers: list[dict] = []
+    warnings: list[dict] = []
+    if not month:
+        return {
+            'month': '',
+            'is_ready': False,
+            'blockers': [
+                _finance_close_check_entry(
+                    code='INVALID_MONTH',
+                    severity='blocker',
+                    title='Tháng không hợp lệ',
+                    message='month phải có dạng YYYY-MM.',
+                )
+            ],
+            'warnings': [],
+        }
+
+    y, m = month.split('-', 1)
+    year = int(y)
+    month_num = int(m)
+
+    payroll_qs = PayrollRecord.objects.filter(month=month, status=PayrollRecord.STATUS_LOCKED)
+    payroll_total = Decimal(str(payroll_qs.aggregate(total=Sum('net_pay')).get('total') or 0))
+    tx_qs = CashTransaction.objects.filter(
+        transaction_type=CashTransaction.TYPE_EXPENSE,
+        transaction_date__year=year,
+        transaction_date__month=month_num,
+        reason__icontains='[PAYROLL:',
+    )
+    posted_total = Decimal(str(tx_qs.aggregate(total=Sum('amount')).get('total') or 0))
+    reconciliation_delta = payroll_total - posted_total
+    if reconciliation_delta != 0:
+        blockers.append(_finance_close_check_entry(
+            code='PAYROLL_RECONCILIATION_DELTA',
+            severity='blocker',
+            title='Lệch đối soát lương',
+            message='Số tiền lương đã khóa và số tiền đã hạch toán sang tài chính chưa khớp.',
+            count=abs(int(reconciliation_delta)),
+            items=[{
+                'payroll_total': str(payroll_total),
+                'posted_total': str(posted_total),
+                'delta': str(reconciliation_delta),
+            }],
+        ))
+
+    pending_l1_qs = AdvanceTransaction.objects.filter(
+        approval_status=AdvanceTransaction.APPROVAL_PENDING_L1,
+        is_active=True,
+        advance_date__year=year,
+        advance_date__month=month_num,
+    ).order_by('-advance_date', '-id')
+    pending_l2_qs = AdvanceTransaction.objects.filter(
+        approval_status=AdvanceTransaction.APPROVAL_PENDING_L2,
+        is_active=True,
+        advance_date__year=year,
+        advance_date__month=month_num,
+    ).order_by('-advance_date', '-id')
+    pending_count = pending_l1_qs.count() + pending_l2_qs.count()
+    if pending_count > 0:
+        sample_items = [
+            {
+                'id': int(adv.id),
+                'code': adv.code,
+                'recipient_name': adv.recipient_name,
+                'approval_status': adv.approval_status,
+                'amount': str(adv.amount),
+            }
+            for adv in list(pending_l1_qs[:5]) + list(pending_l2_qs[:5])
+        ]
+        blockers.append(_finance_close_check_entry(
+            code='PENDING_ADVANCE_APPROVALS',
+            severity='blocker',
+            title='Còn phiếu tạm ứng chờ duyệt',
+            message='Cần xử lý xong các phiếu tạm ứng đang chờ duyệt trong tháng trước khi khóa sổ.',
+            count=pending_count,
+            items=sample_items[:10],
+        ))
+
+    open_advances_qs = _approved_advance_queryset().filter(
+        advance_date__year=year,
+        advance_date__month=month_num,
+        status__in=[AdvanceTransaction.STATUS_OPEN, AdvanceTransaction.STATUS_PARTIAL],
+    ).order_by('advance_date', 'code')
+    if open_advances_qs.exists():
+        sample_items = [
+            {
+                'id': int(adv.id),
+                'code': adv.code,
+                'recipient_name': adv.recipient_name,
+                'status': adv.status,
+                'amount': str(adv.amount),
+            }
+            for adv in open_advances_qs[:10]
+        ]
+        blockers.append(_finance_close_check_entry(
+            code='OPEN_ADVANCES_IN_MONTH',
+            severity='blocker',
+            title='Còn tạm ứng chưa xử lý hết',
+            message='Trong tháng vẫn còn phiếu tạm ứng đã duyệt nhưng chưa quyết toán xong.',
+            count=open_advances_qs.count(),
+            items=sample_items,
+        ))
+
+    overdue_entries = build_overdue_snapshot(as_of=date.today(), threshold_days=30)
+    overdue_count = int(overdue_entries.get('count') or 0) if isinstance(overdue_entries, dict) else 0
+    if overdue_count > 0:
+        warnings.append(_finance_close_check_entry(
+            code='OVERDUE_ADVANCES_EXIST',
+            severity='warning',
+            title='Còn tạm ứng quá hạn',
+            message='Hệ thống đang ghi nhận phiếu tạm ứng quá hạn chưa xử lý, nên rà soát trước khi khóa sổ.',
+            count=overdue_count,
+            items=[{
+                'threshold_days': int(overdue_entries.get('threshold_days') or 30),
+                'total_remaining': str(overdue_entries.get('total_remaining') or '0'),
+            }],
+        ))
+
+    return {
+        'month': month,
+        'is_ready': len(blockers) == 0,
+        'blockers': blockers,
+        'warnings': warnings,
+    }
 
 
 def _can_approve_level2(user) -> bool:
@@ -544,7 +726,12 @@ def _build_cross_module_readiness_payload() -> dict:
 class SearchTextMixin:
     search_text_field = 'search_text'
 
+    def check_module_read_permission(self):
+        if not _can_manage_finance(self.request.user):
+            raise PermissionDenied('Bạn không có quyền xem dữ liệu tài chính.')
+
     def apply_search(self, queryset):
+        self.check_module_read_permission()
         search_raw = (self.request.query_params.get('q') or self.request.query_params.get('search') or '').strip()
         if not search_raw:
             return queryset
@@ -590,17 +777,70 @@ class TransactionCategoryViewSet(SearchTextMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if not _can_manage_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền tạo loại thu chi.')
-        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        instance = serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        _log_finance_audit(
+            self.request.user,
+            action='CREATE',
+            entity_type='FinanceTransactionCategory',
+            entity_id=int(instance.id),
+            entity_code=instance.code or str(instance.id),
+            old_values={},
+            new_values={'code': instance.code, 'name': instance.name, 'category_type': instance.category_type, 'is_system': instance.is_system},
+            changed_fields=['code', 'name', 'category_type', 'is_system'],
+        )
 
     def perform_update(self, serializer):
         if not _can_manage_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền cập nhật loại thu chi.')
-        serializer.save(updated_by=self.request.user)
+        if serializer.instance.is_system and 'is_system' in serializer.validated_data:
+            raise ValidationError({'is_system': 'Không được thay đổi cờ danh mục hệ thống.'})
+        old = serializer.instance
+        old_snap = {
+            'code': old.code,
+            'name': old.name,
+            'category_type': old.category_type,
+            'is_active': old.is_active,
+            'is_system': old.is_system,
+        }
+        instance = serializer.save(updated_by=self.request.user)
+        _log_finance_audit(
+            self.request.user,
+            action='UPDATE',
+            entity_type='FinanceTransactionCategory',
+            entity_id=int(instance.id),
+            entity_code=instance.code or str(instance.id),
+            old_values=old_snap,
+            new_values={
+                'code': instance.code,
+                'name': instance.name,
+                'category_type': instance.category_type,
+                'is_active': instance.is_active,
+                'is_system': instance.is_system,
+            },
+            changed_fields=list(serializer.validated_data.keys()),
+        )
 
     def destroy(self, request, *args, **kwargs):
         if not _can_manage_finance(request.user):
             return Response({'error': 'Bạn không có quyền xóa loại thu chi.'}, status=403)
-        return super().destroy(request, *args, **kwargs)
+        instance = self.get_object()
+        if instance.is_system:
+            return Response({'error': 'Danh mục hệ thống không được phép xóa.'}, status=400)
+        if instance.transactions.exists():
+            return Response({'error': 'Danh mục đã phát sinh giao dịch, chỉ nên ngừng sử dụng thay vì xóa.'}, status=400)
+        snap = {'code': instance.code, 'name': instance.name, 'category_type': instance.category_type}
+        response = super().destroy(request, *args, **kwargs)
+        _log_finance_audit(
+            request.user,
+            action='DELETE',
+            entity_type='FinanceTransactionCategory',
+            entity_id=int(instance.id),
+            entity_code=instance.code or str(instance.id),
+            old_values=snap,
+            new_values={},
+            changed_fields=['deleted'],
+        )
+        return response
 
 
 class BankAccountViewSet(SearchTextMixin, viewsets.ModelViewSet):
@@ -621,17 +861,45 @@ class BankAccountViewSet(SearchTextMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if not _can_manage_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền tạo tài khoản ngân hàng.')
-        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        instance = serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        _log_finance_audit(
+            self.request.user, action='CREATE', entity_type='FinanceBankAccount',
+            entity_id=int(instance.id), entity_code=instance.code or str(instance.id),
+            old_values={}, new_values={'code': instance.code, 'bank_name': instance.bank_name, 'is_active': instance.is_active},
+            changed_fields=['code', 'bank_name', 'is_active'],
+        )
 
     def perform_update(self, serializer):
         if not _can_manage_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền cập nhật tài khoản ngân hàng.')
-        serializer.save(updated_by=self.request.user)
+        old = serializer.instance
+        old_snap = {'code': old.code, 'bank_name': old.bank_name, 'is_active': old.is_active}
+        instance = serializer.save(updated_by=self.request.user)
+        _log_finance_audit(
+            self.request.user, action='UPDATE', entity_type='FinanceBankAccount',
+            entity_id=int(instance.id), entity_code=instance.code or str(instance.id),
+            old_values=old_snap,
+            new_values={'code': instance.code, 'bank_name': instance.bank_name, 'is_active': instance.is_active},
+            changed_fields=list(serializer.validated_data.keys()),
+        )
 
     def destroy(self, request, *args, **kwargs):
         if not _can_manage_finance(request.user):
             return Response({'error': 'Bạn không có quyền xóa tài khoản ngân hàng.'}, status=403)
-        return super().destroy(request, *args, **kwargs)
+        instance = self.get_object()
+        if (
+            CashTransaction.objects.filter(source_bank_account=instance).exists()
+            or AdvanceTransaction.objects.filter(source_bank_account=instance).exists()
+        ):
+            return Response({'error': 'Tài khoản ngân hàng đã phát sinh chứng từ, không thể xóa.'}, status=400)
+        snap = {'code': instance.code, 'bank_name': instance.bank_name}
+        response = super().destroy(request, *args, **kwargs)
+        _log_finance_audit(
+            request.user, action='DELETE', entity_type='FinanceBankAccount',
+            entity_id=int(instance.id), entity_code=instance.code or str(instance.id),
+            old_values=snap, new_values={}, changed_fields=['deleted'],
+        )
+        return response
 
 
 class CashAccountViewSet(SearchTextMixin, viewsets.ModelViewSet):
@@ -655,17 +923,47 @@ class CashAccountViewSet(SearchTextMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if not _can_manage_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền tạo tài khoản quỹ.')
-        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        instance = serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        _log_finance_audit(
+            self.request.user, action='CREATE', entity_type='FinanceCashAccount',
+            entity_id=int(instance.id), entity_code=instance.name or str(instance.id),
+            old_values={}, new_values={'name': instance.name, 'account_type': instance.account_type, 'is_active': instance.is_active},
+            changed_fields=['name', 'account_type', 'is_active'],
+        )
 
     def perform_update(self, serializer):
         if not _can_manage_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền cập nhật tài khoản quỹ.')
-        serializer.save(updated_by=self.request.user)
+        if 'balance' in serializer.validated_data and serializer.validated_data.get('balance') != serializer.instance.balance:
+            raise ValidationError({'balance': 'Không cho phép sửa trực tiếp số dư mở sổ sau khi đã tạo tài khoản.'})
+        old = serializer.instance
+        old_snap = {'name': old.name, 'account_type': old.account_type, 'is_active': old.is_active}
+        instance = serializer.save(updated_by=self.request.user)
+        _log_finance_audit(
+            self.request.user, action='UPDATE', entity_type='FinanceCashAccount',
+            entity_id=int(instance.id), entity_code=instance.name or str(instance.id),
+            old_values=old_snap,
+            new_values={'name': instance.name, 'account_type': instance.account_type, 'is_active': instance.is_active},
+            changed_fields=list(serializer.validated_data.keys()),
+        )
 
     def destroy(self, request, *args, **kwargs):
         if not _can_manage_finance(request.user):
             return Response({'error': 'Bạn không có quyền xóa tài khoản quỹ.'}, status=403)
-        return super().destroy(request, *args, **kwargs)
+        instance = self.get_object()
+        if (
+            CashTransaction.objects.filter(Q(source_cash_account=instance) | Q(target_cash_account=instance)).exists()
+            or AdvanceTransaction.objects.filter(source_cash_account=instance).exists()
+        ):
+            return Response({'error': 'Tài khoản quỹ đã phát sinh chứng từ, không thể xóa.'}, status=400)
+        snap = {'name': instance.name, 'account_type': instance.account_type}
+        response = super().destroy(request, *args, **kwargs)
+        _log_finance_audit(
+            request.user, action='DELETE', entity_type='FinanceCashAccount',
+            entity_id=int(instance.id), entity_code=instance.name or str(instance.id),
+            old_values=snap, new_values={}, changed_fields=['deleted'],
+        )
+        return response
 
 
 class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
@@ -716,17 +1014,46 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             _month_from_date_obj(tx_date),
             'Tháng tài chính đã khóa, không thể thêm giao dịch.',
         )
-        serializer.save(created_by=self.request.user)
+        instance = serializer.save(created_by=self.request.user)
+        _log_finance_audit(
+            self.request.user, action='CREATE', entity_type='FinanceCashTransaction',
+            entity_id=int(instance.id), entity_code=str(instance.id),
+            old_values={},
+            new_values={
+                'transaction_type': instance.transaction_type,
+                'amount': str(instance.amount),
+                'transaction_date': instance.transaction_date.isoformat() if instance.transaction_date else '',
+                'source_type': instance.source_type,
+            },
+            changed_fields=['transaction_type', 'amount', 'transaction_date', 'source_type'],
+        )
 
     def perform_update(self, serializer):
         if not _can_manage_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền cập nhật giao dịch tài chính.')
+        old_month = _month_from_date_obj(serializer.instance.transaction_date)
         tx_date = serializer.validated_data.get('transaction_date', serializer.instance.transaction_date)
-        _ensure_finance_month_unlocked(
-            _month_from_date_obj(tx_date),
+        _ensure_finance_months_unlocked(
+            [old_month, _month_from_date_obj(tx_date)],
             'Tháng tài chính đã khóa, không thể cập nhật giao dịch.',
         )
-        serializer.save()
+        old = serializer.instance
+        old_snap = {
+            'transaction_type': old.transaction_type, 'amount': str(old.amount),
+            'transaction_date': old.transaction_date.isoformat() if old.transaction_date else '',
+        }
+        instance = serializer.save()
+        _log_finance_audit(
+            self.request.user, action='UPDATE', entity_type='FinanceCashTransaction',
+            entity_id=int(instance.id), entity_code=str(instance.id),
+            old_values=old_snap,
+            new_values={
+                'transaction_type': instance.transaction_type,
+                'amount': str(instance.amount),
+                'transaction_date': instance.transaction_date.isoformat() if instance.transaction_date else '',
+            },
+            changed_fields=list(serializer.validated_data.keys()),
+        )
 
     @action(detail=False, methods=['post'])
     def bulk_delete(self, request):
@@ -742,7 +1069,19 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 month = _month_from_date_obj(tx.transaction_date)
                 if month in locked_months:
                     return Response({'error': f'Tháng {month} đã khóa, không thể xóa giao dịch.'}, status=400)
+        deleted_ids = list(CashTransaction.objects.filter(id__in=ids).values_list('id', flat=True))
         deleted_count, _ = CashTransaction.objects.filter(id__in=ids).delete()
+        if deleted_ids:
+            _log_finance_audit(
+                request.user,
+                action='DELETE',
+                entity_type='FinanceCashTransactionBulkDelete',
+                entity_id=0,
+                entity_code='bulk_delete',
+                old_values={'ids': deleted_ids},
+                new_values={},
+                changed_fields=['deleted_ids'],
+            )
         return Response({'success': True, 'count': deleted_count})
 
     def destroy(self, request, *args, **kwargs):
@@ -753,12 +1092,33 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             _month_from_date_obj(instance.transaction_date),
             'Tháng tài chính đã khóa, không thể xóa giao dịch.',
         )
-        return super().destroy(request, *args, **kwargs)
+        snap = {
+            'transaction_type': instance.transaction_type, 'amount': str(instance.amount),
+            'transaction_date': instance.transaction_date.isoformat() if instance.transaction_date else '',
+        }
+        response = super().destroy(request, *args, **kwargs)
+        _log_finance_audit(
+            request.user, action='DELETE', entity_type='FinanceCashTransaction',
+            entity_id=int(instance.id), entity_code=str(instance.id),
+            old_values=snap, new_values={}, changed_fields=['deleted'],
+        )
+        return response
 
     @action(detail=False, methods=['get'])
     def locked_months(self, request):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem danh sách tháng đã khóa.'}, status=403)
         months = sorted(_get_locked_finance_months())
         return Response({'months': months})
+
+    @action(detail=False, methods=['get'])
+    def preclose_check(self, request):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền kiểm tra đóng sổ tài chính.'}, status=403)
+        month = _normalize_month(str(request.query_params.get('month') or ''))
+        if not month:
+            return Response({'error': 'month phải có dạng YYYY-MM'}, status=400)
+        return Response(_build_finance_month_close_check(month))
 
     @action(detail=False, methods=['post'])
     def lock_month(self, request):
@@ -767,6 +1127,15 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
         month = _normalize_month(str(request.data.get('month') or ''))
         if not month:
             return Response({'error': 'month phải có dạng YYYY-MM'}, status=400)
+        checklist = _build_finance_month_close_check(month)
+        if checklist.get('blockers'):
+            return Response(
+                {
+                    'error': 'Chưa thể khóa sổ tài chính vì còn vướng kiểm tra đóng kỳ.',
+                    'checklist': checklist,
+                },
+                status=400,
+            )
         months = _get_locked_finance_months()
         old_months = sorted(months)
         months.add(month)
@@ -823,6 +1192,8 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def payroll_reconciliation(self, request):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem đối soát bảng lương.'}, status=403)
         month = _normalize_month(str(request.query_params.get('month') or ''))
         if not month:
             return Response({'error': 'month phải có dạng YYYY-MM'}, status=400)
@@ -854,6 +1225,8 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def monthly_summary(self, request):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem tổng hợp tài chính tháng.'}, status=403)
         month = (request.query_params.get('month') or '').strip()
         if len(month) != 7 or '-' not in month:
             return Response({'error': 'month phải có dạng YYYY-MM'}, status=400)
@@ -879,10 +1252,9 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             tx_qs.filter(transaction_type=CashTransaction.TYPE_TRANSFER).aggregate(total=Sum('amount')).get('total') or 0
         ))
 
-        advance_qs = AdvanceTransaction.objects.filter(
+        advance_qs = _approved_advance_queryset().filter(
             advance_date__year=year,
             advance_date__month=month_num,
-            is_active=True,
         )
         total_advance = Decimal(str(advance_qs.aggregate(total=Sum('amount')).get('total') or 0))
 
@@ -937,6 +1309,8 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def trend_12m(self, request):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem xu hướng tài chính 12 tháng.'}, status=403)
         end_month = (request.query_params.get('end_month') or '').strip()
         if not end_month:
             today = date.today()
@@ -978,10 +1352,9 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 tx_qs.filter(transaction_type=CashTransaction.TYPE_EXPENSE).aggregate(total=Sum('amount')).get('total') or 0
             ))
 
-            advance_qs = AdvanceTransaction.objects.filter(
+            advance_qs = _approved_advance_queryset().filter(
                 advance_date__year=y_item,
                 advance_date__month=m_item,
-                is_active=True,
             )
             total_advance = Decimal(str(advance_qs.aggregate(total=Sum('amount')).get('total') or 0))
 
@@ -1028,6 +1401,38 @@ def refresh_advance_status(advance: AdvanceTransaction, user):
         advance.status = new_status
         advance.updated_by = user
         advance.save(update_fields=['status', 'updated_by', 'updated_at', 'search_text'])
+
+
+def _advance_disbursement_marker(advance: AdvanceTransaction) -> str:
+    return f'[ADVANCE:{advance.id}]'
+
+
+def _get_advance_disbursement_tx(advance: AdvanceTransaction, *, lock_for_update: bool = False):
+    qs = CashTransaction.objects.filter(reason__icontains=_advance_disbursement_marker(advance)).order_by('-id')
+    if lock_for_update:
+        qs = qs.select_for_update()
+    return qs.first()
+
+
+def _ensure_advance_disbursement_category(actor):
+    category, _ = TransactionCategory.objects.get_or_create(
+        code='ADVANCE_DISB',
+        defaults={
+            'name': 'Chi tạm ứng',
+            'category_type': TransactionCategory.TYPE_EXPENSE,
+            'color': '#d46b08',
+            'note': 'Danh mục hệ thống cho chi tiền tạm ứng',
+            'is_system': True,
+            'is_active': True,
+            'created_by': actor,
+            'updated_by': actor,
+        },
+    )
+    if not category.is_active:
+        category.is_active = True
+        category.updated_by = actor
+        category.save(update_fields=['is_active', 'updated_by', 'updated_at', 'search_text'])
+    return category
 
 
 def _recommend_reminder_policy_preset() -> dict:
@@ -1137,9 +1542,10 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
     def perform_update(self, serializer):
         if not _can_manage_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền cập nhật phiếu tạm ứng.')
+        old_month = _month_from_date_obj(serializer.instance.advance_date)
         adv_date = serializer.validated_data.get('advance_date', serializer.instance.advance_date)
-        _ensure_finance_month_unlocked(
-            _month_from_date_obj(adv_date),
+        _ensure_finance_months_unlocked(
+            [old_month, _month_from_date_obj(adv_date)],
             'Tháng tài chính đã khóa, không thể cập nhật phiếu tạm ứng.',
         )
         current_status = serializer.instance.approval_status
@@ -1151,9 +1557,36 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             raise PermissionDenied('Phiếu đã gửi duyệt/đã duyệt, không thể chỉnh sửa trực tiếp.')
         amount = Decimal(str(serializer.validated_data.get('amount', serializer.instance.amount) or 0))
         required_level = _required_approval_level_for_amount(amount)
-        serializer.save(
+        old = serializer.instance
+        old_snap = {
+            'code': old.code,
+            'advance_date': old.advance_date.isoformat() if old.advance_date else '',
+            'recipient_name': old.recipient_name,
+            'amount': str(old.amount),
+            'status': old.status,
+            'approval_status': old.approval_status,
+        }
+        instance = serializer.save(
             updated_by=self.request.user,
             required_approval_level=required_level,
+        )
+        _log_finance_audit(
+            self.request.user,
+            action='UPDATE',
+            entity_type='FinanceAdvanceApproval',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values=old_snap,
+            new_values={
+                'code': instance.code,
+                'advance_date': instance.advance_date.isoformat() if instance.advance_date else '',
+                'recipient_name': instance.recipient_name,
+                'amount': str(instance.amount),
+                'status': instance.status,
+                'approval_status': instance.approval_status,
+                'required_approval_level': instance.required_approval_level,
+            },
+            changed_fields=list(serializer.validated_data.keys()),
         )
 
     @action(detail=False, methods=['post'])
@@ -1172,7 +1605,19 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
                     return Response({'error': f'Tháng {month} đã khóa, không thể xóa phiếu tạm ứng.'}, status=400)
                 if tx.approval_status in {AdvanceTransaction.APPROVAL_PENDING_L1, AdvanceTransaction.APPROVAL_PENDING_L2, AdvanceTransaction.APPROVAL_APPROVED}:
                     return Response({'error': f'Phiếu {tx.code} đã gửi duyệt/đã duyệt, không thể xóa.'}, status=400)
+        deleted_rows = list(AdvanceTransaction.objects.filter(id__in=ids).values_list('id', 'code'))
         deleted_count, _ = AdvanceTransaction.objects.filter(id__in=ids).delete()
+        if deleted_rows:
+            _log_finance_audit(
+                request.user,
+                action='DELETE',
+                entity_type='FinanceAdvanceApprovalBulkDelete',
+                entity_id=0,
+                entity_code='bulk_delete',
+                old_values={'items': [{'id': int(row_id), 'code': code} for row_id, code in deleted_rows]},
+                new_values={},
+                changed_fields=['deleted_items'],
+            )
         return Response({'success': True, 'count': deleted_count})
 
     def destroy(self, request, *args, **kwargs):
@@ -1189,7 +1634,24 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             AdvanceTransaction.APPROVAL_APPROVED,
         }:
             return Response({'error': 'Phiếu đã gửi duyệt/đã duyệt, không thể xóa.'}, status=400)
-        return super().destroy(request, *args, **kwargs)
+        snap = {
+            'code': instance.code,
+            'advance_date': instance.advance_date.isoformat() if instance.advance_date else '',
+            'recipient_name': instance.recipient_name,
+            'amount': str(instance.amount),
+        }
+        response = super().destroy(request, *args, **kwargs)
+        _log_finance_audit(
+            request.user,
+            action='DELETE',
+            entity_type='FinanceAdvanceApproval',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values=snap,
+            new_values={},
+            changed_fields=['deleted'],
+        )
+        return response
 
     @action(detail=False, methods=['get'])
     def approval_queue(self, request):
@@ -2357,127 +2819,238 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
     def submit_approval(self, request, pk=None):
         if not _can_manage_finance(request.user):
             return Response({'error': 'Bạn không có quyền gửi duyệt phiếu tạm ứng.'}, status=403)
-        advance = self.get_object()
-        if advance.approval_status in {AdvanceTransaction.APPROVAL_PENDING_L1, AdvanceTransaction.APPROVAL_PENDING_L2, AdvanceTransaction.APPROVAL_APPROVED}:
-            return Response({'error': 'Phiếu đang chờ duyệt hoặc đã duyệt.'}, status=400)
-        _ensure_finance_month_unlocked(_month_from_date_obj(advance.advance_date), 'Tháng tài chính đã khóa, không thể gửi duyệt.')
-        old_status = advance.approval_status
-        advance.approval_status = AdvanceTransaction.APPROVAL_PENDING_L1
-        advance.submitted_at = timezone.now()
-        advance.submitted_by = request.user
-        advance.rejected_at = None
-        advance.rejected_by = None
-        advance.rejection_reason = ''
-        advance.required_approval_level = _required_approval_level_for_amount(Decimal(str(advance.amount or 0)))
-        advance.updated_by = request.user
-        advance.save(update_fields=[
-            'approval_status',
-            'submitted_at',
-            'submitted_by',
-            'rejected_at',
-            'rejected_by',
-            'rejection_reason',
-            'required_approval_level',
-            'updated_by',
-            'updated_at',
-            'search_text',
-        ])
-        _log_finance_audit(
-            request.user,
-            action='UPDATE',
-            entity_type='FinanceAdvanceApproval',
-            entity_id=int(advance.id),
-            entity_code=advance.code,
-            old_values={'approval_status': old_status},
-            new_values={'approval_status': advance.approval_status, 'required_approval_level': advance.required_approval_level},
-            changed_fields=['approval_status', 'required_approval_level'],
-        )
+        with transaction.atomic():
+            try:
+                advance = AdvanceTransaction.objects.select_for_update().get(pk=pk)
+            except AdvanceTransaction.DoesNotExist:
+                return Response({'error': 'Không tìm thấy phiếu tạm ứng.'}, status=404)
+            if advance.approval_status in {AdvanceTransaction.APPROVAL_PENDING_L1, AdvanceTransaction.APPROVAL_PENDING_L2, AdvanceTransaction.APPROVAL_APPROVED}:
+                return Response({'error': 'Phiếu đang chờ duyệt hoặc đã duyệt.'}, status=400)
+            _ensure_finance_month_unlocked(_month_from_date_obj(advance.advance_date), 'Tháng tài chính đã khóa, không thể gửi duyệt.')
+            old_status = advance.approval_status
+            advance.approval_status = AdvanceTransaction.APPROVAL_PENDING_L1
+            advance.submitted_at = timezone.now()
+            advance.submitted_by = request.user
+            advance.rejected_at = None
+            advance.rejected_by = None
+            advance.rejection_reason = ''
+            advance.required_approval_level = _required_approval_level_for_amount(Decimal(str(advance.amount or 0)))
+            advance.updated_by = request.user
+            advance.save(update_fields=[
+                'approval_status',
+                'submitted_at',
+                'submitted_by',
+                'rejected_at',
+                'rejected_by',
+                'rejection_reason',
+                'required_approval_level',
+                'updated_by',
+                'updated_at',
+                'search_text',
+            ])
+            _log_finance_audit(
+                request.user,
+                action='UPDATE',
+                entity_type='FinanceAdvanceApproval',
+                entity_id=int(advance.id),
+                entity_code=advance.code,
+                old_values={'approval_status': old_status},
+                new_values={'approval_status': advance.approval_status, 'required_approval_level': advance.required_approval_level},
+                changed_fields=['approval_status', 'required_approval_level'],
+            )
         return Response({'success': True, 'approval_status': advance.approval_status, 'required_approval_level': advance.required_approval_level})
 
     @action(detail=True, methods=['post'])
     def approve_level1(self, request, pk=None):
         if not _can_manage_finance(request.user):
             return Response({'error': 'Bạn không có quyền duyệt cấp 1.'}, status=403)
-        advance = self.get_object()
-        if advance.approval_status != AdvanceTransaction.APPROVAL_PENDING_L1:
-            return Response({'error': 'Phiếu không ở trạng thái chờ duyệt cấp 1.'}, status=400)
-        _ensure_finance_month_unlocked(_month_from_date_obj(advance.advance_date), 'Tháng tài chính đã khóa, không thể duyệt.')
-        old_status = advance.approval_status
-        next_status = AdvanceTransaction.APPROVAL_APPROVED if int(advance.required_approval_level or 1) <= 1 else AdvanceTransaction.APPROVAL_PENDING_L2
-        advance.approval_status = next_status
-        advance.approved_level1_at = timezone.now()
-        advance.approved_level1_by = request.user
-        advance.updated_by = request.user
-        advance.save(update_fields=['approval_status', 'approved_level1_at', 'approved_level1_by', 'updated_by', 'updated_at', 'search_text'])
-        _log_finance_audit(
-            request.user,
-            action='UPDATE',
-            entity_type='FinanceAdvanceApproval',
-            entity_id=int(advance.id),
-            entity_code=advance.code,
-            old_values={'approval_status': old_status},
-            new_values={'approval_status': advance.approval_status},
-            changed_fields=['approval_status', 'approved_level1_at'],
-        )
+        with transaction.atomic():
+            try:
+                advance = AdvanceTransaction.objects.select_for_update().get(pk=pk)
+            except AdvanceTransaction.DoesNotExist:
+                return Response({'error': 'Không tìm thấy phiếu tạm ứng.'}, status=404)
+            if advance.submitted_by_id and advance.submitted_by_id == request.user.id:
+                return Response({'error': 'Người gửi duyệt không thể tự phê duyệt phiếu của mình.'}, status=403)
+            if advance.approval_status != AdvanceTransaction.APPROVAL_PENDING_L1:
+                return Response({'error': 'Phiếu không ở trạng thái chờ duyệt cấp 1.'}, status=400)
+            _ensure_finance_month_unlocked(_month_from_date_obj(advance.advance_date), 'Tháng tài chính đã khóa, không thể duyệt.')
+            old_status = advance.approval_status
+            next_status = AdvanceTransaction.APPROVAL_APPROVED if int(advance.required_approval_level or 1) <= 1 else AdvanceTransaction.APPROVAL_PENDING_L2
+            advance.approval_status = next_status
+            advance.approved_level1_at = timezone.now()
+            advance.approved_level1_by = request.user
+            advance.updated_by = request.user
+            advance.save(update_fields=['approval_status', 'approved_level1_at', 'approved_level1_by', 'updated_by', 'updated_at', 'search_text'])
+            _log_finance_audit(
+                request.user,
+                action='UPDATE',
+                entity_type='FinanceAdvanceApproval',
+                entity_id=int(advance.id),
+                entity_code=advance.code,
+                old_values={'approval_status': old_status},
+                new_values={'approval_status': advance.approval_status},
+                changed_fields=['approval_status', 'approved_level1_at'],
+            )
         return Response({'success': True, 'approval_status': advance.approval_status})
 
     @action(detail=True, methods=['post'])
     def approve_level2(self, request, pk=None):
         if not _can_manage_finance(request.user) or not _can_approve_level2(request.user):
             return Response({'error': 'Bạn không có quyền duyệt cấp 2.'}, status=403)
-        advance = self.get_object()
-        if advance.approval_status != AdvanceTransaction.APPROVAL_PENDING_L2:
-            return Response({'error': 'Phiếu không ở trạng thái chờ duyệt cấp 2.'}, status=400)
-        _ensure_finance_month_unlocked(_month_from_date_obj(advance.advance_date), 'Tháng tài chính đã khóa, không thể duyệt.')
-        old_status = advance.approval_status
-        advance.approval_status = AdvanceTransaction.APPROVAL_APPROVED
-        advance.approved_level2_at = timezone.now()
-        advance.approved_level2_by = request.user
-        advance.updated_by = request.user
-        advance.save(update_fields=['approval_status', 'approved_level2_at', 'approved_level2_by', 'updated_by', 'updated_at', 'search_text'])
-        _log_finance_audit(
-            request.user,
-            action='UPDATE',
-            entity_type='FinanceAdvanceApproval',
-            entity_id=int(advance.id),
-            entity_code=advance.code,
-            old_values={'approval_status': old_status},
-            new_values={'approval_status': advance.approval_status},
-            changed_fields=['approval_status', 'approved_level2_at'],
-        )
+        with transaction.atomic():
+            try:
+                advance = AdvanceTransaction.objects.select_for_update().get(pk=pk)
+            except AdvanceTransaction.DoesNotExist:
+                return Response({'error': 'Không tìm thấy phiếu tạm ứng.'}, status=404)
+            if advance.submitted_by_id and advance.submitted_by_id == request.user.id:
+                return Response({'error': 'Người gửi duyệt không thể tự phê duyệt phiếu của mình.'}, status=403)
+            if advance.approved_level1_by_id and advance.approved_level1_by_id == request.user.id and int(advance.required_approval_level or 1) >= 2:
+                return Response({'error': 'Người đã duyệt cấp 1 không thể đồng thời duyệt cấp 2 cho cùng phiếu.'}, status=403)
+            if advance.approval_status != AdvanceTransaction.APPROVAL_PENDING_L2:
+                return Response({'error': 'Phiếu không ở trạng thái chờ duyệt cấp 2.'}, status=400)
+            _ensure_finance_month_unlocked(_month_from_date_obj(advance.advance_date), 'Tháng tài chính đã khóa, không thể duyệt.')
+            old_status = advance.approval_status
+            advance.approval_status = AdvanceTransaction.APPROVAL_APPROVED
+            advance.approved_level2_at = timezone.now()
+            advance.approved_level2_by = request.user
+            advance.updated_by = request.user
+            advance.save(update_fields=['approval_status', 'approved_level2_at', 'approved_level2_by', 'updated_by', 'updated_at', 'search_text'])
+            _log_finance_audit(
+                request.user,
+                action='UPDATE',
+                entity_type='FinanceAdvanceApproval',
+                entity_id=int(advance.id),
+                entity_code=advance.code,
+                old_values={'approval_status': old_status},
+                new_values={'approval_status': advance.approval_status},
+                changed_fields=['approval_status', 'approved_level2_at'],
+            )
         return Response({'success': True, 'approval_status': advance.approval_status})
 
     @action(detail=True, methods=['post'])
     def reject_approval(self, request, pk=None):
         if not _can_manage_finance(request.user):
             return Response({'error': 'Bạn không có quyền từ chối duyệt.'}, status=403)
-        advance = self.get_object()
-        if advance.approval_status not in {AdvanceTransaction.APPROVAL_PENDING_L1, AdvanceTransaction.APPROVAL_PENDING_L2}:
-            return Response({'error': 'Phiếu không ở trạng thái chờ duyệt.'}, status=400)
         reason = str(request.data.get('reason') or '').strip()
         if not reason:
             return Response({'error': 'reason là bắt buộc khi từ chối.'}, status=400)
-        old_status = advance.approval_status
-        advance.approval_status = AdvanceTransaction.APPROVAL_REJECTED
-        advance.rejected_at = timezone.now()
-        advance.rejected_by = request.user
-        advance.rejection_reason = reason[:255]
-        advance.updated_by = request.user
-        advance.save(update_fields=['approval_status', 'rejected_at', 'rejected_by', 'rejection_reason', 'updated_by', 'updated_at', 'search_text'])
-        _log_finance_audit(
-            request.user,
-            action='UPDATE',
-            entity_type='FinanceAdvanceApproval',
-            entity_id=int(advance.id),
-            entity_code=advance.code,
-            old_values={'approval_status': old_status},
-            new_values={'approval_status': advance.approval_status, 'rejection_reason': advance.rejection_reason},
-            changed_fields=['approval_status', 'rejection_reason'],
-        )
+        with transaction.atomic():
+            try:
+                advance = AdvanceTransaction.objects.select_for_update().get(pk=pk)
+            except AdvanceTransaction.DoesNotExist:
+                return Response({'error': 'Không tìm thấy phiếu tạm ứng.'}, status=404)
+            if advance.approval_status not in {AdvanceTransaction.APPROVAL_PENDING_L1, AdvanceTransaction.APPROVAL_PENDING_L2}:
+                return Response({'error': 'Phiếu không ở trạng thái chờ duyệt.'}, status=400)
+            old_status = advance.approval_status
+            advance.approval_status = AdvanceTransaction.APPROVAL_REJECTED
+            advance.rejected_at = timezone.now()
+            advance.rejected_by = request.user
+            advance.rejection_reason = reason[:255]
+            advance.updated_by = request.user
+            advance.save(update_fields=['approval_status', 'rejected_at', 'rejected_by', 'rejection_reason', 'updated_by', 'updated_at', 'search_text'])
+            _log_finance_audit(
+                request.user,
+                action='UPDATE',
+                entity_type='FinanceAdvanceApproval',
+                entity_id=int(advance.id),
+                entity_code=advance.code,
+                old_values={'approval_status': old_status},
+                new_values={'approval_status': advance.approval_status, 'rejection_reason': advance.rejection_reason},
+                changed_fields=['approval_status', 'rejection_reason'],
+            )
         return Response({'success': True, 'approval_status': advance.approval_status})
+
+    @action(detail=True, methods=['post'])
+    def post_disbursement(self, request, pk=None):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền chi tiền tạm ứng.'}, status=403)
+        with transaction.atomic():
+            try:
+                advance = AdvanceTransaction.objects.select_for_update().get(pk=pk)
+            except AdvanceTransaction.DoesNotExist:
+                return Response({'error': 'Không tìm thấy phiếu tạm ứng.'}, status=404)
+            if advance.approval_status != AdvanceTransaction.APPROVAL_APPROVED:
+                return Response({'error': 'Chỉ được chi tiền cho phiếu tạm ứng đã duyệt.'}, status=400)
+            _ensure_finance_month_unlocked(_month_from_date_obj(advance.advance_date), 'Tháng tài chính đã khóa, không thể chi tiền tạm ứng.')
+            existing = _get_advance_disbursement_tx(advance, lock_for_update=True)
+            if existing:
+                return Response({'error': 'Phiếu này đã có chứng từ chi tiền.'}, status=400)
+            if advance.source_type == AdvanceTransaction.SOURCE_CASH:
+                if not advance.source_cash_account_id or not getattr(advance.source_cash_account, 'is_active', False):
+                    return Response({'error': 'Tài khoản quỹ nguồn không còn hiệu lực để chi tiền.'}, status=400)
+                try:
+                    _ensure_cash_account_has_available_balance(
+                        advance.source_cash_account,
+                        advance.amount,
+                        up_to_date=advance.advance_date,
+                        message_prefix='Quỹ chi tạm ứng',
+                    )
+                except ValidationError as exc:
+                    return Response({'error': exc.detail.get('amount', exc.detail)}, status=400)
+            else:
+                if not advance.source_bank_account_id or not getattr(advance.source_bank_account, 'is_active', False):
+                    return Response({'error': 'Tài khoản ngân hàng nguồn không còn hiệu lực để chi tiền.'}, status=400)
+            category = _ensure_advance_disbursement_category(request.user)
+            marker = _advance_disbursement_marker(advance)
+            tx = CashTransaction.objects.create(
+                transaction_type=CashTransaction.TYPE_EXPENSE,
+                source_type=advance.source_type,
+                source_cash_account=advance.source_cash_account if advance.source_type == AdvanceTransaction.SOURCE_CASH else None,
+                source_bank_account=advance.source_bank_account if advance.source_type == AdvanceTransaction.SOURCE_BANK else None,
+                category=category,
+                transaction_date=advance.advance_date,
+                amount=advance.amount,
+                object_name=advance.recipient_name,
+                reason=f'{marker} Chi tiền tạm ứng {advance.code}',
+                note=f'Tự động sinh từ phiếu tạm ứng {advance.code}',
+                created_by=request.user,
+            )
+            _log_finance_audit(
+                request.user,
+                action='CREATE',
+                entity_type='FinanceAdvanceDisbursement',
+                entity_id=int(advance.id),
+                entity_code=advance.code,
+                old_values={},
+                new_values={'cash_transaction_id': int(tx.id), 'amount': str(advance.amount)},
+                changed_fields=['cash_transaction_id', 'amount'],
+            )
+        return Response({'success': True, 'transaction_id': int(tx.id), 'disbursement_status': 'DISBURSED'})
+
+    @action(detail=True, methods=['post'])
+    def reverse_disbursement(self, request, pk=None):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền hủy chi tiền tạm ứng.'}, status=403)
+        with transaction.atomic():
+            try:
+                advance = AdvanceTransaction.objects.select_for_update().get(pk=pk)
+            except AdvanceTransaction.DoesNotExist:
+                return Response({'error': 'Không tìm thấy phiếu tạm ứng.'}, status=404)
+            _ensure_finance_month_unlocked(_month_from_date_obj(advance.advance_date), 'Tháng tài chính đã khóa, không thể hủy chi tiền tạm ứng.')
+            if advance.settlements.exists():
+                return Response({'error': 'Phiếu đã có quyết toán, không thể hủy chứng từ chi tiền.'}, status=400)
+            tx = _get_advance_disbursement_tx(advance, lock_for_update=True)
+            if tx is None:
+                return Response({'error': 'Phiếu này chưa có chứng từ chi tiền.'}, status=400)
+            _ensure_finance_month_unlocked(_month_from_date_obj(tx.transaction_date), 'Tháng tài chính của chứng từ chi đã khóa, không thể hủy.')
+            tx_id = int(tx.id)
+            tx.delete()
+            _log_finance_audit(
+                request.user,
+                action='DELETE',
+                entity_type='FinanceAdvanceDisbursement',
+                entity_id=int(advance.id),
+                entity_code=advance.code,
+                old_values={'cash_transaction_id': tx_id},
+                new_values={},
+                changed_fields=['cash_transaction_id'],
+            )
+        return Response({'success': True, 'transaction_id': tx_id, 'disbursement_status': 'NOT_DISBURSED'})
 
     @action(detail=False, methods=['get'])
     def overdue_report(self, request):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem báo cáo tạm ứng quá hạn.'}, status=403)
         as_of_raw = (request.query_params.get('as_of') or '').strip()
         overdue_days_raw = (request.query_params.get('overdue_days') or '30').strip()
         try:
@@ -2496,8 +3069,7 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             as_of = date.today()
         cutoff_date = as_of.fromordinal(as_of.toordinal() - overdue_days)
 
-        qs = AdvanceTransaction.objects.filter(
-            is_active=True,
+        qs = _approved_advance_queryset().filter(
             status__in=[AdvanceTransaction.STATUS_OPEN, AdvanceTransaction.STATUS_PARTIAL],
             advance_date__lte=cutoff_date,
         ).select_related('source_cash_account', 'source_bank_account')
@@ -2587,6 +3159,8 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def overdue_overview(self, request):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem tổng quan tạm ứng quá hạn.'}, status=403)
         as_of_raw = (request.query_params.get('as_of') or '').strip()
         if as_of_raw:
             try:
@@ -2597,8 +3171,7 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
         else:
             as_of = date.today()
 
-        base_qs = AdvanceTransaction.objects.filter(
-            is_active=True,
+        base_qs = _approved_advance_queryset().filter(
             status__in=[AdvanceTransaction.STATUS_OPEN, AdvanceTransaction.STATUS_PARTIAL],
             advance_date__lt=as_of,
         ).select_related('source_cash_account', 'source_bank_account')
@@ -3014,23 +3587,93 @@ class AdvanceSettlementViewSet(SearchTextMixin, viewsets.ModelViewSet):
         if advance and advance.approval_status != AdvanceTransaction.APPROVAL_APPROVED:
             raise PermissionDenied('Phiếu tạm ứng chưa được duyệt đầy đủ, không thể quyết toán.')
         with transaction.atomic():
-            settlement = serializer.save(created_by=self.request.user, updated_by=self.request.user)
-            refresh_advance_status(settlement.advance_transaction, self.request.user)
+            locked_advance = (
+                AdvanceTransaction.objects
+                .select_for_update()
+                .get(pk=advance.pk)
+            )
+            validation_error = _validate_settlement_total_under_advance(
+                locked_advance,
+                serializer.validated_data.get('spent_amount'),
+                serializer.validated_data.get('refund_amount'),
+            )
+            if validation_error:
+                raise ValidationError({'non_field_errors': [validation_error]})
+            settlement = serializer.save(
+                created_by=self.request.user,
+                updated_by=self.request.user,
+                advance_transaction=locked_advance,
+            )
+            refresh_advance_status(locked_advance, self.request.user)
+        _log_finance_audit(
+            self.request.user, action='CREATE', entity_type='FinanceAdvanceSettlement',
+            entity_id=int(settlement.id), entity_code=str(settlement.id),
+            old_values={},
+            new_values={
+                'advance_transaction_id': int(settlement.advance_transaction_id),
+                'spent_amount': str(settlement.spent_amount),
+                'refund_amount': str(settlement.refund_amount),
+                'settlement_date': settlement.settlement_date.isoformat() if settlement.settlement_date else '',
+            },
+            changed_fields=['spent_amount', 'refund_amount', 'settlement_date'],
+        )
 
     def perform_update(self, serializer):
         if not _can_manage_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền cập nhật quyết toán.')
+        old_month = _month_from_date_obj(serializer.instance.settlement_date)
         settlement_date = serializer.validated_data.get('settlement_date', serializer.instance.settlement_date)
-        _ensure_finance_month_unlocked(
-            _month_from_date_obj(settlement_date),
+        _ensure_finance_months_unlocked(
+            [old_month, _month_from_date_obj(settlement_date)],
             'Tháng tài chính đã khóa, không thể cập nhật quyết toán.',
         )
         advance = serializer.validated_data.get('advance_transaction', serializer.instance.advance_transaction)
         if advance and advance.approval_status != AdvanceTransaction.APPROVAL_APPROVED:
             raise PermissionDenied('Phiếu tạm ứng chưa được duyệt đầy đủ, không thể cập nhật quyết toán.')
+        old = serializer.instance
+        old_parent_id = old.advance_transaction_id
+        old_snap = {
+            'advance_transaction_id': int(old.advance_transaction_id),
+            'spent_amount': str(old.spent_amount),
+            'refund_amount': str(old.refund_amount),
+            'settlement_date': old.settlement_date.isoformat() if old.settlement_date else '',
+        }
         with transaction.atomic():
-            settlement = serializer.save(updated_by=self.request.user)
-            refresh_advance_status(settlement.advance_transaction, self.request.user)
+            lock_ids = {int(old_parent_id)}
+            if advance and advance.pk:
+                lock_ids.add(int(advance.pk))
+            locked_advances = {
+                row.id: row
+                for row in AdvanceTransaction.objects.select_for_update().filter(id__in=lock_ids)
+            }
+            target_advance = locked_advances.get(int(advance.pk if advance else old_parent_id))
+            validation_error = _validate_settlement_total_under_advance(
+                target_advance,
+                serializer.validated_data.get('spent_amount', old.spent_amount),
+                serializer.validated_data.get('refund_amount', old.refund_amount),
+                exclude_settlement_id=old.id,
+            )
+            if validation_error:
+                raise ValidationError({'non_field_errors': [validation_error]})
+            settlement = serializer.save(
+                updated_by=self.request.user,
+                advance_transaction=target_advance,
+            )
+            refresh_advance_status(target_advance, self.request.user)
+            if int(old_parent_id) != int(target_advance.id):
+                refresh_advance_status(locked_advances[int(old_parent_id)], self.request.user)
+        _log_finance_audit(
+            self.request.user, action='UPDATE', entity_type='FinanceAdvanceSettlement',
+            entity_id=int(settlement.id), entity_code=str(settlement.id),
+            old_values=old_snap,
+            new_values={
+                'advance_transaction_id': int(settlement.advance_transaction_id),
+                'spent_amount': str(settlement.spent_amount),
+                'refund_amount': str(settlement.refund_amount),
+                'settlement_date': settlement.settlement_date.isoformat() if settlement.settlement_date else '',
+            },
+            changed_fields=list(serializer.validated_data.keys()),
+        )
 
     def perform_destroy(self, instance):
         _ensure_finance_month_unlocked(
@@ -3040,9 +3683,16 @@ class AdvanceSettlementViewSet(SearchTextMixin, viewsets.ModelViewSet):
         advance = instance.advance_transaction
         if advance.approval_status != AdvanceTransaction.APPROVAL_APPROVED:
             raise PermissionDenied('Phiếu tạm ứng chưa được duyệt đầy đủ, không thể xóa quyết toán.')
+        snap = {'spent_amount': str(instance.spent_amount), 'refund_amount': str(instance.refund_amount), 'advance_transaction_id': int(instance.advance_transaction_id)}
         with transaction.atomic():
+            locked_advance = AdvanceTransaction.objects.select_for_update().get(pk=advance.pk)
             instance.delete()
-            refresh_advance_status(advance, self.request.user)
+            refresh_advance_status(locked_advance, self.request.user)
+        _log_finance_audit(
+            self.request.user, action='DELETE', entity_type='FinanceAdvanceSettlement',
+            entity_id=int(instance.id), entity_code=str(instance.id),
+            old_values=snap, new_values={}, changed_fields=['deleted'],
+        )
 
     @action(detail=False, methods=['post'])
     def bulk_delete(self, request):
@@ -3062,9 +3712,25 @@ class AdvanceSettlementViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 if settlement.advance_transaction.approval_status != AdvanceTransaction.APPROVAL_APPROVED:
                     return Response({'error': f'Phiếu {settlement.advance_transaction.code} chưa duyệt đầy đủ, không thể xóa quyết toán.'}, status=400)
             advance_ids = {item.advance_transaction_id for item in settlements}
+            locked_advances = {
+                row.id: row
+                for row in AdvanceTransaction.objects.select_for_update().filter(id__in=advance_ids)
+            }
+            deleted_ids = [int(item.id) for item in settlements]
             deleted_count, _ = AdvanceSettlement.objects.filter(id__in=ids).delete()
-            for advance in AdvanceTransaction.objects.filter(id__in=advance_ids):
-                refresh_advance_status(advance, request.user)
+            for advance_id in advance_ids:
+                refresh_advance_status(locked_advances[advance_id], request.user)
+        if deleted_ids:
+            _log_finance_audit(
+                request.user,
+                action='DELETE',
+                entity_type='FinanceAdvanceSettlementBulkDelete',
+                entity_id=0,
+                entity_code='bulk_delete',
+                old_values={'ids': deleted_ids},
+                new_values={},
+                changed_fields=['deleted_ids'],
+            )
         return Response({'success': True, 'count': deleted_count})
 
     def destroy(self, request, *args, **kwargs):

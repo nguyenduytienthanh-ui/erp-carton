@@ -4,3 +4,9 @@ node_modules/
 # Environment / local
 .env
 *.local
+
+# Local artifacts
+debug.log
+.tmp.driveupload/
+frontend/playwright-report/
+frontend/test-results/

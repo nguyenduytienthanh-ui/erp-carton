@@ -10,12 +10,13 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { PAGES } from '../../utils/constants';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { QuickClearIcon } from '../../components';
+import { canManageModulePermissionSettings } from '../../utils/authz';
 
 type HistoryFilters = {
   roleCodeInput: string;
   days: '7' | '30' | '90' | 'all';
   userId: number | null;
-  changedType: 'all' | 'workforce' | 'finance' | 'rbac';
+  changedType: string;
 };
 
 function serializeFilters(filters: HistoryFilters): string {
@@ -29,9 +30,7 @@ function parseFilters(raw: string): HistoryFilters {
       roleCodeInput: String(parsed.roleCodeInput ?? ''),
       days: parsed.days === '7' || parsed.days === '30' || parsed.days === '90' ? parsed.days : '30',
       userId: typeof parsed.userId === 'number' ? parsed.userId : null,
-      changedType: parsed.changedType === 'workforce' || parsed.changedType === 'finance' || parsed.changedType === 'rbac'
-        ? parsed.changedType
-        : 'all',
+      changedType: typeof parsed.changedType === 'string' && parsed.changedType ? parsed.changedType : 'all',
     };
   } catch {
     return { roleCodeInput: '', days: '30', userId: null, changedType: 'all' };
@@ -61,6 +60,7 @@ export default function ModulePermissionHistory() {
   } | null>(null);
   const [freezeConfirmText, setFreezeConfirmText] = useState('');
   const pageSize = Number(((config ?? {}) as HistoryPrefConfig).pageSize ?? 20);
+  const canManageRbac = canManageModulePermissionSettings();
 
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
@@ -116,6 +116,10 @@ export default function ModulePermissionHistory() {
         page_size: 50,
       }),
   });
+  const historyMetaQuery = useQuery({
+    queryKey: ['admin-module-permissions-history-meta'],
+    queryFn: adminApi.getRoleModulePermissionHistoryMeta,
+  });
   const freezePrepareAction = async (userId: number, displayName: string, reason: string) => {
     const prepared = await adminApi.prepareFreezeModulePermissionActor({
       user_id: userId,
@@ -151,17 +155,23 @@ export default function ModulePermissionHistory() {
     await queryClient.invalidateQueries({ queryKey: ['admin-module-permissions-freeze-history'] });
   };
 
-  const userOptions = useMemo(() => {
-    const map = new Map<number, string>();
-    (listQuery.data?.results ?? []).forEach((item) => {
-      const userId = item.user?.id;
-      if (typeof userId === 'number' && userId > 0) {
-        const label = item.user.full_name?.trim() || item.user.username || `User #${userId}`;
-        map.set(userId, label);
-      }
-    });
-    return Array.from(map.entries()).map(([value, label]) => ({ value, label }));
-  }, [listQuery.data?.results]);
+  const userOptions = useMemo(
+    () => (historyMetaQuery.data?.users ?? []).map((item) => ({
+      value: item.id,
+      label: item.full_name?.trim() || item.username || `User #${item.id}`,
+    })),
+    [historyMetaQuery.data?.users]
+  );
+  const changedTypeOptions = useMemo(
+    () => [
+      { value: 'all', label: 'Mọi thay đổi quyền' },
+      ...((historyMetaQuery.data?.changed_types ?? []).map((item) => ({
+        value: item.value,
+        label: item.label,
+      }))),
+    ],
+    [historyMetaQuery.data?.changed_types]
+  );
 
   const rows = listQuery.data?.results ?? [];
   const total = listQuery.data?.count ?? 0;
@@ -343,7 +353,7 @@ export default function ModulePermissionHistory() {
       )}
     >
       <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-        Tra cứu lịch sử bật/tắt quyền Nhân sự, Tài chính và quản trị phân quyền theo vai trò.
+        Tra cứu lịch sử bật/tắt toàn bộ quyền module theo vai trò, kèm cảnh báo bất thường và lịch sử đóng băng user thao tác.
       </Typography.Paragraph>
 
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
@@ -359,18 +369,16 @@ export default function ModulePermissionHistory() {
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card size="small">
-            <Statistic title="Đổi quyền Nhân sự" value={summary?.by_changed_type?.workforce ?? 0} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card size="small">
-            <Statistic title="Đổi quyền Tài chính" value={summary?.by_changed_type?.finance ?? 0} />
+            <Statistic title="User bất thường 24h" value={historyMetaQuery.data?.anomalies_24h_count ?? anomalies24h.length} />
           </Card>
         </Col>
       </Row>
       <div style={{ marginBottom: 12 }}>
         <Space size={[8, 8]} wrap>
-          <Tag color="gold">Đổi quyền RBAC: {summary?.by_changed_type?.rbac ?? 0}</Tag>
+          {Object.entries(summary?.by_changed_type ?? {}).map(([key, value]) => {
+            const label = changedTypeOptions.find((item) => item.value === key)?.label ?? key;
+            return <Tag key={key} color="gold">{`${label}: ${value}`}</Tag>;
+          })}
           {(summary?.top_actors ?? []).map((actor) => (
             <Tag key={`${actor.user_id ?? 'system'}-${actor.username}`}>
               {actor.full_name?.trim() || actor.username}: {actor.events} sự kiện
@@ -435,7 +443,7 @@ export default function ModulePermissionHistory() {
                     <Tag>{item.role_changes_24h} lượt role/24h</Tag>
                     {item.is_frozen ? <Tag color="blue">Đang đóng băng đến {item.frozen_until || '-'}</Tag> : null}
                   </Space>
-                  {canAct ? (
+                  {canAct && canManageRbac ? (
                     item.is_frozen ? (
                       <Button
                         size="small"
@@ -528,12 +536,7 @@ export default function ModulePermissionHistory() {
           value={filters.changedType}
           onChange={(value) => setFilters((prev) => ({ ...prev, changedType: value }))}
           style={{ width: 220 }}
-          options={[
-            { value: 'all', label: 'Mọi thay đổi quyền' },
-            { value: 'workforce', label: 'Đổi quyền Nhân sự' },
-            { value: 'finance', label: 'Đổi quyền Tài chính' },
-            { value: 'rbac', label: 'Đổi quyền RBAC' },
-          ]}
+          options={changedTypeOptions}
         />
         <DatePicker.RangePicker
           value={datePickerValue}

@@ -12,7 +12,14 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 
 from pathlib import Path
 from datetime import timedelta
-from decouple import config
+from decouple import Csv, config
+
+try:
+    import sentry_sdk  # type: ignore[reportMissingImports]
+    from sentry_sdk.integrations.django import DjangoIntegration  # type: ignore[reportMissingImports]
+except ImportError:  # pragma: no cover - optional in local environments
+    sentry_sdk = None
+    DjangoIntegration = None
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -27,7 +34,13 @@ SECRET_KEY = config('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = ["127.0.0.1", "localhost", "10.169.62.194"]
+APP_ENV = config('APP_ENV', default='development')
+
+ALLOWED_HOSTS = config(
+    'ALLOWED_HOSTS',
+    default='127.0.0.1,localhost,10.169.62.194',
+    cast=Csv(),
+)
 
 
 # Application definition
@@ -46,6 +59,7 @@ INSTALLED_APPS = [
     'core.apps.CoreConfig',
     'products',
     'sales',
+    'inventory.apps.InventoryConfig',
     'workforce.apps.WorkforceConfig',
     'finance.apps.FinanceConfig',
     'django_q',
@@ -60,7 +74,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'core.middleware.CurrentRequestMiddleware',  # Store request in thread-local for signals
+    'core.middleware.RequestContextMiddleware',  # Store current request and request_id for tracing
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -141,15 +155,35 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",
-    "http://10.169.62.194:5173",
-    "http://10.169.62.194:5174",
-]
+CORS_ALLOWED_ORIGINS = config(
+    'CORS_ALLOWED_ORIGINS',
+    default=(
+        'http://localhost:5173,http://localhost:5174,'
+        'http://127.0.0.1:5173,http://127.0.0.1:5174,'
+        'http://10.169.62.194:5173,http://10.169.62.194:5174'
+    ),
+    cast=Csv(),
+)
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='http://localhost:5173,http://127.0.0.1:5173',
+    cast=Csv(),
+)
 CORS_ALLOW_CREDENTIALS = True
+SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=False, cast=bool)
+CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=False, cast=bool)
+SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=False, cast=bool)
+SECURE_CONTENT_TYPE_NOSNIFF = config('SECURE_CONTENT_TYPE_NOSNIFF', default=True, cast=bool)
+SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default=0, cast=int)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = config('SECURE_HSTS_INCLUDE_SUBDOMAINS', default=False, cast=bool)
+SECURE_HSTS_PRELOAD = config('SECURE_HSTS_PRELOAD', default=False, cast=bool)
+X_FRAME_OPTIONS = config('X_FRAME_OPTIONS', default='DENY')
+REFERRER_POLICY = config('REFERRER_POLICY', default='same-origin')
+SECURE_PROXY_SSL_HEADER = (
+    ('HTTP_X_FORWARDED_PROTO', 'https')
+    if config('USE_X_FORWARDED_PROTO', default=False, cast=bool)
+    else None
+)
 
 # Custom User Model
 AUTH_USER_MODEL = 'core.User'
@@ -177,6 +211,8 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
 }
 
+PERMISSION_STRICT_DEFAULT = config('PERMISSION_STRICT_DEFAULT', default=False, cast=bool)
+
 # Media files (uploads)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -188,12 +224,71 @@ EMAIL_FILE_PATH = BASE_DIR / 'sent_emails'
 # Django-Q Configuration
 Q_CLUSTER = {
     'name': 'DjangORM',
-    'workers': 4,
-    'timeout': 90,
-    'retry': 120,
-    'queue_limit': 50,
-    'bulk': 10,
+    'workers': config('Q_CLUSTER_WORKERS', default=4, cast=int),
+    'timeout': config('Q_CLUSTER_TIMEOUT', default=90, cast=int),
+    'retry': config('Q_CLUSTER_RETRY', default=120, cast=int),
+    'queue_limit': config('Q_CLUSTER_QUEUE_LIMIT', default=50, cast=int),
+    'bulk': config('Q_CLUSTER_BULK', default=10, cast=int),
     'orm': 'default',
-    'save_limit': 250,
+    'save_limit': config('Q_CLUSTER_SAVE_LIMIT', default=250, cast=int),
     'ack_failures': True,
 }
+
+LOG_LEVEL = config('LOG_LEVEL', default='INFO')
+LOG_TO_FILE = config('LOG_TO_FILE', default=False, cast=bool)
+LOG_DIR = Path(config('LOG_DIR', default=str(BASE_DIR / 'logs')))
+LOG_FILE_MAX_BYTES = config('LOG_FILE_MAX_BYTES', default=10_485_760, cast=int)
+LOG_FILE_BACKUP_COUNT = config('LOG_FILE_BACKUP_COUNT', default=5, cast=int)
+if LOG_TO_FILE:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+log_handlers = {
+    'console': {
+        'class': 'logging.StreamHandler',
+        'formatter': 'standard',
+        'filters': ['request_id'],
+    },
+}
+root_handlers = ['console']
+if LOG_TO_FILE:
+    log_handlers['file'] = {
+        'class': 'logging.handlers.RotatingFileHandler',
+        'formatter': 'standard',
+        'filters': ['request_id'],
+        'filename': str(LOG_DIR / 'erp-carton.log'),
+        'maxBytes': LOG_FILE_MAX_BYTES,
+        'backupCount': LOG_FILE_BACKUP_COUNT,
+        'encoding': 'utf-8',
+    }
+    root_handlers.append('file')
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'standard': {
+            'format': '[%(asctime)s] %(levelname)s %(name)s [req:%(request_id)s]: %(message)s',
+        },
+    },
+    'filters': {
+        'request_id': {
+            '()': 'core.middleware.RequestIdLogFilter',
+        },
+    },
+    'handlers': log_handlers,
+    'root': {
+        'handlers': root_handlers,
+        'level': LOG_LEVEL,
+    },
+}
+
+SENTRY_DSN = config('SENTRY_DSN', default='')
+if sentry_sdk and SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=config('SENTRY_ENVIRONMENT', default=APP_ENV),
+        integrations=[DjangoIntegration()] if DjangoIntegration else [],
+        traces_sample_rate=config('SENTRY_TRACES_SAMPLE_RATE', default=0.0, cast=float),
+        profiles_sample_rate=config('SENTRY_PROFILES_SAMPLE_RATE', default=0.0, cast=float),
+        send_default_pii=config('SENTRY_SEND_DEFAULT_PII', default=False, cast=bool),
+    )

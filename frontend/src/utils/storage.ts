@@ -1,4 +1,9 @@
 import { STORAGE_KEYS } from './constants';
+import type { CurrentUserProfile } from '../api/users';
+
+export type StoredUserProfile =
+  Pick<CurrentUserProfile, 'username'> &
+  Partial<Omit<CurrentUserProfile, 'username'>>;
 
 export const storage = {
   // Token management
@@ -19,12 +24,12 @@ export const storage = {
   },
 
   // User management
-  getUser: (): any | null => {
+  getUser: (): StoredUserProfile | null => {
     const user = localStorage.getItem(STORAGE_KEYS.USER);
-    return user ? JSON.parse(user) : null;
+    return user ? (JSON.parse(user) as StoredUserProfile) : null;
   },
 
-  setUser: (user: any): void => {
+  setUser: (user: StoredUserProfile): void => {
     localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
   },
 

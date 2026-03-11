@@ -39,7 +39,10 @@ export function useQuickEntryKeys(
 ) {
   const { onLastFieldEnter, enabled = true } = options;
   const onLastRef = useRef(onLastFieldEnter);
-  onLastRef.current = onLastFieldEnter;
+
+  useEffect(() => {
+    onLastRef.current = onLastFieldEnter;
+  }, [onLastFieldEnter]);
 
   useEffect(() => {
     if (!enabled) return;

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
 
 export type ProductStatus = 'DRAFT' | 'ACTIVE' | 'DISCONTINUED';
@@ -76,6 +77,44 @@ export interface PaginationState {
 
 const DEFAULT_PAGE_SIZE = 20;
 
+function areArraysEqual<T>(a: T[], b: T[]) {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function areFilterValuesEqual(a: FilterValues, b: FilterValues) {
+  return (
+    a.category === b.category &&
+    a.unit === b.unit &&
+    a.status === b.status &&
+    a.wave === b.wave &&
+    a.box_type === b.box_type &&
+    a.code === b.code &&
+    a.name === b.name &&
+    a.min_cost_price === b.min_cost_price &&
+    a.max_cost_price === b.max_cost_price &&
+    a.min_sale_price === b.min_sale_price &&
+    a.max_sale_price === b.max_sale_price &&
+    a.size_po_dai === b.size_po_dai &&
+    a.size_po_rong === b.size_po_rong &&
+    a.size_po_cao === b.size_po_cao &&
+    a.size_sx_dai === b.size_sx_dai &&
+    a.size_sx_rong === b.size_sx_rong &&
+    a.size_sx_cao === b.size_sx_cao &&
+    a.waterproof === b.waterproof &&
+    a.co_cm === b.co_cm &&
+    a.note === b.note
+  );
+}
+
+function isPaginationEqual(a: PaginationState, b: PaginationState) {
+  return a.current === b.current && a.pageSize === b.pageSize && a.total === b.total;
+}
+
 export interface ProductsListFilterState {
   searchInput: string;
   search: string;
@@ -108,19 +147,28 @@ export function ProductsListFilterProvider({ children }: { children: ReactNode }
   const [state, setState] = useState<ProductsListFilterState>(defaultState);
 
   const setSearchInput = useCallback((v: string) => {
-    setState((s) => ({ ...s, searchInput: v }));
+    setState((s) => (s.searchInput === v ? s : { ...s, searchInput: v }));
   }, []);
   const setSearch = useCallback((v: string) => {
-    setState((s) => ({ ...s, search: v }));
+    setState((s) => (s.search === v ? s : { ...s, search: v }));
   }, []);
   const setActiveFilters = useCallback((v: FilterKey[] | ((prev: FilterKey[]) => FilterKey[])) => {
-    setState((s) => ({ ...s, activeFilters: typeof v === 'function' ? v(s.activeFilters) : v }));
+    setState((s) => {
+      const next = typeof v === 'function' ? v(s.activeFilters) : v;
+      return areArraysEqual(s.activeFilters, next) ? s : { ...s, activeFilters: next };
+    });
   }, []);
   const setFilterValues = useCallback((v: FilterValues | ((prev: FilterValues) => FilterValues)) => {
-    setState((s) => ({ ...s, filterValues: typeof v === 'function' ? v(s.filterValues) : v }));
+    setState((s) => {
+      const next = typeof v === 'function' ? v(s.filterValues) : v;
+      return areFilterValuesEqual(s.filterValues, next) ? s : { ...s, filterValues: next };
+    });
   }, []);
   const setPagination = useCallback((v: PaginationState | ((prev: PaginationState) => PaginationState)) => {
-    setState((s) => ({ ...s, pagination: typeof v === 'function' ? v(s.pagination) : v }));
+    setState((s) => {
+      const next = typeof v === 'function' ? v(s.pagination) : v;
+      return isPaginationEqual(s.pagination, next) ? s : { ...s, pagination: next };
+    });
   }, []);
 
   return (

@@ -151,7 +151,9 @@ export default function BonusPenaltyList() {
     },
   });
 
-  const employees = employeesQuery.data?.results ?? [];
+  const employees = (employeesQuery.data?.results ?? []).filter(
+    (item) => item.is_active && item.status !== 'RESIGNED'
+  );
   const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
   const total = listQuery.data?.count ?? 0;
 

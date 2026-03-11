@@ -115,6 +115,71 @@ class Employee(SearchTextModelMixin):
         super().save(*args, **kwargs)
 
 
+class EmployeeProfileHistory(SearchTextModelMixin):
+    employee = models.ForeignKey(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name='profile_histories',
+        verbose_name='Nhân viên',
+    )
+    effective_month = models.CharField(max_length=7, verbose_name='Tháng hiệu lực', help_text='Định dạng YYYY-MM')
+    salary_basic = models.DecimalField(max_digits=15, decimal_places=2, default=0, verbose_name='Lương cơ bản')
+    department = models.CharField(max_length=120, blank=True, default='', verbose_name='Phòng ban')
+    position = models.CharField(max_length=120, blank=True, default='', verbose_name='Chức vụ')
+    status = models.CharField(
+        max_length=20,
+        choices=Employee.STATUS_CHOICES,
+        default=Employee.STATUS_ACTIVE,
+        verbose_name='Trạng thái hiệu lực',
+    )
+    note = models.TextField(blank=True, default='', verbose_name='Ghi chú hiệu lực')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='workforce_employee_profile_history_created',
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='workforce_employee_profile_history_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'workforce_employee_profile_histories'
+        ordering = ['employee__code', '-effective_month', '-id']
+        unique_together = [('employee', 'effective_month')]
+        indexes = [
+            models.Index(fields=['employee', 'effective_month']),
+            models.Index(fields=['effective_month']),
+        ]
+
+    def __str__(self):
+        return f'{self.employee.code} - {self.effective_month}'
+
+    def _search_values(self):
+        return [
+            self.employee.code if self.employee_id else '',
+            self.employee.name if self.employee_id else '',
+            self.effective_month,
+            str(self.salary_basic or ''),
+            self.department,
+            self.position,
+            self.status,
+            dict(Employee.STATUS_CHOICES).get(self.status, ''),
+            self.note,
+        ]
+
+    def save(self, *args, **kwargs):
+        self._build_search_text()
+        super().save(*args, **kwargs)
+
+
 class AttendanceRecord(SearchTextModelMixin):
     employee = models.ForeignKey(
         Employee,
@@ -475,6 +540,9 @@ class PayrollRecord(SearchTextModelMixin):
         verbose_name='Nhân viên',
     )
     month = models.CharField(max_length=7, verbose_name='Tháng', help_text='Định dạng YYYY-MM')
+    profile_effective_month = models.CharField(max_length=7, blank=True, default='', verbose_name='Tháng hiệu lực hồ sơ')
+    employee_department_snapshot = models.CharField(max_length=120, blank=True, default='', verbose_name='Phòng ban snapshot')
+    employee_position_snapshot = models.CharField(max_length=120, blank=True, default='', verbose_name='Chức vụ snapshot')
     standard_days = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     actual_days = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     basic_salary = models.DecimalField(max_digits=15, decimal_places=2, default=0)
@@ -523,6 +591,9 @@ class PayrollRecord(SearchTextModelMixin):
             self.employee.code if self.employee_id else '',
             self.employee.name if self.employee_id else '',
             self.month,
+            self.profile_effective_month,
+            self.employee_department_snapshot,
+            self.employee_position_snapshot,
             str(self.standard_days),
             str(self.actual_days),
             str(self.basic_salary),

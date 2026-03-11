@@ -1,0 +1,9 @@
+[Unit]
+Description=ERP Carton Task Reminder One-shot Job
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/erp-carton/backend
+EnvironmentFile=/opt/erp-carton/backend/.env
+ExecStart=/opt/erp-carton/backend/.venv/bin/python manage.py send_task_overdue_reminders

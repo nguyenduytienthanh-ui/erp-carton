@@ -6,6 +6,7 @@ export type AdvanceTransactionType = 'PURCHASE' | 'SALARY' | 'OTHER';
 export type AdvanceTransactionStatus = 'OPEN' | 'PARTIAL' | 'SETTLED' | 'CANCELLED';
 export type AdvanceTransactionSourceType = 'CASH' | 'BANK';
 export type AdvanceApprovalStatus = 'DRAFT' | 'PENDING_L1' | 'PENDING_L2' | 'APPROVED' | 'REJECTED';
+export type DisbursementStatus = 'NOT_DISBURSED' | 'DISBURSED';
 
 export interface BankAccount {
   id: number;
@@ -38,6 +39,7 @@ export interface CashAccount {
   name: string;
   account_type: CashAccountType;
   balance: string;
+  current_balance?: string;
   note: string;
   is_active: boolean;
   created_at: string;
@@ -96,6 +98,9 @@ export interface AdvanceTransaction {
   total_spent: string;
   total_refund: string;
   remaining_amount: string;
+  disbursement_status: DisbursementStatus;
+  disbursement_transaction_id?: number | null;
+  disbursed_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -165,6 +170,22 @@ export interface PayrollReconciliationResponse {
   posted_count: number;
   delta: string;
   is_balanced: boolean;
+}
+
+export interface FinanceMonthCloseCheckItem {
+  code: string;
+  severity: 'blocker' | 'warning';
+  title: string;
+  message: string;
+  count: number;
+  items: Array<Record<string, unknown>>;
+}
+
+export interface FinanceMonthCloseCheckResponse {
+  month: string;
+  is_ready: boolean;
+  blockers: FinanceMonthCloseCheckItem[];
+  warnings: FinanceMonthCloseCheckItem[];
 }
 
 export interface AdvanceOverdueBucket {

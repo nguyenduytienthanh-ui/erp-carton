@@ -4,12 +4,33 @@ import { InboxOutlined, DownloadOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { theme } from '../../styles/theme';
 
+interface ImportErrorItem {
+  row?: number;
+  error?: string;
+}
+
+interface ImportResult {
+  success_count: number;
+  error_count: number;
+  errors?: Array<ImportErrorItem | string>;
+}
+
+interface ApiErrorShape {
+  response?: {
+    data?: {
+      error?: string;
+      detail?: string;
+      errors?: ImportErrorItem[];
+    };
+  };
+}
+
 interface ImportModalProps {
   visible: boolean;
   onClose: () => void;
   onSuccess: () => void;
   onDownloadTemplate: () => void;
-  onImport: (file: File, options?: { updateIfExists?: boolean }) => Promise<any>;
+  onImport: (file: File, options?: { updateIfExists?: boolean }) => Promise<ImportResult>;
   entityName?: string;
 }
 
@@ -23,7 +44,7 @@ const ImportModal = ({
   entityName = 'sản phẩm',
 }: ImportModalProps) => {
   const [uploading, setUploading] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ImportResult | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [updateIfExists, setUpdateIfExists] = useState(false);
 
@@ -51,7 +72,15 @@ const ImportModal = ({
       setFile(null);
       setResult(null);
     },
-    fileList: file ? [file as any] : [],
+    fileList: file
+      ? [{
+          uid: '-1',
+          name: file.name,
+          status: 'done',
+          size: file.size,
+          type: file.type,
+        }]
+      : [],
   };
 
   const handleClose = () => {
@@ -84,14 +113,15 @@ const ImportModal = ({
         });
         onSuccess();
       }
-    } catch (error: any) {
-      const data = error.response?.data;
+    } catch (error: unknown) {
+      const typedError = error as ApiErrorShape;
+      const data = typedError.response?.data;
       let errMsg = 'Import thất bại!';
       if (data) {
         if (typeof data.error === 'string') errMsg = data.error;
         else if (typeof data.detail === 'string') errMsg = data.detail;
         else if (Array.isArray(data.errors) && data.errors.length > 0) {
-          errMsg = data.errors.map((e: { row?: number; error?: string }) =>
+          errMsg = data.errors.map((e: ImportErrorItem) =>
             e.row ? `Dòng ${e.row}: ${e.error || ''}` : e.error
           ).slice(0, 5).join('; ') + (data.errors.length > 5 ? ` ... (+${data.errors.length - 5} lỗi)` : '');
         }
@@ -172,7 +202,7 @@ const ImportModal = ({
                       <strong>Chi tiết lỗi:</strong>
                     </p>
                     <ul style={{ maxHeight: '200px', overflow: 'auto', paddingLeft: 20 }}>
-                      {result.errors.map((err: { row?: number; error?: string } | string, index: number) => {
+                      {result.errors.map((err: ImportErrorItem | string, index: number) => {
                         const msg = typeof err === 'object' && err !== null
                           ? (err.row ? `Dòng ${err.row}: ${err.error || ''}` : String(err.error || ''))
                           : String(err);

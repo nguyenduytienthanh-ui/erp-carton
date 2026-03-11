@@ -282,7 +282,6 @@ export default function WorkflowTaskTemplateList() {
       trigger: record.trigger,
       title_template: record.title_template,
       description_template: record.description_template,
-      assign_rule: (record.assign_rule ?? {}) as Record<string, {} | undefined>,
       due_in_days: record.due_in_days,
       priority: record.priority,
       is_blocking: record.is_blocking,

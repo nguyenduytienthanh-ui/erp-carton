@@ -1,5 +1,6 @@
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 import django_filters
@@ -28,9 +29,165 @@ from .mixins import AuditLogMixin, ExportExcelMixin
 from .permissions import check_action_permission
 
 
+MODULE_PERMISSION_FIELDS = [
+    {
+        'field': 'workforce_manage',
+        'label': 'Nhân sự',
+        'resource': 'WORKFORCE',
+        'action': 'MANAGE',
+        'changed_type': 'workforce',
+    },
+    {
+        'field': 'finance_manage',
+        'label': 'Tài chính',
+        'resource': 'FINANCE',
+        'action': 'MANAGE',
+        'changed_type': 'finance',
+    },
+    {
+        'field': 'ops_view',
+        'label': 'Điều hành',
+        'resource': 'OPS',
+        'action': 'VIEW',
+        'changed_type': 'ops',
+    },
+    {
+        'field': 'workflow_view',
+        'label': 'Workflow xem',
+        'resource': 'WORKFLOW',
+        'action': 'VIEW',
+        'changed_type': 'workflow_view',
+    },
+    {
+        'field': 'workflow_manage',
+        'label': 'Workflow quản lý',
+        'resource': 'WORKFLOW',
+        'action': 'MANAGE',
+        'changed_type': 'workflow_manage',
+    },
+    {
+        'field': 'operations_log_view',
+        'label': 'Nhật ký vận hành',
+        'resource': 'CORE',
+        'action': 'VIEW_OPERATIONS_LOG',
+        'changed_type': 'operations_log',
+    },
+    {
+        'field': 'rbac_audit_view',
+        'label': 'Lịch sử phân quyền',
+        'resource': 'CORE',
+        'action': 'VIEW_RBAC_AUDIT',
+        'changed_type': 'rbac_audit',
+    },
+    {
+        'field': 'rbac_manage',
+        'label': 'Quản trị phân quyền',
+        'resource': 'CORE',
+        'action': 'MANAGE_RBAC',
+        'changed_type': 'rbac',
+    },
+]
+
+
+def _user_role_names(user):
+    try:
+        pairs = user.roles.values_list('name', 'code')
+    except Exception:
+        return set()
+    role_names = set()
+    for name, code in pairs:
+        if name:
+            role_names.add(str(name).strip().lower())
+        if code:
+            role_names.add(str(code).strip().lower())
+    return role_names
+
+
+def _has_any_role_name(user, accepted_names):
+    return any(role_name in accepted_names for role_name in _user_role_names(user))
+
+
+def _can_view_ops_hub(user):
+    if not user or not user.is_authenticated:
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    if check_action_permission(user, 'OPS', 'VIEW', strict=True):
+        return True
+    return _has_any_role_name(user, {'admin', 'manager', 'operation-manager', 'ops-manager', 'quan-ly', 'quanly'})
+
+
+def _can_view_workflow(user):
+    if not user or not user.is_authenticated:
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    if check_action_permission(user, 'WORKFLOW', 'VIEW', strict=True):
+        return True
+    if check_action_permission(user, 'WORKFLOW', 'MANAGE', strict=True):
+        return True
+    return _has_any_role_name(user, {'admin', 'manager', 'operation-manager', 'ops-manager', 'quan-ly', 'quanly'})
+
+
+def _can_manage_workflow(user):
+    if not user or not user.is_authenticated:
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    if check_action_permission(user, 'WORKFLOW', 'MANAGE', strict=True):
+        return True
+    return _has_any_role_name(user, {'admin', 'manager', 'operation-manager', 'ops-manager', 'quan-ly', 'quanly'})
+
+
+def _can_view_operations_log(user):
+    if not user or not user.is_authenticated:
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    if check_action_permission(user, 'CORE', 'VIEW_OPERATIONS_LOG', strict=True):
+        return True
+    return _has_any_role_name(user, {'admin', 'manager', 'operation-manager', 'ops-manager', 'quan-ly', 'quanly'})
+
+
+def _can_view_rbac_audit(user):
+    if not user or not user.is_authenticated:
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    if check_action_permission(user, 'CORE', 'VIEW_RBAC_AUDIT', strict=True):
+        return True
+    if check_action_permission(user, 'CORE', 'MANAGE_RBAC', strict=True):
+        return True
+    return _has_any_role_name(user, {'admin', 'manager', 'quan-ly', 'quanly'})
+
+
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+
+    def get_queryset(self):
+        queryset = User.objects.prefetch_related('roles', 'teams').all().order_by('first_name', 'last_name', 'username')
+        search = (self.request.query_params.get('search') or self.request.query_params.get('q') or '').strip()
+        if search:
+            queryset = queryset.filter(
+                models.Q(username__icontains=search)
+                | models.Q(first_name__icontains=search)
+                | models.Q(last_name__icontains=search)
+                | models.Q(email__icontains=search)
+                | models.Q(phone__icontains=search)
+            )
+        role_id = self.request.query_params.get('role')
+        if role_id:
+            queryset = queryset.filter(roles__id=role_id)
+        team_id = self.request.query_params.get('team')
+        if team_id:
+            queryset = queryset.filter(teams__id=team_id)
+        is_active = self.request.query_params.get('is_active')
+        if is_active in ('true', 'True', '1'):
+            queryset = queryset.filter(is_active=True)
+        elif is_active in ('false', 'False', '0'):
+            queryset = queryset.filter(is_active=False)
+        return queryset.distinct()
 
     @action(detail=False, methods=['get'])
     def me(self, request):
@@ -166,12 +323,15 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
     @staticmethod
     def _get_module_permission_map():
-        perms = Permission.objects.filter(
-            models.Q(resource='WORKFORCE', action='MANAGE')
-            | models.Q(resource='FINANCE', action='MANAGE')
-            | models.Q(resource='CORE', action='MANAGE_RBAC')
-        )
+        query = models.Q()
+        for row in MODULE_PERMISSION_FIELDS:
+            query |= models.Q(resource=row['resource'], action=row['action'])
+        perms = Permission.objects.filter(query)
         return {f'{perm.resource}:{perm.action}': perm for perm in perms}
+
+    @staticmethod
+    def _module_permission_keys():
+        return [row['field'] for row in MODULE_PERMISSION_FIELDS]
 
     @staticmethod
     def _freeze_cache_key(user_id):
@@ -224,10 +384,6 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             return Response({'error': 'Bạn không có quyền xem cấu hình quyền module.'}, status=403)
 
         perm_map = self._get_module_permission_map()
-        workforce_perm = perm_map.get('WORKFORCE:MANAGE')
-        finance_perm = perm_map.get('FINANCE:MANAGE')
-        rbac_perm = perm_map.get('CORE:MANAGE_RBAC')
-
         roles = (
             Role.objects
             .filter(deleted_at__isnull=True)
@@ -242,11 +398,21 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                 'role_code': role.code,
                 'role_name': role.name,
                 'is_active': role.is_active,
-                'workforce_manage': bool(workforce_perm and workforce_perm.id in assigned_ids),
-                'finance_manage': bool(finance_perm and finance_perm.id in assigned_ids),
-                'rbac_manage': bool(rbac_perm and rbac_perm.id in assigned_ids),
+                **{
+                    row['field']: bool(
+                        perm_map.get(f"{row['resource']}:{row['action']}")
+                        and perm_map[f"{row['resource']}:{row['action']}"].id in assigned_ids
+                    )
+                    for row in MODULE_PERMISSION_FIELDS
+                },
             })
-        return Response({'items': items})
+        return Response({
+            'items': items,
+            'field_meta': [
+                {'field': row['field'], 'label': row['label'], 'changed_type': row['changed_type']}
+                for row in MODULE_PERMISSION_FIELDS
+            ],
+        })
 
     @module_permissions.mapping.post
     def update_module_permissions(self, request):
@@ -266,11 +432,10 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             return Response({'error': 'items là bắt buộc và phải là mảng.'}, status=400)
 
         perm_map = self._get_module_permission_map()
-        workforce_perm = perm_map.get('WORKFORCE:MANAGE')
-        finance_perm = perm_map.get('FINANCE:MANAGE')
-        rbac_perm = perm_map.get('CORE:MANAGE_RBAC')
-        if not workforce_perm or not finance_perm or not rbac_perm:
+        if any(perm_map.get(f"{row['resource']}:{row['action']}") is None for row in MODULE_PERMISSION_FIELDS):
             return Response({'error': 'Thiếu permission hệ thống, vui lòng chạy migration mới nhất.'}, status=400)
+        rbac_field = next(row for row in MODULE_PERMISSION_FIELDS if row['field'] == 'rbac_manage')
+        rbac_perm = perm_map[f"{rbac_field['resource']}:{rbac_field['action']}"]
 
         role_ids = []
         for item in raw_items:
@@ -322,47 +487,28 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                     continue
                 role = roles[role_id]
                 assigned_ids = {perm.id for perm in role.permissions.all()}
-                old_workforce = workforce_perm.id in assigned_ids
-                old_finance = finance_perm.id in assigned_ids
-                old_rbac = rbac_perm.id in assigned_ids
-
-                workforce_manage = bool(item.get('workforce_manage'))
-                finance_manage = bool(item.get('finance_manage'))
-                rbac_manage = bool(item.get('rbac_manage'))
-
-                if workforce_manage:
-                    role.permissions.add(workforce_perm)
-                else:
-                    role.permissions.remove(workforce_perm)
-
-                if finance_manage:
-                    role.permissions.add(finance_perm)
-                else:
-                    role.permissions.remove(finance_perm)
-
-                if rbac_manage:
-                    role.permissions.add(rbac_perm)
-                else:
-                    role.permissions.remove(rbac_perm)
-                if (
-                    old_workforce != workforce_manage
-                    or old_finance != finance_manage
-                    or old_rbac != rbac_manage
-                ):
+                old_values = {}
+                new_values = {}
+                changed_any = False
+                for row_cfg in MODULE_PERMISSION_FIELDS:
+                    perm = perm_map[f"{row_cfg['resource']}:{row_cfg['action']}"]
+                    old_flag = perm.id in assigned_ids
+                    new_flag = bool(item.get(row_cfg['field']))
+                    old_values[row_cfg['field']] = old_flag
+                    new_values[row_cfg['field']] = new_flag
+                    if new_flag:
+                        role.permissions.add(perm)
+                    else:
+                        role.permissions.remove(perm)
+                    if old_flag != new_flag:
+                        changed_any = True
+                if changed_any:
                     changed_rows.append({
                         'role_id': role.id,
                         'role_code': role.code,
                         'role_name': role.name,
-                        'old': {
-                            'workforce_manage': old_workforce,
-                            'finance_manage': old_finance,
-                            'rbac_manage': old_rbac,
-                        },
-                        'new': {
-                            'workforce_manage': workforce_manage,
-                            'finance_manage': finance_manage,
-                            'rbac_manage': rbac_manage,
-                        },
+                        'old': old_values,
+                        'new': new_values,
                     })
                 updated += 1
 
@@ -576,7 +722,7 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def module_permissions_freeze_history(self, request):
-        if not self._can_manage_module_permissions(request.user):
+        if not _can_view_rbac_audit(request.user):
             return Response({'error': 'Bạn không có quyền xem lịch sử đóng băng quyền module.'}, status=403)
 
         queryset = (
@@ -643,8 +789,66 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         return Response({'count': total, 'results': results})
 
     @action(detail=False, methods=['get'])
+    def module_permissions_history_meta(self, request):
+        if not _can_view_rbac_audit(request.user):
+            return Response({'error': 'Bạn không có quyền xem metadata lịch sử phân quyền module.'}, status=403)
+
+        user_ids = list(
+            AuditLog.objects
+            .filter(entity_type='RoleModulePermission', user_id__isnull=False)
+            .order_by()
+            .values_list('user_id', flat=True)
+            .distinct()[:200]
+        )
+        users = list(
+            User.objects
+            .filter(id__in=user_ids)
+            .order_by('username')
+            .values('id', 'username', 'first_name', 'last_name')
+        )
+        user_items = [
+            {
+                'id': int(row['id']),
+                'username': row['username'],
+                'full_name': f"{row['first_name']} {row['last_name']}".strip(),
+            }
+            for row in users
+        ]
+
+        recent_cutoff = django_timezone.now() - timedelta(hours=24)
+        recent_logs = list(
+            AuditLog.objects
+            .filter(entity_type='RoleModulePermission', created_at__gte=recent_cutoff)
+            .select_related('user')
+            .order_by('-created_at', '-id')
+        )
+        recent_actor_counts = {}
+        for row in recent_logs:
+            actor_key = row.user_id or 0
+            current = recent_actor_counts.get(actor_key)
+            if current is None:
+                current = {'events_24h': 0, 'role_changes_24h': 0}
+                recent_actor_counts[actor_key] = current
+            current['events_24h'] += 1
+            new_items = (row.new_values or {}).get('items') if isinstance(row.new_values, dict) else []
+            if isinstance(new_items, list):
+                current['role_changes_24h'] += len([item for item in new_items if isinstance(item, dict)])
+        anomalies_24h_count = len([
+            actor for actor in recent_actor_counts.values()
+            if int(actor['events_24h']) >= 10 or int(actor['role_changes_24h']) >= 20
+        ])
+        return Response({
+            'users': user_items,
+            'changed_types': [
+                {'value': row['changed_type'], 'label': row['label']}
+                for row in MODULE_PERMISSION_FIELDS
+            ],
+            'anomalies_24h_count': anomalies_24h_count,
+        })
+
+    @action(detail=False, methods=['get'])
     def module_permissions_history(self, request):
-        if not self._can_manage_module_permissions(request.user):
+        if not _can_view_rbac_audit(request.user):
             return Response({'error': 'Bạn không có quyền xem lịch sử phân quyền module.'}, status=403)
 
         queryset = (
@@ -686,10 +890,11 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                 queryset = queryset.filter(created_at__lte=dt_to)
 
         role_code = (request.query_params.get('role_code') or '').strip().lower()
+        supported_changed_types = {row['changed_type'] for row in MODULE_PERMISSION_FIELDS}
         changed_type = (request.query_params.get('changed_type') or '').strip().lower()
 
         rows_all = list(queryset)
-        if role_code or changed_type in {'workforce', 'finance', 'rbac'}:
+        if role_code or changed_type in supported_changed_types:
             filtered_rows = []
             for row in rows_all:
                 old_items = (row.old_values or {}).get('items') if isinstance(row.old_values, dict) else []
@@ -714,9 +919,14 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                     role_code_value = str(item.get('role_code') or '').strip().lower()
                     if role_code and role_code not in role_code_value:
                         continue
-                    if changed_type in {'workforce', 'finance', 'rbac'}:
+                    if changed_type in supported_changed_types:
                         old_item = old_by_role_id.get(role_id, {})
-                        field_name = f'{changed_type}_manage'
+                        field_name = next(
+                            (row['field'] for row in MODULE_PERMISSION_FIELDS if row['changed_type'] == changed_type),
+                            '',
+                        )
+                        if not field_name:
+                            continue
                         if bool(old_item.get(field_name)) == bool(item.get(field_name)):
                             continue
                     matched = True
@@ -738,9 +948,7 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                 'Username',
                 'Role code',
                 'Role name',
-                'Workforce (cu -> moi)',
-                'Finance (cu -> moi)',
-                'RBAC (cu -> moi)',
+                *[f"{row['label']} (cu -> moi)" for row in MODULE_PERMISSION_FIELDS],
                 'IP',
             ])
             for row in rows_all:
@@ -766,8 +974,13 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                     role_code_value = str(item.get('role_code') or '')
                     if role_code and role_code not in role_code_value.strip().lower():
                         continue
-                    if changed_type in {'workforce', 'finance', 'rbac'}:
-                        field_name = f'{changed_type}_manage'
+                    if changed_type in supported_changed_types:
+                        field_name = next(
+                            (row['field'] for row in MODULE_PERMISSION_FIELDS if row['changed_type'] == changed_type),
+                            '',
+                        )
+                        if not field_name:
+                            continue
                         if bool(old_item.get(field_name)) == bool(item.get(field_name)):
                             continue
                     ws.append([
@@ -776,9 +989,10 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                         row.user.username if row.user else '',
                         role_code_value,
                         str(item.get('role_name') or ''),
-                        f'{"Bật" if bool(old_item.get("workforce_manage")) else "Tắt"} -> {"Bật" if bool(item.get("workforce_manage")) else "Tắt"}',
-                        f'{"Bật" if bool(old_item.get("finance_manage")) else "Tắt"} -> {"Bật" if bool(item.get("finance_manage")) else "Tắt"}',
-                        f'{"Bật" if bool(old_item.get("rbac_manage")) else "Tắt"} -> {"Bật" if bool(item.get("rbac_manage")) else "Tắt"}',
+                        *[
+                            f'{"Bật" if bool(old_item.get(row_cfg["field"])) else "Tắt"} -> {"Bật" if bool(item.get(row_cfg["field"])) else "Tắt"}'
+                            for row_cfg in MODULE_PERMISSION_FIELDS
+                        ],
                         row.ip_address or '',
                     ])
             response = HttpResponse(
@@ -790,7 +1004,7 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
         summary_total_events = len(rows_all)
         summary_total_role_changes = 0
-        summary_by_changed_type = {'workforce': 0, 'finance': 0, 'rbac': 0}
+        summary_by_changed_type = {row['changed_type']: 0 for row in MODULE_PERMISSION_FIELDS}
         actor_stats = {}
         for row in rows_all:
             old_items = (row.old_values or {}).get('items') if isinstance(row.old_values, dict) else []
@@ -831,15 +1045,10 @@ class RoleViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                 role_id = int(role_id_raw)
                 old_item = old_by_role_id.get(role_id, {})
                 changed_any = False
-                if bool(old_item.get('workforce_manage')) != bool(item.get('workforce_manage')):
-                    summary_by_changed_type['workforce'] += 1
-                    changed_any = True
-                if bool(old_item.get('finance_manage')) != bool(item.get('finance_manage')):
-                    summary_by_changed_type['finance'] += 1
-                    changed_any = True
-                if bool(old_item.get('rbac_manage')) != bool(item.get('rbac_manage')):
-                    summary_by_changed_type['rbac'] += 1
-                    changed_any = True
+                for row_cfg in MODULE_PERMISSION_FIELDS:
+                    if bool(old_item.get(row_cfg['field'])) != bool(item.get(row_cfg['field'])):
+                        summary_by_changed_type[row_cfg['changed_type']] += 1
+                        changed_any = True
                 if changed_any:
                     summary_total_role_changes += 1
                     actor['role_changes'] += 1
@@ -1839,6 +2048,11 @@ class CommentViewSet(viewsets.ModelViewSet):
 class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
     """Combined activity stream from audit logs and comments"""
     permission_classes = [IsAuthenticated]
+
+    @staticmethod
+    def _ensure_operations_log_permission(user):
+        if not _can_view_operations_log(user):
+            raise PermissionDenied('Bạn không có quyền xem nhật ký vận hành.')
     
     @action(detail=False, methods=['get'])
     def by_entity(self, request):
@@ -1897,12 +2111,13 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
                 from products.models import PriceChange
                 price_events = PriceChange.objects.filter(
                     product_id=entity_id
-                ).exclude(status='APPLIED').order_by('-created_at')[:20]
+                ).exclude(status=PriceChange.STATUS_ACTIVE_APPLIED).order_by('-created_at')[:20]
                 for event in price_events:
                     action = {
-                        'PENDING': 'SUBMIT',
-                        'APPROVED': 'APPROVE',
-                        'REJECTED': 'REJECT',
+                        PriceChange.STATUS_PENDING_APPROVAL: 'SUBMIT',
+                        PriceChange.STATUS_APPROVED_SCHEDULED: 'APPROVE',
+                        PriceChange.STATUS_REJECTED: 'REJECT',
+                        PriceChange.STATUS_SUPERSEDED: 'UPDATE',
                     }.get(event.status, 'UPDATE')
                     activities.append({
                         'type': 'audit',
@@ -1913,18 +2128,23 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
                             'old_values': {
                                 'cost_price': str(event.old_cost_price) if event.old_cost_price is not None else None,
                                 'sale_price': str(event.old_sale_price) if event.old_sale_price is not None else None,
+                                'commission_per_unit': str(event.old_commission_per_unit) if event.old_commission_per_unit is not None else None,
+                                'commission_percent': str(event.old_commission_percent) if event.old_commission_percent is not None else None,
                             },
                             'new_values': {
                                 'cost_price': str(event.new_cost_price) if event.new_cost_price is not None else None,
                                 'sale_price': str(event.new_sale_price) if event.new_sale_price is not None else None,
+                                'commission_per_unit': str(event.new_commission_per_unit) if event.new_commission_per_unit is not None else None,
+                                'commission_percent': str(event.new_commission_percent) if event.new_commission_percent is not None else None,
                                 'price_change_reason': event.reason or '',
                                 'price_effective_at': event.effective_at.isoformat() if event.effective_at else None,
                                 'reject_reason': event.reject_reason or '',
                                 'delta_cost_percent': str(event.delta_cost_percent) if event.delta_cost_percent is not None else None,
                                 'delta_sale_percent': str(event.delta_sale_percent) if event.delta_sale_percent is not None else None,
+                                'price_change_status': event.status,
                             },
                             'changed_fields': [
-                                'cost_price', 'sale_price',
+                                'cost_price', 'sale_price', 'commission_per_unit', 'commission_percent',
                                 *(['price_change_reason'] if event.reason else []),
                                 *(['price_effective_at'] if event.effective_at else []),
                                 *(['reject_reason'] if event.reject_reason else []),
@@ -1983,7 +2203,7 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
         success_filter = (success_filter or 'ALL').strip().upper()
         q = (q or '').strip().lower()
 
-        allow_all = include_all and (user.is_staff or user.is_superuser)
+        allow_all = include_all and _can_view_operations_log(user)
         items = []
 
         def allow_item(source, action, actor_name, success, message):
@@ -2120,6 +2340,7 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
         Query:
           - actor_query, action, source, success, q, limit, include_all
         """
+        self._ensure_operations_log_permission(request.user)
         actor_query = request.query_params.get('actor_query') or ''
         action_filter = request.query_params.get('action') or 'ALL'
         source_filter = request.query_params.get('source') or 'ALL'
@@ -2149,6 +2370,7 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
         Kiểm tra thay đổi mới cho nhật ký vận hành (lightweight).
         Query: giống operations_log + since (ISO datetime)
         """
+        self._ensure_operations_log_permission(request.user)
         since_dt = self._parse_since(request.query_params.get('since'))
         if since_dt == 'INVALID':
             return Response({'error': 'since phải là ISO datetime hợp lệ.'}, status=400)
@@ -2180,6 +2402,34 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
             'latest_at': latest_at,
             'server_time': django_timezone.now(),
             'changed_count': changed_count,
+        })
+
+    @action(detail=False, methods=['get'], url_path='operations_log_meta')
+    def operations_log_meta(self, request):
+        self._ensure_operations_log_permission(request.user)
+        items = self._build_operations_items(
+            user=request.user,
+            actor_query='',
+            action_filter='ALL',
+            source_filter='ALL',
+            success_filter='ALL',
+            q='',
+            include_all=True,
+            limit=300,
+        )
+        actions = sorted({str(item.get('action') or '').upper() for item in items if str(item.get('action') or '').strip()})
+        sources = sorted({str(item.get('source') or '').upper() for item in items if str(item.get('source') or '').strip()})
+        recent_cutoff = django_timezone.now() - timedelta(hours=24)
+        recent_failed_count = len([
+            item for item in items
+            if item.get('success') is False
+            and item.get('created_at')
+            and item['created_at'] >= recent_cutoff
+        ])
+        return Response({
+            'actions': [{'value': action, 'label': action} for action in actions],
+            'sources': [{'value': source, 'label': source} for source in sources],
+            'recent_failed_count_24h': recent_failed_count,
         })
 
 
@@ -2902,13 +3152,13 @@ class TaskViewSet(viewsets.ModelViewSet):
         Thao tác task hàng loạt.
         Body:
           {
-            "action": "START" | "COMPLETE" | "REMIND_OVERDUE",
+            "action": "START" | "COMPLETE" | "REMIND_OVERDUE" | "REASSIGN",
             "task_ids": [1,2,3]
           }
         """
         action_name = str(request.data.get('action') or '').strip().upper()
         raw_ids = request.data.get('task_ids') or []
-        if action_name not in ('START', 'COMPLETE', 'REMIND_OVERDUE'):
+        if action_name not in ('START', 'COMPLETE', 'REMIND_OVERDUE', 'REASSIGN'):
             return Response({'error': 'action không hợp lệ.'}, status=400)
         if not isinstance(raw_ids, list):
             return Response({'error': 'task_ids phải là danh sách.'}, status=400)
@@ -2931,6 +3181,20 @@ class TaskViewSet(viewsets.ModelViewSet):
         today = django_timezone.localdate()
         cool_down_since = django_timezone.now() - timedelta(hours=6)
         actor_name = request.user.get_full_name() or request.user.username
+        reassign_to_raw = request.data.get('assigned_to', None)
+        reassign_note = (request.data.get('note') or '').strip()
+        new_assignee = None
+        if action_name == 'REASSIGN':
+            if reassign_to_raw in (None, '', 0, '0'):
+                new_assignee = None
+            else:
+                try:
+                    reassign_to_id = int(reassign_to_raw)
+                except (TypeError, ValueError):
+                    return Response({'error': 'assigned_to không hợp lệ.'}, status=400)
+                new_assignee = User.objects.filter(id=reassign_to_id, is_active=True).first()
+                if not new_assignee:
+                    return Response({'error': 'Không tìm thấy người nhận nhiệm vụ hợp lệ.'}, status=400)
         items = []
         success_count = 0
         failed_count = 0
@@ -3056,6 +3320,68 @@ class TaskViewSet(viewsets.ModelViewSet):
                     })
                     continue
 
+                if action_name == 'REASSIGN':
+                    if not task.is_open:
+                        raise ValueError('Chỉ chuyển giao nhiệm vụ đang mở.')
+                    if not self._can_manage_task(request.user, task):
+                        raise PermissionError('Không có quyền chuyển nhiệm vụ này.')
+                    old_assignee_id = task.assigned_to_id
+                    old_assignee_name = task.assigned_to.get_full_name() if task.assigned_to else 'Chưa giao'
+                    new_assignee_name = (
+                        new_assignee.get_full_name() or new_assignee.username
+                        if new_assignee else 'Chưa giao'
+                    )
+                    task.assigned_to = new_assignee
+                    task.needs_help = False
+                    task.help_reason = ''
+                    task.save(update_fields=['assigned_to', 'needs_help', 'help_reason', 'updated_at'])
+                    comment_content = (
+                        f'🔄 **Chuyển giao nhiệm vụ (bulk)**\n'
+                        f'Từ: {old_assignee_name} → Đến: {new_assignee_name}\n'
+                        f'Bởi: {actor_name}'
+                    )
+                    if reassign_note:
+                        comment_content += f'\nLý do: {reassign_note}'
+                    if task.last_update_note:
+                        comment_content += f'\n\n📋 *Tiến độ hiện tại: {task.last_update_note}*'
+                    Comment.objects.create(
+                        entity_type='Task',
+                        entity_id=task.id,
+                        content=comment_content,
+                        created_by=request.user,
+                    )
+                    AuditLog.objects.create(
+                        user=request.user,
+                        action='UPDATE',
+                        entity_type='Task',
+                        entity_id=task.id,
+                        entity_code=task.entity_code or str(task.id),
+                        changed_fields=['assigned_to'],
+                        old_values={'assigned_to': old_assignee_id},
+                        new_values={
+                            'assigned_to': new_assignee.id if new_assignee else None,
+                            'mode': 'BULK',
+                            'note': reassign_note,
+                        },
+                    )
+                    if new_assignee and new_assignee.id != request.user.id:
+                        Notification.objects.create(
+                            recipient_id=new_assignee.id,
+                            notification_type='system',
+                            title=f'🔄 Bạn được giao {task.title[:60]}',
+                            message=f'{actor_name} vừa chuyển nhiệm vụ "{task.title}" cho bạn.',
+                            entity_type='Task',
+                            entity_id=task.id,
+                            actor=request.user,
+                        )
+                    success_count += 1
+                    items.append({
+                        'task_id': task.id,
+                        'success': True,
+                        'message': f'Đã chuyển nhiệm vụ sang {new_assignee_name}.',
+                    })
+                    continue
+
                 raise ValueError('Thao tác không hỗ trợ.')
             except PermissionError as e:
                 failed_count += 1
@@ -3110,7 +3436,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         """
         Lịch sử thao tác task hàng loạt (từ AuditLog).
         Query:
-          - action: START | COMPLETE | REMIND_OVERDUE
+          - action: START | COMPLETE | REMIND_OVERDUE | REASSIGN
           - result: ALL | SUCCESS | HAS_ERROR
           - limit: 1..200
         """
@@ -3146,6 +3472,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                     'Bắt đầu' if action_name == 'START'
                     else 'Hoàn thành' if action_name == 'COMPLETE'
                     else 'Nhắc quá hạn' if action_name == 'REMIND_OVERDUE'
+                    else 'Chuyển người xử lý' if action_name == 'REASSIGN'
                     else action_name
                 ),
                 'selected_count': int(payload.get('total_requested') or 0),
@@ -3307,6 +3634,16 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
     SCHEDULER_JOB_NAME = 'workflow-automation-global-scheduler'
 
     @staticmethod
+    def _ensure_workflow_view_permission(user):
+        if not _can_view_workflow(user):
+            raise PermissionDenied('Bạn không có quyền xem dữ liệu workflow.')
+
+    @staticmethod
+    def _ensure_workflow_manage_permission(user):
+        if not _can_manage_workflow(user):
+            raise PermissionDenied('Bạn không có quyền quản lý dữ liệu workflow.')
+
+    @staticmethod
     def _to_bool(value, default=False):
         if value is None:
             return default
@@ -3328,6 +3665,7 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
         return pref
 
     def get_queryset(self):
+        self._ensure_workflow_view_permission(self.request.user)
         qs = WorkflowTaskTemplate.objects.select_related('created_by')
         entity_type = self.request.query_params.get('entity_type')
         trigger = self.request.query_params.get('trigger')
@@ -3341,7 +3679,16 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        self._ensure_workflow_manage_permission(self.request.user)
         serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        self._ensure_workflow_manage_permission(self.request.user)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._ensure_workflow_manage_permission(self.request.user)
+        instance.delete()
 
     @action(detail=False, methods=['post'], url_path='generate_for_entity')
     def generate_for_entity(self, request):
@@ -3350,6 +3697,7 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
         Body: { entity_type, entity_id, entity_code, trigger }
         Returns: { created: [...task titles], skipped: N }
         """
+        self._ensure_workflow_manage_permission(request.user)
         from .workflow_services import generate_tasks_for_entity
 
         entity_type = (request.data.get('entity_type') or '').strip()
@@ -3387,6 +3735,7 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
         Xem trước task sẽ được sinh (không tạo thật).
         Body: { entity_type, entity_id, entity_code, trigger }
         """
+        self._ensure_workflow_view_permission(request.user)
         from .workflow_services import preview_tasks_for_entity
 
         entity_type = (request.data.get('entity_type') or '').strip()
@@ -3420,6 +3769,7 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
         Board quy trình kiểu cột cho entity + trigger.
         GET /api/workflow-task-templates/pipeline_board/?entity_type=SalesOrder&trigger=SUBMIT&limit=200
         """
+        self._ensure_workflow_view_permission(request.user)
         from .workflow_services import build_workflow_pipeline_board
 
         entity_type = (request.query_params.get('entity_type') or 'SalesOrder').strip()
@@ -3446,6 +3796,7 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
           - entity_type, trigger
           - since: ISO datetime
         """
+        self._ensure_workflow_view_permission(request.user)
         entity_type = (request.query_params.get('entity_type') or 'SalesOrder').strip()
         trigger = (request.query_params.get('trigger') or 'SUBMIT').strip()
         since_dt = TaskViewSet._parse_since(request.query_params.get('since'))
@@ -3491,6 +3842,7 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
         Chuyển entity sang bước kế tiếp.
         Body: {entity_type, entity_id, entity_code, trigger, note}
         """
+        self._ensure_workflow_manage_permission(request.user)
         from .workflow_services import advance_pipeline_step
 
         entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()
@@ -3520,6 +3872,7 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
         Di chuyển card sang cột khác (drag-drop).
         Body: {entity_type, entity_id, entity_code, trigger, target_column_id, note}
         """
+        self._ensure_workflow_manage_permission(request.user)
         from .workflow_services import move_pipeline_card
 
         entity_type = (request.data.get('entity_type') or 'SalesOrder').strip()

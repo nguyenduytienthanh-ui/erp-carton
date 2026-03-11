@@ -22,16 +22,31 @@ class AuditLogMixin:
     
     def perform_create(self, serializer):
         """Log CREATE action"""
-        obj = serializer.save(created_by=self.request.user)
+        # Check if serializer has custom create() - if so, don't pass created_by
+        # The serializer.create() should handle it
+        try:
+            obj = serializer.save(created_by=self.request.user)
+        except TypeError:
+            # Serializer.create() doesn't accept created_by as kwarg
+            obj = serializer.save()
         
         # Create audit log
+        # Convert validated_data to JSON-serializable format
+        new_values = {}
+        for key, value in serializer.validated_data.items():
+            if hasattr(value, 'id') and hasattr(value, '__class__'):
+                # FK object - store ID and name
+                new_values[key] = f'{value.__class__.__name__}({value.id})'
+            else:
+                new_values[key] = str(value) if value is not None else None
+        
         AuditLog.objects.create(
             user=self.request.user,
             action='CREATE',
             entity_type=obj.__class__.__name__,
             entity_id=obj.id,
             entity_code=getattr(obj, 'code', str(obj.id)),
-            new_values=serializer.validated_data,
+            new_values=new_values,
             ip_address=get_client_ip(self.request),
             user_agent=self.request.META.get('HTTP_USER_AGENT', '')[:500]
         )

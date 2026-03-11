@@ -5,7 +5,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from core.views import logout_view
-from core.health import health_check
+from core.health import health_check, live_check, ready_check
 
 # In ra khi load: nếu thấy đường dẫn khác D:\ERP-Carton\... thì server đang chạy từ thư mục sai
 if os.environ.get('RUN_MAIN') == 'true':
@@ -18,6 +18,8 @@ def root_redirect(request):
 urlpatterns = [
     path('', root_redirect),
     path('admin/', admin.site.urls),
+    path('health/live/', live_check, name='health-live'),
+    path('health/ready/', ready_check, name='health-ready'),
     path('health/', health_check, name='health-check'),
     path('api/auth/logout/', logout_view, name='logout'),
     path('api/', include('core.urls')),

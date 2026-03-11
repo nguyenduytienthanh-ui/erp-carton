@@ -8,8 +8,6 @@ import {
   Modal,
   Pagination,
   Space,
-  Input,
-  InputNumber,
   Select,
   Card,
   Checkbox,
@@ -28,16 +26,13 @@ import {
   ReloadOutlined,
   MoreOutlined,
   HistoryOutlined,
-  SendOutlined,
-  CheckOutlined,
-  CloseOutlined,
   LockOutlined,
   ProjectOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { MenuProps } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { productsApi, type ActivityItem, type PriceChangeRecord } from '../../api/products';
+import { productsApi, type ActivityItem } from '../../api/products';
 import type { Product } from '../../types/product';
 import { theme } from '../../styles/theme';
 import FormattedPrice from '../../components/FormattedPrice';
@@ -79,6 +74,8 @@ import {
 import { useBulkDelete } from '../../hooks/useBulkDelete';
 import { TOAST } from '../../shared/toast';
 import { PRODUCT_STATUS_LABELS } from '../../utils/constants';
+import PriceWorkflowDrawer from './PriceWorkflowDrawer';
+import BulkPriceAdjustModal from './BulkPriceAdjustModal';
 
 const PRODUCT_LIST_SIZE_SEPARATED = ['size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao'];
 const PRODUCT_LIST_SIZE_MERGED = ['size_po_merged', 'size_sx_merged'];
@@ -297,13 +294,6 @@ const formatHistoryFieldValueVi = (field: string, value: unknown): string => {
   return formatHistoryValueVi(value);
 };
 
-const normalizeDateTimeLocal = (value: string): string | undefined => {
-  const raw = value.trim();
-  if (!raw) return undefined;
-  if (raw.length === 16) return `${raw}:00`;
-  return raw;
-};
-
 const stableHistoryValue = (value: unknown): string => {
   if (value === null || value === undefined) return '';
   if (Array.isArray(value)) return `[${value.map((v) => stableHistoryValue(v)).join(',')}]`;
@@ -359,13 +349,13 @@ const EMPTY_LOCAL_FILTER_INPUT: LocalFilterInput = {
 const TEXT_FILTER_KEYS: (keyof FilterValues)[] = ['code', 'name', 'note'];
 
 function localInputToFilterValues(local: LocalFilterInput): FilterValues {
-  const fv = { ...EMPTY_FILTER_VALUES } as Record<string, any>;
+  const fv = { ...EMPTY_FILTER_VALUES } as Record<string, FilterValues[keyof FilterValues]>;
   for (const k of Object.keys(EMPTY_FILTER_VALUES) as (keyof FilterValues)[]) {
     const v = local[k as keyof LocalFilterInput];
     if (NUMERIC_FILTER_KEYS.includes(k as NumericFilterKey)) {
       const s = v == null ? '' : String(v).trim();
-      fv[k] = s === '' ? null : (k.includes('price') ? parseFloat(s) : parseInt(s, 10));
-      if (Number.isNaN(fv[k])) fv[k] = null;
+      const parsed = s === '' ? null : (k.includes('price') ? parseFloat(s) : parseInt(s, 10));
+      fv[k] = parsed == null || Number.isNaN(parsed) ? null : parsed;
     } else if (TEXT_FILTER_KEYS.includes(k)) {
       const s = v != null && typeof v === 'string' ? v.trim() : '';
       fv[k] = s === '' ? null : s;
@@ -373,11 +363,11 @@ function localInputToFilterValues(local: LocalFilterInput): FilterValues {
       fv[k] = v ?? null;
     }
   }
-  return fv as FilterValues;
+  return fv as unknown as FilterValues;
 }
 
 function filterValuesToLocalInput(fv: FilterValues): LocalFilterInput {
-  const local = { ...EMPTY_LOCAL_FILTER_INPUT } as Record<string, any>;
+  const local = { ...EMPTY_LOCAL_FILTER_INPUT } as Record<string, LocalFilterInput[keyof LocalFilterInput]>;
   for (const k of Object.keys(EMPTY_FILTER_VALUES) as (keyof FilterValues)[]) {
     const v = fv[k];
     if (NUMERIC_FILTER_KEYS.includes(k as NumericFilterKey)) {
@@ -399,11 +389,11 @@ function parseStableFilterString(s: string | undefined): FilterValues {
   if (!s || typeof s !== 'string') return { ...EMPTY_FILTER_VALUES };
   try {
     const o = JSON.parse(s) as Record<string, unknown>;
-    const out = { ...EMPTY_FILTER_VALUES } as Record<string, any>;
+    const out = { ...EMPTY_FILTER_VALUES } as Record<string, FilterValues[keyof FilterValues]>;
     for (const k of FILTER_KEYS_ORDER) {
-      if (o[k] !== undefined && o[k] !== null) out[k] = o[k];
+      if (o[k] !== undefined && o[k] !== null) out[k] = o[k] as FilterValues[keyof FilterValues];
     }
-    return out as FilterValues;
+    return out as unknown as FilterValues;
   } catch {
     return { ...EMPTY_FILTER_VALUES };
   }
@@ -445,6 +435,14 @@ const FILTER_KEYS: FilterKey[] = [
   'code', 'name', 'category', 'unit', 'status', 'wave', 'box_type', 'cost_price', 'sale_price',
   'size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao',
   'waterproof', 'co_cm', 'note',
+];
+
+const PRODUCT_LIST_ORDERED_URL_KEYS = [
+  'q', 'code', 'name', 'category', 'unit', 'status', 'wave', 'box_type',
+  'min_cost_price', 'max_cost_price', 'min_sale_price', 'max_sale_price',
+  'size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao',
+  'waterproof', 'co_cm', 'note',
+  'activeFilters', 'page', 'pageSize', 'exact_search',
 ];
 
 /** Persist localFilterInput qua remount (StrictMode mount→unmount→remount) để không mất chữ khi gõ ký tự đầu. */
@@ -625,6 +623,8 @@ const ProductList = () => {
     setFilterValues,
     setPagination,
   } = useProductsListFilter();
+  const currentPage = pagination.current;
+  const currentPageSize = pagination.pageSize;
 
   const {
     visibleColumns,
@@ -693,12 +693,15 @@ const ProductList = () => {
   }, [localFilterInput, searchInput, syncLocalToContext]);
 
   const {
+    selectedRowKeys,
+    setSelectedRowKeys,
     rowSelection,
     clearSelection,
     removeFromSelection,
     selectedIds,
     selectedCount,
   } = useRowSelection<Product>();
+  const [selectedProductMap, setSelectedProductMap] = useState<Record<number, Product>>({});
   const [importModalVisible, setImportModalVisible] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -721,16 +724,7 @@ const ProductList = () => {
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [taskProduct, setTaskProduct] = useState<Product | null>(null);
   const [priceWorkflowProduct, setPriceWorkflowProduct] = useState<Product | null>(null);
-  const [priceSubmitModalOpen, setPriceSubmitModalOpen] = useState(false);
-  const [priceRejectModalOpen, setPriceRejectModalOpen] = useState(false);
-  const [pendingPriceChangeId, setPendingPriceChangeId] = useState<number | null>(null);
-  const [priceNewCost, setPriceNewCost] = useState<number | null>(null);
-  const [priceNewSale, setPriceNewSale] = useState<number | null>(null);
-  const [priceReason, setPriceReason] = useState('');
-  const [priceEffectiveAt, setPriceEffectiveAt] = useState('');
-  const [priceRejectReason, setPriceRejectReason] = useState('');
-  const [priceWorkflowLoading, setPriceWorkflowLoading] = useState(false);
-  const pageSizeInputRef = useRef<any>(null);
+  const [bulkPriceModalOpen, setBulkPriceModalOpen] = useState(false);
   const filterPanelRef = useRef<HTMLDivElement>(null);
   const inlineFilterPanelRef = useRef<HTMLDivElement>(null);
 
@@ -847,7 +841,7 @@ const ProductList = () => {
     if (savedDesktopDensity === 'comfortable' || savedDesktopDensity === 'compact') {
       setDesktopTableDensity(savedDesktopDensity);
     }
-  }, [config, searchInput, setIntentImmediate]);
+  }, [config, searchInput, setActiveFilters, setFilterValues, setIntentImmediate, setPagination]);
 
   const handleViewModeChange = useCallback((mode: ListViewMode) => {
     setViewMode(mode);
@@ -874,7 +868,7 @@ const ProductList = () => {
   useEffect(() => {
     const t = setTimeout(() => {
       void savePreferences({
-        filters: { filterValues, activeFilters } as any,
+        filters: { filterValues, activeFilters },
       });
     }, 600);
     return () => clearTimeout(t);
@@ -900,7 +894,7 @@ const ProductList = () => {
       }
       setPagination((p) => ({ ...p, current: 1 }));
     },
-    [sortField, sortOrder, savePreferences]
+    [savePreferences, setPagination, sortField, sortOrder]
   );
 
   // Column permissions: chỉ hiện cột user được phép xem
@@ -911,26 +905,19 @@ const ProductList = () => {
   /** Tránh effect ghi URL chạy với giá trị cũ khi vừa áp từ URL. */
   const skipNextUrlWrite = useRef(false);
   /** Thứ tự key cố định để chuẩn hóa URL khi so sánh — tránh nhảy chữ khi gõ nhanh (phải trùng với params ghi ra). */
-  const ORDERED_URL_KEYS = [
-    'q', 'code', 'name', 'category', 'unit', 'status', 'wave', 'box_type',
-    'min_cost_price', 'max_cost_price', 'min_sale_price', 'max_sale_price',
-    'size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao',
-    'waterproof', 'co_cm', 'note',
-    'activeFilters', 'page', 'pageSize', 'exact_search',
-  ];
   const [exactSearch, setExactSearch] = useState(false);
 
   // Nếu URL có params thì ưu tiên URL (vd: bookmark, chia sẻ link) — trừ khi URL vừa do mình ghi (tránh nhảy chữ khi gõ nhanh)
   useLayoutEffect(() => {
-    const currentUrlStr = normalizeSearchParamsToOrderedString(searchParams, ORDERED_URL_KEYS);
+    const currentUrlStr = normalizeSearchParamsToOrderedString(searchParams, PRODUCT_LIST_ORDERED_URL_KEYS);
     if (currentUrlStr === lastWrittenParams.current) return;
 
-    const hasUrlParams = ORDERED_URL_KEYS.some((key) => searchParams.get(key) != null);
+    const hasUrlParams = PRODUCT_LIST_ORDERED_URL_KEYS.some((key) => searchParams.get(key) != null);
     if (!hasUrlParams) return;
     isFirstMount.current = false;
     const parsed = parseProductListParams(searchParams);
     const writtenParams = productListParamsToSearch(parsed.search, parsed.filterValues, parsed.activeFilters, parsed.page, parsed.pageSize, parsed.exactSearch);
-    lastWrittenParams.current = normalizeParamsToOrderedString(writtenParams, ORDERED_URL_KEYS);
+    lastWrittenParams.current = normalizeParamsToOrderedString(writtenParams, PRODUCT_LIST_ORDERED_URL_KEYS);
     setSearchInput(parsed.searchInput);
     setSearch(parsed.search);
     setExactSearch(parsed.exactSearch);
@@ -944,7 +931,7 @@ const ProductList = () => {
       current: parsed.page,
       pageSize: parsed.pageSize,
     }));
-  }, [searchParams]);
+  }, [searchParams, setActiveFilters, setFilterValues, setIntentImmediate, setPagination, setSearch, setSearchInput]);
 
   // Query layer: chỉ intent (đã debounce) ghi ra URL + localStorage; không đụng input.
   useEffect(() => {
@@ -956,20 +943,20 @@ const ProductList = () => {
       intentSearch,
       intentFilters,
       activeFilters,
-      pagination.current,
-      pagination.pageSize,
+      currentPage,
+      currentPageSize,
       exactSearch
     );
-    const str = normalizeParamsToOrderedString(params, ORDERED_URL_KEYS);
+    const str = normalizeParamsToOrderedString(params, PRODUCT_LIST_ORDERED_URL_KEYS);
     if (str === lastWrittenParams.current) return;
 
     const doWrite = () => {
       lastWrittenParams.current = str;
-      saveProductListStateToStorage(intentSearch, intentFilters, pagination.current, pagination.pageSize);
+      saveProductListStateToStorage(intentSearch, intentFilters, currentPage, currentPageSize);
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          ORDERED_URL_KEYS.forEach((k) => next.delete(k));
+          PRODUCT_LIST_ORDERED_URL_KEYS.forEach((k) => next.delete(k));
           Object.entries(params).forEach(([k, v]) => next.set(k, v));
           return next;
         },
@@ -984,7 +971,7 @@ const ProductList = () => {
     }
     const timer = setTimeout(doWrite, URL_WRITE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [intentSearch, intentFilterStableString, activeFilters, pagination.current, pagination.pageSize, exactSearch, setSearchParams]);
+  }, [activeFilters, currentPage, currentPageSize, exactSearch, intentFilters, intentSearch, setSearchParams]);
 
   // Reset về trang 1 khi intent (tìm kiếm / lọc) thay đổi — bỏ qua lần đầu.
   const isFirstIntentRun = useRef(true);
@@ -994,7 +981,7 @@ const ProductList = () => {
       return;
     }
     setPagination((p) => ({ ...p, current: 1 }));
-  }, [intentSearch, intentFilterStableString]);
+  }, [intentSearch, intentFilterStableString, setPagination]);
 
   // Query layer: queryKey chỉ phụ thuộc intent → API không gọi dư, không race với input.
   const productsQueryParamsKey = useMemo(() => {
@@ -1002,12 +989,12 @@ const ProductList = () => {
       intentSearch,
       intentFilters,
       activeFilters,
-      pagination.current,
-      pagination.pageSize,
+      currentPage,
+      currentPageSize,
       exactSearch
     );
-    return normalizeParamsToOrderedString(params, ORDERED_URL_KEYS);
-  }, [intentSearch, intentFilterStableString, activeFilters, pagination.current, pagination.pageSize, exactSearch]);
+    return normalizeParamsToOrderedString(params, PRODUCT_LIST_ORDERED_URL_KEYS);
+  }, [activeFilters, currentPage, currentPageSize, exactSearch, intentFilters, intentSearch]);
 
   const { data: productsData, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['products', productsQueryParamsKey, sortField, sortOrder],
@@ -1036,8 +1023,8 @@ const ProductList = () => {
         waterproof: intentFilters.waterproof != null ? String(intentFilters.waterproof) : undefined,
         co_cm: intentFilters.co_cm === true ? 'true' : intentFilters.co_cm === false ? 'false' : undefined,
         note: intentFilters.note?.trim() || undefined,
-        page: pagination.current,
-        page_size: pagination.pageSize,
+        page: currentPage,
+        page_size: currentPageSize,
       };
       if (sortField && sortOrder) {
         params.ordering = sortOrder === 'desc' ? `-${sortField}` : sortField;
@@ -1054,9 +1041,12 @@ const ProductList = () => {
 
   useEffect(() => {
     if (productsData?.count !== undefined) {
-      setPagination((p) => ({ ...p, total: productsData.count }));
+      setPagination((p) => {
+        if (p.total === productsData.count) return p;
+        return { ...p, total: productsData.count };
+      });
     }
-  }, [productsData?.count]);
+  }, [productsData?.count, setPagination]);
 
   const { data: categoriesData } = useQuery({
     queryKey: ['categories', 'list'],
@@ -1091,6 +1081,40 @@ const ProductList = () => {
   const waves = wavesData?.results ?? [];
   const boxTypes = boxTypesData?.results ?? [];
   const products = productsData?.results ?? [];
+  const selectedProductsForBulk = useMemo(
+    () => selectedIds.map((id) => selectedProductMap[id]).filter(Boolean),
+    [selectedIds, selectedProductMap],
+  );
+  const productRowSelection = useMemo(() => ({
+    ...rowSelection,
+    preserveSelectedRowKeys: true,
+    selectedRowKeys,
+    onChange: (keys: React.Key[], rows: Product[]) => {
+      setSelectedRowKeys(keys);
+      setSelectedProductMap((prev) => {
+        const next = { ...prev };
+        rows.forEach((row) => {
+          if (row?.id) next[row.id] = row;
+        });
+        const keepIds = new Set(
+          keys
+            .map((key) => Number(String(key)))
+            .filter((value) => Number.isFinite(value) && value > 0),
+        );
+        Object.keys(next).forEach((key) => {
+          const numericKey = Number(key);
+          if (!keepIds.has(numericKey)) delete next[numericKey];
+        });
+        return next;
+      });
+    },
+  }), [rowSelection, selectedRowKeys, setSelectedRowKeys]);
+
+  useEffect(() => {
+    if (selectedIds.length === 0) {
+      setSelectedProductMap({});
+    }
+  }, [selectedIds]);
 
   const mergedActivity = useMemo<ActivityItem[]>(() => {
     const unique = new Map<string, ActivityItem>();
@@ -1130,7 +1154,7 @@ const ProductList = () => {
     setFilterValues(EMPTY_FILTER_VALUES);
     setIntentImmediate(searchInput ?? '', EMPTY_FILTER_VALUES);
     setPagination((p) => ({ ...p, current: 1 }));
-  }, [searchInput, setFilterValues, setIntentImmediate]);
+  }, [searchInput, setActiveFilters, setFilterValues, setIntentImmediate, setPagination]);
 
   const handleToggleFilter = useCallback((key: FilterKey) => {
     if (activeFilters.includes(key)) {
@@ -1146,7 +1170,7 @@ const ProductList = () => {
     } else {
       setActiveFilters((prev) => [...prev, key]);
     }
-  }, [activeFilters]);
+  }, [activeFilters, setActiveFilters]);
 
   const handleDelete = useCallback(
     (id: number) => deleteOneMutation.mutateAsync(id),
@@ -1166,9 +1190,10 @@ const ProductList = () => {
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
       message.success({ content: 'Đã tải template thành công!', key: 'template' });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const { generalMessage } = parseApiError(err);
       message.error({
-        content: err?.message || 'Tải template thất bại!',
+        content: generalMessage || 'Tải template thất bại!',
         key: 'template',
       });
     }
@@ -1178,35 +1203,38 @@ const ProductList = () => {
     return await productsApi.importProducts(file, options);
   }, []);
 
+  const exportParams = useMemo<Record<string, unknown>>(() => {
+    const params: Record<string, unknown> = {};
+    if (intentSearch) params.search = intentSearch;
+    if (intentFilters.code?.trim()) params.code = intentFilters.code.trim();
+    if (intentFilters.name?.trim()) params.name = intentFilters.name.trim();
+    if (intentFilters.category != null) params.category = intentFilters.category;
+    if (intentFilters.unit != null) params.unit = intentFilters.unit;
+    if (intentFilters.status != null) params.status = intentFilters.status;
+    if (intentFilters.wave != null) params.wave = intentFilters.wave;
+    if (intentFilters.box_type != null) params.box_type = intentFilters.box_type;
+    if (intentFilters.min_cost_price != null) params.min_cost_price = intentFilters.min_cost_price;
+    if (intentFilters.max_cost_price != null) params.max_cost_price = intentFilters.max_cost_price;
+    if (intentFilters.min_sale_price != null) params.min_sale_price = intentFilters.min_sale_price;
+    if (intentFilters.max_sale_price != null) params.max_sale_price = intentFilters.max_sale_price;
+    if (intentFilters.size_po_dai != null) params.size_po_dai = intentFilters.size_po_dai;
+    if (intentFilters.size_po_rong != null) params.size_po_rong = intentFilters.size_po_rong;
+    if (intentFilters.size_po_cao != null) params.size_po_cao = intentFilters.size_po_cao;
+    if (intentFilters.size_sx_dai != null) params.size_sx_dai = intentFilters.size_sx_dai;
+    if (intentFilters.size_sx_rong != null) params.size_sx_rong = intentFilters.size_sx_rong;
+    if (intentFilters.size_sx_cao != null) params.size_sx_cao = intentFilters.size_sx_cao;
+    if (intentFilters.waterproof != null) params.waterproof = String(intentFilters.waterproof);
+    if (intentFilters.co_cm === true) params.co_cm = true;
+    if (intentFilters.co_cm === false) params.co_cm = false;
+    if (intentFilters.note?.trim()) params.note = intentFilters.note.trim();
+    return params;
+  }, [intentFilters, intentSearch]);
+
   const handleExport = useCallback(async (format: 'excel' | 'pdf' = 'excel') => {
     try {
       message.loading({ content: format === 'pdf' ? 'Đang xuất PDF...' : 'Đang xuất dữ liệu...', key: 'export' });
 
-      const params: Record<string, unknown> = {};
-      if (intentSearch) params.search = intentSearch;
-      if (intentFilters.code?.trim()) params.code = intentFilters.code.trim();
-      if (intentFilters.name?.trim()) params.name = intentFilters.name.trim();
-      if (intentFilters.category != null) params.category = intentFilters.category;
-      if (intentFilters.unit != null) params.unit = intentFilters.unit;
-      if (intentFilters.status != null) params.status = intentFilters.status;
-      if (intentFilters.wave != null) params.wave = intentFilters.wave;
-      if (intentFilters.box_type != null) params.box_type = intentFilters.box_type;
-      if (intentFilters.min_cost_price != null) params.min_cost_price = intentFilters.min_cost_price;
-      if (intentFilters.max_cost_price != null) params.max_cost_price = intentFilters.max_cost_price;
-      if (intentFilters.min_sale_price != null) params.min_sale_price = intentFilters.min_sale_price;
-      if (intentFilters.max_sale_price != null) params.max_sale_price = intentFilters.max_sale_price;
-      if (intentFilters.size_po_dai != null) params.size_po_dai = intentFilters.size_po_dai;
-      if (intentFilters.size_po_rong != null) params.size_po_rong = intentFilters.size_po_rong;
-      if (intentFilters.size_po_cao != null) params.size_po_cao = intentFilters.size_po_cao;
-      if (intentFilters.size_sx_dai != null) params.size_sx_dai = intentFilters.size_sx_dai;
-      if (intentFilters.size_sx_rong != null) params.size_sx_rong = intentFilters.size_sx_rong;
-      if (intentFilters.size_sx_cao != null) params.size_sx_cao = intentFilters.size_sx_cao;
-      if (intentFilters.waterproof != null) params.waterproof = String(intentFilters.waterproof);
-      if (intentFilters.co_cm === true) params.co_cm = true;
-      if (intentFilters.co_cm === false) params.co_cm = false;
-      if (intentFilters.note?.trim()) params.note = intentFilters.note.trim();
-
-      const blob = await productsApi.exportProducts(format, params);
+      const blob = await productsApi.exportProducts(format, exportParams);
 
       if (!(blob instanceof Blob) || blob.size === 0) {
         message.error({ content: 'Dữ liệu xuất rỗng hoặc không hợp lệ.', key: 'export' });
@@ -1241,16 +1269,13 @@ const ProductList = () => {
       }, 200);
 
       message.success({ content: format === 'pdf' ? 'Xuất PDF thành công!' : 'Xuất Excel thành công!', key: 'export' });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Export error:', err);
-      const msg =
-        err?.message ||
-        (typeof err.response?.data?.detail === 'string' ? err.response.data.detail : null) ||
-        (typeof err.response?.data?.error === 'string' ? err.response.data.error : null) ||
-        'Xuất Excel thất bại!';
+      const { generalMessage } = parseApiError(err);
+      const msg = generalMessage || 'Xuất Excel thất bại!';
       message.error({ content: msg, key: 'export' });
     }
-  }, [intentSearch, intentFilterStableString]);
+  }, [exportParams]);
 
   const handleAdd = useCallback(() => {
     setFormMode('create');
@@ -1281,126 +1306,9 @@ const ProductList = () => {
     setHistoryModalOpen(true);
   }, []);
 
-  const refreshAfterPriceWorkflow = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['products'] });
-    queryClient.invalidateQueries({ queryKey: ['products', 'activity'] });
-  }, [queryClient]);
-
-  const getLatestPendingPriceChange = useCallback(async (productId: number): Promise<PriceChangeRecord | null> => {
-    const changes = await productsApi.getPriceChanges(productId);
-    return changes.find((item) => item.status === 'PENDING') ?? null;
-  }, []);
-
-  const openSubmitPriceModal = useCallback((record: Product) => {
+  const openPriceWorkflowDrawer = useCallback((record: Product) => {
     setPriceWorkflowProduct(record);
-    setPriceNewCost(Number(record.cost_price ?? 0));
-    setPriceNewSale(Number(record.sale_price ?? 0));
-    setPriceReason('');
-    setPriceEffectiveAt('');
-    setPriceSubmitModalOpen(true);
   }, []);
-
-  const handleSubmitPriceChange = useCallback(async () => {
-    if (!priceWorkflowProduct) return;
-    const reason = priceReason.trim();
-    if (!reason) {
-      message.warning('Vui lòng nhập lý do đề xuất thay đổi giá.');
-      return;
-    }
-    const currentCost = Number(priceWorkflowProduct.cost_price ?? 0);
-    const currentSale = Number(priceWorkflowProduct.sale_price ?? 0);
-    const nextCost = priceNewCost ?? currentCost;
-    const nextSale = priceNewSale ?? currentSale;
-    if (nextCost === currentCost && nextSale === currentSale) {
-      message.warning('Bạn chưa thay đổi giá vốn hoặc đơn giá.');
-      return;
-    }
-    if (nextSale < nextCost) {
-      message.warning('Đơn giá mới phải lớn hơn hoặc bằng giá vốn mới.');
-      return;
-    }
-    setPriceWorkflowLoading(true);
-    try {
-      await productsApi.submitPriceChange(priceWorkflowProduct.id, {
-        new_cost_price: nextCost,
-        new_sale_price: nextSale,
-        reason,
-        effective_at: normalizeDateTimeLocal(priceEffectiveAt),
-      });
-      message.success('Đã gửi đề xuất thay đổi giá.');
-      setPriceSubmitModalOpen(false);
-      setPriceWorkflowProduct(null);
-      refreshAfterPriceWorkflow();
-    } catch (err: unknown) {
-      const { generalMessage } = parseApiError(err);
-      message.error(generalMessage || 'Gửi đề xuất thay đổi giá thất bại.');
-    } finally {
-      setPriceWorkflowLoading(false);
-    }
-  }, [priceWorkflowProduct, priceReason, priceNewCost, priceNewSale, priceEffectiveAt, refreshAfterPriceWorkflow]);
-
-  const handleApproveLatestPriceChange = useCallback(async (record: Product) => {
-    setPriceWorkflowLoading(true);
-    try {
-      const pending = await getLatestPendingPriceChange(record.id);
-      if (!pending) {
-        message.info('Không có đề xuất giá nào đang chờ duyệt.');
-        return;
-      }
-      await productsApi.approvePriceChange(record.id, pending.id);
-      message.success('Đã duyệt đề xuất thay đổi giá.');
-      refreshAfterPriceWorkflow();
-    } catch (err: unknown) {
-      const { generalMessage } = parseApiError(err);
-      message.error(generalMessage || 'Duyệt đề xuất giá thất bại.');
-    } finally {
-      setPriceWorkflowLoading(false);
-    }
-  }, [getLatestPendingPriceChange, refreshAfterPriceWorkflow]);
-
-  const openRejectLatestPriceChangeModal = useCallback(async (record: Product) => {
-    setPriceWorkflowLoading(true);
-    try {
-      const pending = await getLatestPendingPriceChange(record.id);
-      if (!pending) {
-        message.info('Không có đề xuất giá nào đang chờ duyệt.');
-        return;
-      }
-      setPriceWorkflowProduct(record);
-      setPendingPriceChangeId(pending.id);
-      setPriceRejectReason('');
-      setPriceRejectModalOpen(true);
-    } catch (err: unknown) {
-      const { generalMessage } = parseApiError(err);
-      message.error(generalMessage || 'Không lấy được đề xuất giá chờ duyệt.');
-    } finally {
-      setPriceWorkflowLoading(false);
-    }
-  }, [getLatestPendingPriceChange]);
-
-  const handleRejectLatestPriceChange = useCallback(async () => {
-    if (!priceWorkflowProduct || !pendingPriceChangeId) return;
-    const rejectReason = priceRejectReason.trim();
-    if (!rejectReason) {
-      message.warning('Vui lòng nhập lý do từ chối.');
-      return;
-    }
-    setPriceWorkflowLoading(true);
-    try {
-      await productsApi.rejectPriceChange(priceWorkflowProduct.id, pendingPriceChangeId, rejectReason);
-      message.success('Đã từ chối đề xuất thay đổi giá.');
-      setPriceRejectModalOpen(false);
-      setPriceWorkflowProduct(null);
-      setPendingPriceChangeId(null);
-      setPriceRejectReason('');
-      refreshAfterPriceWorkflow();
-    } catch (err: unknown) {
-      const { generalMessage } = parseApiError(err);
-      message.error(generalMessage || 'Từ chối đề xuất giá thất bại.');
-    } finally {
-      setPriceWorkflowLoading(false);
-    }
-  }, [priceWorkflowProduct, pendingPriceChangeId, priceRejectReason, refreshAfterPriceWorkflow]);
 
   const openTaskModal = useCallback((record: Product) => {
     setTaskProduct(record);
@@ -1420,16 +1328,8 @@ const ProductList = () => {
       handleClone(record);
       return;
     }
-    if (action === 'submit_price_change') {
-      openSubmitPriceModal(record);
-      return;
-    }
-    if (action === 'approve_price_change') {
-      void handleApproveLatestPriceChange(record);
-      return;
-    }
-    if (action === 'reject_price_change') {
-      void openRejectLatestPriceChangeModal(record);
+    if (action === 'price_workflow') {
+      openPriceWorkflowDrawer(record);
       return;
     }
     if (action === 'delete') {
@@ -1441,9 +1341,7 @@ const ProductList = () => {
     handleDelete,
     openHistoryModal,
     openTaskModal,
-    openSubmitPriceModal,
-    handleApproveLatestPriceChange,
-    openRejectLatestPriceChangeModal,
+    openPriceWorkflowDrawer,
   ]);
 
   const renderRowActions = useCallback((record: Product) => (
@@ -1452,9 +1350,16 @@ const ProductList = () => {
         trigger={['click']}
         menu={{
           items: [
-            { key: 'submit_price_change', icon: <SendOutlined />, label: 'Trình duyệt thay đổi giá' },
-            { key: 'approve_price_change', icon: <CheckOutlined />, label: 'Duyệt đề xuất giá gần nhất' },
-            { key: 'reject_price_change', icon: <CloseOutlined />, label: 'Từ chối đề xuất giá gần nhất', danger: true },
+            {
+              key: 'price_workflow',
+              label: (
+                <span>
+                  Quản trị giá
+                  {record.has_pending_price_change && <Tag color="gold" style={{ marginInlineStart: 8, marginInlineEnd: 0 }}>Chờ duyệt</Tag>}
+                  {!record.has_pending_price_change && record.has_scheduled_price_change && <Tag color="blue" style={{ marginInlineStart: 8, marginInlineEnd: 0 }}>Chờ hiệu lực</Tag>}
+                </span>
+              ),
+            },
             { type: 'divider' },
             {
               key: 'tasks',
@@ -1643,8 +1548,8 @@ const ProductList = () => {
     { title: 'Đóng', dataIndex: 'process_dong', key: 'process_dong', sortField: 'process_dong', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
     { title: 'Dán', dataIndex: 'process_dan', key: 'process_dan', sortField: 'process_dan', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
     { title: 'Khác', dataIndex: 'process_khac', key: 'process_khac', sortField: 'process_khac', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
-    { title: 'Ghi chú công đoạn khác', dataIndex: 'note_other', key: 'note_other', sortField: 'note_other', width: 140, ellipsis: true, render: (t: string) => t ?? '-' },
-    { title: 'Ghi chú chung', dataIndex: 'note', key: 'note', sortField: 'note', width: 140, ellipsis: true, render: (t: string) => t ?? '-' },
+    { title: 'Ghi chú sản xuất', dataIndex: 'note_other', key: 'note_other', sortField: 'note_other', width: 140, ellipsis: true, render: (t: string) => t ?? '-' },
+    { title: 'Ghi chú mã hàng', dataIndex: 'note', key: 'note', sortField: 'note', width: 140, ellipsis: true, render: (t: string) => t ?? '-' },
     {
       title: 'Trạng thái',
       dataIndex: 'status',
@@ -1662,6 +1567,11 @@ const ProductList = () => {
             {record.has_pending_price_change && (
               <Tag color="gold" style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: '16px', paddingInline: 6 }}>
                 Chờ duyệt giá
+              </Tag>
+            )}
+            {!record.has_pending_price_change && record.has_scheduled_price_change && (
+              <Tag color="blue" style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: '16px', paddingInline: 6 }}>
+                Chờ hiệu lực
               </Tag>
             )}
           </div>
@@ -1712,7 +1622,7 @@ const ProductList = () => {
     } else {
       handleClearAllFilters();
     }
-  }, [handleClearAllFilters]);
+  }, [handleClearAllFilters, setActiveFilters]);
 
   const filterModalContent = (
     <div
@@ -2073,6 +1983,11 @@ const ProductList = () => {
             </Button>
               )}
             {!isMobile && selectedCount > 0 && (
+              <Button onClick={() => setBulkPriceModalOpen(true)}>
+                Điều chỉnh giá ({selectedCount})
+              </Button>
+            )}
+            {!isMobile && selectedCount > 0 && (
               <Button
                 danger
                 icon={<DeleteOutlined />}
@@ -2326,7 +2241,7 @@ const ProductList = () => {
               Không tải được danh sách sản phẩm.
             </div>
             <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
-              {(error as any)?.message || (error as any)?.response?.data?.detail || 'Kiểm tra backend đã chạy chưa (Django tại http://127.0.0.1:8000).'}
+              {parseApiError(error).generalMessage || 'Kiểm tra backend đã chạy chưa (Django tại http://127.0.0.1:8000).'}
             </div>
             <Button type="primary" onClick={refetchProducts}>
               Thử lại
@@ -2344,7 +2259,7 @@ const ProductList = () => {
           loading={isLoading}
           size="middle"
           bordered
-          rowSelection={rowSelection}
+          rowSelection={productRowSelection}
           scroll={{ x: 'max-content' }}
           style={{
             background: 'white',
@@ -2427,26 +2342,13 @@ const ProductList = () => {
                 simple={false}
               />
             <div className="input-number-with-clear-wrapper" style={{ width: 110, display: 'inline-block', position: 'relative' }}>
-              <InputNumber
-                ref={pageSizeInputRef}
-                size="small"
+              <input
+                type="number"
                 min={1}
                 max={500}
-                controls={false}
-                style={{ width: '100%' }}
+                style={{ width: '100%', height: 24, padding: '0 28px 0 8px', border: '1px solid #d9d9d9', borderRadius: 6 }}
                 className="input-number-with-clear"
-                value={isEditingPageSize ? pageSizeDraft : pagination.pageSize}
-                formatter={(v) => {
-                  // Khi đang nhập và đã xoá trắng, hiển thị trống hoàn toàn
-                  if (isEditingPageSize && v == null) return '';
-                  return `${v ?? ''} / trang`;
-                }}
-                parser={(v) => {
-                  const digits = String(v ?? '').replace(/[^\d]/g, '');
-                  if (!digits) return Number.NaN;
-                  const n = parseInt(digits, 10);
-                  return Number.isNaN(n) ? Number.NaN : n;
-                }}
+                value={isEditingPageSize ? (pageSizeDraft ?? '') : pagination.pageSize}
                 // Click vào để nhập: xoá hết dữ liệu (trống)
                 onFocus={() => {
                   setIsEditingPageSize(true);
@@ -2456,7 +2358,15 @@ const ProductList = () => {
                   setIsEditingPageSize(true);
                   setPageSizeDraft(null);
                 }}
-                onChange={(v) => setPageSizeDraft(typeof v === 'number' ? v : null)}
+                onChange={(e) => {
+                  const digits = String(e.target.value ?? '').replace(/[^\d]/g, '');
+                  if (!digits) {
+                    setPageSizeDraft(null);
+                    return;
+                  }
+                  const next = parseInt(digits, 10);
+                  setPageSizeDraft(Number.isNaN(next) ? null : next);
+                }}
                 onBlur={() => {
                   const v = pageSizeDraft;
                   // Nếu user chưa nhập thì bỏ qua và revert về giá trị hiện tại
@@ -2475,11 +2385,16 @@ const ProductList = () => {
                   if (e.key !== 'Enter') return;
                   e.preventDefault();
                   const v = pageSizeDraft;
-                if (v == null) return;
-                void applyPageSize(v).finally(() => {
-                  pageSizeInputRef.current?.blur?.();
-                });
-              }}
+                  if (v == null) return;
+                  void applyPageSize(v).finally(() => {
+                    window.setTimeout(() => {
+                      const activeElement = document.activeElement;
+                      if (activeElement instanceof HTMLElement) {
+                        activeElement.blur();
+                      }
+                    }, 0);
+                  });
+                }}
               />
               {(isEditingPageSize ? pageSizeDraft : pagination.pageSize) != null && (
                 <QuickClearIcon onClear={() => { setPageSizeDraft(null); setIsEditingPageSize(true); }} title="Xóa nhanh" style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', zIndex: 1 }} />
@@ -2573,6 +2488,11 @@ const ProductList = () => {
             <Button icon={<ExportOutlined />} onClick={() => { void handleExport('pdf'); setMobileActionsOpen(false); }}>
               Xuất PDF
             </Button>
+            {selectedCount > 0 && (
+              <Button onClick={() => { setBulkPriceModalOpen(true); setMobileActionsOpen(false); }}>
+                Điều chỉnh giá ({selectedCount})
+              </Button>
+            )}
             <Button danger onClick={() => { handleClearAllFilters(); setMobileActionsOpen(false); }}>
               Xóa toàn bộ bộ lọc
             </Button>
@@ -2738,82 +2658,28 @@ const ProductList = () => {
           blockingCount={taskProduct?.blocking_tasks_count ?? 0}
         />
 
-        <Modal
-          title={`Trình duyệt thay đổi giá${priceWorkflowProduct ? ` - ${priceWorkflowProduct.code}` : ''}`}
-          open={priceSubmitModalOpen}
-          onCancel={() => {
-            setPriceSubmitModalOpen(false);
-            setPriceWorkflowProduct(null);
-            setPriceReason('');
-            setPriceEffectiveAt('');
+        <PriceWorkflowDrawer
+          open={!!priceWorkflowProduct}
+          productId={priceWorkflowProduct?.id ?? null}
+          initialProduct={priceWorkflowProduct}
+          onClose={() => setPriceWorkflowProduct(null)}
+          onRefresh={() => {
+            void queryClient.invalidateQueries({ queryKey: ['products'] });
+            void queryClient.invalidateQueries({ queryKey: ['products', 'activity'] });
           }}
-          onOk={() => void handleSubmitPriceChange()}
-          okText="Gửi đề xuất"
-          confirmLoading={priceWorkflowLoading}
-          cancelText="Hủy"
-        >
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <div>
-              <div style={{ marginBottom: 6, fontWeight: 600 }}>Giá vốn mới</div>
-              <InputNumber
-                style={{ width: '100%' }}
-                min={0}
-                value={priceNewCost}
-                onChange={(v) => setPriceNewCost(v as number | null)}
-              />
-            </div>
-            <div>
-              <div style={{ marginBottom: 6, fontWeight: 600 }}>Đơn giá mới</div>
-              <InputNumber
-                style={{ width: '100%' }}
-                min={0}
-                value={priceNewSale}
-                onChange={(v) => setPriceNewSale(v as number | null)}
-              />
-            </div>
-          </div>
-          <div style={{ marginTop: 12 }}>
-            <div style={{ marginBottom: 6, fontWeight: 600 }}>Hiệu lực từ (tuỳ chọn)</div>
-            <input
-              type="datetime-local"
-              className="pf-input"
-              value={priceEffectiveAt}
-              onChange={(e) => setPriceEffectiveAt(e.target.value)}
-            />
-          </div>
-          <div style={{ marginTop: 12 }}>
-            <div style={{ marginBottom: 6, fontWeight: 600 }}>Lý do thay đổi giá</div>
-            <Input.TextArea
-              rows={4}
-              value={priceReason}
-              onChange={(e) => setPriceReason(e.target.value)}
-              placeholder="Nhập lý do thay đổi giá..."
-            />
-          </div>
-        </Modal>
+        />
 
-        <Modal
-          title={`Từ chối đề xuất giá${priceWorkflowProduct ? ` - ${priceWorkflowProduct.code}` : ''}`}
-          open={priceRejectModalOpen}
-          onCancel={() => {
-            setPriceRejectModalOpen(false);
-            setPriceWorkflowProduct(null);
-            setPendingPriceChangeId(null);
-            setPriceRejectReason('');
+        <BulkPriceAdjustModal
+          open={bulkPriceModalOpen}
+          selectedProducts={selectedProductsForBulk}
+          onClose={() => setBulkPriceModalOpen(false)}
+          onSubmitted={() => {
+            clearSelection();
+            setSelectedProductMap({});
+            void queryClient.invalidateQueries({ queryKey: ['products'] });
+            void queryClient.invalidateQueries({ queryKey: ['products', 'activity'] });
           }}
-          onOk={() => void handleRejectLatestPriceChange()}
-          okText="Xác nhận từ chối"
-          okButtonProps={{ danger: true }}
-          confirmLoading={priceWorkflowLoading}
-          cancelText="Hủy"
-        >
-          <Input.TextArea
-            rows={4}
-            value={priceRejectReason}
-            onChange={(e) => setPriceRejectReason(e.target.value)}
-            placeholder="Nhập lý do từ chối đề xuất giá..."
-          />
-        </Modal>
+        />
 
         <ImportModal
           visible={importModalVisible}

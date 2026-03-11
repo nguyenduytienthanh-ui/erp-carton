@@ -1,0 +1,14 @@
+[Unit]
+Description=ERP Carton Workflow Scheduler
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/erp-carton/backend
+EnvironmentFile=/opt/erp-carton/backend/.env
+ExecStart=/opt/erp-carton/backend/.venv/bin/python manage.py run_workflow_automation_scheduler
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

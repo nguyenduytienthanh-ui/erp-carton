@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
@@ -10,6 +11,8 @@ from core.notifications import create_notification
 from core.permissions import check_action_permission
 
 from workforce.models import SalaryAdvanceRecord
+
+logger = logging.getLogger(__name__)
 
 
 APPROVAL_SLA_SCHEDULE_NAME = 'WORKFORCE_SALARY_ADVANCE_APPROVAL_SLA_REMINDER'
@@ -106,8 +109,8 @@ def get_approval_sla_policy() -> dict:
     ]:
         try:
             policy[key] = max(1, int(parsed.get(key, policy[key])))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning('workforce.reminders: invalid value for policy key %s — %s', key, exc)
     policy['window_days'] = min(policy['window_days'], 365)
     return policy
 
@@ -126,8 +129,8 @@ def save_approval_sla_policy(policy: dict) -> dict:
         ]:
             try:
                 normalized[key] = max(1, int(policy.get(key, normalized[key])))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning('workforce.reminders: invalid value for save policy key %s — %s', key, exc)
     normalized['window_days'] = min(normalized['window_days'], 365)
     import json
 

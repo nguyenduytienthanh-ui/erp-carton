@@ -118,6 +118,7 @@ class SalesOrderDeliveryPlanAdmin(admin.ModelAdmin):
         'line',
         'delivery_date',
         'qty',
+        'shipped_qty',
         'delivered_qty',
         'remaining_qty',
     ]

@@ -1,4 +1,4 @@
-﻿from django.test import TestCase
+from django.test import TestCase
 from rest_framework.test import APIClient
 
 from core.models import AuditLog, Notification, Permission, Role, User
@@ -19,30 +19,24 @@ class RoleModulePermissionsApiTest(TestCase):
 
     @staticmethod
     def _ensure_permissions():
-        Permission.objects.update_or_create(
-            resource='WORKFORCE',
-            action='MANAGE',
-            defaults={
-                'code': 'WORKFORCE_MANAGE',
-                'name': 'Manage Workforce module',
-            },
-        )
-        Permission.objects.update_or_create(
-            resource='FINANCE',
-            action='MANAGE',
-            defaults={
-                'code': 'FINANCE_MANAGE',
-                'name': 'Manage Finance module',
-            },
-        )
-        Permission.objects.update_or_create(
-            resource='CORE',
-            action='MANAGE_RBAC',
-            defaults={
-                'code': 'CORE_MANAGE_RBAC',
-                'name': 'Manage RBAC settings',
-            },
-        )
+        for resource, action, code, name in [
+            ('WORKFORCE', 'MANAGE', 'WORKFORCE_MANAGE', 'Manage Workforce module'),
+            ('FINANCE', 'MANAGE', 'FINANCE_MANAGE', 'Manage Finance module'),
+            ('OPS', 'VIEW', 'OPS_VIEW', 'View operations cockpit'),
+            ('WORKFLOW', 'VIEW', 'WORKFLOW_VIEW', 'View workflow boards'),
+            ('WORKFLOW', 'MANAGE', 'WORKFLOW_MANAGE', 'Manage workflow templates'),
+            ('CORE', 'VIEW_OPERATIONS_LOG', 'CORE_VIEW_OPERATIONS_LOG', 'View operations log'),
+            ('CORE', 'VIEW_RBAC_AUDIT', 'CORE_VIEW_RBAC_AUDIT', 'View RBAC audit history'),
+            ('CORE', 'MANAGE_RBAC', 'CORE_MANAGE_RBAC', 'Manage RBAC settings'),
+        ]:
+            Permission.objects.update_or_create(
+                resource=resource,
+                action=action,
+                defaults={
+                    'code': code,
+                    'name': name,
+                },
+            )
 
     def test_get_module_permissions_forbidden_for_normal_user(self):
         self.client.force_authenticate(user=self.normal_user)
@@ -164,6 +158,26 @@ class RoleModulePermissionsApiTest(TestCase):
         summary = response.json().get('summary', {})
         self.assertIn('trend_12m', summary)
         self.assertIn('anomalies_24h', summary)
+
+    def test_module_permissions_meta_returns_users_and_changed_types(self):
+        self.client.force_authenticate(user=self.admin)
+        AuditLog.objects.create(
+            user=self.admin,
+            action='UPDATE',
+            entity_type='RoleModulePermission',
+            entity_id=0,
+            entity_id_str='role-module-permissions',
+            entity_code='ROLE_MODULE_PERMISSIONS',
+            old_values={'items': []},
+            new_values={'items': [{'role_id': self.role_admin.id, 'role_code': 'ADMIN', 'ops_view': True}]},
+            changed_fields=['module_permissions'],
+        )
+        response = self.client.get('/api/roles/module_permissions_history_meta/')
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        changed_types = {item['value'] for item in body.get('changed_types', [])}
+        self.assertIn('ops', changed_types)
+        self.assertTrue(body.get('users'))
 
 
 

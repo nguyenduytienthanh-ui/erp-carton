@@ -75,11 +75,41 @@ class CustomerSerializer(serializers.ModelSerializer):
     updated_by_username = serializers.CharField(source='updated_by.username', read_only=True)
     owner_name = serializers.CharField(source='owner.username', read_only=True, allow_null=True)
     team_name = serializers.CharField(source='team.name', read_only=True, allow_null=True)
+    code = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = Customer
         fields = '__all__'
         read_only_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        # Auto-generate customer code if not provided
+        if not validated_data.get('code'):
+            from django.utils import timezone
+            import random
+            
+            # Generate code: KH-YYYYMMDD-XXXXX (KH = Khách Hàng)
+            now = timezone.now()
+            date_str = now.strftime('%Y%m%d')
+            random_suffix = str(random.randint(10000, 99999))
+            code = f'KH-{date_str}-{random_suffix}'
+            
+            # Ensure unique
+            max_attempts = 10
+            base_code = code
+            attempt = 0
+            while Customer.objects.filter(code=code).exists() and attempt < max_attempts:
+                random_suffix = str(random.randint(10000, 99999))
+                code = f'{base_code[:-5]}{random_suffix}'
+                attempt += 1
+            
+            validated_data['code'] = code
+        
+        # Ensure created_by is set (can come from context or kwargs)
+        if 'created_by' not in validated_data and self.context.get('request'):
+            validated_data['created_by'] = self.context['request'].user
+        
+        return super().create(validated_data)
 
 
 class ExportTemplateSerializer(serializers.ModelSerializer):

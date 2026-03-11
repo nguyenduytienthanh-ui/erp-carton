@@ -1,5 +1,13 @@
 from django.contrib import admin
-from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product
+from .models import (
+    ProductCategory,
+    ProductUnit,
+    ProductWave,
+    ProductBoxType,
+    Product,
+    ProductBundle,
+    ProductBundleComponent,
+)
 
 
 class ProductCategoryAdmin(admin.ModelAdmin):
@@ -334,3 +342,54 @@ class ProductAdmin(admin.ModelAdmin):
         'bulk_assign_owner_me', 'bulk_assign_team_mine',
         'export_to_excel',
     ]
+
+
+class ProductBundleComponentInline(admin.TabularInline):
+    model = ProductBundleComponent
+    extra = 0
+    autocomplete_fields = ['component_product']
+
+
+@admin.register(ProductBundle)
+class ProductBundleAdmin(admin.ModelAdmin):
+    list_display = [
+        'sellable_product',
+        'primary_product',
+        'pricing_mode',
+        'derived_commission_mode',
+        'delivery_rule',
+        'is_active',
+        'updated_at',
+    ]
+    list_filter = ['pricing_mode', 'delivery_rule', 'is_active', 'updated_at']
+    search_fields = ['sellable_product__code', 'sellable_product__name', 'primary_product__code', 'primary_product__name']
+    autocomplete_fields = ['sellable_product', 'primary_product', 'created_by', 'updated_by']
+    readonly_fields = ['created_at', 'updated_at', 'created_by', 'updated_by']
+    inlines = [ProductBundleComponentInline]
+
+    fieldsets = (
+        ('Thông tin bộ', {
+            'fields': ('sellable_product', 'primary_product', 'is_active', 'delivery_rule', 'note')
+        }),
+        ('Giá bộ', {
+            'fields': ('pricing_mode', 'fixed_cost_price', 'fixed_sale_price')
+        }),
+        ('Hoa hồng bộ (đi theo cách tính giá)', {
+            'fields': ('fixed_commission_per_unit', 'fixed_commission_percent')
+        }),
+        ('Thông tin hệ thống', {
+            'fields': ('created_at', 'updated_at', 'created_by', 'updated_by'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    @admin.display(description='Kiểu HH bộ')
+    def derived_commission_mode(self, obj):
+        return dict(ProductBundle.COMMISSION_MODE_CHOICES).get(obj.get_commission_mode(), obj.get_commission_mode())
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        obj.updated_by = request.user
+        obj.commission_mode = obj.get_commission_mode()
+        super().save_model(request, obj, form, change)

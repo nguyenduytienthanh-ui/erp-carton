@@ -37,13 +37,18 @@ Mở `.env` và điền: SECRET_KEY, DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_
 pip install -r requirements.txt
 python manage.py migrate
 python manage.py seed_master_data
+python manage.py bootstrap_uat_demo --reset-passwords --password Demo123!
 ```
 
-### 2.3 Tạo superuser (để đăng nhập)
+### 2.3 Tạo superuser (để quản trị hệ thống)
 
 ```powershell
 python manage.py createsuperuser
 ```
+
+Ngoài superuser, dự án có thể dùng ngay bộ user UAT ở tài liệu:
+
+- [UAT_DEMO_USERS.md](./UAT_DEMO_USERS.md)
 
 ---
 
@@ -71,6 +76,13 @@ npm run dev
 ```
 
 Mở trình duyệt: http://localhost:5173/
+
+### 4.1 Smoke check nhanh
+
+```powershell
+cd backend
+python manage.py smoke_http --backend-base http://127.0.0.1:8000 --frontend-base http://127.0.0.1:5173 --username uat_admin --password Demo123!
+```
 
 ---
 

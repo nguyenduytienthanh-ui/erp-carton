@@ -3,14 +3,10 @@ import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, 
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { financeApi } from '../../api/finance';
 import { workforceApi } from '../../api/workforce';
-import type {
-  Employee,
-  SalaryAdvanceRecord,
-  SalaryAdvanceRecordPayload,
-  SalaryAdvanceApprovalStatus,
-  SalaryAdvanceStatus,
-} from '../../types/workforce';
+import type { BankAccount, CashAccount } from '../../types/finance';
+import type { Employee, SalaryAdvanceRecord, SalaryAdvanceRecordPayload, SalaryAdvanceApprovalStatus, SalaryAdvanceStatus } from '../../types/workforce';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
@@ -70,8 +66,13 @@ type SalaryAdvanceForm = {
   reason: string;
   approved_by_name: string;
   note: string;
-  status: SalaryAdvanceStatus;
   is_active: boolean;
+};
+
+type DisbursementForm = {
+  source_type: 'CASH' | 'BANK';
+  source_cash_account: number | null;
+  source_bank_account: number | null;
 };
 
 const emptyForm: SalaryAdvanceForm = {
@@ -82,8 +83,13 @@ const emptyForm: SalaryAdvanceForm = {
   reason: 'Ứng lương',
   approved_by_name: '',
   note: '',
-  status: 'UNDEDUCTED',
   is_active: true,
+};
+
+const emptyDisbursementForm: DisbursementForm = {
+  source_type: 'CASH',
+  source_cash_account: null,
+  source_bank_account: null,
 };
 
 export default function SalaryAdvanceList() {
@@ -95,6 +101,14 @@ export default function SalaryAdvanceList() {
   const [editing, setEditing] = useState<SalaryAdvanceRecord | null>(null);
   const [openModal, setOpenModal] = useState(false);
   const [form] = Form.useForm<SalaryAdvanceForm>();
+  const [rejectModal, setRejectModal] = useState<{ open: boolean; id: number | null }>({ open: false, id: null });
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectForm] = Form.useForm();
+  const [disbursementModal, setDisbursementModal] = useState<{ open: boolean; row: SalaryAdvanceRecord | null }>({
+    open: false,
+    row: null,
+  });
+  const [disbursementForm] = Form.useForm<DisbursementForm>();
   const { config, saveConfig } = useUserPreferences('workforce-salary-advance-list');
   const canManage = canManageWorkforceData();
 
@@ -112,6 +126,16 @@ export default function SalaryAdvanceList() {
   const employeesQuery = useQuery({
     queryKey: ['workforce-employees-select'],
     queryFn: () => workforceApi.getEmployees({ page: 1, page_size: 500, ordering: 'code', is_active: 'true' }),
+  });
+  const cashAccountsQuery = useQuery({
+    queryKey: ['finance-cash-accounts-all'],
+    queryFn: () => financeApi.getCashAccounts({ page: 1, page_size: 300, ordering: 'name', is_active: 'true' }),
+    enabled: canManage,
+  });
+  const bankAccountsQuery = useQuery({
+    queryKey: ['finance-bank-accounts-all'],
+    queryFn: () => financeApi.getBankAccounts({ page: 1, page_size: 300, ordering: 'code', is_active: 'true' }),
+    enabled: canManage,
   });
 
   const params = useMemo(() => {
@@ -199,8 +223,27 @@ export default function SalaryAdvanceList() {
       await approvalSlaOverviewQuery.refetch();
     },
   });
+  const postDisbursementMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: number; payload: DisbursementForm }) =>
+      workforceApi.postSalaryAdvanceDisbursement(id, payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
+      messageApi.success('Đã ghi nhận chi tiền ứng lương');
+    },
+  });
+  const reverseDisbursementMutation = useMutation({
+    mutationFn: (id: number) => workforceApi.reverseSalaryAdvanceDisbursement(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
+      messageApi.success('Đã hủy chứng từ chi tiền ứng lương');
+    },
+  });
 
-  const employees = employeesQuery.data?.results ?? [];
+  const employees = (employeesQuery.data?.results ?? []).filter(
+    (item) => item.is_active && item.status !== 'RESIGNED'
+  );
+  const cashAccounts = cashAccountsQuery.data?.results ?? [];
+  const bankAccounts = bankAccountsQuery.data?.results ?? [];
   const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
   const total = listQuery.data?.count ?? 0;
 
@@ -212,7 +255,13 @@ export default function SalaryAdvanceList() {
     const deducted = rows
       .filter((item) => item.status === 'DEDUCTED')
       .reduce((acc, item) => acc + Number(item.amount), 0);
-    return { totalAmount, undeducted, deducted };
+    const approvedNotDisbursed = rows
+      .filter((item) => item.approval_status === 'APPROVED' && item.disbursement_status !== 'DISBURSED')
+      .reduce((acc, item) => acc + Number(item.amount), 0);
+    const disbursedNotDeducted = rows
+      .filter((item) => item.disbursement_status === 'DISBURSED' && item.status === 'UNDEDUCTED')
+      .reduce((acc, item) => acc + Number(item.amount), 0);
+    return { totalAmount, undeducted, deducted, approvedNotDisbursed, disbursedNotDeducted };
   }, [rows]);
 
   const columns: ColumnsType<SalaryAdvanceRecord> = [
@@ -252,9 +301,19 @@ export default function SalaryAdvanceList() {
       },
     },
     {
+      title: 'Chi tiền',
+      dataIndex: 'disbursement_status',
+      width: 120,
+      render: (status: SalaryAdvanceRecord['disbursement_status']) => (
+        <Tag color={status === 'DISBURSED' ? 'green' : 'default'}>
+          {status === 'DISBURSED' ? 'Đã chi' : 'Chưa chi'}
+        </Tag>
+      ),
+    },
+    {
       title: 'Thao tác',
       key: 'actions',
-      width: 360,
+      width: 470,
       fixed: 'right',
       render: (_, row) => (
         <Space>
@@ -280,15 +339,41 @@ export default function SalaryAdvanceList() {
                   size="small"
                   danger
                   onClick={() => {
-                    const reason = window.prompt('Nhập lý do từ chối:', '');
-                    if (!reason || !reason.trim()) {
-                      return;
-                    }
-                    rejectApprovalMutation.mutate({ id: row.id, reason: reason.trim() });
+                    setRejectReason('');
+                    rejectForm.resetFields();
+                    setRejectModal({ open: true, id: row.id });
                   }}
-                  loading={rejectApprovalMutation.isPending}
+                  loading={rejectApprovalMutation.isPending && rejectModal.id === row.id}
                 >
                   Từ chối
+                </Button>
+              )}
+              {row.approval_status === 'APPROVED' && row.disbursement_status !== 'DISBURSED' && (
+                <Button
+                  size="small"
+                  type="primary"
+                  onClick={() => {
+                    disbursementForm.setFieldsValue(emptyDisbursementForm);
+                    setDisbursementModal({ open: true, row });
+                  }}
+                >
+                  Chi tiền
+                </Button>
+              )}
+              {row.disbursement_status === 'DISBURSED' && (
+                <Button
+                  size="small"
+                  onClick={() =>
+                    Modal.confirm({
+                      title: 'Hủy chứng từ chi tiền ứng lương?',
+                      okText: 'Hủy chi',
+                      cancelText: 'Đóng',
+                      onOk: () => reverseDisbursementMutation.mutateAsync(row.id),
+                    })
+                  }
+                  loading={reverseDisbursementMutation.isPending}
+                >
+                  Hủy chi
                 </Button>
               )}
               <Button
@@ -304,7 +389,6 @@ export default function SalaryAdvanceList() {
                     reason: row.reason,
                     approved_by_name: row.approved_by_name,
                     note: row.note,
-                    status: row.status,
                     is_active: row.is_active,
                   });
                   setOpenModal(true);
@@ -342,7 +426,6 @@ export default function SalaryAdvanceList() {
     reason: values.reason || 'Ứng lương',
     approved_by_name: values.approved_by_name || '',
     note: values.note || '',
-    status: values.status,
     is_active: values.is_active,
   });
 
@@ -357,13 +440,28 @@ export default function SalaryAdvanceList() {
     setOpenModal(false);
   };
 
+  const submitDisbursement = async () => {
+    if (!disbursementModal.row) return;
+    const values = await disbursementForm.validateFields();
+    await postDisbursementMutation.mutateAsync({
+      id: disbursementModal.row.id,
+      payload: {
+        source_type: values.source_type,
+        source_cash_account: values.source_type === 'CASH' ? values.source_cash_account : null,
+        source_bank_account: values.source_type === 'BANK' ? values.source_bank_account : null,
+      },
+    });
+    setDisbursementModal({ open: false, row: null });
+    disbursementForm.resetFields();
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {contextHolder}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ margin: 0 }}>Ứng lương</h2>
-          <div style={{ color: '#8c8c8c' }}>Quản lý ứng lương và trạng thái đã trừ/chưa trừ</div>
+          <div style={{ color: '#8c8c8c' }}>Quản lý ứng lương; trạng thái đã trừ/chưa trừ do hệ thống tự quản lý</div>
         </div>
         <Button
           type="primary"
@@ -465,18 +563,26 @@ export default function SalaryAdvanceList() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 12 }}>
         <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-          <div style={{ color: '#8c8c8c' }}>Tổng ứng</div>
+          <div style={{ color: '#8c8c8c' }}>Tổng ứng trang hiện tại</div>
           <div style={{ fontWeight: 700, fontSize: 20 }}>{summary.totalAmount.toLocaleString('vi-VN')} đ</div>
         </div>
         <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-          <div style={{ color: '#8c8c8c' }}>Chưa trừ</div>
+          <div style={{ color: '#8c8c8c' }}>Chưa trừ trang hiện tại</div>
           <div style={{ fontWeight: 700, color: '#d48806', fontSize: 20 }}>{summary.undeducted.toLocaleString('vi-VN')} đ</div>
         </div>
         <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-          <div style={{ color: '#8c8c8c' }}>Đã trừ</div>
+          <div style={{ color: '#8c8c8c' }}>Đã trừ trang hiện tại</div>
           <div style={{ fontWeight: 700, color: '#389e0d', fontSize: 20 }}>{summary.deducted.toLocaleString('vi-VN')} đ</div>
+        </div>
+        <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
+          <div style={{ color: '#8c8c8c' }}>Đã duyệt chưa chi</div>
+          <div style={{ fontWeight: 700, color: '#d48806', fontSize: 20 }}>{summary.approvedNotDisbursed.toLocaleString('vi-VN')} đ</div>
+        </div>
+        <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
+          <div style={{ color: '#8c8c8c' }}>Đã chi chưa trừ</div>
+          <div style={{ fontWeight: 700, color: '#cf1322', fontSize: 20 }}>{summary.disbursedNotDeducted.toLocaleString('vi-VN')} đ</div>
         </div>
       </div>
 
@@ -528,9 +634,6 @@ export default function SalaryAdvanceList() {
             <Form.Item name="amount" label="Số tiền" rules={[{ required: true }]}>
               <InputNumber min={1} style={{ width: '100%' }} />
             </Form.Item>
-            <Form.Item name="status" label="Trạng thái" rules={[{ required: true }]}>
-              <Select options={STATUS_OPTIONS} />
-            </Form.Item>
             <Form.Item name="approved_by_name" label="Người duyệt">
               <Input />
             </Form.Item>
@@ -543,6 +646,103 @@ export default function SalaryAdvanceList() {
           </Form.Item>
           <Form.Item name="is_active" label="Kích hoạt" valuePropName="checked">
             <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Chi tiền ứng lương"
+        open={disbursementModal.open}
+        onCancel={() => {
+          setDisbursementModal({ open: false, row: null });
+          disbursementForm.resetFields();
+        }}
+        onOk={submitDisbursement}
+        confirmLoading={postDisbursementMutation.isPending}
+      >
+        <Form form={disbursementForm} layout="vertical" initialValues={emptyDisbursementForm}>
+          <Form.Item name="source_type" label="Nguồn tiền" rules={[{ required: true }]}>
+            <Select
+              options={[
+                { value: 'CASH', label: 'Quỹ tiền mặt' },
+                { value: 'BANK', label: 'Ngân hàng' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item shouldUpdate noStyle>
+            {() =>
+              disbursementForm.getFieldValue('source_type') === 'BANK' ? (
+                <Form.Item
+                  name="source_bank_account"
+                  label="Tài khoản ngân hàng"
+                  rules={[{ required: true, message: 'Vui lòng chọn tài khoản ngân hàng.' }]}
+                >
+                  <Select
+                    options={bankAccounts.map((item: BankAccount) => ({
+                      value: item.id,
+                      label: `${item.code} - ${item.account_name}`,
+                    }))}
+                  />
+                </Form.Item>
+              ) : (
+                <Form.Item
+                  name="source_cash_account"
+                  label="Quỹ tiền mặt"
+                  rules={[{ required: true, message: 'Vui lòng chọn quỹ tiền mặt.' }]}
+                >
+                  <Select
+                    options={cashAccounts.map((item: CashAccount) => ({
+                      value: item.id,
+                      label: `${item.name} | khả dụng ${Number(item.current_balance ?? item.balance ?? 0).toLocaleString('vi-VN')} đ`,
+                    }))}
+                  />
+                </Form.Item>
+              )
+            }
+          </Form.Item>
+          <div style={{ color: '#8c8c8c' }}>
+            {disbursementModal.row
+              ? `Hệ thống sẽ tự sinh chứng từ chi tiền đúng theo ngày ứng: ${disbursementModal.row.advance_date}.`
+              : ''}
+          </div>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Từ chối duyệt ứng lương"
+        open={rejectModal.open}
+        onCancel={() => {
+          setRejectModal({ open: false, id: null });
+          rejectForm.resetFields();
+        }}
+        onOk={() => {
+          rejectForm
+            .validateFields()
+            .then((values: { reason: string }) => {
+              if (rejectModal.id !== null) {
+                rejectApprovalMutation.mutate({ id: rejectModal.id, reason: values.reason.trim() });
+                setRejectModal({ open: false, id: null });
+                rejectForm.resetFields();
+              }
+            })
+            .catch(() => {});
+        }}
+        okText="Xác nhận từ chối"
+        okButtonProps={{ danger: true }}
+        confirmLoading={rejectApprovalMutation.isPending}
+      >
+        <Form form={rejectForm} layout="vertical">
+          <Form.Item
+            name="reason"
+            label="Lý do từ chối"
+            rules={[{ required: true, message: 'Vui lòng nhập lý do từ chối.' }]}
+          >
+            <Input.TextArea
+              rows={3}
+              placeholder="Nhập lý do từ chối duyệt..."
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+            />
           </Form.Item>
         </Form>
       </Modal>

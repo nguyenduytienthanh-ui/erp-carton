@@ -58,7 +58,7 @@ function parseFilters(raw: string): TransactionFilters {
 type CashAccountForm = {
   name: string;
   account_type: CashAccountType;
-  balance: number;
+  balance?: number;
   note: string;
   is_active: boolean;
 };
@@ -328,11 +328,18 @@ export default function CashBook() {
       render: (value: CashAccountType) => (value === 'CASH' ? 'Tiền mặt' : 'Quỹ'),
     },
     {
-      title: 'Số dư',
+      title: 'Số dư mở sổ',
       dataIndex: 'balance',
-      width: 200,
+      width: 160,
       align: 'right',
       render: (value: string) => `${Number(value || 0).toLocaleString('vi-VN')} đ`,
+    },
+    {
+      title: 'Số dư khả dụng',
+      dataIndex: 'current_balance',
+      width: 170,
+      align: 'right',
+      render: (value: string | undefined, row) => `${Number(value ?? row.balance ?? 0).toLocaleString('vi-VN')} đ`,
     },
     { title: 'Kích hoạt', dataIndex: 'is_active', width: 100, render: (v: boolean) => (v ? 'Có' : 'Không') },
     {
@@ -385,14 +392,16 @@ export default function CashBook() {
     const payload = {
       name: values.name.trim(),
       account_type: values.account_type,
-      balance: String(values.balance ?? 0),
       note: values.note || '',
       is_active: values.is_active,
     };
     if (editingAccount) {
       await updateAccountMutation.mutateAsync({ id: editingAccount.id, payload });
     } else {
-      await createAccountMutation.mutateAsync(payload);
+      await createAccountMutation.mutateAsync({
+        ...payload,
+        balance: String(values.balance ?? 0),
+      });
     }
     setOpenAccountModal(false);
   };
@@ -528,15 +537,15 @@ export default function CashBook() {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
             <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-              <div style={{ color: '#8c8c8c' }}>Tổng thu</div>
+              <div style={{ color: '#8c8c8c' }}>Tổng thu trang hiện tại</div>
               <div style={{ fontWeight: 700, color: '#389e0d', fontSize: 20 }}>{summary.totalIncome.toLocaleString('vi-VN')} đ</div>
             </div>
             <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-              <div style={{ color: '#8c8c8c' }}>Tổng chi</div>
+              <div style={{ color: '#8c8c8c' }}>Tổng chi trang hiện tại</div>
               <div style={{ fontWeight: 700, color: '#cf1322', fontSize: 20 }}>{summary.totalExpense.toLocaleString('vi-VN')} đ</div>
             </div>
             <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-              <div style={{ color: '#8c8c8c' }}>Chênh lệch</div>
+              <div style={{ color: '#8c8c8c' }}>Chênh lệch trang hiện tại</div>
               <div style={{ fontWeight: 700, fontSize: 20 }}>{summary.delta.toLocaleString('vi-VN')} đ</div>
             </div>
           </div>
@@ -590,9 +599,11 @@ export default function CashBook() {
               ]}
             />
           </Form.Item>
-          <Form.Item name="balance" label="Số dư ban đầu" initialValue={0}>
-            <InputNumber min={0} style={{ width: '100%' }} />
-          </Form.Item>
+          {!editingAccount ? (
+            <Form.Item name="balance" label="Số dư mở sổ" initialValue={0}>
+              <InputNumber min={0} style={{ width: '100%' }} />
+            </Form.Item>
+          ) : null}
           <Form.Item name="note" label="Ghi chú">
             <Input.TextArea rows={2} />
           </Form.Item>
@@ -663,7 +674,7 @@ export default function CashBook() {
                     <Select
                       options={activeCashAccounts.map((item) => ({
                         value: item.id,
-                        label: `${item.name} (${Number(item.balance).toLocaleString('vi-VN')} đ)`,
+                        label: `${item.name} (${Number(item.current_balance ?? item.balance).toLocaleString('vi-VN')} đ)`,
                       }))}
                     />
                   </Form.Item>
@@ -679,7 +690,7 @@ export default function CashBook() {
                     <Select
                       options={activeCashAccounts.map((item) => ({
                         value: item.id,
-                        label: item.name,
+                        label: `${item.name} (${Number(item.current_balance ?? item.balance).toLocaleString('vi-VN')} đ)`,
                       }))}
                     />
                   </Form.Item>

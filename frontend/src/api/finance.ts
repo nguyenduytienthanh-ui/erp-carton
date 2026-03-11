@@ -12,6 +12,7 @@ import type {
   ExecutiveAutoPolicy,
   ExecutiveAutoHistoryResponse,
   ExecutiveAutoGovernanceResponse,
+  FinanceMonthCloseCheckResponse,
   CrossModuleBootstrapResponse,
   CrossModuleBootstrapHistoryResponse,
   CrossModuleReadinessResponse,
@@ -36,11 +37,15 @@ type AdvanceTransactionPayload = Omit<
   | 'id'
   | 'created_at'
   | 'updated_at'
+  | 'status'
   | 'source_cash_account_name'
   | 'source_bank_account_code'
   | 'total_spent'
   | 'total_refund'
   | 'remaining_amount'
+  | 'disbursement_status'
+  | 'disbursement_transaction_id'
+  | 'disbursed_at'
   | 'approval_status'
   | 'required_approval_level'
   | 'submitted_at'
@@ -181,6 +186,12 @@ export const financeApi = {
     const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_KPI);
     return response.data as ExecutiveKpiResponse;
   },
+  getFinanceMonthCloseCheck: async (month: string): Promise<FinanceMonthCloseCheckResponse> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_CASH_TRANSACTIONS}preclose_check/`, {
+      params: { month },
+    });
+    return response.data as FinanceMonthCloseCheckResponse;
+  },
   getCrossModuleReadiness: async (): Promise<CrossModuleReadinessResponse> => {
     const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CROSS_MODULE_READINESS);
     return response.data as CrossModuleReadinessResponse;
@@ -255,6 +266,14 @@ export const financeApi = {
     const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_APPROVE_LEVEL2.replace('{id}', String(id));
     const response = await axiosInstance.post(endpoint, {});
     return response.data as { success: boolean; approval_status: string };
+  },
+  postAdvanceDisbursement: async (id: number): Promise<{ success: boolean; transaction_id: number; disbursement_status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_ADVANCE_TRANSACTIONS}${id}/post_disbursement/`, {});
+    return response.data as { success: boolean; transaction_id: number; disbursement_status: string };
+  },
+  reverseAdvanceDisbursement: async (id: number): Promise<{ success: boolean; transaction_id: number; disbursement_status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_ADVANCE_TRANSACTIONS}${id}/reverse_disbursement/`, {});
+    return response.data as { success: boolean; transaction_id: number; disbursement_status: string };
   },
   rejectAdvanceApproval: async (id: number, reason: string): Promise<{ success: boolean; approval_status: string }> => {
     const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_REJECT_APPROVAL.replace('{id}', String(id));
@@ -359,8 +378,8 @@ export const financeApi = {
     return response.data as FinanceLockedMonthsResponse;
   },
 
-  unlockFinanceMonth: async (month: string): Promise<FinanceLockedMonthsResponse> => {
-    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_UNLOCK_MONTH, { month });
+  unlockFinanceMonth: async (month: string, force = false): Promise<FinanceLockedMonthsResponse> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_UNLOCK_MONTH, { month, force });
     return response.data as FinanceLockedMonthsResponse;
   },
 

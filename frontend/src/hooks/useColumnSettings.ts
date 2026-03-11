@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useUserPreferences } from './useUserPreferences';
+import type { PreferencesConfig } from '../types/preferences';
 
 export interface UseColumnSettingsOptions {
   /** Cột hiển thị mặc định khi chưa có config (vd. lần đầu). */
@@ -32,61 +33,58 @@ export function useColumnSettings(
 ): UseColumnSettingsResult {
   const { defaultVisibleColumns, sizeColumns } = options;
   const { config, saveConfig } = useUserPreferences(pageKey);
-  const configRef = useRef(config);
-  configRef.current = config;
+  const configRef = useRef<PreferencesConfig>(config);
 
-  const [visibleColumns, setVisibleColumns] = useState<string[]>(() => {
+  const savedVisibleColumns = useMemo(() => {
     const cols = (config?.columns as string[] | undefined);
-    if (Array.isArray(cols) && cols.length > 0) return cols;
-    return defaultVisibleColumns;
-  });
+    return Array.isArray(cols) && cols.length > 0 ? cols : defaultVisibleColumns;
+  }, [config, defaultVisibleColumns]);
 
-  const [sizeDisplayMode, setSizeDisplayMode] = useState<'merged' | 'separated'>(() => {
+  const savedSizeDisplayMode = useMemo<'merged' | 'separated'>(() => {
     if (!sizeColumns) return 'separated';
     const mode = config?.sizeDisplayMode as 'merged' | 'separated' | undefined;
     return mode === 'merged' || mode === 'separated' ? mode : 'separated';
-  });
-
-  // Đồng bộ từ config khi load / restore từ server
-  useEffect(() => {
-    if (config == null) return;
-    const cols = (config.columns as string[] | undefined);
-    if (Array.isArray(cols) && cols.length > 0) setVisibleColumns(cols);
-    if (sizeColumns) {
-      const mode = config.sizeDisplayMode as 'merged' | 'separated' | undefined;
-      if (mode === 'merged' || mode === 'separated') setSizeDisplayMode(mode);
-    }
   }, [config, sizeColumns]);
+
+  const [visibleColumnsOverride, setVisibleColumnsOverride] = useState<string[] | null>(null);
+  const [sizeDisplayModeOverride, setSizeDisplayModeOverride] = useState<'merged' | 'separated' | null>(null);
+
+  const visibleColumns = visibleColumnsOverride ?? savedVisibleColumns;
+  const sizeDisplayMode = sizeDisplayModeOverride ?? savedSizeDisplayMode;
+
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
 
   const savePreferences = useCallback(
     async (partial: Record<string, unknown>) => {
       const merged = { ...(configRef.current || {}), ...partial };
-      await saveConfig(merged as any);
+      await saveConfig(merged);
     },
-    [saveConfig]
+    [saveConfig],
   );
 
   const handleVisibleColumnsChange = useCallback(
     async (newColumns: string[]) => {
-      setVisibleColumns(newColumns);
+      setVisibleColumnsOverride(newColumns);
       await savePreferences({ columns: newColumns });
     },
-    [savePreferences]
+    [savePreferences],
   );
 
   const handleSizeDisplayModeChange = useCallback(
     async (mode: 'merged' | 'separated') => {
       if (!sizeColumns) return;
-      setSizeDisplayMode(mode);
       const { separated, merged } = sizeColumns;
       const newCols =
         mode === 'merged'
           ? [...visibleColumns.filter((k) => !separated.includes(k)), ...merged]
           : [...visibleColumns.filter((k) => !merged.includes(k)), ...separated];
-      setVisibleColumns(newCols);
+      setSizeDisplayModeOverride(mode);
+      setVisibleColumnsOverride(newCols);
       await savePreferences({ columns: newCols, sizeDisplayMode: mode });
     },
-    [visibleColumns, sizeColumns, savePreferences]
+    [visibleColumns, sizeColumns, savePreferences],
   );
 
   return {

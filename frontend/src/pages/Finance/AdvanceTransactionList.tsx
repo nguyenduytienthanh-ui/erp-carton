@@ -51,7 +51,6 @@ type AdvanceForm = {
   amount: number;
   purpose: string;
   note: string;
-  status: AdvanceTransactionStatus;
   is_active: boolean;
 };
 
@@ -128,7 +127,6 @@ const emptyAdvanceForm: AdvanceForm = {
   amount: 0,
   purpose: '',
   note: '',
-  status: 'OPEN',
   is_active: true,
 };
 
@@ -164,10 +162,13 @@ export default function AdvanceTransactionList() {
   const [settlementsPage, setSettlementsPage] = useState(1);
   const [openAdvanceModal, setOpenAdvanceModal] = useState(false);
   const [openSettlementModal, setOpenSettlementModal] = useState(false);
+  const [advanceSelectSearch, setAdvanceSelectSearch] = useState('');
   const [editingAdvance, setEditingAdvance] = useState<AdvanceTransaction | null>(null);
   const [editingSettlement, setEditingSettlement] = useState<AdvanceSettlement | null>(null);
   const [advanceForm] = Form.useForm<AdvanceForm>();
   const [settlementForm] = Form.useForm<SettlementForm>();
+  const [rejectModal, setRejectModal] = useState<{ open: boolean; id: number | null }>({ open: false, id: null });
+  const [rejectForm] = Form.useForm();
   const { config, saveConfig } = useUserPreferences(PAGES.FINANCE_ADVANCE_TRANSACTIONS);
   const canManage = canManageFinanceData();
 
@@ -214,8 +215,14 @@ export default function AdvanceTransactionList() {
     queryFn: () => financeApi.getBankAccounts({ page: 1, page_size: 300, ordering: 'code', is_active: 'true' }),
   });
   const advanceSelectQuery = useQuery({
-    queryKey: ['finance-advance-transactions-select'],
-    queryFn: () => financeApi.getAdvanceTransactions({ page: 1, page_size: 500, ordering: '-advance_date' }),
+    queryKey: ['finance-advance-transactions-select', advanceSelectSearch],
+    queryFn: () => financeApi.getAdvanceTransactions({
+      page: 1,
+      page_size: 50,
+      ordering: '-advance_date',
+      approval_status: 'APPROVED',
+      q: advanceSelectSearch.trim() || undefined,
+    }),
   });
 
   const createAdvanceMutation = useMutation({
@@ -271,6 +278,20 @@ export default function AdvanceTransactionList() {
       messageApi.success('Đã từ chối phiếu');
     },
   });
+  const postAdvanceDisbursementMutation = useMutation({
+    mutationFn: (id: number) => financeApi.postAdvanceDisbursement(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
+      messageApi.success('Đã ghi nhận chi tiền tạm ứng');
+    },
+  });
+  const reverseAdvanceDisbursementMutation = useMutation({
+    mutationFn: (id: number) => financeApi.reverseAdvanceDisbursement(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
+      messageApi.success('Đã hủy chứng từ chi tiền tạm ứng');
+    },
+  });
 
   const createSettlementMutation = useMutation({
     mutationFn: financeApi.createAdvanceSettlement,
@@ -308,7 +329,7 @@ export default function AdvanceTransactionList() {
   const cashAccounts = cashAccountsQuery.data?.results ?? [];
   const bankAccounts = bankAccountsQuery.data?.results ?? [];
   const advanceOptions = (advanceSelectQuery.data?.results ?? []).filter(
-    (item) => item.status !== 'CANCELLED' && item.approval_status === 'APPROVED'
+    (item) => (item.status === 'OPEN' || item.status === 'PARTIAL') && item.approval_status === 'APPROVED'
   );
 
   const summary = useMemo(() => {
@@ -377,9 +398,19 @@ export default function AdvanceTransactionList() {
       },
     },
     {
+      title: 'Chi tiền',
+      dataIndex: 'disbursement_status',
+      width: 130,
+      render: (value: AdvanceTransaction['disbursement_status']) => (
+        <Tag color={value === 'DISBURSED' ? 'green' : 'default'}>
+          {value === 'DISBURSED' ? 'Đã chi' : 'Chưa chi'}
+        </Tag>
+      ),
+    },
+    {
       title: 'Thao tác',
       key: 'actions',
-      width: 350,
+      width: 460,
       fixed: 'right',
       render: (_, row) => (
         <Space>
@@ -417,15 +448,38 @@ export default function AdvanceTransactionList() {
                   size="small"
                   danger
                   onClick={() => {
-                    const reason = window.prompt('Nhập lý do từ chối duyệt:', '');
-                    if (!reason || !reason.trim()) {
-                      return;
-                    }
-                    rejectAdvanceApprovalMutation.mutate({ id: row.id, reason: reason.trim() });
+                    rejectForm.resetFields();
+                    setRejectModal({ open: true, id: row.id });
                   }}
-                  loading={rejectAdvanceApprovalMutation.isPending}
+                  loading={rejectAdvanceApprovalMutation.isPending && rejectModal.id === row.id}
                 >
                   Từ chối
+                </Button>
+              )}
+              {row.approval_status === 'APPROVED' && row.disbursement_status !== 'DISBURSED' && (
+                <Button
+                  size="small"
+                  type="primary"
+                  onClick={() => postAdvanceDisbursementMutation.mutate(row.id)}
+                  loading={postAdvanceDisbursementMutation.isPending}
+                >
+                  Chi tiền
+                </Button>
+              )}
+              {row.disbursement_status === 'DISBURSED' && (
+                <Button
+                  size="small"
+                  onClick={() =>
+                    Modal.confirm({
+                      title: `Hủy chứng từ chi tiền ${row.code}?`,
+                      okText: 'Hủy chi',
+                      cancelText: 'Đóng',
+                      onOk: () => reverseAdvanceDisbursementMutation.mutateAsync(row.id),
+                    })
+                  }
+                  loading={reverseAdvanceDisbursementMutation.isPending}
+                >
+                  Hủy chi
                 </Button>
               )}
               <Button
@@ -444,7 +498,6 @@ export default function AdvanceTransactionList() {
                     amount: Number(row.amount),
                     purpose: row.purpose,
                     note: row.note,
-                    status: row.status,
                     is_active: row.is_active,
                   });
                   setOpenAdvanceModal(true);
@@ -552,7 +605,6 @@ export default function AdvanceTransactionList() {
       amount: String(values.amount ?? 0),
       purpose: values.purpose || '',
       note: values.note || '',
-      status: values.status,
       is_active: values.is_active,
     };
     if (editingAdvance) {
@@ -701,19 +753,19 @@ export default function AdvanceTransactionList() {
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
             <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-              <div style={{ color: '#8c8c8c' }}>Tổng tạm ứng</div>
+              <div style={{ color: '#8c8c8c' }}>Tổng tạm ứng trang hiện tại</div>
               <div style={{ fontWeight: 700, fontSize: 20 }}>{summary.totalAdvance.toLocaleString('vi-VN')} đ</div>
             </div>
             <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-              <div style={{ color: '#8c8c8c' }}>Đã chi thực tế</div>
+              <div style={{ color: '#8c8c8c' }}>Đã chi thực tế trang hiện tại</div>
               <div style={{ fontWeight: 700, color: '#1677ff', fontSize: 20 }}>{summary.totalSpent.toLocaleString('vi-VN')} đ</div>
             </div>
             <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-              <div style={{ color: '#8c8c8c' }}>Đã hoàn ứng</div>
+              <div style={{ color: '#8c8c8c' }}>Đã hoàn ứng trang hiện tại</div>
               <div style={{ fontWeight: 700, color: '#389e0d', fontSize: 20 }}>{summary.totalRefund.toLocaleString('vi-VN')} đ</div>
             </div>
             <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-              <div style={{ color: '#8c8c8c' }}>Còn lại</div>
+              <div style={{ color: '#8c8c8c' }}>Còn lại trang hiện tại</div>
               <div style={{ fontWeight: 700, color: '#cf1322', fontSize: 20 }}>{summary.totalRemaining.toLocaleString('vi-VN')} đ</div>
             </div>
           </div>
@@ -832,9 +884,6 @@ export default function AdvanceTransactionList() {
             <Form.Item name="amount" label="Số tiền" rules={[{ required: true, message: 'Bắt buộc' }]}>
               <InputNumber min={1} style={{ width: '100%' }} />
             </Form.Item>
-            <Form.Item name="status" label="Trạng thái">
-              <Select options={STATUS_OPTIONS} />
-            </Form.Item>
           </div>
           <Form.Item name="purpose" label="Mục đích">
             <Input />
@@ -862,6 +911,9 @@ export default function AdvanceTransactionList() {
             rules={[{ required: true, message: 'Bắt buộc' }]}
           >
             <Select
+              showSearch
+              filterOption={false}
+              onSearch={setAdvanceSelectSearch}
               options={advanceOptions.map((item: AdvanceTransaction) => ({
                 value: item.id,
                 label: `${item.code} - ${item.recipient_name} (${Number(item.remaining_amount).toLocaleString('vi-VN')} đ)`,
@@ -881,6 +933,40 @@ export default function AdvanceTransactionList() {
           </div>
           <Form.Item name="note" label="Ghi chú">
             <Input.TextArea rows={2} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Từ chối duyệt phiếu tạm ứng"
+        open={rejectModal.open}
+        onCancel={() => {
+          setRejectModal({ open: false, id: null });
+          rejectForm.resetFields();
+        }}
+        onOk={() => {
+          rejectForm
+            .validateFields()
+            .then((values: { reason: string }) => {
+              if (rejectModal.id !== null) {
+                rejectAdvanceApprovalMutation.mutate({ id: rejectModal.id, reason: values.reason.trim() });
+                setRejectModal({ open: false, id: null });
+                rejectForm.resetFields();
+              }
+            })
+            .catch(() => {});
+        }}
+        okText="Xác nhận từ chối"
+        okButtonProps={{ danger: true }}
+        confirmLoading={rejectAdvanceApprovalMutation.isPending}
+      >
+        <Form form={rejectForm} layout="vertical">
+          <Form.Item
+            name="reason"
+            label="Lý do từ chối"
+            rules={[{ required: true, message: 'Vui lòng nhập lý do từ chối.' }]}
+          >
+            <Input.TextArea rows={3} placeholder="Nhập lý do từ chối duyệt phiếu tạm ứng..." />
           </Form.Item>
         </Form>
       </Modal>

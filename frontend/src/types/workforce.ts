@@ -19,6 +19,7 @@ export interface Employee {
   bank_name: string;
   bank_branch: string;
   note: string;
+  profile_effective_month?: string;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -42,7 +43,33 @@ export interface EmployeePayload {
   bank_name: string;
   bank_branch: string;
   note: string;
+  profile_effective_month?: string;
   is_active: boolean;
+}
+
+export interface EmployeeProfileHistory {
+  id: number;
+  employee: number;
+  employee_code: string;
+  employee_name: string;
+  effective_month: string;
+  salary_basic: string;
+  department: string;
+  position: string;
+  status: EmployeeStatus;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EmployeeProfileHistoryPayload {
+  employee: number;
+  effective_month: string;
+  salary_basic: number;
+  department: string;
+  position: string;
+  status: EmployeeStatus;
+  note: string;
 }
 
 export interface PaginatedResponse<T> {
@@ -139,6 +166,7 @@ export interface BonusPenaltyRecordPayload {
 
 export type SalaryAdvanceStatus = 'UNDEDUCTED' | 'DEDUCTED';
 export type SalaryAdvanceApprovalStatus = 'DRAFT' | 'PENDING_L1' | 'PENDING_L2' | 'APPROVED' | 'REJECTED';
+export type SalaryAdvanceDisbursementStatus = 'NOT_DISBURSED' | 'DISBURSED';
 
 export interface SalaryAdvanceRecord {
   id: number;
@@ -154,6 +182,9 @@ export interface SalaryAdvanceRecord {
   status: SalaryAdvanceStatus;
   approval_status: SalaryAdvanceApprovalStatus;
   required_approval_level: number;
+  disbursement_status: SalaryAdvanceDisbursementStatus;
+  disbursement_transaction_id?: number | null;
+  disbursed_at?: string | null;
   submitted_at?: string | null;
   submitted_by?: number | null;
   approved_level1_at?: string | null;
@@ -176,7 +207,6 @@ export interface SalaryAdvanceRecordPayload {
   reason: string;
   approved_by_name: string;
   note: string;
-  status: SalaryAdvanceStatus;
   is_active: boolean;
 }
 
@@ -232,6 +262,7 @@ export interface PayrollRecord {
   employee_department: string;
   employee_position: string;
   month: string;
+  profile_effective_month: string;
   standard_days: string;
   actual_days: string;
   basic_salary: string;
@@ -247,4 +278,20 @@ export interface PayrollRecord {
   note: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface WorkforceMonthCloseCheckItem {
+  code: string;
+  severity: 'blocker' | 'warning';
+  title: string;
+  message: string;
+  count: number;
+  items: Array<Record<string, unknown>>;
+}
+
+export interface WorkforceMonthCloseCheckResponse {
+  month: string;
+  is_ready: boolean;
+  blockers: WorkforceMonthCloseCheckItem[];
+  warnings: WorkforceMonthCloseCheckItem[];
 }

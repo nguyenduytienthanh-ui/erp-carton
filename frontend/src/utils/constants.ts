@@ -1,10 +1,11 @@
-export const API_BASE_URL = 'http://127.0.0.1:8000/api';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
 
 export const PAGES = {
   PRODUCTS_LIST: 'products-list',
   PRODUCTS_FORM: 'products-form',
   CUSTOMERS_LIST: 'customers-list',
   ORDERS_LIST: 'orders-list',
+  SALES_ORDERS: 'sales-orders',
   DASHBOARD: 'dashboard',
   SETTINGS: 'settings',
   WORKFORCE_EMPLOYEES: 'workforce-employees',
@@ -12,6 +13,11 @@ export const PAGES = {
   FINANCE_TRANSACTION_CATEGORIES: 'finance-transaction-categories',
   FINANCE_CASH_BOOK: 'finance-cash-book',
   FINANCE_ADVANCE_TRANSACTIONS: 'finance-advance-transactions',
+  INVENTORY_WAREHOUSES: 'inventory-warehouses',
+  INVENTORY_LOCATIONS: 'inventory-locations',
+  INVENTORY_STOCK: 'inventory-stock',
+  INVENTORY_TRANSACTIONS: 'inventory-transactions',
+  INVENTORY_RESERVATIONS: 'inventory-reservations',
   EXECUTIVE_COCKPIT: 'executive-cockpit',
   ADMIN_MODULE_PERMISSIONS: 'admin-module-permissions',
   ADMIN_MODULE_PERMISSION_HISTORY: 'admin-module-permission-history',
@@ -45,6 +51,7 @@ export const API_ENDPOINTS = {
 
   // Workforce
   WORKFORCE_EMPLOYEES: '/workforce/employees/',
+  WORKFORCE_EMPLOYEE_PROFILE_HISTORIES: '/workforce/employee-profile-histories/',
   WORKFORCE_ATTENDANCE_RECORDS: '/workforce/attendance-records/',
   WORKFORCE_BONUS_PENALTY_RECORDS: '/workforce/bonus-penalty-records/',
   WORKFORCE_SALARY_ADVANCES: '/workforce/salary-advances/',
@@ -91,6 +98,14 @@ export const API_ENDPOINTS = {
   FINANCE_LOCK_MONTH: '/finance/cash-transactions/lock_month/',
   FINANCE_UNLOCK_MONTH: '/finance/cash-transactions/unlock_month/',
   FINANCE_PAYROLL_RECONCILIATION: '/finance/cash-transactions/payroll_reconciliation/',
+
+  // Inventory
+  INVENTORY_WAREHOUSES: '/inventory/warehouses/',
+  INVENTORY_LOCATIONS: '/inventory/locations/',
+  INVENTORY_TRANSACTIONS: '/inventory/transactions/',
+  INVENTORY_RESERVATIONS: '/inventory/reservations/',
+  INVENTORY_STOCK: '/inventory/stock/',
+  SALES_ORDERS: '/sales/orders/',
 
   // Admin
   ROLES: '/roles/',

@@ -5,6 +5,7 @@ import { EyeOutlined, InboxOutlined, StarFilled, StarOutlined } from '@ant-desig
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { TASK_PRIORITY_LABELS, tasksApi, type TaskItem, type TaskPriority, type TaskStatus } from '../../api/tasks';
+import { getUserDisplayName, usersApi } from '../../api/users';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { useRowSelection } from '../../hooks/useRowSelection';
@@ -31,7 +32,7 @@ type InboxNamedPreset = {
   name: string;
   filters: InboxFilterSnapshot;
 };
-type BulkHistoryAction = 'START' | 'COMPLETE' | 'REMIND_OVERDUE';
+type BulkHistoryAction = 'START' | 'COMPLETE' | 'REMIND_OVERDUE' | 'REASSIGN';
 type BulkHistoryItem = {
   id: string;
   action: BulkHistoryAction;
@@ -77,6 +78,10 @@ export default function TaskInbox() {
   const [bulkInProgress, setBulkInProgress] = useState<BulkHistoryAction | null>(null);
   const [bulkHistoryActionFilter, setBulkHistoryActionFilter] = useState<'ALL' | BulkHistoryAction>('ALL');
   const [bulkHistoryResultFilter, setBulkHistoryResultFilter] = useState<BulkHistoryResultFilter>('ALL');
+  const [bulkReassignOpen, setBulkReassignOpen] = useState(false);
+  const [bulkReassignTo, setBulkReassignTo] = useState<number | null>(null);
+  const [bulkReassignNote, setBulkReassignNote] = useState('');
+  const [bulkReassignSearch, setBulkReassignSearch] = useState('');
   const canBulkManage = useMemo(() => canManageBulkByRole(), []);
   const { selectedIds, rowSelection, clearSelection } = useRowSelection<TaskItem>();
   const { config: savedConfig, saveConfig } = useUserPreferences('task-inbox');
@@ -131,6 +136,11 @@ export default function TaskInbox() {
     staleTime: 5_000,
     refetchInterval: autoRefreshPollingInterval,
     refetchIntervalInBackground: false,
+  });
+  const bulkReassignUsersQuery = useQuery({
+    queryKey: ['task-bulk-reassign-users', bulkReassignSearch],
+    queryFn: () => usersApi.list({ search: bulkReassignSearch.trim() || undefined, is_active: true }),
+    staleTime: 30_000,
   });
   const liveQueryParams = useMemo(() => {
     const base = {
@@ -312,7 +322,9 @@ export default function TaskInbox() {
       ? 'Bắt đầu'
       : action === 'COMPLETE'
         ? 'Hoàn thành'
-        : 'Nhắc quá hạn';
+        : action === 'REMIND_OVERDUE'
+          ? 'Nhắc quá hạn'
+          : 'Chuyển người xử lý';
     const confirmed = await new Promise<boolean>((resolve) => {
       Modal.confirm({
         title: `${actionName} hàng loạt`,
@@ -381,6 +393,84 @@ export default function TaskInbox() {
     }
     clearSelection();
     refreshInbox();
+  };
+
+  const runBulkReassign = async () => {
+    if (!canBulkManage) {
+      message.error('Bạn không có quyền thao tác hàng loạt.');
+      return;
+    }
+    if (!selectedEffectiveIds.length) {
+      message.warning('Vui lòng chọn ít nhất 1 nhiệm vụ.');
+      return;
+    }
+    if (!bulkReassignTo) {
+      message.warning('Vui lòng chọn người xử lý mới.');
+      return;
+    }
+    const selectedMap = new Map(filteredData.map((x) => [x.id, x]));
+    const selectedTargets = selectedEffectiveIds
+      .map((id) => selectedMap.get(id))
+      .filter((item): item is TaskItem => !!item);
+    if (!selectedTargets.length) {
+      message.warning('Không có nhiệm vụ hợp lệ để chuyển giao.');
+      return;
+    }
+    const targetUser = (bulkReassignUsersQuery.data ?? []).find((item) => item.id === bulkReassignTo);
+    const targetName = targetUser ? getUserDisplayName(targetUser) : `#${bulkReassignTo}`;
+    const confirmed = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: 'Chuyển người xử lý hàng loạt',
+        content: `Bạn có chắc muốn chuyển ${selectedTargets.length} nhiệm vụ đã chọn sang ${targetName} không?`,
+        okText: 'Xác nhận',
+        cancelText: 'Hủy',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+    if (!confirmed) return;
+    setBulkInProgress('REASSIGN');
+    try {
+      const result = await tasksApi.bulkAction({
+        action: 'REASSIGN',
+        task_ids: selectedTargets.map((item) => item.id),
+        assigned_to: bulkReassignTo,
+        note: bulkReassignNote.trim() || undefined,
+      });
+      const failedDetails = result.items
+        .filter((item) => !item.success)
+        .map((item) => {
+          const title = selectedMap.get(item.task_id)?.title || 'Nhiệm vụ';
+          return `#${item.task_id} - ${title}: ${item.message || 'Lỗi không xác định'}`;
+        });
+      if (result.failed_count > 0) {
+        message.warning(`Chuyển người hàng loạt: thành công ${result.success_count}, lỗi ${result.failed_count}.`);
+        Modal.warning({
+          title: 'Chi tiết lỗi chuyển người hàng loạt',
+          width: 760,
+          content: (
+            <div style={{ maxHeight: 280, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
+              {failedDetails.join('\n')}
+            </div>
+          ),
+        });
+      } else {
+        message.success(`Đã chuyển ${result.success_count} nhiệm vụ sang ${targetName}.`);
+      }
+      setBulkReassignOpen(false);
+      setBulkReassignTo(null);
+      setBulkReassignNote('');
+      setBulkReassignSearch('');
+      clearSelection();
+      refreshInbox();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
+        || (err as { message?: string })?.message
+        || 'Không thể chuyển người xử lý hàng loạt.';
+      message.error(msg);
+    } finally {
+      setBulkInProgress(null);
+    }
   };
 
   const exportFilteredCsv = () => {
@@ -865,6 +955,19 @@ export default function TaskInbox() {
             <Button size="small" disabled={!canBulkManage || bulkInProgress !== null} loading={bulkInProgress === 'REMIND_OVERDUE'} onClick={() => void runBulkAction('REMIND_OVERDUE')}>
               Nhắc quá hạn hàng loạt
             </Button>
+            <Button
+              size="small"
+              disabled={!canBulkManage || bulkInProgress !== null}
+              loading={bulkInProgress === 'REASSIGN'}
+              onClick={() => {
+                setBulkReassignSearch('');
+                setBulkReassignTo(null);
+                setBulkReassignNote('');
+                setBulkReassignOpen(true);
+              }}
+            >
+              Chuyển người hàng loạt
+            </Button>
             <Button size="small" onClick={clearSelection}>
               Bỏ chọn
             </Button>
@@ -887,6 +990,7 @@ export default function TaskInbox() {
               { value: 'START', label: 'Bắt đầu' },
               { value: 'COMPLETE', label: 'Hoàn thành' },
               { value: 'REMIND_OVERDUE', label: 'Nhắc quá hạn' },
+              { value: 'REASSIGN', label: 'Chuyển người xử lý' },
             ]}
           />
           <Select<BulkHistoryResultFilter>
@@ -957,6 +1061,38 @@ export default function TaskInbox() {
           titlePrefix="Nhiệm vụ của tôi"
         />
       </Suspense>
+      <Modal
+        title={`Chuyển người xử lý cho ${selectedEffectiveIds.length} nhiệm vụ`}
+        open={bulkReassignOpen}
+        onCancel={() => setBulkReassignOpen(false)}
+        onOk={() => void runBulkReassign()}
+        okText="Xác nhận chuyển"
+        cancelText="Hủy"
+        confirmLoading={bulkInProgress === 'REASSIGN'}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Select
+            showSearch
+            allowClear
+            placeholder="Tìm và chọn người xử lý mới..."
+            value={bulkReassignTo ?? undefined}
+            onChange={(value) => setBulkReassignTo(value ?? null)}
+            onSearch={setBulkReassignSearch}
+            filterOption={false}
+            loading={bulkReassignUsersQuery.isLoading}
+            options={(bulkReassignUsersQuery.data ?? []).map((user) => ({
+              value: user.id,
+              label: `${getUserDisplayName(user)} (@${user.username})`,
+            }))}
+          />
+          <Input.TextArea
+            rows={4}
+            value={bulkReassignNote}
+            onChange={(event) => setBulkReassignNote(event.target.value)}
+            placeholder="Ghi chú bàn giao hàng loạt, ví dụ: chuyển nhóm ca sáng xử lý tiếp đơn gấp..."
+          />
+        </div>
+      </Modal>
       <Modal
         title="Lưu mẫu lọc cá nhân"
         open={isPresetModalOpen}

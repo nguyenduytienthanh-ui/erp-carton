@@ -24,6 +24,12 @@ export interface OperationLiveUpdatesResponse {
   changed_count: number;
 }
 
+export interface OperationsLogMetaResponse {
+  actions: Array<{ value: string; label: string }>;
+  sources: Array<{ value: string; label: string }>;
+  recent_failed_count_24h: number;
+}
+
 export const operationsApi = {
   list(params?: {
     actor_query?: string;
@@ -62,6 +68,12 @@ export const operationsApi = {
           include_all: toFlag(params.include_all),
         },
       })
+      .then((r) => r.data);
+  },
+
+  meta() {
+    return axiosInstance
+      .get<OperationsLogMetaResponse>('/activity/operations_log_meta/')
       .then((r) => r.data);
   },
 };

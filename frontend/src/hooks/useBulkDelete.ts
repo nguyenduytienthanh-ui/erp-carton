@@ -32,7 +32,11 @@ export function useBulkDelete({
     onSuccess: (_, id) => {
       message.success(TOAST.DELETE_SUCCESS);
       queryClient.invalidateQueries({ queryKey });
-      onRemoveFromSelection?.(id) ?? onClearSelection();
+      if (onRemoveFromSelection) {
+        onRemoveFromSelection(id);
+      } else {
+        onClearSelection();
+      }
     },
     onError: (err) => {
       message.error(getToastMessage(err));

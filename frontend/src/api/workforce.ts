@@ -6,6 +6,8 @@ import type {
   BonusPenaltyRecord,
   BonusPenaltyRecordPayload,
   Employee,
+  EmployeeProfileHistory,
+  EmployeeProfileHistoryPayload,
   EmployeePayload,
   PaginatedResponse,
   PayrollRecord,
@@ -13,6 +15,7 @@ import type {
   SalaryAdvanceApprovalQueueResponse,
   SalaryAdvanceRecord,
   SalaryAdvanceRecordPayload,
+  WorkforceMonthCloseCheckResponse,
 } from '../types/workforce';
 
 export const workforceApi = {
@@ -33,6 +36,24 @@ export const workforceApi = {
 
   deleteEmployee: async (id: number): Promise<void> => {
     await axiosInstance.delete(`${API_ENDPOINTS.WORKFORCE_EMPLOYEES}${id}/`);
+  },
+  getEmployeeProfileHistories: async (params?: Record<string, unknown>): Promise<PaginatedResponse<EmployeeProfileHistory>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.WORKFORCE_EMPLOYEE_PROFILE_HISTORIES, { params });
+    return response.data;
+  },
+  createEmployeeProfileHistory: async (payload: EmployeeProfileHistoryPayload): Promise<EmployeeProfileHistory> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.WORKFORCE_EMPLOYEE_PROFILE_HISTORIES, payload);
+    return response.data;
+  },
+  updateEmployeeProfileHistory: async (
+    id: number,
+    payload: Partial<EmployeeProfileHistoryPayload>
+  ): Promise<EmployeeProfileHistory> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.WORKFORCE_EMPLOYEE_PROFILE_HISTORIES}${id}/`, payload);
+    return response.data;
+  },
+  deleteEmployeeProfileHistory: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.WORKFORCE_EMPLOYEE_PROFILE_HISTORIES}${id}/`);
   },
 
   getAttendanceRecords: async (params?: Record<string, unknown>): Promise<PaginatedResponse<AttendanceRecord>> => {
@@ -142,6 +163,19 @@ export const workforceApi = {
     const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_SALARY_ADVANCES}${id}/reject_approval/`, { reason });
     return response.data as { success: boolean; approval_status: string };
   },
+  postSalaryAdvanceDisbursement: async (
+    id: number,
+    payload: { source_type: 'CASH' | 'BANK'; source_cash_account?: number | null; source_bank_account?: number | null }
+  ): Promise<{ success: boolean; transaction_id: number; disbursement_status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_SALARY_ADVANCES}${id}/post_disbursement/`, payload);
+    return response.data as { success: boolean; transaction_id: number; disbursement_status: string };
+  },
+  reverseSalaryAdvanceDisbursement: async (
+    id: number
+  ): Promise<{ success: boolean; transaction_id: number; disbursement_status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_SALARY_ADVANCES}${id}/reverse_disbursement/`);
+    return response.data as { success: boolean; transaction_id: number; disbursement_status: string };
+  },
 
   getPayrollRecords: async (params?: Record<string, unknown>): Promise<PaginatedResponse<PayrollRecord>> => {
     const response = await axiosInstance.get(API_ENDPOINTS.WORKFORCE_PAYROLL_RECORDS, { params });
@@ -156,14 +190,57 @@ export const workforceApi = {
     return response.data;
   },
 
-  lockPayroll: async (id: number): Promise<{ success: boolean; status: string }> => {
-    const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_PAYROLL_RECORDS}${id}/lock/`);
+  lockPayroll: async (
+    id: number,
+    payload?: {
+      source_type?: 'CASH' | 'BANK';
+      source_cash_account?: number | null;
+      source_bank_account?: number | null;
+      save_as_default?: boolean;
+    }
+  ): Promise<{ success: boolean; status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_PAYROLL_RECORDS}${id}/lock/`, payload || {});
     return response.data;
+  },
+
+  getPayrollPostingDefaults: async (): Promise<{
+    source_type?: 'CASH' | 'BANK';
+    source_cash_account?: number | null;
+    source_bank_account?: number | null;
+  }> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.WORKFORCE_PAYROLL_RECORDS}posting_defaults/`);
+    return response.data as {
+      source_type?: 'CASH' | 'BANK';
+      source_cash_account?: number | null;
+      source_bank_account?: number | null;
+    };
   },
 
   unlockPayroll: async (id: number): Promise<{ success: boolean; status: string }> => {
     const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_PAYROLL_RECORDS}${id}/unlock/`);
     return response.data;
+  },
+
+  getPayrollLockedMonths: async (): Promise<{ months: string[] }> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.WORKFORCE_PAYROLL_RECORDS}locked_months/`);
+    return response.data as { months: string[] };
+  },
+
+  getPayrollMonthCloseCheck: async (month: string): Promise<WorkforceMonthCloseCheckResponse> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.WORKFORCE_PAYROLL_RECORDS}preclose_check/`, {
+      params: { month },
+    });
+    return response.data as WorkforceMonthCloseCheckResponse;
+  },
+
+  lockPayrollMonth: async (month: string): Promise<{ success: boolean; months: string[] }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_PAYROLL_RECORDS}lock_month/`, { month });
+    return response.data as { success: boolean; months: string[] };
+  },
+
+  unlockPayrollMonth: async (month: string): Promise<{ success: boolean; months: string[] }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.WORKFORCE_PAYROLL_RECORDS}unlock_month/`, { month });
+    return response.data as { success: boolean; months: string[] };
   },
 };
 

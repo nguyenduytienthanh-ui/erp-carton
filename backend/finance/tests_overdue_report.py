@@ -38,6 +38,7 @@ class FinanceOverdueReportTest(TestCase):
             amount=Decimal('1000000'),
             purpose='Mua vat tu',
             status=AdvanceTransaction.STATUS_OPEN,
+            approval_status=AdvanceTransaction.APPROVAL_APPROVED,
             is_active=True,
             created_by=self.user,
             updated_by=self.user,
@@ -74,6 +75,7 @@ class FinanceOverdueReportTest(TestCase):
             amount=Decimal('500000'),
             purpose='Tam ung',
             status=AdvanceTransaction.STATUS_OPEN,
+            approval_status=AdvanceTransaction.APPROVAL_APPROVED,
             is_active=True,
             created_by=self.user,
             updated_by=self.user,
@@ -103,6 +105,7 @@ class FinanceOverdueReportTest(TestCase):
             amount=Decimal('1000000'),
             purpose='A',
             status=AdvanceTransaction.STATUS_OPEN,
+            approval_status=AdvanceTransaction.APPROVAL_APPROVED,
             is_active=True,
             created_by=self.user,
             updated_by=self.user,
@@ -117,6 +120,7 @@ class FinanceOverdueReportTest(TestCase):
             amount=Decimal('2000000'),
             purpose='B',
             status=AdvanceTransaction.STATUS_OPEN,
+            approval_status=AdvanceTransaction.APPROVAL_APPROVED,
             is_active=True,
             created_by=self.user,
             updated_by=self.user,
@@ -131,6 +135,7 @@ class FinanceOverdueReportTest(TestCase):
             amount=Decimal('3000000'),
             purpose='C',
             status=AdvanceTransaction.STATUS_OPEN,
+            approval_status=AdvanceTransaction.APPROVAL_APPROVED,
             is_active=True,
             created_by=self.user,
             updated_by=self.user,
@@ -147,3 +152,27 @@ class FinanceOverdueReportTest(TestCase):
         self.assertEqual(by_threshold[60]['count'], 2)
         self.assertEqual(by_threshold[90]['count'], 1)
         self.assertEqual(payload['top_urgent'][0]['code'], 'TA101')
+
+    def test_overdue_report_excludes_unapproved_advances(self):
+        as_of = date.today()
+        AdvanceTransaction.objects.create(
+            code='TA104',
+            advance_type=AdvanceTransaction.TYPE_OTHER,
+            advance_date=as_of - timedelta(days=120),
+            recipient_name='Nguoi nhap nhap',
+            source_type=AdvanceTransaction.SOURCE_CASH,
+            source_cash_account=self.cash_account,
+            amount=Decimal('400000'),
+            purpose='Draft',
+            status=AdvanceTransaction.STATUS_OPEN,
+            approval_status=AdvanceTransaction.APPROVAL_DRAFT,
+            is_active=True,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        response = self.client.get(
+            '/api/finance/advance-transactions/overdue_report/',
+            {'as_of': as_of.isoformat(), 'overdue_days': 30},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['summary']['count'], 0)

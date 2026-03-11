@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import IntegrityError
 from django.db.models import ProtectedError
-from django.db.models import Q, Count, Case, When, Value, IntegerField, Exists, OuterRef, Subquery
+from django.db.models import Q, Count, Case, When, Value, IntegerField, Exists, OuterRef, Subquery, DateTimeField, DecimalField
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.http import HttpResponse
@@ -29,13 +29,22 @@ from .filters import (
     ProductWaveFilter,
     ProductBoxTypeFilter,
 )
-from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product, PriceChange
+from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product, ProductBundle, PriceChange
+from .price_services import (
+    activate_due_price_changes,
+    approve_price_change as approve_price_change_service,
+    merge_price_values,
+    record_direct_price_change,
+    resolve_product_price_as_of,
+    submit_price_change_request,
+)
 from .serializers import (
     ProductCategorySerializer,
     ProductUnitSerializer,
     ProductWaveSerializer,
     ProductBoxTypeSerializer,
     ProductSerializer,
+    ProductBundleSerializer,
     PriceChangeSerializer,
 )
 
@@ -82,7 +91,7 @@ class ProductCategoryViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def bulk_activate(self, request):
-        if not check_action_permission(request.user, 'ProductCategory', 'EDIT'):
+        if not check_action_permission(request.user, 'ProductCategory', 'EDIT', strict=True):
             return Response({'error': 'Không có quyền kích hoạt'}, status=status.HTTP_403_FORBIDDEN)
         ids = request.data.get('ids', [])
         ProductCategory.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=True)
@@ -90,7 +99,7 @@ class ProductCategoryViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def bulk_deactivate(self, request):
-        if not check_action_permission(request.user, 'ProductCategory', 'EDIT'):
+        if not check_action_permission(request.user, 'ProductCategory', 'EDIT', strict=True):
             return Response({'error': 'Không có quyền vô hiệu hóa'}, status=status.HTTP_403_FORBIDDEN)
         ids = request.data.get('ids', [])
         ProductCategory.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=False)
@@ -158,7 +167,7 @@ class ProductUnitViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def bulk_activate(self, request):
-        if not check_action_permission(request.user, 'ProductUnit', 'EDIT'):
+        if not check_action_permission(request.user, 'ProductUnit', 'EDIT', strict=True):
             return Response({'error': 'Không có quyền'}, status=status.HTTP_403_FORBIDDEN)
         ids = request.data.get('ids', [])
         ProductUnit.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=True)
@@ -166,7 +175,7 @@ class ProductUnitViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def bulk_deactivate(self, request):
-        if not check_action_permission(request.user, 'ProductUnit', 'EDIT'):
+        if not check_action_permission(request.user, 'ProductUnit', 'EDIT', strict=True):
             return Response({'error': 'Không có quyền'}, status=status.HTTP_403_FORBIDDEN)
         ids = request.data.get('ids', [])
         ProductUnit.objects.filter(id__in=ids, deleted_at__isnull=True).update(is_active=False)
@@ -403,7 +412,11 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             )
 
     queryset = Product.objects.select_related(
-        'category', 'unit', 'wave', 'box_type', 'owner', 'team', 'created_by', 'updated_by'
+        'category', 'unit', 'wave', 'box_type', 'owner', 'team', 'created_by', 'updated_by',
+        'bundle_config', 'bundle_config__primary_product',
+    ).prefetch_related(
+        'bundle_config__components__component_product',
+        'bundle_config__components__component_product__unit',
     ).all()
     serializer_class = ProductSerializer
     permission_classes = [IsAuthenticated]
@@ -419,6 +432,8 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
     ordering = ['-created_at']
 
     def get_queryset(self):
+        if self.action in {'list', 'retrieve', 'price_changes'}:
+            activate_due_price_changes()
         queryset = super().get_queryset()
         user = self.request.user
 
@@ -500,9 +515,46 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         if self.action == 'list' and self.request.query_params.get('parent__isnull') in ('true', 'True', '1'):
             queryset = queryset.filter(parent__isnull=True).annotate(components_count=Count('components'))
 
-        # Badge vận hành: đánh dấu sản phẩm đang có đề xuất giá chờ duyệt.
-        pending_price_change_qs = PriceChange.objects.filter(product_id=OuterRef('pk'), status='PENDING')
-        queryset = queryset.annotate(has_pending_price_change=Exists(pending_price_change_qs))
+        # Badge vận hành: trạng thái trình duyệt giá và giá sắp hiệu lực.
+        now = timezone.now()
+        pending_price_change_qs = PriceChange.objects.filter(
+            product_id=OuterRef('pk'),
+            status=PriceChange.STATUS_PENDING_APPROVAL,
+        )
+        scheduled_price_change_qs = (
+            PriceChange.objects
+            .filter(
+                product_id=OuterRef('pk'),
+                status=PriceChange.STATUS_APPROVED_SCHEDULED,
+                effective_at__isnull=False,
+                effective_at__gt=now,
+            )
+            .order_by('effective_at', 'id')
+        )
+        queryset = queryset.annotate(
+            has_pending_price_change=Exists(pending_price_change_qs),
+            has_scheduled_price_change=Exists(scheduled_price_change_qs),
+            next_price_effective_at=Subquery(
+                scheduled_price_change_qs.values('effective_at')[:1],
+                output_field=DateTimeField(),
+            ),
+            next_price_cost=Subquery(
+                scheduled_price_change_qs.values('new_cost_price')[:1],
+                output_field=DecimalField(max_digits=15, decimal_places=2),
+            ),
+            next_price_sale=Subquery(
+                scheduled_price_change_qs.values('new_sale_price')[:1],
+                output_field=DecimalField(max_digits=15, decimal_places=2),
+            ),
+            next_price_commission_per_unit=Subquery(
+                scheduled_price_change_qs.values('new_commission_per_unit')[:1],
+                output_field=DecimalField(max_digits=10, decimal_places=2),
+            ),
+            next_price_commission_percent=Subquery(
+                scheduled_price_change_qs.values('new_commission_percent')[:1],
+                output_field=DecimalField(max_digits=5, decimal_places=2),
+            ),
+        )
 
         return queryset
 
@@ -545,6 +597,81 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         if timezone.is_naive(dt):
             dt = timezone.make_aware(dt, timezone.get_current_timezone())
         return dt
+
+    def _parse_bulk_price_items(self, payload):
+        if not isinstance(payload, list) or not payload:
+            raise DRFValidationError({'items': 'Danh sách mã hàng điều chỉnh không hợp lệ.'})
+        normalized_items = []
+        product_ids = []
+        for raw_item in payload:
+            if not isinstance(raw_item, dict):
+                raise DRFValidationError({'items': 'Mỗi dòng điều chỉnh phải là một object.'})
+            try:
+                product_id = int(raw_item.get('product_id') or 0)
+            except (TypeError, ValueError):
+                product_id = 0
+            if product_id <= 0:
+                raise DRFValidationError({'items': 'Thiếu product_id hợp lệ trong danh sách điều chỉnh.'})
+            normalized_items.append({
+                'product_id': product_id,
+                'new_cost_price': self._to_decimal(raw_item.get('new_cost_price')),
+                'new_sale_price': self._to_decimal(raw_item.get('new_sale_price')),
+                'new_commission_per_unit': self._to_decimal(raw_item.get('new_commission_per_unit')),
+                'new_commission_percent': self._to_decimal(raw_item.get('new_commission_percent')),
+            })
+            product_ids.append(product_id)
+        products = Product.objects.in_bulk(product_ids)
+        missing_ids = [product_id for product_id in product_ids if product_id not in products]
+        if missing_ids:
+            raise DRFValidationError({'items': f'Không tìm thấy sản phẩm: {", ".join(map(str, missing_ids))}.'})
+        return normalized_items, products
+
+    def _build_bulk_price_preview(self, items, products):
+        activate_due_price_changes(product_ids=list(products.keys()))
+        preview_items = []
+        for item in items:
+            product = products[item['product_id']]
+            current_values = resolve_product_price_as_of(product, timezone.now())
+            merged_values = merge_price_values(
+                {
+                    'cost_price': current_values['cost_price'],
+                    'sale_price': current_values['sale_price'],
+                    'commission_per_unit': current_values['commission_per_unit'],
+                    'commission_percent': current_values['commission_percent'],
+                },
+                {
+                    'cost_price': item['new_cost_price'],
+                    'sale_price': item['new_sale_price'],
+                    'commission_per_unit': item['new_commission_per_unit'],
+                    'commission_percent': item['new_commission_percent'],
+                },
+            )
+            next_cost = merged_values['cost_price']
+            next_sale = merged_values['sale_price']
+            if next_sale is not None and next_cost is not None and next_sale < next_cost:
+                raise DRFValidationError({
+                    'items': f'Mã {product.code}: đơn giá mới phải lớn hơn hoặc bằng giá vốn mới.'
+                })
+            delta_cost, delta_cost_pct = self._calc_delta(current_values['cost_price'], next_cost)
+            delta_sale, delta_sale_pct = self._calc_delta(current_values['sale_price'], next_sale)
+            preview_items.append({
+                'product_id': product.id,
+                'product_code': product.code,
+                'product_name': product.name,
+                'old_cost_price': str(current_values['cost_price'] or 0),
+                'new_cost_price': str(next_cost or 0),
+                'old_sale_price': str(current_values['sale_price'] or 0),
+                'new_sale_price': str(next_sale or 0),
+                'old_commission_per_unit': str(current_values['commission_per_unit'] or 0),
+                'new_commission_per_unit': str(merged_values['commission_per_unit'] or 0),
+                'old_commission_percent': str(current_values['commission_percent'] or 0),
+                'new_commission_percent': str(merged_values['commission_percent'] or 0),
+                'delta_cost': str(delta_cost or 0),
+                'delta_cost_percent': str(delta_cost_pct or 0),
+                'delta_sale': str(delta_sale or 0),
+                'delta_sale_percent': str(delta_sale_pct or 0),
+            })
+        return preview_items
 
     def perform_create(self, serializer):
         from core.models import NumberSequence
@@ -617,11 +744,30 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             instance = serializer.instance
             if instance.parent is not None:
                 serializer.validated_data.pop('code', None)
+            managed_price_fields = {
+                'cost_price',
+                'sale_price',
+                'commission_per_unit',
+                'commission_percent',
+            }
             price_change_reason = (serializer.validated_data.pop('price_change_reason', '') or '').strip()
             price_effective_at = serializer.validated_data.pop('price_effective_at', None)
             old_values = {}
             new_values = {}
             changed_fields = []
+            original_price_snapshot = {
+                field: getattr(instance, field, None)
+                for field in managed_price_fields
+            }
+            incoming_price_values = {}
+            for field in list(serializer.validated_data.keys()):
+                if field not in managed_price_fields:
+                    continue
+                new_val = serializer.validated_data.pop(field)
+                old_val = original_price_snapshot.get(field)
+                if old_val != new_val:
+                    incoming_price_values[field] = new_val
+
             for field, new_val in serializer.validated_data.items():
                 old_val = getattr(instance, field, None)
                 if old_val != new_val:
@@ -647,38 +793,32 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
                         child.code = f"{new_code}-{suffix}"
                         child.save(update_fields=['code', 'updated_at'])
 
-            # Lịch sử giá chuyên dụng: chỉ tạo khi có thay đổi giá bán/mua.
-            price_fields_changed = {'cost_price', 'sale_price'} & set(changed_fields)
-            if price_fields_changed:
-                old_cost = self._to_decimal(old_values.get('cost_price', instance.cost_price))
-                new_cost = self._to_decimal(new_values.get('cost_price', instance.cost_price))
-                old_sale = self._to_decimal(old_values.get('sale_price', instance.sale_price))
-                new_sale = self._to_decimal(new_values.get('sale_price', instance.sale_price))
-
-                delta_cost, delta_cost_pct = self._calc_delta(old_cost, new_cost)
-                delta_sale, delta_sale_pct = self._calc_delta(old_sale, new_sale)
-
-                PriceChange.objects.create(
-                    product=instance,
-                    old_cost_price=old_cost,
-                    new_cost_price=new_cost,
-                    old_sale_price=old_sale,
-                    new_sale_price=new_sale,
-                    delta_cost=delta_cost,
-                    delta_sale=delta_sale,
-                    delta_cost_percent=delta_cost_pct,
-                    delta_sale_percent=delta_sale_pct,
+            if incoming_price_values:
+                price_change = record_direct_price_change(
+                    instance,
+                    new_values=incoming_price_values,
+                    actor=self.request.user,
                     reason=price_change_reason,
-                    source='MANUAL',
                     effective_at=price_effective_at,
-                    status='APPLIED',
-                    submitted_by=self.request.user,
-                    approved_by=self.request.user,
-                    approved_at=timezone.now(),
+                    source=PriceChange.SOURCE_MANUAL,
                 )
+                field_map = {
+                    'cost_price': 'new_cost_price',
+                    'sale_price': 'new_sale_price',
+                    'commission_per_unit': 'new_commission_per_unit',
+                    'commission_percent': 'new_commission_percent',
+                }
+                for field, change_field in field_map.items():
+                    if field not in incoming_price_values:
+                        continue
+                    changed_fields.append(field)
+                    old_values[field] = str(original_price_snapshot.get(field) or 0)
+                    new_values[field] = str(getattr(price_change, change_field) or 0)
                 new_values['price_change_reason'] = price_change_reason
-                if price_effective_at:
-                    new_values['price_effective_at'] = price_effective_at.isoformat()
+                if price_change.effective_at:
+                    new_values['price_effective_at'] = price_change.effective_at.isoformat()
+                new_values['price_change_status'] = price_change.status
+                new_values['price_change_id'] = price_change.id
             
             # Tạo AuditLog với error handling
             try:
@@ -719,6 +859,41 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         )
         instance.delete()
 
+    @action(detail=True, methods=['get', 'put', 'patch', 'delete'], url_path='bundle')
+    def bundle(self, request, pk=None):
+        product = self.get_object()
+        try:
+            bundle = product.bundle_config
+        except ProductBundle.DoesNotExist:
+            bundle = None
+
+        if request.method == 'GET':
+            if not bundle:
+                return Response({'detail': 'Sản phẩm chưa có cấu hình bộ.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response(ProductBundleSerializer(bundle, context={'request': request}).data)
+
+        if request.method == 'DELETE':
+            if bundle:
+                bundle.delete()
+            Product.objects.filter(pk=product.pk).update(is_set=False)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        payload = request.data.copy()
+        payload['sellable_product'] = product.id
+        serializer = ProductBundleSerializer(
+            bundle,
+            data=payload,
+            partial=request.method == 'PATCH',
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        existed = bundle is not None
+        saved_bundle = serializer.save(sellable_product=product)
+        return Response(
+            ProductBundleSerializer(saved_bundle, context={'request': request}).data,
+            status=status.HTTP_200_OK if existed else status.HTTP_201_CREATED,
+        )
+
     @action(detail=False, methods=['post'])
     def bulk_delete(self, request):
         ids = request.data.get('ids', [])
@@ -747,7 +922,7 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def bulk_activate(self, request):
-        if not check_action_permission(request.user, 'Product', 'EDIT'):
+        if not check_action_permission(request.user, 'Product', 'EDIT', strict=True):
             return Response({'error': 'Không có quyền kích hoạt'}, status=status.HTTP_403_FORBIDDEN)
         ids = request.data.get('ids', [])
         Product.objects.filter(id__in=ids).update(is_active=True, status='ACTIVE')
@@ -767,7 +942,7 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def bulk_deactivate(self, request):
-        if not check_action_permission(request.user, 'Product', 'EDIT'):
+        if not check_action_permission(request.user, 'Product', 'EDIT', strict=True):
             return Response({'error': 'Không có quyền vô hiệu hóa'}, status=status.HTTP_403_FORBIDDEN)
         ids = request.data.get('ids', [])
         Product.objects.filter(id__in=ids).update(is_active=False)
@@ -790,54 +965,138 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         Product.objects.filter(id__in=ids).update(status='DISCONTINUED')
         return Response({'message': f'Đã ngừng sản xuất {len(ids)} sản phẩm'})
 
+    @action(detail=False, methods=['post'], url_path='bulk_price_preview')
+    def bulk_price_preview(self, request):
+        items, products = self._parse_bulk_price_items(request.data.get('items') or [])
+        preview_items = self._build_bulk_price_preview(items, products)
+        return Response({
+            'total': len(preview_items),
+            'items': preview_items,
+        })
+
+    @action(detail=False, methods=['post'], url_path='bulk_price_submit')
+    def bulk_price_submit(self, request):
+        reason = (request.data.get('reason') or '').strip()
+        if not reason:
+            return Response({'reason': 'Vui lòng nhập lý do điều chỉnh giá hàng loạt.'}, status=status.HTTP_400_BAD_REQUEST)
+        items, products = self._parse_bulk_price_items(request.data.get('items') or [])
+        preview_items = self._build_bulk_price_preview(items, products)
+        effective_at = self._parse_effective_at(request.data.get('effective_at'))
+        auto_approve = str(request.data.get('auto_approve') or '').lower() in ('1', 'true', 'yes')
+        batch_code = (request.data.get('batch_code') or '').strip() or f'PRICE-{uuid.uuid4().hex[:10].upper()}'
+        results = []
+        for item in items:
+            product = products[item['product_id']]
+            price_change = submit_price_change_request(
+                product,
+                new_values={
+                    'cost_price': item['new_cost_price'],
+                    'sale_price': item['new_sale_price'],
+                    'commission_per_unit': item['new_commission_per_unit'],
+                    'commission_percent': item['new_commission_percent'],
+                },
+                reason=reason,
+                actor=request.user,
+                effective_at=effective_at,
+                source=PriceChange.SOURCE_MANUAL,
+                batch_code=batch_code,
+            )
+            if auto_approve:
+                price_change = approve_price_change_service(price_change, request.user)
+            AuditLog.objects.create(
+                user=request.user,
+                action='BULK_SUBMIT' if not auto_approve else 'BULK_APPROVE',
+                entity_type='Product',
+                entity_id=product.id,
+                entity_id_str=str(product.id),
+                entity_code=product.code,
+                old_values={
+                    'cost_price': str(price_change.old_cost_price or 0),
+                    'sale_price': str(price_change.old_sale_price or 0),
+                    'commission_per_unit': str(price_change.old_commission_per_unit or 0),
+                    'commission_percent': str(price_change.old_commission_percent or 0),
+                },
+                new_values={
+                    'cost_price': str(price_change.new_cost_price or 0),
+                    'sale_price': str(price_change.new_sale_price or 0),
+                    'commission_per_unit': str(price_change.new_commission_per_unit or 0),
+                    'commission_percent': str(price_change.new_commission_percent or 0),
+                    'price_change_reason': reason,
+                    'price_effective_at': price_change.effective_at.isoformat() if price_change.effective_at else None,
+                    'price_change_id': price_change.id,
+                    'price_change_status': price_change.status,
+                    'batch_code': batch_code,
+                },
+                changed_fields=[
+                    field for field in ['cost_price', 'sale_price', 'commission_per_unit', 'commission_percent']
+                    if getattr(price_change, f'old_{field}') != getattr(price_change, f'new_{field}')
+                ],
+                ip_address=get_client_ip(request),
+                user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+            )
+            results.append(PriceChangeSerializer(price_change).data)
+        return Response({
+            'batch_code': batch_code,
+            'total': len(results),
+            'auto_approve': auto_approve,
+            'items': results,
+            'preview': preview_items,
+        }, status=status.HTTP_201_CREATED)
+
     @action(detail=True, methods=['get'], url_path='price_changes')
     def price_changes(self, request, pk=None):
         product = self.get_object()
-        queryset = PriceChange.objects.filter(product=product).order_by('-created_at')[:100]
+        activate_due_price_changes(product_ids=[product.id])
+        queryset = PriceChange.objects.filter(product=product).order_by('-effective_at', '-created_at')[:100]
         serializer = PriceChangeSerializer(queryset, many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'], url_path='submit_price_change')
     def submit_price_change(self, request, pk=None):
         product = self.get_object()
+        activate_due_price_changes(product_ids=[product.id])
         reason = (request.data.get('reason') or '').strip()
         if not reason:
             return Response({'reason': 'Vui lòng nhập lý do đề xuất thay đổi giá.'}, status=status.HTTP_400_BAD_REQUEST)
 
         new_cost = self._to_decimal(request.data.get('new_cost_price'))
         new_sale = self._to_decimal(request.data.get('new_sale_price'))
-        if new_cost is None and new_sale is None:
-            return Response({'detail': 'Cần nhập ít nhất 1 giá mới (giá vốn hoặc đơn giá).'}, status=status.HTTP_400_BAD_REQUEST)
+        new_commission_per_unit = self._to_decimal(request.data.get('new_commission_per_unit'))
+        new_commission_percent = self._to_decimal(request.data.get('new_commission_percent'))
+        if all(value is None for value in [new_cost, new_sale, new_commission_per_unit, new_commission_percent]):
+            return Response(
+                {'detail': 'Cần nhập ít nhất 1 giá/hoa hồng mới để trình duyệt.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        if new_cost is None:
-            new_cost = self._to_decimal(product.cost_price)
-        if new_sale is None:
-            new_sale = self._to_decimal(product.sale_price)
-        if new_cost is not None and new_sale is not None and new_sale < new_cost:
+        current_cost = self._to_decimal(product.cost_price)
+        current_sale = self._to_decimal(product.sale_price)
+        next_cost = new_cost if new_cost is not None else current_cost
+        next_sale = new_sale if new_sale is not None else current_sale
+        if next_cost is not None and next_sale is not None and next_sale < next_cost:
             return Response({'new_sale_price': 'Đơn giá mới phải lớn hơn hoặc bằng giá vốn mới.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        old_cost = self._to_decimal(product.cost_price)
-        old_sale = self._to_decimal(product.sale_price)
-        delta_cost, delta_cost_pct = self._calc_delta(old_cost, new_cost)
-        delta_sale, delta_sale_pct = self._calc_delta(old_sale, new_sale)
         effective_at = self._parse_effective_at(request.data.get('effective_at'))
+        batch_code = (request.data.get('batch_code') or '').strip()
 
-        price_change = PriceChange.objects.create(
-            product=product,
-            old_cost_price=old_cost,
-            new_cost_price=new_cost,
-            old_sale_price=old_sale,
-            new_sale_price=new_sale,
-            delta_cost=delta_cost,
-            delta_sale=delta_sale,
-            delta_cost_percent=delta_cost_pct,
-            delta_sale_percent=delta_sale_pct,
+        price_change = submit_price_change_request(
+            product,
+            new_values={
+                'cost_price': new_cost,
+                'sale_price': new_sale,
+                'commission_per_unit': new_commission_per_unit,
+                'commission_percent': new_commission_percent,
+            },
             reason=reason,
-            source='MANUAL',
+            actor=request.user,
             effective_at=effective_at,
-            status='PENDING',
-            submitted_by=request.user,
+            source=PriceChange.SOURCE_MANUAL,
+            batch_code=batch_code,
         )
+        changed_fields = [
+            field for field in ['cost_price', 'sale_price', 'commission_per_unit', 'commission_percent']
+            if getattr(price_change, f'old_{field}') != getattr(price_change, f'new_{field}')
+        ]
 
         AuditLog.objects.create(
             user=request.user,
@@ -846,15 +1105,24 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             entity_id=product.id,
             entity_id_str=str(product.id),
             entity_code=product.code,
-            old_values={'cost_price': str(old_cost), 'sale_price': str(old_sale)},
+            old_values={
+                'cost_price': str(price_change.old_cost_price or 0),
+                'sale_price': str(price_change.old_sale_price or 0),
+                'commission_per_unit': str(price_change.old_commission_per_unit or 0),
+                'commission_percent': str(price_change.old_commission_percent or 0),
+            },
             new_values={
-                'cost_price': str(new_cost),
-                'sale_price': str(new_sale),
+                'cost_price': str(price_change.new_cost_price or 0),
+                'sale_price': str(price_change.new_sale_price or 0),
+                'commission_per_unit': str(price_change.new_commission_per_unit or 0),
+                'commission_percent': str(price_change.new_commission_percent or 0),
                 'price_change_reason': reason,
                 'price_effective_at': effective_at.isoformat() if effective_at else None,
                 'price_change_id': price_change.id,
+                'price_change_status': price_change.status,
+                'batch_code': price_change.batch_code or None,
             },
-            changed_fields=['cost_price', 'sale_price'],
+            changed_fields=changed_fields,
             ip_address=get_client_ip(request),
             user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
@@ -863,24 +1131,25 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='approve_price_change')
     def approve_price_change(self, request, pk=None):
         product = self.get_object()
+        activate_due_price_changes(product_ids=[product.id])
         change_id = request.data.get('change_id')
         if not change_id:
             return Response({'change_id': 'Thiếu change_id.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            price_change = PriceChange.objects.get(id=change_id, product=product, status='PENDING')
+            price_change = PriceChange.objects.get(
+                id=change_id,
+                product=product,
+                status=PriceChange.STATUS_PENDING_APPROVAL,
+            )
         except PriceChange.DoesNotExist:
             return Response({'detail': 'Đề xuất giá không tồn tại hoặc đã xử lý.'}, status=status.HTTP_404_NOT_FOUND)
 
-        product.cost_price = price_change.new_cost_price if price_change.new_cost_price is not None else product.cost_price
-        product.sale_price = price_change.new_sale_price if price_change.new_sale_price is not None else product.sale_price
-        product.updated_by = request.user
-        product.save(update_fields=['cost_price', 'sale_price', 'updated_by', 'updated_at'])
-
-        price_change.status = 'APPROVED'
-        price_change.approved_by = request.user
-        price_change.approved_at = timezone.now()
-        price_change.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
+        price_change = approve_price_change_service(price_change, request.user)
+        changed_fields = [
+            field for field in ['cost_price', 'sale_price', 'commission_per_unit', 'commission_percent']
+            if getattr(price_change, f'old_{field}') != getattr(price_change, f'new_{field}')
+        ]
 
         AuditLog.objects.create(
             user=request.user,
@@ -889,15 +1158,23 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             entity_id=product.id,
             entity_id_str=str(product.id),
             entity_code=product.code,
-            old_values={'cost_price': str(price_change.old_cost_price), 'sale_price': str(price_change.old_sale_price)},
+            old_values={
+                'cost_price': str(price_change.old_cost_price or 0),
+                'sale_price': str(price_change.old_sale_price or 0),
+                'commission_per_unit': str(price_change.old_commission_per_unit or 0),
+                'commission_percent': str(price_change.old_commission_percent or 0),
+            },
             new_values={
-                'cost_price': str(price_change.new_cost_price),
-                'sale_price': str(price_change.new_sale_price),
+                'cost_price': str(price_change.new_cost_price or 0),
+                'sale_price': str(price_change.new_sale_price or 0),
+                'commission_per_unit': str(price_change.new_commission_per_unit or 0),
+                'commission_percent': str(price_change.new_commission_percent or 0),
                 'price_change_reason': price_change.reason,
                 'price_effective_at': price_change.effective_at.isoformat() if price_change.effective_at else None,
                 'price_change_id': price_change.id,
+                'price_change_status': price_change.status,
             },
-            changed_fields=['cost_price', 'sale_price'],
+            changed_fields=changed_fields,
             ip_address=get_client_ip(request),
             user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
@@ -906,6 +1183,7 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='reject_price_change')
     def reject_price_change(self, request, pk=None):
         product = self.get_object()
+        activate_due_price_changes(product_ids=[product.id])
         change_id = request.data.get('change_id')
         reject_reason = (request.data.get('reject_reason') or '').strip()
         if not change_id:
@@ -914,11 +1192,15 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             return Response({'reject_reason': 'Vui lòng nhập lý do từ chối.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            price_change = PriceChange.objects.get(id=change_id, product=product, status='PENDING')
+            price_change = PriceChange.objects.get(
+                id=change_id,
+                product=product,
+                status=PriceChange.STATUS_PENDING_APPROVAL,
+            )
         except PriceChange.DoesNotExist:
             return Response({'detail': 'Đề xuất giá không tồn tại hoặc đã xử lý.'}, status=status.HTTP_404_NOT_FOUND)
 
-        price_change.status = 'REJECTED'
+        price_change.status = PriceChange.STATUS_REJECTED
         price_change.reject_reason = reject_reason
         price_change.approved_by = request.user
         price_change.approved_at = timezone.now()
@@ -931,16 +1213,27 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             entity_id=product.id,
             entity_id_str=str(product.id),
             entity_code=product.code,
-            old_values={'cost_price': str(price_change.old_cost_price), 'sale_price': str(price_change.old_sale_price)},
+            old_values={
+                'cost_price': str(price_change.old_cost_price or 0),
+                'sale_price': str(price_change.old_sale_price or 0),
+                'commission_per_unit': str(price_change.old_commission_per_unit or 0),
+                'commission_percent': str(price_change.old_commission_percent or 0),
+            },
             new_values={
-                'cost_price': str(price_change.new_cost_price),
-                'sale_price': str(price_change.new_sale_price),
+                'cost_price': str(price_change.new_cost_price or 0),
+                'sale_price': str(price_change.new_sale_price or 0),
+                'commission_per_unit': str(price_change.new_commission_per_unit or 0),
+                'commission_percent': str(price_change.new_commission_percent or 0),
                 'price_change_reason': price_change.reason,
                 'price_effective_at': price_change.effective_at.isoformat() if price_change.effective_at else None,
                 'reject_reason': reject_reason,
                 'price_change_id': price_change.id,
+                'price_change_status': price_change.status,
             },
-            changed_fields=['cost_price', 'sale_price'],
+            changed_fields=[
+                field for field in ['cost_price', 'sale_price', 'commission_per_unit', 'commission_percent']
+                if getattr(price_change, f'old_{field}') != getattr(price_change, f'new_{field}')
+            ],
             ip_address=get_client_ip(request),
             user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
@@ -1119,7 +1412,7 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         file = request.FILES.get('file')
         if not file:
             return Response({'error': 'Không có file'}, status=status.HTTP_400_BAD_REQUEST)
-        if not check_action_permission(request.user, 'Product', 'IMPORT'):
+        if not check_action_permission(request.user, 'Product', 'IMPORT', strict=True):
             return Response({'error': 'Không có quyền import'}, status=status.HTTP_403_FORBIDDEN)
 
         from core.utils import import_from_excel_with_processor

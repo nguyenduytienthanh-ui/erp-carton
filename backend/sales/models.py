@@ -224,6 +224,9 @@ class SalesOrderLine(models.Model):
         on_delete=models.PROTECT,
         related_name='sales_order_lines',
     )
+    internal_product_code = models.CharField(max_length=50, blank=True, db_index=True)
+    trace_code = models.CharField(max_length=150, blank=True, db_index=True)
+    product_snapshot = models.JSONField(default=dict, blank=True)
     uom = models.CharField(max_length=20, blank=True)
     qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('1'))
     unit_price = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
@@ -246,6 +249,21 @@ class SalesOrderLine(models.Model):
         return f"{self.sales_order_id}#{self.line_number}"
 
     def save(self, *args, **kwargs):
+        if self.product_id:
+            from sales.services import build_sales_order_line_product_snapshot, build_sales_order_line_trace_code
+
+            if not self.internal_product_code:
+                self.internal_product_code = getattr(self.product, 'code', '') or ''
+            if not self.product_snapshot:
+                as_of_datetime = getattr(self.sales_order, 'order_date', None) if self.sales_order_id else None
+                self.product_snapshot = build_sales_order_line_product_snapshot(
+                    self.product,
+                    as_of_datetime=as_of_datetime,
+                )
+            if self.sales_order_id and not self.trace_code:
+                self.trace_code = build_sales_order_line_trace_code(self.sales_order, self.product, self.line_number)
+            if not self.uom:
+                self.uom = getattr(getattr(self.product, 'unit', None), 'code', None) or self.uom
         line_sub, disc, tax, total = calc_line_totals(
             self.qty, self.unit_price, self.discount_pct, self.tax_pct,
         )
@@ -280,6 +298,7 @@ class SalesOrderDeliveryPlan(models.Model):
     )
     delivery_date = models.DateField(db_index=True)
     qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    shipped_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
     delivered_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
     note = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -297,6 +316,11 @@ class SalesOrderDeliveryPlan(models.Model):
 
     def __str__(self):
         return f"{self.line.sales_order.code}#{self.line.line_number} {self.delivery_date} qty={self.qty}"
+
+    @property
+    def remaining_shipment_qty(self):
+        remain = (self.qty or Decimal('0')) - (self.shipped_qty or Decimal('0'))
+        return remain if remain > 0 else Decimal('0')
 
     @property
     def remaining_qty(self):

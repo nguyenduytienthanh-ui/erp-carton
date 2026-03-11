@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 from django.db import models
 from django.db.models import Q
 from django.contrib.auth import get_user_model
@@ -596,7 +597,12 @@ class Product(models.Model):
     @property
     def is_component(self):
         """Kiểm tra có phải là thùng con/lót/khay không"""
-        return self.parent is not None
+        if self.parent is not None:
+            return True
+        bundle_links = getattr(self, 'bundle_memberships', None)
+        if bundle_links is None:
+            return False
+        return bundle_links.exists()
 
     @property
     def full_name(self):
@@ -609,20 +615,294 @@ class Product(models.Model):
         return " ".join(parts)
 
 
+class ProductBundle(models.Model):
+    """Định nghĩa bộ sản phẩm để bán/giao đồng bộ mà không làm mất tính độc lập của từng mã hàng."""
+
+    PRICING_MODE_PRIMARY = 'PRIMARY_PRODUCT'
+    PRICING_MODE_FIXED = 'FIXED_BUNDLE'
+    PRICING_MODE_SUM_COMPONENTS = 'SUM_COMPONENTS'
+    PRICING_MODE_CHOICES = [
+        (PRICING_MODE_PRIMARY, 'Lấy theo sản phẩm mẹ/đại diện'),
+        (PRICING_MODE_FIXED, 'Giá bộ cố định'),
+        (PRICING_MODE_SUM_COMPONENTS, 'Cộng từ các thành phần'),
+    ]
+
+    COMMISSION_MODE_PRIMARY = 'PRIMARY_PRODUCT'
+    COMMISSION_MODE_FIXED = 'FIXED_VALUES'
+    COMMISSION_MODE_SUM_COMPONENTS = 'SUM_COMPONENTS'
+    COMMISSION_MODE_CHOICES = [
+        (COMMISSION_MODE_PRIMARY, 'Lấy theo sản phẩm mẹ/đại diện'),
+        (COMMISSION_MODE_FIXED, 'Hoa hồng cố định theo bộ'),
+        (COMMISSION_MODE_SUM_COMPONENTS, 'Cộng từ các thành phần'),
+    ]
+
+    DELIVERY_RULE_STRICT_FULL_SET = 'STRICT_FULL_SET'
+    DELIVERY_RULE_NON_SYNC = 'NON_SYNC'
+    DELIVERY_RULE_CHOICES = [
+        (DELIVERY_RULE_STRICT_FULL_SET, 'Giao đồng bộ đủ bộ'),
+        (DELIVERY_RULE_NON_SYNC, 'Giao không đồng bộ'),
+    ]
+
+    sellable_product = models.OneToOneField(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='bundle_config',
+        verbose_name='Mã bán/bộ đại diện',
+    )
+    primary_product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='primary_for_bundles',
+        verbose_name='Sản phẩm mẹ/chính',
+    )
+    pricing_mode = models.CharField(
+        max_length=30,
+        choices=PRICING_MODE_CHOICES,
+        default=PRICING_MODE_PRIMARY,
+        verbose_name='Kiểu tính giá bộ',
+    )
+    fixed_cost_price = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0'),
+        validators=[MinValueValidator(0)],
+        verbose_name='Giá vốn bộ cố định',
+    )
+    fixed_sale_price = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0'),
+        validators=[MinValueValidator(0)],
+        verbose_name='Giá bán bộ cố định',
+    )
+    commission_mode = models.CharField(
+        max_length=30,
+        choices=COMMISSION_MODE_CHOICES,
+        default=COMMISSION_MODE_PRIMARY,
+        verbose_name='Kiểu tính hoa hồng bộ',
+    )
+    fixed_commission_per_unit = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0'),
+        validators=[MinValueValidator(0)],
+        verbose_name='HHCĐ bộ cố định',
+    )
+    fixed_commission_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0'),
+        validators=[MinValueValidator(0)],
+        verbose_name='HH% bộ cố định',
+    )
+    delivery_rule = models.CharField(
+        max_length=30,
+        choices=DELIVERY_RULE_CHOICES,
+        default=DELIVERY_RULE_STRICT_FULL_SET,
+        verbose_name='Quy tắc giao đồng bộ',
+    )
+    note = models.TextField(blank=True, verbose_name='Ghi chú bộ')
+    is_active = models.BooleanField(default=True, verbose_name='Kích hoạt')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Ngày tạo')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Ngày cập nhật')
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_product_bundles',
+        verbose_name='Người tạo',
+    )
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='updated_product_bundles',
+        verbose_name='Người cập nhật',
+    )
+
+    class Meta:
+        db_table = 'product_bundles'
+        ordering = ['sellable_product__code']
+        verbose_name = 'Bộ sản phẩm'
+        verbose_name_plural = 'Bộ sản phẩm'
+        indexes = [
+            models.Index(fields=['pricing_mode']),
+            models.Index(fields=['commission_mode']),
+            models.Index(fields=['delivery_rule']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return f'Bundle {self.sellable_product.code}'
+
+    @classmethod
+    def commission_mode_from_pricing_mode(cls, pricing_mode):
+        return {
+            cls.PRICING_MODE_PRIMARY: cls.COMMISSION_MODE_PRIMARY,
+            cls.PRICING_MODE_FIXED: cls.COMMISSION_MODE_FIXED,
+            cls.PRICING_MODE_SUM_COMPONENTS: cls.COMMISSION_MODE_SUM_COMPONENTS,
+        }.get(pricing_mode, cls.COMMISSION_MODE_PRIMARY)
+
+    def get_commission_mode(self):
+        return self.commission_mode_from_pricing_mode(self.pricing_mode)
+
+    def get_primary_product(self):
+        return self.primary_product or self.sellable_product
+
+    def get_active_components(self):
+        return self.components.select_related(
+            'component_product',
+            'component_product__unit',
+        ).filter(
+            component_product__is_active=True,
+            is_active=True,
+        ).order_by('sort_order', 'id')
+
+    def resolve_cost_price(self, as_of=None):
+        from .price_services import resolve_product_price_as_of
+
+        total = Decimal('0')
+        components = list(self.get_active_components())
+        for component in components:
+            component_price = resolve_product_price_as_of(component.component_product, as_of)
+            total += (component_price['cost_price'] or Decimal('0')) * (component.qty_per_bundle or Decimal('0'))
+        if total > 0:
+            return total
+        primary = self.get_primary_product()
+        primary_price = resolve_product_price_as_of(primary, as_of)
+        return primary_price['cost_price'] or Decimal('0')
+
+    def resolve_sale_price(self, as_of=None):
+        from .price_services import resolve_product_price_as_of
+
+        primary = self.get_primary_product()
+        if self.pricing_mode == self.PRICING_MODE_FIXED:
+            return self.fixed_sale_price or Decimal('0')
+        if self.pricing_mode == self.PRICING_MODE_SUM_COMPONENTS:
+            total = Decimal('0')
+            for component in self.get_active_components():
+                component_price = resolve_product_price_as_of(component.component_product, as_of)
+                total += (component_price['sale_price'] or Decimal('0')) * (component.qty_per_bundle or Decimal('0'))
+            return total
+        primary_price = resolve_product_price_as_of(primary, as_of)
+        return primary_price['sale_price'] or Decimal('0')
+
+    def resolve_commission_per_unit(self, as_of=None):
+        from .price_services import resolve_product_price_as_of
+
+        primary = self.get_primary_product()
+        commission_mode = self.get_commission_mode()
+        if commission_mode == self.COMMISSION_MODE_FIXED:
+            return self.fixed_commission_per_unit or Decimal('0')
+        if commission_mode == self.COMMISSION_MODE_SUM_COMPONENTS:
+            total = Decimal('0')
+            for component in self.get_active_components():
+                component_price = resolve_product_price_as_of(component.component_product, as_of)
+                total += (component_price['commission_per_unit'] or Decimal('0')) * (component.qty_per_bundle or Decimal('0'))
+            return total
+        primary_price = resolve_product_price_as_of(primary, as_of)
+        return primary_price['commission_per_unit'] or Decimal('0')
+
+    def resolve_commission_percent(self, as_of=None):
+        from .price_services import resolve_product_price_as_of
+
+        primary = self.get_primary_product()
+        commission_mode = self.get_commission_mode()
+        if commission_mode == self.COMMISSION_MODE_FIXED:
+            return self.fixed_commission_percent or Decimal('0')
+        if commission_mode == self.COMMISSION_MODE_SUM_COMPONENTS:
+            weighted_amount = Decimal('0')
+            sale_base = Decimal('0')
+            for component in self.get_active_components():
+                component_price = resolve_product_price_as_of(component.component_product, as_of)
+                component_sale = (component_price['sale_price'] or Decimal('0')) * (component.qty_per_bundle or Decimal('0'))
+                if component_sale <= 0:
+                    continue
+                sale_base += component_sale
+                weighted_amount += component_sale * ((component_price['commission_percent'] or Decimal('0')) / Decimal('100'))
+            if sale_base <= 0:
+                return Decimal('0')
+            return (weighted_amount / sale_base * Decimal('100')).quantize(Decimal('0.01'))
+        primary_price = resolve_product_price_as_of(primary, as_of)
+        return primary_price['commission_percent'] or Decimal('0')
+
+
+class ProductBundleComponent(models.Model):
+    """Thành phần thuộc một bộ sản phẩm."""
+
+    bundle = models.ForeignKey(
+        ProductBundle,
+        on_delete=models.CASCADE,
+        related_name='components',
+        verbose_name='Bộ sản phẩm',
+    )
+    component_product = models.ForeignKey(
+        Product,
+        on_delete=models.PROTECT,
+        related_name='bundle_memberships',
+        verbose_name='Mã hàng thành phần',
+    )
+    qty_per_bundle = models.DecimalField(
+        max_digits=18,
+        decimal_places=4,
+        default=Decimal('1'),
+        validators=[MinValueValidator(Decimal('0.0001'))],
+        verbose_name='Số lượng trong 1 bộ',
+    )
+    is_required = models.BooleanField(default=True, verbose_name='Bắt buộc giao đủ')
+    sort_order = models.PositiveIntegerField(default=0, verbose_name='Thứ tự')
+    is_active = models.BooleanField(default=True, verbose_name='Kích hoạt')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Ngày tạo')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Ngày cập nhật')
+
+    class Meta:
+        db_table = 'product_bundle_components'
+        ordering = ['sort_order', 'id']
+        verbose_name = 'Thành phần bộ sản phẩm'
+        verbose_name_plural = 'Thành phần bộ sản phẩm'
+        unique_together = [['bundle', 'component_product']]
+        indexes = [
+            models.Index(fields=['bundle']),
+            models.Index(fields=['component_product']),
+            models.Index(fields=['is_required']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return f'{self.bundle.sellable_product.code} -> {self.component_product.code} x {self.qty_per_bundle}'
+
+
 class PriceChange(models.Model):
     """Lịch sử thay đổi giá chuyên dụng cho sản phẩm."""
 
+    STATUS_PENDING_APPROVAL = 'PENDING_APPROVAL'
+    STATUS_APPROVED_SCHEDULED = 'APPROVED_SCHEDULED'
+    STATUS_ACTIVE_APPLIED = 'ACTIVE_APPLIED'
+    STATUS_REJECTED = 'REJECTED'
+    STATUS_SUPERSEDED = 'SUPERSEDED'
+
     STATUS_CHOICES = [
-        ('PENDING', 'Chờ duyệt'),
-        ('APPROVED', 'Đã duyệt'),
-        ('REJECTED', 'Từ chối'),
-        ('APPLIED', 'Đã áp dụng'),
+        (STATUS_PENDING_APPROVAL, 'Chờ duyệt'),
+        (STATUS_APPROVED_SCHEDULED, 'Đã duyệt, chờ hiệu lực'),
+        (STATUS_ACTIVE_APPLIED, 'Đang hiệu lực'),
+        (STATUS_REJECTED, 'Từ chối'),
+        (STATUS_SUPERSEDED, 'Đã bị thay thế'),
     ]
 
+    SOURCE_SYSTEM = 'SYSTEM'
+    SOURCE_MANUAL = 'MANUAL'
+    SOURCE_IMPORT = 'IMPORT'
+    SOURCE_API = 'API'
+
     SOURCE_CHOICES = [
-        ('MANUAL', 'Thủ công'),
-        ('IMPORT', 'Nhập dữ liệu'),
-        ('API', 'API'),
+        (SOURCE_SYSTEM, 'Hệ thống'),
+        (SOURCE_MANUAL, 'Thủ công'),
+        (SOURCE_IMPORT, 'Nhập dữ liệu'),
+        (SOURCE_API, 'API'),
     ]
 
     product = models.ForeignKey(
@@ -636,6 +916,10 @@ class PriceChange(models.Model):
     new_cost_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     old_sale_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     new_sale_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    old_commission_per_unit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    new_commission_per_unit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    old_commission_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    new_commission_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
 
     delta_cost = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     delta_sale = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
@@ -645,8 +929,10 @@ class PriceChange(models.Model):
     reason = models.TextField(blank=True, default='')
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='MANUAL')
     effective_at = models.DateTimeField(null=True, blank=True)
+    applied_at = models.DateTimeField(null=True, blank=True)
+    batch_code = models.CharField(max_length=64, blank=True, default='')
 
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='APPLIED')
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_ACTIVE_APPLIED)
     submitted_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
@@ -669,11 +955,27 @@ class PriceChange(models.Model):
 
     class Meta:
         db_table = 'product_price_changes'
-        ordering = ['-created_at']
+        ordering = ['-effective_at', '-created_at']
         indexes = [
             models.Index(fields=['product', 'created_at']),
             models.Index(fields=['status', 'created_at']),
+            models.Index(fields=['product', 'effective_at']),
+            models.Index(fields=['batch_code']),
         ]
 
     def __str__(self):
         return f"{self.product.code} - {self.status} ({self.created_at:%Y-%m-%d %H:%M})"
+
+    def recalculate_delta_percents(self, save=False):
+        self.delta_cost_percent = None
+        self.delta_sale_percent = None
+        if self.old_cost_price not in (None, Decimal('0')):
+            self.delta_cost_percent = (
+                (self.delta_cost or Decimal('0')) / self.old_cost_price * Decimal('100')
+            ).quantize(Decimal('0.01'))
+        if self.old_sale_price not in (None, Decimal('0')):
+            self.delta_sale_percent = (
+                (self.delta_sale or Decimal('0')) / self.old_sale_price * Decimal('100')
+            ).quantize(Decimal('0.01'))
+        if save:
+            self.save(update_fields=['delta_cost_percent', 'delta_sale_percent', 'updated_at'])

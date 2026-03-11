@@ -155,7 +155,9 @@ export default function AttendanceList() {
     },
   });
 
-  const employees = employeesQuery.data?.results ?? [];
+  const employees = (employeesQuery.data?.results ?? []).filter(
+    (item) => item.is_active && item.status !== 'RESIGNED'
+  );
   const rows = listQuery.data?.results ?? [];
   const total = listQuery.data?.count ?? 0;
 

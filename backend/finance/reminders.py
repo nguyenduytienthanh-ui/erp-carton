@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -11,6 +12,8 @@ from core.models import Setting
 from core.notifications import create_notification
 from core.permissions import check_action_permission
 from finance.models import AdvanceTransaction
+
+logger = logging.getLogger(__name__)
 
 
 REMINDER_SCHEDULE_NAME = 'FINANCE_ADVANCE_OVERDUE_DAILY_REMINDER'
@@ -206,8 +209,8 @@ def get_approval_sla_policy() -> dict:
     ]:
         try:
             policy[key] = max(1, int(parsed.get(key, policy[key])))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning('finance.reminders: invalid value for policy key %s — %s', key, exc)
     policy['window_days'] = min(policy['window_days'], 365)
     return policy
 
@@ -226,8 +229,8 @@ def save_approval_sla_policy(policy: dict) -> dict:
         ]:
             try:
                 normalized[key] = max(1, int(policy.get(key, normalized[key])))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning('finance.reminders: invalid value for save policy key %s — %s', key, exc)
     normalized['window_days'] = min(normalized['window_days'], 365)
     import json
     Setting.objects.update_or_create(
@@ -264,6 +267,7 @@ def build_overdue_snapshot(as_of: date | None = None, threshold_days: int = 90) 
     cutoff = as_of.fromordinal(as_of.toordinal() - threshold_days)
     qs = AdvanceTransaction.objects.filter(
         is_active=True,
+        approval_status=AdvanceTransaction.APPROVAL_APPROVED,
         status__in=[AdvanceTransaction.STATUS_OPEN, AdvanceTransaction.STATUS_PARTIAL],
         advance_date__lte=cutoff,
     )

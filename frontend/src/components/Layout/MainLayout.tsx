@@ -10,19 +10,16 @@ import {
   TagsOutlined,
   ToolOutlined,
   DollarOutlined,
-  ProjectOutlined,
   ControlOutlined,
-  ThunderboltOutlined,
   ApartmentOutlined,
-  BarChartOutlined,
   InboxOutlined,
   UserOutlined,
   TeamOutlined,
+  ShoppingCartOutlined,
   LogoutOutlined,
   BellOutlined,
-  FileSearchOutlined,
   SafetyOutlined,
-  HistoryOutlined,
+  DatabaseOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -30,12 +27,26 @@ import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { storage } from '../../utils/storage';
 import TaskQuickLauncher from '../TaskQuickLauncher/TaskQuickLauncher';
 import { notificationsApi } from '../../api/notifications';
+import { operationsApi } from '../../api/operations';
+import { adminApi } from '../../api/admin';
 import { financeApi } from '../../api/finance';
 import { workforceApi } from '../../api/workforce';
-import { canAccessOpsModules, canManageFinanceData, canManageModulePermissionSettings, canManageWorkforceData } from '../../utils/authz';
+import {
+  canManageFinanceData,
+  canAccessSalesOrders,
+  canManageInventoryData,
+  canManageModulePermissionSettings,
+  canManageWorkforceData,
+  canViewModulePermissionHistory,
+  canViewOperationsLog,
+  canViewOpsHub,
+  canViewWorkflowData,
+  canManageWorkflowData,
+} from '../../utils/authz';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
 const { Header, Sider, Content } = Layout;
+const SIDEBAR_OPEN_KEYS_STORAGE_KEY = 'erp-carton.sidebar-open-keys';
 
 type ConnectionLike = {
   saveData?: boolean;
@@ -52,9 +63,15 @@ function shouldSkipRouteChunkPrefetch(): boolean {
 const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/': () => import('../../pages/Dashboard'),
   '/products': () => import('../../pages/Products/ProductList'),
+  '/sales-orders': () => import('../../pages/Sales/SalesOrderList'),
   '/categories': () => import('../../pages/Categories/CategoryList'),
   '/units': () => import('../../pages/Units/UnitList'),
   '/customers': () => import('../../pages/Customers/CustomerList'),
+  '/warehouses': () => import('../../pages/Inventory/WarehouseList'),
+  '/warehouse-locations': () => import('../../pages/Inventory/WarehouseLocationList'),
+  '/inventory-stock': () => import('../../pages/Inventory/InventoryStockOverview'),
+  '/inventory-transactions': () => import('../../pages/Inventory/InventoryTransactionList'),
+  '/inventory-reservations': () => import('../../pages/Inventory/InventoryReservationList'),
   '/task-inbox': () => import('../../pages/Tasks/TaskInbox'),
   '/executive-cockpit': () => import('../../pages/Management/ExecutiveCockpit'),
   '/task-operations': () => import('../../pages/Tasks/TaskOperationsBoard'),
@@ -81,16 +98,32 @@ const MainLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenuVisible, setMobileMenuVisible] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [openMenuKeys, setOpenMenuKeys] = useState<string[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(SIDEBAR_OPEN_KEYS_STORAGE_KEY);
+      if (!raw) return ['workforce-group', 'finance-group'];
+      const parsed = JSON.parse(raw) as string[];
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : ['inventory-group', 'workforce-group', 'finance-group'];
+    } catch {
+      return ['inventory-group', 'workforce-group', 'finance-group'];
+    }
+  });
   const navigate = useNavigate();
   const location = useLocation();
   const user = storage.getUser();
   const desktopControlSize = 40;
   const queryClient = useQueryClient();
   const prefetchedRoutesRef = useRef<Set<string>>(new Set());
-  const canAccessOps = canAccessOpsModules();
+  const canViewOps = canViewOpsHub();
+  const canViewSalesOrders = canAccessSalesOrders();
+  const canViewWorkflow = canViewWorkflowData();
+  const canManageWorkflow = canManageWorkflowData();
+  const canViewOpsLog = canViewOperationsLog();
   const canManageFinance = canManageFinanceData();
+  const canManageInventory = canManageInventoryData();
   const canManageWorkforce = canManageWorkforceData();
   const canManageModulePermissions = canManageModulePermissionSettings();
+  const canViewRbacAudit = canViewModulePermissionHistory();
   const headerNotificationInterval = useRealtimePollingInterval({
     enabled: true,
     activeMs: 15_000,
@@ -129,6 +162,22 @@ const MainLayout = () => {
     refetchInterval: workforceApprovalInterval,
     refetchIntervalInBackground: false,
   });
+  const operationsLogMetaQuery = useQuery({
+    queryKey: ['layout-operations-log-meta'],
+    queryFn: () => operationsApi.meta(),
+    enabled: canViewOpsLog,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+  });
+  const rbacHistoryMetaQuery = useQuery({
+    queryKey: ['layout-rbac-history-meta'],
+    queryFn: () => adminApi.getRoleModulePermissionHistoryMeta(),
+    enabled: canViewRbacAudit,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    refetchIntervalInBackground: false,
+  });
   const markReadMutation = useMutation({
     mutationFn: (id: number) => notificationsApi.markRead(id),
     onSuccess: () => {
@@ -162,6 +211,10 @@ const MainLayout = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_OPEN_KEYS_STORAGE_KEY, JSON.stringify(openMenuKeys));
+  }, [openMenuKeys]);
+
   const prefetchRouteChunk = useCallback((routePath: string) => {
     if (shouldSkipRouteChunkPrefetch()) return;
     if (routePath === location.pathname) return;
@@ -191,6 +244,9 @@ const MainLayout = () => {
   const salaryAdvancePendingCount =
     (salaryAdvanceApprovalQueueQuery.data?.pending_l1_count ?? 0) +
     (salaryAdvanceApprovalQueueQuery.data?.pending_l2_count ?? 0);
+  const unreadCount = unreadQuery.data?.length ?? 0;
+  const operationsFailedCount = operationsLogMetaQuery.data?.recent_failed_count_24h ?? 0;
+  const rbacAnomalyCount = rbacHistoryMetaQuery.data?.anomalies_24h_count ?? 0;
 
   const menuItems: MenuProps['items'] = [
     {
@@ -203,6 +259,11 @@ const MainLayout = () => {
       icon: <AppstoreOutlined />,
       label: renderMenuLabel('/products', 'Sản phẩm'),
     },
+    canViewSalesOrders ? {
+      key: '/sales-orders',
+      icon: <ShoppingCartOutlined />,
+      label: renderMenuLabel('/sales-orders', 'Đơn hàng xuất'),
+    } : null,
     {
       key: '/categories',
       icon: <TagsOutlined />,
@@ -218,6 +279,33 @@ const MainLayout = () => {
       icon: <TeamOutlined />,
       label: renderMenuLabel('/customers', 'Khách hàng'),
     },
+    canManageInventory ? {
+      key: 'inventory-group',
+      icon: <DatabaseOutlined />,
+      label: 'Kho',
+      children: [
+        {
+          key: '/inventory-stock',
+          label: renderMenuLabel('/inventory-stock', 'Tồn kho'),
+        },
+        {
+          key: '/inventory-transactions',
+          label: renderMenuLabel('/inventory-transactions', 'Sổ kho'),
+        },
+        {
+          key: '/inventory-reservations',
+          label: renderMenuLabel('/inventory-reservations', 'Reservation'),
+        },
+        {
+          key: '/warehouses',
+          label: renderMenuLabel('/warehouses', 'Kho hàng'),
+        },
+        {
+          key: '/warehouse-locations',
+          label: renderMenuLabel('/warehouse-locations', 'Vị trí kho'),
+        },
+      ],
+    } : null,
     {
       key: '/pricings',
       icon: <DollarOutlined />,
@@ -292,50 +380,77 @@ const MainLayout = () => {
       icon: <InboxOutlined />,
       label: renderMenuLabel('/task-inbox', 'Nhiệm vụ của tôi'),
     },
-    canAccessOps ? {
-      key: '/executive-cockpit',
-      icon: <ControlOutlined />,
-      label: renderMenuLabel('/executive-cockpit', 'Điều hành tổng hợp'),
-    } : null,
-    canAccessOps ? {
-      key: '/task-operations',
-      icon: <ProjectOutlined />,
-      label: renderMenuLabel('/task-operations', 'Điều hành nhiệm vụ'),
-    } : null,
-    canAccessOps ? {
-      key: '/workflow-task-templates',
-      icon: <ThunderboltOutlined />,
-      label: renderMenuLabel('/workflow-task-templates', 'Mẫu nhiệm vụ'),
-    } : null,
-    canAccessOps ? {
-      key: '/workflow-pipeline',
-      icon: <ApartmentOutlined />,
-      label: renderMenuLabel('/workflow-pipeline', 'Luồng công việc'),
-    } : null,
-    canAccessOps ? {
-      key: '/workflow-analytics',
-      icon: <BarChartOutlined />,
-      label: renderMenuLabel('/workflow-analytics', 'Phân tích quy trình'),
-    } : null,
     {
       key: '/notifications',
       icon: <BellOutlined />,
-      label: renderMenuLabel('/notifications', 'Thông báo'),
+      label: renderMenuLabel(
+        '/notifications',
+        <span>
+          Thông báo {unreadCount > 0 ? <Badge count={unreadCount} size="small" overflowCount={99} /> : null}
+        </span>
+      ),
     },
-    canAccessOps ? {
-      key: '/operations-log',
-      icon: <FileSearchOutlined />,
-      label: renderMenuLabel('/operations-log', 'Nhật ký vận hành'),
+    canViewOps ? {
+      key: 'ops-group',
+      icon: <ControlOutlined />,
+      label: 'Điều hành',
+      children: [
+        {
+          key: '/executive-cockpit',
+          label: renderMenuLabel('/executive-cockpit', 'Điều hành tổng hợp'),
+        },
+        {
+          key: '/task-operations',
+          label: renderMenuLabel('/task-operations', 'Điều hành nhiệm vụ'),
+        },
+      ],
     } : null,
-    canManageModulePermissions ? {
-      key: '/admin/module-permissions',
+    (canManageWorkflow || canViewWorkflow) ? {
+      key: 'workflow-group',
+      icon: <ApartmentOutlined />,
+      label: 'Workflow',
+      children: [
+        ...(canManageWorkflow ? [{
+          key: '/workflow-task-templates',
+          label: renderMenuLabel('/workflow-task-templates', 'Mẫu nhiệm vụ'),
+        }] : []),
+        ...(canViewWorkflow ? [{
+          key: '/workflow-pipeline',
+          label: renderMenuLabel('/workflow-pipeline', 'Luồng công việc'),
+        }, {
+          key: '/workflow-analytics',
+          label: renderMenuLabel('/workflow-analytics', 'Phân tích quy trình'),
+        }] : []),
+      ],
+    } : null,
+    (canViewOpsLog || canManageModulePermissions || canViewRbacAudit) ? {
+      key: 'governance-group',
       icon: <SafetyOutlined />,
-      label: renderMenuLabel('/admin/module-permissions', 'Phân quyền module'),
-    } : null,
-    canManageModulePermissions ? {
-      key: '/admin/module-permissions-history',
-      icon: <HistoryOutlined />,
-      label: renderMenuLabel('/admin/module-permissions-history', 'Lịch sử phân quyền'),
+      label: 'Kiểm soát',
+      children: [
+        ...(canViewOpsLog ? [{
+          key: '/operations-log',
+          label: renderMenuLabel(
+            '/operations-log',
+            <span>
+              Nhật ký vận hành {operationsFailedCount > 0 ? <Badge count={operationsFailedCount} size="small" overflowCount={99} /> : null}
+            </span>
+          ),
+        }] : []),
+        ...(canManageModulePermissions ? [{
+          key: '/admin/module-permissions',
+          label: renderMenuLabel('/admin/module-permissions', 'Phân quyền module'),
+        }] : []),
+        ...(canViewRbacAudit ? [{
+          key: '/admin/module-permissions-history',
+          label: renderMenuLabel(
+            '/admin/module-permissions-history',
+            <span>
+              Lịch sử phân quyền {rbacAnomalyCount > 0 ? <Badge count={rbacAnomalyCount} size="small" overflowCount={99} /> : null}
+            </span>
+          ),
+        }] : []),
+      ],
     } : null,
   ];
 
@@ -439,8 +554,10 @@ const MainLayout = () => {
       theme={isMobile ? 'light' : 'dark'}
       mode="inline"
       selectedKeys={[location.pathname]}
+      openKeys={collapsed && !isMobile ? [] : openMenuKeys}
       items={menuItems}
       onClick={handleMenuClick}
+      onOpenChange={(keys) => setOpenMenuKeys(keys as string[])}
     />
   );
 

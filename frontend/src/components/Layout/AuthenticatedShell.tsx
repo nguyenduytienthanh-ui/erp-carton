@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import MainLayout from './MainLayout';
 import { ProductsListFilterProvider } from '../../contexts/ProductsListFilterContext';
-import { canAccessOpsModules, canManageModulePermissionSettings } from '../../utils/authz';
+import { canAccessOpsModules, canAccessSalesOrders, canManageInventoryData, canManageModulePermissionSettings, canViewWorkflowData, canManageWorkflowData } from '../../utils/authz';
 import { usersApi } from '../../api/users';
 import { storage } from '../../utils/storage';
 
@@ -21,6 +21,12 @@ function shouldSkipPrefetch(): boolean {
 const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/task-inbox': () => import('../../pages/Tasks/TaskInbox'),
   '/products': () => import('../../pages/Products/ProductList'),
+  '/sales-orders': () => import('../../pages/Sales/SalesOrderList'),
+  '/warehouses': () => import('../../pages/Inventory/WarehouseList'),
+  '/warehouse-locations': () => import('../../pages/Inventory/WarehouseLocationList'),
+  '/inventory-stock': () => import('../../pages/Inventory/InventoryStockOverview'),
+  '/inventory-transactions': () => import('../../pages/Inventory/InventoryTransactionList'),
+  '/inventory-reservations': () => import('../../pages/Inventory/InventoryReservationList'),
   '/customers': () => import('../../pages/Customers/CustomerList'),
   '/executive-cockpit': () => import('../../pages/Management/ExecutiveCockpit'),
   '/notifications': () => import('../../pages/Notifications/NotificationCenter'),
@@ -31,28 +37,57 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/admin/module-permissions-history': () => import('../../pages/Admin/ModulePermissionHistory'),
 };
 
-function getRoutePrefetchOrder(pathname: string, canAccessOps: boolean, canManageRbac: boolean): string[] {
-  const common = ['/task-inbox', '/products', '/notifications'];
+function getRoutePrefetchOrder(pathname: string, canAccessOps: boolean, canViewWorkflow: boolean, canManageWorkflow: boolean, canManageRbac: boolean, canManageInventory: boolean, canAccessSales: boolean): string[] {
+  const common = ['/task-inbox', '/products', ...(canAccessSales ? ['/sales-orders'] : []), '/notifications', ...(canManageInventory ? ['/inventory-stock', '/inventory-transactions'] : [])];
   if (pathname.startsWith('/products')) {
     return [
       ...common,
+      ...(canManageInventory ? ['/warehouses', '/warehouse-locations', '/inventory-reservations'] : []),
       '/customers',
       ...(canAccessOps ? ['/task-operations'] : []),
+      ...(canViewWorkflow ? ['/workflow-pipeline', '/workflow-analytics'] : []),
+      ...(canManageWorkflow ? ['/workflow-task-templates'] : []),
+      ...(canManageRbac ? ['/admin/module-permissions', '/admin/module-permissions-history'] : []),
+    ];
+  }
+  if (pathname.startsWith('/sales-orders')) {
+    return [
+      ...common,
+      ...(canManageInventory ? ['/inventory-stock', '/inventory-reservations'] : []),
+      '/customers',
+      ...(canAccessOps ? ['/task-operations'] : []),
+      ...(canViewWorkflow ? ['/workflow-pipeline', '/workflow-analytics'] : []),
+      ...(canManageRbac ? ['/admin/module-permissions', '/admin/module-permissions-history'] : []),
+    ];
+  }
+  if (pathname.startsWith('/inventory')) {
+    return [
+      ...common,
+      ...(canManageInventory ? ['/warehouses', '/warehouse-locations', '/inventory-stock', '/inventory-transactions', '/inventory-reservations'] : []),
+      '/customers',
+      ...(canAccessOps ? ['/task-operations'] : []),
+      ...(canViewWorkflow ? ['/workflow-pipeline', '/workflow-analytics'] : []),
       ...(canManageRbac ? ['/admin/module-permissions', '/admin/module-permissions-history'] : []),
     ];
   }
   if (pathname.startsWith('/task') || pathname.startsWith('/workflow')) {
     return [
       ...common,
-      ...(canAccessOps ? ['/executive-cockpit', '/workflow-pipeline', '/workflow-analytics', '/task-operations'] : []),
+      ...(canManageInventory ? ['/inventory-stock', '/inventory-transactions'] : []),
+      ...(canAccessOps ? ['/executive-cockpit', '/task-operations'] : []),
+      ...(canViewWorkflow ? ['/workflow-pipeline', '/workflow-analytics'] : []),
+      ...(canManageWorkflow ? ['/workflow-task-templates'] : []),
       ...(canManageRbac ? ['/admin/module-permissions', '/admin/module-permissions-history'] : []),
       '/customers',
     ];
   }
   return [
     ...common,
+    ...(canManageInventory ? ['/warehouses', '/warehouse-locations', '/inventory-stock', '/inventory-transactions', '/inventory-reservations'] : []),
     '/customers',
-    ...(canAccessOps ? ['/executive-cockpit', '/workflow-pipeline'] : []),
+    ...(canAccessOps ? ['/executive-cockpit', '/task-operations'] : []),
+    ...(canViewWorkflow ? ['/workflow-pipeline', '/workflow-analytics'] : []),
+    ...(canManageWorkflow ? ['/workflow-task-templates'] : []),
     ...(canManageRbac ? ['/admin/module-permissions', '/admin/module-permissions-history'] : []),
   ];
 }
@@ -82,8 +117,12 @@ export default function AuthenticatedShell() {
 
     const pathname = globalThis.location?.pathname || '/';
     const canAccessOps = canAccessOpsModules();
+    const canAccessSales = canAccessSalesOrders();
+    const canManageInventory = canManageInventoryData();
+    const canViewWorkflow = canViewWorkflowData();
+    const canManageWorkflow = canManageWorkflowData();
     const canManageRbac = canManageModulePermissionSettings();
-    const routePrefetchTasks = getRoutePrefetchOrder(pathname, canAccessOps, canManageRbac)
+    const routePrefetchTasks = getRoutePrefetchOrder(pathname, canAccessOps, canViewWorkflow, canManageWorkflow, canManageRbac, canManageInventory, canAccessSales)
       .filter((routePath) => routePath !== pathname)
       .map((routePath) => routeChunkPrefetchers[routePath])
       .filter((v): v is (() => Promise<unknown>) => typeof v === 'function');

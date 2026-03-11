@@ -3,7 +3,7 @@ import { Button, Card, Input, Select, message, Space, Switch, Table, Tag, Typogr
 import { ReloadOutlined, SaveOutlined, SafetyOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '../../api/admin';
-import type { RoleModulePermissionItem } from '../../types/admin';
+import type { RoleModulePermissionItem, RoleModulePermissionUpdatePayload } from '../../types/admin';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { QuickClearIcon } from '../../components';
@@ -15,6 +15,26 @@ type ModulePermissionConfig = {
 type ModulePermissionFilters = {
   status: 'all' | 'active' | 'inactive';
 };
+type PermissionFieldKey =
+  | 'workforce_manage'
+  | 'finance_manage'
+  | 'ops_view'
+  | 'workflow_view'
+  | 'workflow_manage'
+  | 'operations_log_view'
+  | 'rbac_audit_view'
+  | 'rbac_manage';
+
+const DEFAULT_PERMISSION_FIELDS: Array<{ field: PermissionFieldKey; label: string }> = [
+  { field: 'workforce_manage', label: 'Nhân sự' },
+  { field: 'finance_manage', label: 'Tài chính' },
+  { field: 'ops_view', label: 'Điều hành' },
+  { field: 'workflow_view', label: 'Workflow xem' },
+  { field: 'workflow_manage', label: 'Workflow quản lý' },
+  { field: 'operations_log_view', label: 'Nhật ký vận hành' },
+  { field: 'rbac_audit_view', label: 'Audit phân quyền' },
+  { field: 'rbac_manage', label: 'Quản trị phân quyền' },
+];
 
 function serializeFilters(filters: ModulePermissionFilters): string {
   return JSON.stringify(filters);
@@ -38,7 +58,7 @@ export default function ModulePermissionSettings() {
   const [searchInput, setSearchInput] = useState('');
   const [filters, setFilters] = useState<ModulePermissionFilters>({ status: 'all' });
   const [showInactiveOverride, setShowInactiveOverride] = useState<boolean | null>(null);
-  const [draftByRole, setDraftByRole] = useState<Record<number, Pick<RoleModulePermissionItem, 'workforce_manage' | 'finance_manage' | 'rbac_manage'>>>({});
+  const [draftByRole, setDraftByRole] = useState<Record<number, Partial<Record<PermissionFieldKey, boolean>>>>({});
 
   const listQuery = useQuery({
     queryKey: ['admin-module-permissions'],
@@ -46,6 +66,16 @@ export default function ModulePermissionSettings() {
   });
 
   const sourceItems = useMemo(() => listQuery.data?.items ?? [], [listQuery.data?.items]);
+  const fieldMeta = listQuery.data?.field_meta;
+  const permissionFields = useMemo(
+    () => (fieldMeta?.length
+      ? fieldMeta.map((item) => ({
+          field: item.field as PermissionFieldKey,
+          label: item.label,
+        }))
+      : DEFAULT_PERMISSION_FIELDS),
+    [fieldMeta]
+  );
   const configShowInactive = Boolean(((config ?? {}) as ModulePermissionConfig).showInactive);
   const showInactive = showInactiveOverride ?? configShowInactive;
   const { intentSearch, intentFilters } = useSearchFilterIntent({
@@ -86,12 +116,10 @@ export default function ModulePermissionSettings() {
       const original = sourceMap.get(item.role_id);
       if (!original) return true;
       return (
-        item.workforce_manage !== original.workforce_manage
-        || item.finance_manage !== original.finance_manage
-        || item.rbac_manage !== original.rbac_manage
+        permissionFields.some((field) => item[field.field] !== original[field.field])
       );
     });
-  }, [mergedItems, sourceMap]);
+  }, [mergedItems, sourceMap, permissionFields]);
 
   const visibleItems = useMemo(
     () =>
@@ -109,21 +137,15 @@ export default function ModulePermissionSettings() {
     [mergedItems, showInactive, intentFilters.status, intentSearch]
   );
 
-  const updateDraft = (roleId: number, key: 'workforce_manage' | 'finance_manage' | 'rbac_manage', value: boolean) => {
+  const updateDraft = (roleId: number, key: PermissionFieldKey, value: boolean) => {
     const sourceItem = sourceMap.get(roleId);
     if (!sourceItem) return;
     setDraftByRole((prev) => {
-      const current = prev[roleId] ?? {
-        workforce_manage: sourceItem.workforce_manage,
-        finance_manage: sourceItem.finance_manage,
-        rbac_manage: sourceItem.rbac_manage,
-      };
+      const current = prev[roleId] ?? Object.fromEntries(
+        permissionFields.map((field) => [field.field, sourceItem[field.field]])
+      ) as Partial<Record<PermissionFieldKey, boolean>>;
       const nextRoleState = { ...current, [key]: value };
-      const isSameAsSource = (
-        nextRoleState.workforce_manage === sourceItem.workforce_manage
-        && nextRoleState.finance_manage === sourceItem.finance_manage
-        && nextRoleState.rbac_manage === sourceItem.rbac_manage
-      );
+      const isSameAsSource = permissionFields.every((field) => nextRoleState[field.field] === sourceItem[field.field]);
       if (isSameAsSource) {
         const rest = { ...prev };
         delete rest[roleId];
@@ -137,12 +159,17 @@ export default function ModulePermissionSettings() {
   };
 
   const handleSave = async () => {
-    const payload = {
+    const payload: RoleModulePermissionUpdatePayload = {
       items: mergedItems.map((item) => ({
         role_id: item.role_id,
-        workforce_manage: item.workforce_manage,
-        finance_manage: item.finance_manage,
-        rbac_manage: item.rbac_manage,
+        workforce_manage: Boolean(item.workforce_manage),
+        finance_manage: Boolean(item.finance_manage),
+        ops_view: Boolean(item.ops_view),
+        workflow_view: Boolean(item.workflow_view),
+        workflow_manage: Boolean(item.workflow_manage),
+        operations_log_view: Boolean(item.operations_log_view),
+        rbac_audit_view: Boolean(item.rbac_audit_view),
+        rbac_manage: Boolean(item.rbac_manage),
       })),
     };
     await saveMutation.mutateAsync(payload);
@@ -243,43 +270,20 @@ export default function ModulePermissionSettings() {
               </Space>
             ),
           },
-          {
-            title: 'Quản lý Nhân sự',
-            dataIndex: 'workforce_manage',
-            key: 'workforce_manage',
+          ...permissionFields.map((field) => ({
+            title: field.label,
+            dataIndex: field.field,
+            key: field.field,
             width: 170,
-            render: (value, record) => (
+            render: (value: boolean, record: RoleModulePermissionItem) => (
               <Switch
                 checked={Boolean(value)}
-                onChange={(checked) => updateDraft(record.role_id, 'workforce_manage', checked)}
+                onChange={(checked) => updateDraft(record.role_id, field.field, checked)}
               />
             ),
-          },
-          {
-            title: 'Quản lý Tài chính',
-            dataIndex: 'finance_manage',
-            key: 'finance_manage',
-            width: 170,
-            render: (value, record) => (
-              <Switch
-                checked={Boolean(value)}
-                onChange={(checked) => updateDraft(record.role_id, 'finance_manage', checked)}
-              />
-            ),
-          },
-          {
-            title: 'Quản trị phân quyền',
-            dataIndex: 'rbac_manage',
-            key: 'rbac_manage',
-            width: 170,
-            render: (value, record) => (
-              <Switch
-                checked={Boolean(value)}
-                onChange={(checked) => updateDraft(record.role_id, 'rbac_manage', checked)}
-              />
-            ),
-          },
+          })),
         ]}
+        scroll={{ x: 1400 }}
       />
     </Card>
   );

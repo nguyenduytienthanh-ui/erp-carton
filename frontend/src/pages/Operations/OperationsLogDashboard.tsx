@@ -9,6 +9,7 @@ import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { storage } from '../../utils/storage';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
+import { canViewOperationsLog } from '../../utils/authz';
 
 const { Text, Title } = Typography;
 
@@ -29,6 +30,7 @@ const SOURCE_COLORS: Record<string, string> = {
 };
 
 function canViewAllLogs(): boolean {
+  if (canViewOperationsLog()) return true;
   const user = storage.getUser() as unknown;
   if (!user || typeof user !== 'object') return false;
   const u = user as Record<string, unknown>;
@@ -99,6 +101,11 @@ export default function OperationsLogDashboard() {
       limit: 200,
     }),
     staleTime: 5_000,
+  });
+  const logMetaQuery = useQuery({
+    queryKey: ['operations-log-meta'],
+    queryFn: () => operationsApi.meta(),
+    staleTime: 30_000,
   });
 
   const liveQuery = useQuery({
@@ -229,6 +236,11 @@ export default function OperationsLogDashboard() {
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
           <Title level={4} style={{ margin: 0 }}>Nhật ký vận hành</Title>
           <Space wrap>
+            <Tag color={Number(logMetaQuery.data?.recent_failed_count_24h ?? 0) > 0 ? 'red' : 'green'}>
+              Lỗi 24h: {logMetaQuery.data?.recent_failed_count_24h ?? 0}
+            </Tag>
+          </Space>
+          <Space wrap>
             <Input
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
@@ -249,14 +261,7 @@ export default function OperationsLogDashboard() {
               style={{ width: 150 }}
               options={[
                 { value: 'ALL', label: 'Mọi hành động' },
-                { value: 'ADVANCE', label: 'ADVANCE' },
-                { value: 'MOVE', label: 'MOVE' },
-                { value: 'FAIL', label: 'FAIL' },
-                { value: 'START', label: 'START' },
-                { value: 'COMPLETE', label: 'COMPLETE' },
-                { value: 'REMIND_OVERDUE', label: 'REMIND_OVERDUE' },
-                { value: 'RUN_AUTOMATION', label: 'RUN_AUTOMATION' },
-                { value: 'UPDATE', label: 'UPDATE' },
+                ...((logMetaQuery.data?.actions ?? []).map((item) => ({ value: item.value, label: item.label }))),
               ]}
             />
             <Select<OperationSource>
@@ -265,11 +270,10 @@ export default function OperationsLogDashboard() {
               style={{ width: 160 }}
               options={[
                 { value: 'ALL', label: 'Mọi nguồn' },
-                { value: 'TASK_BULK', label: 'Task Bulk' },
-                { value: 'PIPELINE_EVENT', label: 'Pipeline' },
-                { value: 'INSIGHT_ACTION', label: 'Insight' },
-                { value: 'TASK_AUDIT', label: 'Task Audit' },
-                { value: 'AUTOMATION_RUN', label: 'Automation' },
+                ...((logMetaQuery.data?.sources ?? []).map((item) => ({
+                  value: item.value as OperationSource,
+                  label: SOURCE_LABELS[item.value] || item.label,
+                }))),
               ]}
             />
             <Select<OperationSuccessFilter>

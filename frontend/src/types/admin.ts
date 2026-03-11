@@ -5,11 +5,21 @@ export interface RoleModulePermissionItem {
   is_active: boolean;
   workforce_manage: boolean;
   finance_manage: boolean;
+  ops_view: boolean;
+  workflow_view: boolean;
+  workflow_manage: boolean;
+  operations_log_view: boolean;
+  rbac_audit_view: boolean;
   rbac_manage: boolean;
 }
 
 export interface RoleModulePermissionResponse {
   items: RoleModulePermissionItem[];
+  field_meta?: Array<{
+    field: keyof RoleModulePermissionItem | string;
+    label: string;
+    changed_type: string;
+  }>;
 }
 
 export interface RoleModulePermissionUpdatePayload {
@@ -17,6 +27,11 @@ export interface RoleModulePermissionUpdatePayload {
     role_id: number;
     workforce_manage: boolean;
     finance_manage: boolean;
+    ops_view: boolean;
+    workflow_view: boolean;
+    workflow_manage: boolean;
+    operations_log_view: boolean;
+    rbac_audit_view: boolean;
     rbac_manage: boolean;
   }>;
 }
@@ -44,11 +59,7 @@ export interface RoleModulePermissionHistoryResponse {
   summary?: {
     total_events: number;
     total_role_changes: number;
-    by_changed_type: {
-      workforce: number;
-      finance: number;
-      rbac: number;
-    };
+    by_changed_type: Record<string, number>;
     top_actors: Array<{
       user_id: number | null;
       username: string;
@@ -72,6 +83,19 @@ export interface RoleModulePermissionHistoryResponse {
       frozen_until?: string | null;
     }>;
   };
+}
+
+export interface RoleModulePermissionHistoryMetaResponse {
+  users: Array<{
+    id: number;
+    username: string;
+    full_name: string;
+  }>;
+  changed_types: Array<{
+    value: string;
+    label: string;
+  }>;
+  anomalies_24h_count: number;
 }
 
 export interface RoleModulePermissionFreezeHistoryItem {

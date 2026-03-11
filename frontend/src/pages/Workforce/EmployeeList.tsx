@@ -4,7 +4,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PlusOutlined } from '@ant-design/icons';
 import { workforceApi } from '../../api/workforce';
-import type { Employee, EmployeePayload, EmployeeStatus } from '../../types/workforce';
+import type { Employee, EmployeePayload, EmployeeProfileHistory, EmployeeProfileHistoryPayload, EmployeeStatus } from '../../types/workforce';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
@@ -61,6 +61,18 @@ const emptyPayload: EmployeePayload = {
   is_active: true,
 };
 
+type EmployeeHistoryForm = EmployeeProfileHistoryPayload;
+
+const emptyHistoryPayload: EmployeeHistoryForm = {
+  employee: 0,
+  effective_month: '',
+  salary_basic: 0,
+  department: '',
+  position: '',
+  status: 'ACTIVE',
+  note: '',
+};
+
 export default function EmployeeList() {
   const queryClient = useQueryClient();
   const [messageApi, contextHolder] = message.useMessage();
@@ -70,6 +82,9 @@ export default function EmployeeList() {
   const [editing, setEditing] = useState<Employee | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form] = Form.useForm<EmployeePayload>();
+  const [historyModal, setHistoryModal] = useState<{ open: boolean; employee: Employee | null }>({ open: false, employee: null });
+  const [historyEditing, setHistoryEditing] = useState<EmployeeProfileHistory | null>(null);
+  const [historyForm] = Form.useForm<EmployeeHistoryForm>();
   const { config, saveConfig } = useUserPreferences(PAGES.WORKFORCE_EMPLOYEES);
   const canManage = canManageWorkforceData();
 
@@ -99,6 +114,17 @@ export default function EmployeeList() {
     queryKey: ['workforce-employees', params],
     queryFn: () => workforceApi.getEmployees(params),
   });
+  const historyQuery = useQuery({
+    queryKey: ['workforce-employee-profile-histories', historyModal.employee?.id],
+    queryFn: () =>
+      workforceApi.getEmployeeProfileHistories({
+        employee: historyModal.employee?.id,
+        page: 1,
+        page_size: 200,
+        ordering: '-effective_month',
+      }),
+    enabled: historyModal.open && historyModal.employee !== null,
+  });
 
   const createMutation = useMutation({
     mutationFn: workforceApi.createEmployee,
@@ -124,6 +150,31 @@ export default function EmployeeList() {
       messageApi.success('Đã xóa nhân viên');
     },
   });
+  const createHistoryMutation = useMutation({
+    mutationFn: workforceApi.createEmployeeProfileHistory,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['workforce-employee-profile-histories'] });
+      await queryClient.invalidateQueries({ queryKey: ['workforce-employees'] });
+      messageApi.success('Đã thêm mốc hiệu lực');
+    },
+  });
+  const updateHistoryMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: number; payload: Partial<EmployeeProfileHistoryPayload> }) =>
+      workforceApi.updateEmployeeProfileHistory(id, payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['workforce-employee-profile-histories'] });
+      await queryClient.invalidateQueries({ queryKey: ['workforce-employees'] });
+      messageApi.success('Đã cập nhật mốc hiệu lực');
+    },
+  });
+  const deleteHistoryMutation = useMutation({
+    mutationFn: workforceApi.deleteEmployeeProfileHistory,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['workforce-employee-profile-histories'] });
+      await queryClient.invalidateQueries({ queryKey: ['workforce-employees'] });
+      messageApi.success('Đã xóa mốc hiệu lực');
+    },
+  });
 
   const rows = listQuery.data?.results ?? [];
   const total = listQuery.data?.count ?? 0;
@@ -144,6 +195,21 @@ export default function EmployeeList() {
     setIsModalOpen(true);
   };
 
+  const openHistoryModal = (row: Employee) => {
+    setHistoryEditing(null);
+    historyForm.setFieldsValue({
+      ...emptyHistoryPayload,
+      employee: row.id,
+      effective_month: row.profile_effective_month || row.start_date?.slice(0, 7) || '',
+      salary_basic: Number(row.salary_basic ?? 0),
+      department: row.department,
+      position: row.position,
+      status: row.status,
+      note: '',
+    });
+    setHistoryModal({ open: true, employee: row });
+  };
+
   const handleSubmit = async () => {
     const values = await form.validateFields();
     const payload: EmployeePayload = {
@@ -157,6 +223,32 @@ export default function EmployeeList() {
       await createMutation.mutateAsync(payload);
     }
     setIsModalOpen(false);
+  };
+
+  const submitHistory = async () => {
+    if (!historyModal.employee) return;
+    const values = await historyForm.validateFields();
+    const payload: EmployeeProfileHistoryPayload = {
+      employee: historyModal.employee.id,
+      effective_month: values.effective_month,
+      salary_basic: Number(values.salary_basic || 0),
+      department: values.department || '',
+      position: values.position || '',
+      status: values.status,
+      note: values.note || '',
+    };
+    if (historyEditing) {
+      await updateHistoryMutation.mutateAsync({ id: historyEditing.id, payload });
+    } else {
+      await createHistoryMutation.mutateAsync(payload);
+    }
+    setHistoryEditing(null);
+    historyForm.setFieldsValue({
+      ...payload,
+      employee: historyModal.employee.id,
+      effective_month: '',
+      note: '',
+    });
   };
 
   const columns: ColumnsType<Employee> = [
@@ -187,12 +279,15 @@ export default function EmployeeList() {
     {
       title: 'Thao tác',
       key: 'actions',
-      width: 170,
+      width: 250,
       fixed: 'right',
       render: (_, row) => (
         <Space>
           {canManage && (
             <>
+              <Button size="small" onClick={() => openHistoryModal(row)}>
+                Hiệu lực
+              </Button>
               <Button size="small" onClick={() => openEdit(row)}>
                 Sửa
               </Button>
@@ -332,6 +427,136 @@ export default function EmployeeList() {
             <Switch />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={historyModal.employee ? `Lịch sử hiệu lực - ${historyModal.employee.code}` : 'Lịch sử hiệu lực'}
+        open={historyModal.open}
+        onCancel={() => {
+          setHistoryModal({ open: false, employee: null });
+          setHistoryEditing(null);
+          historyForm.resetFields();
+        }}
+        footer={null}
+        width={1000}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ color: '#8c8c8c' }}>
+            Mỗi mốc hiệu lực áp dụng từ đầu tháng đã chọn. Payroll sẽ lấy mốc gần nhất nhỏ hơn hoặc bằng tháng đang tính.
+          </div>
+          <Form form={historyForm} layout="vertical">
+            <div style={{ display: 'grid', gridTemplateColumns: '180px repeat(4, minmax(0, 1fr))', gap: 12 }}>
+              <Form.Item name="effective_month" label="Tháng hiệu lực" rules={[{ required: true, message: 'Bắt buộc' }]}>
+                <Input type="month" />
+              </Form.Item>
+              <Form.Item name="salary_basic" label="Lương cơ bản" rules={[{ required: true, message: 'Bắt buộc' }]}>
+                <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item name="department" label="Phòng ban">
+                <Input />
+              </Form.Item>
+              <Form.Item name="position" label="Chức vụ">
+                <Input />
+              </Form.Item>
+              <Form.Item name="status" label="Trạng thái">
+                <Select options={STATUS_OPTIONS} />
+              </Form.Item>
+            </div>
+            <Form.Item name="note" label="Ghi chú">
+              <Input />
+            </Form.Item>
+            <Space>
+              <Button type="primary" onClick={submitHistory} loading={createHistoryMutation.isPending || updateHistoryMutation.isPending}>
+                {historyEditing ? 'Cập nhật mốc' : 'Thêm mốc'}
+              </Button>
+              {historyEditing ? (
+                <Button
+                  onClick={() => {
+                    setHistoryEditing(null);
+                    historyForm.setFieldsValue({
+                      ...emptyHistoryPayload,
+                      employee: historyModal.employee?.id ?? 0,
+                      salary_basic: Number(historyModal.employee?.salary_basic ?? 0),
+                      department: historyModal.employee?.department ?? '',
+                      position: historyModal.employee?.position ?? '',
+                      status: historyModal.employee?.status ?? 'ACTIVE',
+                    });
+                  }}
+                >
+                  Hủy sửa
+                </Button>
+              ) : null}
+            </Space>
+          </Form>
+          <Table
+            rowKey="id"
+            loading={historyQuery.isLoading}
+            dataSource={historyQuery.data?.results ?? []}
+            pagination={false}
+            size="small"
+            scroll={{ x: 900 }}
+            columns={[
+              { title: 'Tháng hiệu lực', dataIndex: 'effective_month', width: 130 },
+              {
+                title: 'Lương cơ bản',
+                dataIndex: 'salary_basic',
+                width: 160,
+                align: 'right',
+                render: (value: string) => `${Number(value || 0).toLocaleString('vi-VN')} đ`,
+              },
+              { title: 'Phòng ban', dataIndex: 'department', width: 160 },
+              { title: 'Chức vụ', dataIndex: 'position', width: 160 },
+              {
+                title: 'Trạng thái',
+                dataIndex: 'status',
+                width: 120,
+                render: (status: EmployeeStatus) => STATUS_OPTIONS.find((item) => item.value === status)?.label ?? status,
+              },
+              { title: 'Ghi chú', dataIndex: 'note' },
+              {
+                title: 'Thao tác',
+                key: 'actions',
+                width: 150,
+                fixed: 'right',
+                render: (_, row: EmployeeProfileHistory) => (
+                  <Space>
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        setHistoryEditing(row);
+                        historyForm.setFieldsValue({
+                          employee: row.employee,
+                          effective_month: row.effective_month,
+                          salary_basic: Number(row.salary_basic || 0),
+                          department: row.department,
+                          position: row.position,
+                          status: row.status,
+                          note: row.note,
+                        });
+                      }}
+                    >
+                      Sửa
+                    </Button>
+                    <Button
+                      size="small"
+                      danger
+                      onClick={() =>
+                        Modal.confirm({
+                          title: `Xóa mốc hiệu lực ${row.effective_month}?`,
+                          okText: 'Xóa',
+                          cancelText: 'Hủy',
+                          onOk: () => deleteHistoryMutation.mutateAsync(row.id),
+                        })
+                      }
+                    >
+                      Xóa
+                    </Button>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        </div>
       </Modal>
     </div>
   );

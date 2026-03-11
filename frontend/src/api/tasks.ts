@@ -110,7 +110,7 @@ export interface TaskBulkActionItemResult {
 
 export interface TaskBulkActionResult {
   success: boolean;
-  action: 'START' | 'COMPLETE' | 'REMIND_OVERDUE';
+  action: 'START' | 'COMPLETE' | 'REMIND_OVERDUE' | 'REASSIGN';
   total_requested: number;
   processed_count: number;
   success_count: number;
@@ -251,14 +251,16 @@ export const tasksApi = {
   },
 
   bulkAction(params: {
-    action: 'START' | 'COMPLETE' | 'REMIND_OVERDUE';
+    action: 'START' | 'COMPLETE' | 'REMIND_OVERDUE' | 'REASSIGN';
     task_ids: number[];
+    assigned_to?: number | null;
+    note?: string;
   }) {
     return axiosInstance.post<TaskBulkActionResult>('/tasks/bulk_action/', params).then((r) => r.data);
   },
 
   bulkHistory(params?: {
-    action?: 'ALL' | 'START' | 'COMPLETE' | 'REMIND_OVERDUE';
+    action?: 'ALL' | 'START' | 'COMPLETE' | 'REMIND_OVERDUE' | 'REASSIGN';
     result?: 'ALL' | 'SUCCESS' | 'HAS_ERROR';
     limit?: number;
   }) {

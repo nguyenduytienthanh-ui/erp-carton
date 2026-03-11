@@ -1,13 +1,17 @@
 """
 Services chứng từ: code theo kỳ, snapshot, post atomic + idempotent.
 """
-from datetime import timedelta
+from datetime import datetime, time, timedelta
+from decimal import Decimal
+
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 from django.conf import settings
 
 from core.models import WorkflowDefinition, ApprovalHistory, AuditLog, Task
 from core.mixins import get_client_ip
+from products.price_services import resolve_product_price_as_of
 from sales.models import (
     SalesOrder,
     SalesOrderLine,
@@ -16,6 +20,201 @@ from sales.models import (
     SalesOrderStatus,
     SalesOrderDeliveryPlan,
 )
+
+
+AUTO_SHIPMENT_PLAN_NOTE = '[AUTO-SHIP]'
+
+
+def _normalize_price_as_of(as_of_datetime):
+    if as_of_datetime is None:
+        return timezone.now()
+    if isinstance(as_of_datetime, datetime):
+        value = as_of_datetime
+    else:
+        value = datetime.combine(as_of_datetime, time.max)
+    if timezone.is_naive(value):
+        value = timezone.make_aware(value, timezone.get_current_timezone())
+    return value
+
+
+def build_sales_order_line_trace_code(order, product, line_number):
+    product_code = getattr(product, 'code', '') or ''
+    order_code = getattr(order, 'code', '') or ''
+    order_date = getattr(order, 'order_date', None)
+    order_date_token = order_date.strftime('%Y%m%d') if order_date else timezone.localdate().strftime('%Y%m%d')
+    line_token = str(line_number or 0).zfill(3)
+    return f'{product_code}|{order_date_token}|{order_code}|L{line_token}'
+
+
+def build_sales_order_line_package_trace_code(line_trace_code, package_index):
+    base_code = str(line_trace_code or '').strip()
+    package_token = str(package_index or 0).zfill(3)
+    return f'{base_code}|C{package_token}' if base_code else f'C{package_token}'
+
+
+def build_shipment_package_trace_code(line_trace_code, shipment_code, package_index):
+    base_code = str(line_trace_code or '').strip()
+    shipment_token = str(shipment_code or '').strip()
+    package_token = str(package_index or 0).zfill(3)
+    if base_code and shipment_token:
+        return f'{base_code}|{shipment_token}|C{package_token}'
+    if base_code:
+        return f'{base_code}|C{package_token}'
+    if shipment_token:
+        return f'{shipment_token}|C{package_token}'
+    return f'C{package_token}'
+
+
+def build_shipment_package_code(shipment_code, line_number, package_index):
+    shipment_token = str(shipment_code or '').strip()
+    line_token = str(line_number or 0).zfill(3)
+    package_token = str(package_index or 0).zfill(3)
+    return f'{shipment_token}-L{line_token}-P{package_token}' if shipment_token else f'L{line_token}-P{package_token}'
+
+
+def build_sales_order_line_product_snapshot(product, as_of_datetime=None):
+    if not product:
+        return {}
+    as_of = _normalize_price_as_of(as_of_datetime)
+    bundle = None
+    primary_product = None
+    base_pricing = resolve_product_price_as_of(product, as_of)
+    resolved_cost_price = base_pricing['cost_price'] or Decimal('0')
+    resolved_sale_price = base_pricing['sale_price'] or Decimal('0')
+    resolved_commission_per_unit = base_pricing['commission_per_unit'] or Decimal('0')
+    resolved_commission_percent = base_pricing['commission_percent'] or Decimal('0')
+    bundle_components = []
+    bundle_pricing_mode = None
+    bundle_commission_mode = None
+    bundle_delivery_rule = None
+    bundle_primary_product_id = None
+    bundle_primary_product_name = None
+    try:
+        bundle = product.bundle_config
+    except Exception:
+        bundle = None
+    if bundle and bundle.is_active:
+        primary_product = bundle.get_primary_product()
+        resolved_cost_price = bundle.resolve_cost_price(as_of)
+        resolved_sale_price = bundle.resolve_sale_price(as_of)
+        resolved_commission_per_unit = bundle.resolve_commission_per_unit(as_of)
+        resolved_commission_percent = bundle.resolve_commission_percent(as_of)
+        bundle_pricing_mode = bundle.pricing_mode
+        bundle_commission_mode = bundle.get_commission_mode()
+        bundle_delivery_rule = bundle.delivery_rule
+        bundle_primary_product_id = primary_product.id if primary_product else None
+        bundle_primary_product_name = primary_product.name if primary_product else None
+        bundle_components = [
+            {
+                'component_product_id': component.component_product_id,
+                'component_product_code': component.component_product.code,
+                'component_product_name': component.component_product.name,
+                'qty_per_bundle': str(component.qty_per_bundle or 0),
+                'unit_name': getattr(getattr(component.component_product, 'unit', None), 'name', None),
+                'is_required': component.is_required,
+            }
+            for component in bundle.get_active_components()
+        ]
+    return {
+        'product_id': product.id,
+        'code': product.code,
+        'name': product.name,
+        'category_id': product.category_id,
+        'category_name': getattr(getattr(product, 'category', None), 'name', None),
+        'unit_id': product.unit_id,
+        'unit_name': getattr(getattr(product, 'unit', None), 'name', None),
+        'description': product.description or '',
+        'size_order': product.size_order or '',
+        'size_production': product.size_production or '',
+        'wave_id': product.wave_id,
+        'wave_code': getattr(getattr(product, 'wave', None), 'code', None),
+        'wave_name': getattr(getattr(product, 'wave', None), 'name', None),
+        'box_type_id': product.box_type_id,
+        'box_type_code': getattr(getattr(product, 'box_type', None), 'code', None),
+        'box_type_name': getattr(getattr(product, 'box_type', None), 'name', None),
+        'standalone_cost_price': str(base_pricing['cost_price'] or 0),
+        'standalone_sale_price': str(base_pricing['sale_price'] or 0),
+        'standalone_commission_per_unit': str(base_pricing['commission_per_unit'] or 0),
+        'standalone_commission_percent': str(base_pricing['commission_percent'] or 0),
+        'cost_price': str(resolved_cost_price),
+        'sale_price': str(resolved_sale_price),
+        'min_stock': str(product.min_stock or 0),
+        'delivery_tolerance': product.delivery_tolerance or '',
+        'commission_per_unit': str(resolved_commission_per_unit),
+        'commission_percent': str(resolved_commission_percent),
+        'process_xa': product.process_xa,
+        'process_in': product.process_in,
+        'process_boi': product.process_boi,
+        'process_can_mang': product.process_can_mang,
+        'process_be': product.process_be,
+        'process_chap': product.process_chap,
+        'process_dong': product.process_dong,
+        'process_dan': product.process_dan,
+        'process_khac': product.process_khac,
+        'film_code': product.film_code or '',
+        'film_file_url': product.film_file_url or '',
+        'color_count': product.color_count,
+        'mold_code': product.mold_code or '',
+        'mold_file_url': product.mold_file_url or '',
+        'waterproof': product.waterproof or '',
+        'note_other': product.note_other or '',
+        'note': product.note or '',
+        'parent_id': product.parent_id,
+        'parent_name': getattr(getattr(product, 'parent', None), 'name', None),
+        'component_quantity': product.component_quantity,
+        'is_set': product.is_set,
+        'bundle_id': bundle.id if bundle else None,
+        'bundle_pricing_mode': bundle_pricing_mode,
+        'bundle_commission_mode': bundle_commission_mode,
+        'bundle_delivery_rule': bundle_delivery_rule,
+        'bundle_primary_product_id': bundle_primary_product_id,
+        'bundle_primary_product_name': bundle_primary_product_name,
+        'bundle_components': bundle_components,
+        'status': product.status,
+        'owner_id': product.owner_id,
+        'owner_name': getattr(getattr(product, 'owner', None), 'username', None),
+        'team_id': product.team_id,
+        'team_name': getattr(getattr(product, 'team', None), 'name', None),
+        'is_active': product.is_active,
+    }
+
+
+def merge_sales_order_line_product_snapshot(product, overrides=None, *, unit_price=None, as_of_datetime=None):
+    snapshot = build_sales_order_line_product_snapshot(product, as_of_datetime=as_of_datetime)
+    overrides = overrides or {}
+    editable_keys = {
+        'description',
+        'size_order',
+        'size_production',
+        'sale_price',
+        'delivery_tolerance',
+        'commission_per_unit',
+        'commission_percent',
+        'process_xa',
+        'process_in',
+        'process_boi',
+        'process_can_mang',
+        'process_be',
+        'process_chap',
+        'process_dong',
+        'process_dan',
+        'process_khac',
+        'film_code',
+        'film_file_url',
+        'color_count',
+        'mold_code',
+        'mold_file_url',
+        'waterproof',
+        'note_other',
+        'note',
+        'unit_name',
+    }
+    for key, value in overrides.items():
+        if key in editable_keys and value is not None:
+            snapshot[key] = value
+    if unit_price is not None:
+        snapshot['sale_price'] = str(unit_price)
+    return snapshot
 
 
 def get_next_sales_order_code(order_date):
@@ -45,21 +244,26 @@ def build_posted_snapshot(order):
     lines_snap = []
     for line in order.lines.select_related('product').prefetch_related('delivery_plans').order_by('line_number'):
         p = line.product
+        line_snapshot = getattr(line, 'product_snapshot', None) or {}
         plans = [
             {
                 'delivery_date': pl.delivery_date.isoformat() if pl.delivery_date else None,
                 'qty': str(pl.qty),
+                'shipped_qty': str(pl.shipped_qty),
                 'delivered_qty': str(pl.delivered_qty),
                 'remaining_qty': str(pl.remaining_qty),
+                'remaining_shipment_qty': str(pl.remaining_shipment_qty),
                 'note': pl.note or '',
             }
             for pl in line.delivery_plans.all().order_by('delivery_date', 'id')
         ]
         lines_snap.append({
             'line_number': line.line_number,
-            'product_id': p.id,
-            'product_code': p.code,
-            'product_name': p.name,
+            'product_id': line_snapshot.get('product_id', p.id),
+            'product_code': line.internal_product_code or line_snapshot.get('code', p.code),
+            'product_name': line_snapshot.get('name', p.name),
+            'trace_code': line.trace_code,
+            'product_snapshot': line_snapshot,
             'qty': str(line.qty),
             'unit_price': str(line.unit_price),
             'discount_pct': str(line.discount_pct),
@@ -68,6 +272,160 @@ def build_posted_snapshot(order):
             'delivery_plans': plans,
         })
     return {'customer': customer_snap, 'lines': lines_snap, 'total': str(order.total)}
+
+
+def get_sales_order_line_shipped_qty(line, *, exclude_transaction_id=None):
+    from inventory.models import InventoryTransaction, InventoryTransactionStatus, InventoryTransactionType
+
+    if not getattr(line, 'id', None):
+        return Decimal('0')
+    qs = InventoryTransaction.objects.filter(
+        sales_order_line=line,
+        transaction_type=InventoryTransactionType.ISSUE,
+        status=InventoryTransactionStatus.POSTED,
+    )
+    if exclude_transaction_id:
+        qs = qs.exclude(pk=exclude_transaction_id)
+    agg = qs.aggregate(total=Sum('quantity'))
+    return agg.get('total') or Decimal('0')
+
+
+def ensure_sales_order_line_shipment_allowed(line, quantity, *, exclude_transaction_id=None):
+    quantity = Decimal(str(quantity or 0))
+    if quantity <= 0:
+        return
+    current_shipped = get_sales_order_line_shipped_qty(line, exclude_transaction_id=exclude_transaction_id)
+    ordered_qty = Decimal(str(getattr(line, 'qty', 0) or 0))
+    if current_shipped + quantity > ordered_qty:
+        remaining = ordered_qty - current_shipped
+        raise ValueError(
+            f'Dòng {line.line_number} chỉ còn được xuất {remaining}, yêu cầu={quantity}.'
+        )
+
+
+def apply_delivery_plan_shipment(line, quantity, *, actor=None, shipment_date=None):
+    quantity = Decimal(str(quantity or 0))
+    if quantity <= 0:
+        return []
+    shipment_date = shipment_date or timezone.localdate()
+    touched_plan_ids = []
+    remaining = quantity
+    plans = list(line.delivery_plans.all().order_by('delivery_date', 'id'))
+    for plan in plans:
+        plan_remaining = plan.remaining_shipment_qty
+        if plan_remaining <= 0:
+            continue
+        allocate_qty = min(plan_remaining, remaining)
+        if allocate_qty <= 0:
+            continue
+        plan.shipped_qty = (plan.shipped_qty or Decimal('0')) + allocate_qty
+        plan.save(update_fields=['shipped_qty', 'updated_at'])
+        touched_plan_ids.append(plan.id)
+        remaining -= allocate_qty
+        if remaining <= 0:
+            break
+
+    if remaining > 0:
+        auto_plan = SalesOrderDeliveryPlan.objects.create(
+            line=line,
+            delivery_date=shipment_date,
+            qty=remaining,
+            shipped_qty=remaining,
+            delivered_qty=Decimal('0'),
+            note=f'{AUTO_SHIPMENT_PLAN_NOTE} Tự động tạo từ xuất kho.',
+        )
+        touched_plan_ids.append(auto_plan.id)
+
+    if actor:
+        sync_sales_order_delivery_tasks(actor=actor, order_ids=[line.sales_order_id], days_ahead=14)
+    return touched_plan_ids
+
+
+def reverse_delivery_plan_shipment(line, quantity, *, actor=None):
+    quantity = Decimal(str(quantity or 0))
+    if quantity <= 0:
+        return []
+    touched_plan_ids = []
+    remaining = quantity
+    plans = list(line.delivery_plans.filter(shipped_qty__gt=0).order_by('-delivery_date', '-id'))
+    for plan in plans:
+        allocated_qty = min(plan.shipped_qty or Decimal('0'), remaining)
+        if allocated_qty <= 0:
+            continue
+        plan.shipped_qty = max(Decimal('0'), (plan.shipped_qty or Decimal('0')) - allocated_qty)
+        if plan.delivered_qty > plan.shipped_qty:
+            plan.delivered_qty = plan.shipped_qty
+        if (plan.note or '').startswith(AUTO_SHIPMENT_PLAN_NOTE) and (plan.shipped_qty or Decimal('0')) <= 0 and (plan.delivered_qty or Decimal('0')) <= 0:
+            touched_plan_ids.append(plan.id)
+            plan.delete()
+        else:
+            plan.save(update_fields=['shipped_qty', 'delivered_qty', 'updated_at'])
+            touched_plan_ids.append(plan.id)
+        remaining -= allocated_qty
+        if remaining <= 0:
+            break
+
+    if actor:
+        sync_sales_order_delivery_tasks(actor=actor, order_ids=[line.sales_order_id], days_ahead=14)
+    return touched_plan_ids
+
+
+def apply_delivery_plan_delivery(line, quantity, *, actor=None, delivery_date=None):
+    quantity = Decimal(str(quantity or 0))
+    if quantity <= 0:
+        return []
+    delivery_date = delivery_date or timezone.localdate()
+    touched_plan_ids = []
+    remaining = quantity
+    plans = list(line.delivery_plans.filter(shipped_qty__gt=0).order_by('delivery_date', 'id'))
+    for plan in plans:
+        deliverable_qty = min(plan.qty or Decimal('0'), plan.shipped_qty or Decimal('0')) - (plan.delivered_qty or Decimal('0'))
+        if deliverable_qty <= 0:
+            continue
+        allocate_qty = min(deliverable_qty, remaining)
+        if allocate_qty <= 0:
+            continue
+        plan.delivered_qty = (plan.delivered_qty or Decimal('0')) + allocate_qty
+        plan.save(update_fields=['delivered_qty', 'updated_at'])
+        touched_plan_ids.append(plan.id)
+        remaining -= allocate_qty
+        if remaining <= 0:
+            break
+
+    if remaining > 0:
+        auto_plan = SalesOrderDeliveryPlan.objects.create(
+            line=line,
+            delivery_date=delivery_date,
+            qty=remaining,
+            shipped_qty=remaining,
+            delivered_qty=remaining,
+            note='[AUTO-DELIVERY] Tự động tạo từ xác nhận giao xong.',
+        )
+        touched_plan_ids.append(auto_plan.id)
+
+    if actor:
+        sync_sales_order_delivery_tasks(actor=actor, order_ids=[line.sales_order_id], days_ahead=14)
+    return touched_plan_ids
+
+
+def get_sales_order_void_blockers(order):
+    from inventory.models import InventoryReservation, InventoryReservationStatus, InventoryTransaction, InventoryTransactionStatus
+
+    blockers = []
+    open_reservations = InventoryReservation.objects.filter(
+        sales_order=order,
+        status=InventoryReservationStatus.OPEN,
+    )
+    if open_reservations.filter(reserved_qty__gt=0).exists():
+        blockers.append('Đơn còn reservation OPEN, cần release/hủy reservation trước khi void.')
+    active_shipments = InventoryTransaction.objects.filter(
+        sales_order=order,
+        transaction_type='ISSUE',
+        status=InventoryTransactionStatus.POSTED,
+    )
+    if active_shipments.exists():
+        blockers.append('Đơn đã có phiếu xuất kho POSTED, cần hủy/chứng từ đảo trước khi void.')
+    return blockers
 
 
 def post_sales_order(order, user, request=None):
@@ -190,7 +548,7 @@ def sync_sales_order_delivery_tasks(actor=None, order_ids=None, days_ahead=2):
         title = f"[Giao hàng] {order.code} - Dòng {plan.line.line_number}"
         description = (
             f"Mã hàng: {plan.line.product.code} - {plan.line.product.name}\n"
-            f"Kế hoạch: {plan.qty} | Đã giao: {plan.delivered_qty} | Còn lại: {plan.remaining_qty}\n"
+            f"Kế hoạch: {plan.qty} | Đã xuất: {plan.shipped_qty} | Đã giao: {plan.delivered_qty} | Còn giao: {plan.remaining_qty}\n"
             f"Ngày giao: {plan.delivery_date.isoformat()}\n"
             f"Ghi chú: {plan.note or '-'}"
         )

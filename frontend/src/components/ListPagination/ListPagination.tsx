@@ -2,7 +2,7 @@
  * Bộ phân trang dùng chung: Tổng số + Pagination + Ô chọn số dòng/trang (X / trang)
  * Dùng cho ProductList, CustomerList, ...
  */
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { Pagination, InputNumber, Space, message } from 'antd';
 import QuickClearIcon from '../QuickClearIcon';
 
@@ -32,7 +32,6 @@ export default function ListPagination({
 }: ListPaginationProps) {
   const [pageSizeDraft, setPageSizeDraft] = useState<number | null>(null);
   const [isEditingPageSize, setIsEditingPageSize] = useState(false);
-  const pageSizeInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleApplyPageSize = (v: number | null) => {
     if (v == null) return;
@@ -75,7 +74,6 @@ export default function ListPagination({
           />
           <div className="input-number-with-clear-wrapper" style={{ width: 110, display: 'inline-block', position: 'relative' }}>
             <InputNumber
-              ref={pageSizeInputRef as any}
               size="small"
               min={minPageSize}
               max={maxPageSize}
@@ -117,7 +115,12 @@ export default function ListPagination({
                 const v = pageSizeDraft;
                 if (v == null) return;
                 handleApplyPageSize(v);
-                (pageSizeInputRef.current as any)?.blur?.();
+                window.setTimeout(() => {
+                  const activeElement = document.activeElement;
+                  if (activeElement instanceof HTMLElement) {
+                    activeElement.blur();
+                  }
+                }, 0);
               }}
             />
             {(isEditingPageSize ? pageSizeDraft : pageSize) != null && (

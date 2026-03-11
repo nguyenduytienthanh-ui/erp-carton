@@ -338,12 +338,12 @@ const CustomerList = () => {
   const [formMode, setFormMode] = useState<CustomerFormMode>('create');
   const [importModalVisible, setImportModalVisible] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
-  const [viewMode, setViewMode] = useState<ListViewMode>(() => (window.innerWidth <= 768 ? 'cards' : 'table'));
-  const [cardDensity, setCardDensity] = useState<CardDensity>('comfortable');
-  const [desktopTableDensity, setDesktopTableDensity] = useState<DesktopTableDensity>('comfortable');
+  const [viewModeOverride, setViewModeOverride] = useState<ListViewMode | null>(null);
+  const [cardDensityOverride, setCardDensityOverride] = useState<CardDensity | null>(null);
+  const [desktopTableDensityOverride, setDesktopTableDensityOverride] = useState<DesktopTableDensity | null>(null);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
-  const [sortField, setSortField] = useState<string | null>(null);
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | null>(null);
+  const [sortFieldOverride, setSortFieldOverride] = useState<string | null | undefined>(undefined);
+  const [sortOrderOverride, setSortOrderOverride] = useState<'asc' | 'desc' | null | undefined>(undefined);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
   const [historySearchInput, setHistorySearchInput] = useState('');
@@ -378,28 +378,37 @@ const CustomerList = () => {
       configRef.current = merged;
       await saveConfig(merged);
     },
-    [saveConfig]
+    [saveConfig],
   );
 
-  useEffect(() => {
-    const savedMode = config?.mobileListViewMode as ListViewMode | undefined;
-    if (savedMode === 'table' || savedMode === 'cards') {
-      setViewMode(savedMode);
-    }
-    const savedDensity = config?.mobileCardDensity as CardDensity | undefined;
-    if (savedDensity === 'comfortable' || savedDensity === 'compact') {
-      setCardDensity(savedDensity);
-    }
-    const savedDesktopDensity = config?.desktopTableDensity as DesktopTableDensity | undefined;
-    if (savedDesktopDensity === 'comfortable' || savedDesktopDensity === 'compact') {
-      setDesktopTableDensity(savedDesktopDensity);
-    }
-    if (config?.sort && typeof config.sort === 'object' && (config.sort as { field?: string; order?: 'asc' | 'desc' }).field && (config.sort as { field?: string; order?: 'asc' | 'desc' }).order) {
-      const s = config.sort as { field: string; order: 'asc' | 'desc' };
-      setSortField(s.field);
-      setSortOrder(s.order);
-    }
-  }, [config]);
+  const savedViewMode = config?.mobileListViewMode;
+  const resolvedViewMode: ListViewMode =
+    viewModeOverride ??
+    (savedViewMode === 'table' || savedViewMode === 'cards'
+      ? savedViewMode
+      : isMobile
+        ? 'cards'
+        : 'table');
+
+  const savedCardDensity = config?.mobileCardDensity;
+  const resolvedCardDensity: CardDensity =
+    cardDensityOverride ??
+    (savedCardDensity === 'comfortable' || savedCardDensity === 'compact'
+      ? savedCardDensity
+      : 'comfortable');
+
+  const savedDesktopTableDensity = config?.desktopTableDensity;
+  const resolvedDesktopTableDensity: DesktopTableDensity =
+    desktopTableDensityOverride ??
+    (savedDesktopTableDensity === 'comfortable' || savedDesktopTableDensity === 'compact'
+      ? savedDesktopTableDensity
+      : 'comfortable');
+
+  const savedSort = config?.sort as { field?: string; order?: 'asc' | 'desc' } | undefined;
+  const resolvedSortField =
+    sortFieldOverride === undefined ? (savedSort?.field ?? null) : sortFieldOverride;
+  const resolvedSortOrder =
+    sortOrderOverride === undefined ? (savedSort?.order ?? null) : sortOrderOverride;
 
   const {
     intentSearch,
@@ -414,11 +423,16 @@ const CustomerList = () => {
     parseFilters: parseStableFilterString,
   });
 
+  const currentPage = pagination.current;
+  const currentPageSize = pagination.pageSize;
+
   const apiParams = useMemo(() => {
     const p: Record<string, unknown> = {
-      page: pagination.current,
-      page_size: pagination.pageSize,
-      ordering: sortField ? `${sortOrder === 'desc' ? '-' : ''}${sortField}` : 'code',
+      page: currentPage,
+      page_size: currentPageSize,
+      ordering: resolvedSortField
+        ? `${resolvedSortOrder === 'desc' ? '-' : ''}${resolvedSortField}`
+        : 'code',
     };
     if (intentSearch.trim()) p.q = intentSearch.trim();
     if (intentFilters.code?.trim()) p.code = intentFilters.code.trim();
@@ -431,7 +445,15 @@ const CustomerList = () => {
     if (intentFilters.is_active === false) p.is_active = 'false';
     if (exactSearch) p.exact_search = '1';
     return p;
-  }, [intentSearch, intentFilters, pagination.current, pagination.pageSize, exactSearch, sortField, sortOrder]);
+  }, [
+    currentPage,
+    currentPageSize,
+    exactSearch,
+    intentFilters,
+    intentSearch,
+    resolvedSortField,
+    resolvedSortOrder,
+  ]);
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['customers', apiParams],
@@ -516,14 +538,22 @@ const CustomerList = () => {
     setIntentImmediate(searchInput, EMPTY_FILTER_VALUES);
   }, [searchInput, setIntentImmediate]);
 
-  const syncUrl = useCallback(() => {
-    const params = customerListParamsToSearch(intentSearch, intentFilters, activeFilters, pagination.current, pagination.pageSize, exactSearch);
-    setSearchParams(params, { replace: true });
-  }, [intentSearch, intentFilters, activeFilters, pagination, exactSearch, setSearchParams]);
+  const urlParams = useMemo(
+    () =>
+      customerListParamsToSearch(
+        intentSearch,
+        intentFilters,
+        activeFilters,
+        currentPage,
+        currentPageSize,
+        exactSearch,
+      ),
+    [activeFilters, currentPage, currentPageSize, exactSearch, intentFilters, intentSearch],
+  );
 
   useEffect(() => {
-    syncUrl();
-  }, [intentSearch, intentFilters, activeFilters, pagination.current, pagination.pageSize, exactSearch]);
+    setSearchParams(urlParams, { replace: true });
+  }, [setSearchParams, urlParams]);
 
   const handleAdd = () => {
     setFormMode('create');
@@ -684,41 +714,41 @@ const CustomerList = () => {
   };
 
   const handleViewModeChange = useCallback((mode: ListViewMode) => {
-    setViewMode(mode);
+    setViewModeOverride(mode);
     void savePreferences({ mobileListViewMode: mode });
   }, [savePreferences]);
 
   const handleCardDensityChange = useCallback((density: CardDensity) => {
-    setCardDensity(density);
+    setCardDensityOverride(density);
     void savePreferences({ mobileCardDensity: density });
   }, [savePreferences]);
 
   const handleDesktopTableDensityChange = useCallback((density: DesktopTableDensity) => {
-    setDesktopTableDensity(density);
+    setDesktopTableDensityOverride(density);
     void savePreferences({ desktopTableDensity: density });
   }, [savePreferences]);
 
   const handleSort = useCallback(
     async (orderingParam: string) => {
       let newOrder: 'asc' | 'desc' | null = null;
-      if (sortField === orderingParam) {
-        if (sortOrder === 'asc') newOrder = 'desc';
-        else if (sortOrder === 'desc') newOrder = null;
+      if (resolvedSortField === orderingParam) {
+        if (resolvedSortOrder === 'asc') newOrder = 'desc';
+        else if (resolvedSortOrder === 'desc') newOrder = null;
       } else {
         newOrder = 'asc';
       }
       if (newOrder === null) {
-        setSortField(null);
-        setSortOrder(null);
+        setSortFieldOverride(null);
+        setSortOrderOverride(null);
         await savePreferences({ sort: undefined });
       } else {
-        setSortField(orderingParam);
-        setSortOrder(newOrder);
+        setSortFieldOverride(orderingParam);
+        setSortOrderOverride(newOrder);
         await savePreferences({ sort: { field: orderingParam, order: newOrder } });
       }
       setPagination((p) => ({ ...p, current: 1 }));
     },
-    [sortField, sortOrder, savePreferences]
+    [resolvedSortField, resolvedSortOrder, savePreferences],
   );
 
   const handleFormClose = useCallback(() => {
@@ -729,12 +759,12 @@ const CustomerList = () => {
   }, [queryClient]);
 
   const SortIcon = ({ orderingParam }: { orderingParam: string }) => {
-    if (sortField !== orderingParam) {
+    if (resolvedSortField !== orderingParam) {
       return <span style={{ color: '#bfbfbf', fontSize: 10, marginLeft: 2 }}>⇅</span>;
     }
     return (
       <span style={{ color: '#1890ff', fontSize: 10, fontWeight: 'bold', marginLeft: 2 }}>
-        {sortOrder === 'asc' ? '▲' : '▼'}
+        {resolvedSortOrder === 'asc' ? '▲' : '▼'}
       </span>
     );
   };
@@ -930,9 +960,9 @@ const CustomerList = () => {
     </div>
   );
 
-  const showCards = isMobile && viewMode === 'cards';
-  const showTable = !isMobile || viewMode === 'table';
-  const isCompactCards = cardDensity === 'compact';
+  const showCards = isMobile && resolvedViewMode === 'cards';
+  const showTable = !isMobile || resolvedViewMode === 'table';
+  const isCompactCards = resolvedCardDensity === 'compact';
 
   return (
     <>
@@ -962,7 +992,7 @@ const CustomerList = () => {
               {!isMobile && (
                 <Segmented
                   size="small"
-                  value={desktopTableDensity}
+                  value={resolvedDesktopTableDensity}
                   onChange={(value) => handleDesktopTableDensityChange(value as DesktopTableDensity)}
                   options={[
                     { label: 'Thoáng', value: 'comfortable' },
@@ -998,7 +1028,7 @@ const CustomerList = () => {
               {!isMobile && <Button icon={<ExportOutlined />} onClick={() => handleExport('excel')} title="Xuất Excel">Xuất Excel</Button>}
               {!isMobile && <Button icon={<ExportOutlined />} onClick={() => handleExport('pdf')} title="Xuất PDF">Xuất PDF</Button>}
               {!isMobile && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới">Thêm mới</Button>}
-              {(!isMobile || viewMode === 'table') && selectedCount > 0 && (
+              {(!isMobile || resolvedViewMode === 'table') && selectedCount > 0 && (
                 <Button
                   danger
                   icon={<DeleteOutlined />}
@@ -1017,7 +1047,7 @@ const CustomerList = () => {
         <div className="list-page-table-wrap" style={{ background: 'white', padding: isMobile ? '0 12px 76px' : '0 24px 24px', borderRadius: '0 0 8px 8px' }}>
           {showTable && (
           <Table
-            className={`enterprise-data-table ${desktopTableDensity === 'compact' ? 'table-density-compact' : 'table-density-comfortable'}`}
+            className={`enterprise-data-table ${resolvedDesktopTableDensity === 'compact' ? 'table-density-compact' : 'table-density-comfortable'}`}
             rowKey="id"
             columns={columns}
             dataSource={results}
@@ -1146,16 +1176,16 @@ const CustomerList = () => {
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <Segmented
-            value={viewMode}
+            value={resolvedViewMode}
             onChange={(value) => handleViewModeChange(value as ListViewMode)}
             options={[
               { label: 'Thẻ', value: 'cards' },
               { label: 'Bảng', value: 'table' },
             ]}
           />
-          {viewMode === 'cards' && (
+          {resolvedViewMode === 'cards' && (
             <Segmented
-              value={cardDensity}
+              value={resolvedCardDensity}
               onChange={(value) => handleCardDensityChange(value as CardDensity)}
               options={[
                 { label: 'Thoáng', value: 'comfortable' },
