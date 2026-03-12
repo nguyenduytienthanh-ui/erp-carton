@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import MainLayout from './MainLayout';
-import { ProductsListFilterProvider } from '../../contexts/ProductsListFilterContext';
 import { canAccessOpsModules, canAccessSalesOrders, canManageInventoryData, canManageModulePermissionSettings, canViewWorkflowData, canManageWorkflowData } from '../../utils/authz';
 import { usersApi } from '../../api/users';
 import { storage } from '../../utils/storage';
@@ -178,9 +177,5 @@ export default function AuthenticatedShell() {
     return () => w.clearTimeout(timeoutId);
   }, [queryClient]);
 
-  return (
-    <ProductsListFilterProvider>
-      <MainLayout />
-    </ProductsListFilterProvider>
-  );
+  return <MainLayout />;
 }

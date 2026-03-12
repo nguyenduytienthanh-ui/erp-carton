@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, startTransition } from 'react';
 import type { ReactNode } from 'react';
 import { Layout, Menu, Button, Popover, Space, message, Divider, Drawer, Badge } from 'antd';
 import type { MenuProps } from 'antd';
@@ -541,11 +541,15 @@ const MainLayout = () => {
     </div>
   );
 
-  const handleMenuClick = useCallback(({ key }: { key: string }) => {
-    prefetchRouteChunk(key);
-    navigate(key);
-    if (isMobile) {
-      setMobileMenuVisible(false);
+  const handleMenuSelect = useCallback(({ key }: { key: string }) => {
+    if (key && !key.endsWith('-group')) {
+      prefetchRouteChunk(key);
+      startTransition(() => {
+        navigate(key);
+      });
+      if (isMobile) {
+        setMobileMenuVisible(false);
+      }
     }
   }, [navigate, isMobile, prefetchRouteChunk]);
 
@@ -556,7 +560,7 @@ const MainLayout = () => {
       selectedKeys={[location.pathname]}
       openKeys={collapsed && !isMobile ? [] : openMenuKeys}
       items={menuItems}
-      onClick={handleMenuClick}
+      onSelect={handleMenuSelect}
       onOpenChange={(keys) => setOpenMenuKeys(keys as string[])}
     />
   );

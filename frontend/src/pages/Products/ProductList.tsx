@@ -1041,12 +1041,23 @@ const ProductList = () => {
 
   useEffect(() => {
     if (productsData?.count !== undefined) {
-      setPagination((p) => {
-        if (p.total === productsData.count) return p;
-        return { ...p, total: productsData.count };
-      });
+      // Only update if component is still mounted
+      if (isMountedRef.current) {
+        setPagination((p) => {
+          if (p.total === productsData.count) return p;
+          return { ...p, total: productsData.count };
+        });
+      }
     }
   }, [productsData?.count, setPagination]);
+
+  // Component mount/unmount tracker to prevent state updates on unmount
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const { data: categoriesData } = useQuery({
     queryKey: ['categories', 'list'],

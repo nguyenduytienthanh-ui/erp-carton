@@ -6,6 +6,7 @@ import type { Locale } from 'antd/es/locale';
 import { theme as customTheme } from './styles/theme';
 import PrivateRoute from './components/PrivateRoute';
 import FeatureRoute from './components/FeatureRoute';
+import { ProductsListFilterProvider } from './contexts/ProductsListFilterContext';
 
 import { ErrorBoundary } from './components/ErrorBoundary';
 import {
@@ -141,7 +142,14 @@ export default function AppRouter() {
               }
             >
               <Route index element={withAsyncBoundary(<Dashboard />)} />
-              <Route path="products" element={withAsyncBoundary(<ProductList />)} />
+              <Route
+                path="products"
+                element={withAsyncBoundary(
+                  <ProductsListFilterProvider>
+                    <ProductList />
+                  </ProductsListFilterProvider>
+                )}
+              />
               <Route path="sales-orders" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<SalesOrderList />)}</FeatureRoute>} />
               <Route path="categories" element={withAsyncBoundary(<CategoryList />)} />
               <Route path="units" element={withAsyncBoundary(<UnitList />)} />
