@@ -51,7 +51,7 @@ const Dashboard = () => {
     enabled: canManageFinance,
     staleTime: 30_000,
     refetchInterval: 60_000,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
   });
   const remindMutation = useMutation({
     mutationFn: () => financeApi.remindOverdueAdvances({ threshold_days: 90 }),

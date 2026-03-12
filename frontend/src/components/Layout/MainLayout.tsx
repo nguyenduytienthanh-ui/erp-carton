@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, startTransition } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { Layout, Menu, Button, Popover, Space, message, Divider, Drawer, Badge } from 'antd';
 import type { MenuProps } from 'antd';
@@ -544,9 +544,7 @@ const MainLayout = () => {
   const handleMenuSelect = useCallback(({ key }: { key: string }) => {
     if (key && !key.endsWith('-group')) {
       prefetchRouteChunk(key);
-      startTransition(() => {
-        navigate(key);
-      });
+      navigate(key);
       if (isMobile) {
         setMobileMenuVisible(false);
       }

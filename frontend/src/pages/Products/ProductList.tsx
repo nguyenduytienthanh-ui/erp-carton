@@ -1041,13 +1041,10 @@ const ProductList = () => {
 
   useEffect(() => {
     if (productsData?.count !== undefined) {
-      // Only update if component is still mounted
-      if (isMountedRef.current) {
-        setPagination((p) => {
-          if (p.total === productsData.count) return p;
-          return { ...p, total: productsData.count };
-        });
-      }
+      setPagination((p) => {
+        if (p.total === productsData.count) return p;
+        return { ...p, total: productsData.count };
+      });
     }
   }, [productsData?.count, setPagination]);
 
