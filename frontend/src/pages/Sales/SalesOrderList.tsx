@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import {
   Button,
   Card,
@@ -687,6 +687,13 @@ export default function SalesOrderList() {
   const [shipmentPackages, setShipmentPackages] = useState<SalesOrderShipmentPackageItem[]>([]);
   const [selectedPackageIds, setSelectedPackageIds] = useState<number[]>([]);
   const [detailOrder, setDetailOrder] = useState<SalesOrder | null>(null);
+
+  // Cleanup on unmount to prevent hanging queries
+  useEffect(() => {
+    return () => {
+      setDetailOrder(null);
+    };
+  }, []);
   const [form] = Form.useForm<SalesOrderFormValues>();
   const [shipmentForm] = Form.useForm<ShipmentFormValues>();
   const [shipmentPackForm] = Form.useForm<ShipmentPackFormValues>();
@@ -729,36 +736,57 @@ export default function SalesOrderList() {
     queryKey: ['sales-orders', params],
     queryFn: () => salesApi.getOrders(params),
     enabled: canView,
+    gcTime: 0,
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
   });
   const customerQuery = useQuery({
     queryKey: ['sales-order-customers'],
     queryFn: () => customersApi.getCustomers({ page_size: 200, is_active: true }),
     enabled: canView,
+    gcTime: 0,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
   const productQuery = useQuery({
     queryKey: ['sales-order-products'],
     queryFn: () => productsApi.getProducts({ page_size: 200, is_active: true, ordering: 'code' }),
     enabled: canView,
+    gcTime: 0,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
   const detailQuery = useQuery({
     queryKey: ['sales-order-detail', detailOrder?.id],
     queryFn: () => salesApi.getOrder(detailOrder?.id as number),
     enabled: Boolean(detailOrder?.id),
+    gcTime: 0,
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
   });
   const deliveryOverviewQuery = useQuery({
     queryKey: ['sales-order-delivery-overview', detailOrder?.id],
     queryFn: () => salesApi.getDeliveryOverview(detailOrder?.id as number),
     enabled: Boolean(detailOrder?.id),
+    gcTime: 0,
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
   });
   const reservationOverviewQuery = useQuery({
     queryKey: ['sales-order-reservation-overview', detailOrder?.id],
     queryFn: () => salesApi.getReservationOverview(detailOrder?.id as number),
     enabled: Boolean(detailOrder?.id),
+    gcTime: 0,
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
   });
   const shipmentOverviewQuery = useQuery({
     queryKey: ['sales-order-shipment-overview', detailOrder?.id],
     queryFn: () => salesApi.getShipmentOverview(detailOrder?.id as number),
     enabled: Boolean(detailOrder?.id),
+    gcTime: 0,
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
   });
   const detailLines = useMemo(
     () => detailQuery.data?.lines ?? detailOrder?.lines ?? [],
@@ -772,6 +800,7 @@ export default function SalesOrderList() {
     queryKey: ['sales-order-reserve-stock', reserveLine?.product],
     queryFn: () => inventoryApi.getStock({ product: reserveLine?.product, page_size: 200 }),
     enabled: Boolean(reserveLine?.product),
+    gcTime: 0,
   });
   const batchReserveStockQuery = useQuery({
     queryKey: ['sales-order-batch-reserve-stock', detailOrder?.id, reserveCandidateLines.map((line) => line.product).join(',')],
@@ -787,6 +816,7 @@ export default function SalesOrderList() {
       return rows;
     },
     enabled: false,
+    gcTime: 0,
   });
 
   const invalidate = async () => {
@@ -806,6 +836,7 @@ export default function SalesOrderList() {
     queryFn: () => attachmentsApi.list('OutboundShipment', shipmentAttachmentModal?.shipment.shipment_id as number),
     enabled: Boolean(shipmentAttachmentModal?.shipment.shipment_id),
     staleTime: 0,
+    gcTime: 0,
   });
   const shipmentProofAttachments = useMemo(
     () =>
