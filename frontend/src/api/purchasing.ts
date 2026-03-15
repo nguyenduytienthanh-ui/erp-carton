@@ -185,4 +185,41 @@ export const purchasingApi = {
     const response = await axiosInstance.post(`${API_ENDPOINTS.PURCHASING_REQUESTS}${id}/reject/`, { reason: reason ?? '' });
     return response.data;
   },
+
+  // Purchase Returns
+  getPurchaseReturns: async (params?: Record<string, unknown>): Promise<PaginatedResponse<any>> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}`, { params });
+    return response.data;
+  },
+  getPurchaseReturn: async (id: number): Promise<any> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/`);
+    return response.data;
+  },
+  createPurchaseReturn: async (payload: Record<string, unknown>): Promise<any> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns'), payload);
+    return response.data;
+  },
+  updatePurchaseReturn: async (id: number, payload: Record<string, unknown>): Promise<any> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/`, payload);
+    return response.data;
+  },
+  deletePurchaseReturn: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/`);
+  },
+  submitPurchaseReturn: async (id: number): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/submit_return/`);
+    return response.data;
+  },
+  approvePurchaseReturn: async (id: number): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/approve_return/`);
+    return response.data;
+  },
+  postPurchaseReturn: async (id: number): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/post_return/`);
+    return response.data;
+  },
+  cancelPurchaseReturn: async (id: number, reason?: string): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/cancel_return/`, { reason: reason ?? '' });
+    return response.data;
+  },
 };

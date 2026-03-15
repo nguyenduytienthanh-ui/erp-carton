@@ -217,3 +217,49 @@ export interface PurchaseRequest {
   updated_at: string;
   lines?: PurchaseRequestLine[];
 }
+
+export type PurchaseReturnStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'POSTED' | 'CANCELLED';
+
+export interface PurchaseReturnLine {
+  id: number;
+  line_number: number;
+  product: number;
+  product_code?: string;
+  product_name?: string;
+  qty: string;
+  unit_price: string;
+  tax_pct: string;
+  note: string;
+}
+
+export interface PurchaseReturn {
+  id: number;
+  code: string;
+  return_date: string;
+  status: PurchaseReturnStatus;
+  reference: string;
+  purchase_order?: number | null;
+  purchase_order_code?: string | null;
+  supplier: number;
+  supplier_name?: string;
+  subtotal: string;
+  tax_total: string;
+  total: string;
+  return_reason: string;
+  return_notes: string;
+  submitted_by?: number | null;
+  submitted_at?: string | null;
+  approved_by?: number | null;
+  approved_at?: string | null;
+  posted_by?: number | null;
+  posted_at?: string | null;
+  cancelled_by?: number | null;
+  cancelled_at?: string | null;
+  cancel_reason?: string;
+  created_by?: number | null;
+  created_at: string;
+  updated_by?: number | null;
+  updated_at: string;
+  lines?: PurchaseReturnLine[];
+}
+

@@ -237,3 +237,61 @@ export interface OutboundShipment {
   created_at: string;
   updated_at: string;
 }
+
+export type StockAlertType = 'LOW_STOCK' | 'OUT_OF_STOCK';
+export type StockAlertStatus = 'ACTIVE' | 'ACKNOWLEDGED' | 'RESOLVED';
+
+export interface StockAlert {
+  id: number;
+  product: number;
+  product_code?: string;
+  product_name?: string;
+  alert_type: StockAlertType;
+  status: StockAlertStatus;
+  triggered_at: string;
+  acknowledged_at?: string | null;
+  acknowledged_by?: number | null;
+  acknowledged_by_name?: string | null;
+  current_qty: string;
+  min_stock: string;
+}
+
+export type WarehouseTransferStatus = 'DRAFT' | 'SUBMITTED' | 'IN_TRANSIT' | 'RECEIVED' | 'CANCELLED';
+
+export interface WarehouseTransferLine {
+  id: number;
+  line_number: number;
+  product: number;
+  product_code?: string;
+  product_name?: string;
+  qty: string;
+  received_qty: string;
+  note: string;
+}
+
+export interface WarehouseTransfer {
+  id: number;
+  code: string;
+  transfer_date: string;
+  status: WarehouseTransferStatus;
+  from_warehouse: number;
+  from_warehouse_code?: string;
+  to_warehouse: number;
+  to_warehouse_code?: string;
+  reference: string;
+  note: string;
+  submitted_by?: number | null;
+  submitted_at?: string | null;
+  posted_by?: number | null;
+  posted_at?: string | null;
+  received_by?: number | null;
+  received_at?: string | null;
+  cancelled_by?: number | null;
+  cancelled_at?: string | null;
+  cancel_reason?: string;
+  created_by?: number | null;
+  created_at: string;
+  updated_by?: number | null;
+  updated_at: string;
+  lines?: WarehouseTransferLine[];
+}

@@ -41,6 +41,7 @@ const MaterialPriceList = lazy(() => import('./pages/Purchasing/MaterialPriceLis
 const PurchaseOrderList = lazy(() => import('./pages/Purchasing/PurchaseOrderList'));
 const PurchaseReceiptList = lazy(() => import('./pages/Purchasing/PurchaseReceiptList'));
 const PurchaseRequestList = lazy(() => import('./pages/Purchasing/PurchaseRequestList'));
+const PurchaseReturnList = lazy(() => import('./pages/Purchasing/PurchaseReturnList'));
 const ProductionOrderList = lazy(() => import('./pages/Production/ProductionOrderList'));
 const ExecutiveCockpit = lazy(() => import('./pages/Management/ExecutiveCockpit'));
 const ReportsCenter = lazy(() => import('./pages/Management/ReportsCenter'));
@@ -69,6 +70,8 @@ const WarehouseList = lazy(() => import('./pages/Inventory/WarehouseList'));
 const WarehouseLocationList = lazy(() => import('./pages/Inventory/WarehouseLocationList'));
 const InventoryStockOverview = lazy(() => import('./pages/Inventory/InventoryStockOverview'));
 const StocktakeList = lazy(() => import('./pages/Inventory/StocktakeList'));
+const StockAlertList = lazy(() => import('./pages/Inventory/StockAlertList'));
+const WarehouseTransferList = lazy(() => import('./pages/Inventory/WarehouseTransferList'));
 const InventoryTransactionList = lazy(() => import('./pages/Inventory/InventoryTransactionList'));
 const InventoryReservationList = lazy(() => import('./pages/Inventory/InventoryReservationList'));
 const ModulePermissionSettings = lazy(() => import('./pages/Admin/ModulePermissionSettings'));
@@ -186,6 +189,7 @@ export default function AppRouter() {
               <Route path="purchase-orders" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseOrderList />)}</FeatureRoute>} />
               <Route path="purchase-receipts" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseReceiptList />)}</FeatureRoute>} />
               <Route path="purchase-requests" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseRequestList />)}</FeatureRoute>} />
+              <Route path="purchase-returns" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseReturnList />)}</FeatureRoute>} />
               <Route path="production-orders" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionOrderList />)}</FeatureRoute>} />
               <Route path="warehouses" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseList />)}</FeatureRoute>} />
               <Route path="warehouse-locations" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseLocationList />)}</FeatureRoute>} />
@@ -193,6 +197,8 @@ export default function AppRouter() {
               <Route path="inventory-transactions" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryTransactionList />)}</FeatureRoute>} />
               <Route path="inventory-reservations" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryReservationList />)}</FeatureRoute>} />
               <Route path="stocktakes" element={<FeatureRoute allow={canManageStocktakeRoute} fallbackTo="/">{withAsyncBoundary(<StocktakeList />)}</FeatureRoute>} />
+              <Route path="stock-alerts" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<StockAlertList />)}</FeatureRoute>} />
+              <Route path="warehouse-transfers" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseTransferList />)}</FeatureRoute>} />
               <Route path="executive-cockpit" element={<FeatureRoute allow={canViewOps} fallbackTo="/task-inbox">{withAsyncBoundary(<ExecutiveCockpit />)}</FeatureRoute>} />
               <Route path="reports" element={<FeatureRoute allow={canViewReports} fallbackTo="/">{withAsyncBoundary(<ReportsCenter />)}</FeatureRoute>} />
               <Route path="task-operations" element={<FeatureRoute allow={canViewOps} fallbackTo="/task-inbox">{withAsyncBoundary(<TaskOperationsBoard />)}</FeatureRoute>} />
