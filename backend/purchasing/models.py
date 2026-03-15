@@ -768,3 +768,156 @@ class PurchaseRequestLine(models.Model):
 
     def __str__(self):
         return f"{self.purchase_request.code}-L{self.line_number}"
+
+
+class PurchaseReturnStatus:
+    """Purchase Return statuses."""
+    DRAFT = 'DRAFT'
+    SUBMITTED = 'SUBMITTED'
+    APPROVED = 'APPROVED'
+    POSTED = 'POSTED'
+    CANCELLED = 'CANCELLED'
+    CHOICES = [
+        (DRAFT, 'Nháp'),
+        (SUBMITTED, 'Chờ duyệt'),
+        (APPROVED, 'Đã duyệt'),
+        (POSTED, 'Đã vào sổ'),
+        (CANCELLED, 'Đã hủy'),
+    ]
+
+
+class PurchaseReturn(SearchTextModelMixin):
+    """Purchase Return to Supplier - trả hàng cho nhà cung cấp."""
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    return_date = models.DateField()
+    status = models.CharField(
+        max_length=20,
+        choices=PurchaseReturnStatus.CHOICES,
+        default=PurchaseReturnStatus.DRAFT,
+        db_index=True,
+    )
+    
+    # Reference
+    reference = models.CharField(max_length=200, blank=True)
+    purchase_order = models.ForeignKey(
+        PurchaseOrder,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='returns',
+    )
+    supplier = models.ForeignKey(
+        Supplier,
+        on_delete=models.PROTECT,
+        related_name='purchase_returns',
+    )
+    
+    # Amounts
+    subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    tax_total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    
+    # Return reason
+    return_reason = models.CharField(
+        max_length=20,
+        choices=[
+            ('DEFECT', 'Lỗi'),
+            ('WRONG_QTY', 'Sai số lượng'),
+            ('WRONG_ITEM', 'Sai hàng'),
+            ('DAMAGE', 'Hỏng hóc'),
+            ('OTHER', 'Khác'),
+        ],
+        default='OTHER',
+    )
+    return_notes = models.TextField(blank=True)
+    
+    # Approval
+    submitted_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='purchase_returns_submitted',
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='purchase_returns_approved',
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    
+    # Posting
+    posted_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='purchase_returns_posted',
+    )
+    posted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    
+    # Cancellation
+    cancelled_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='purchase_returns_cancelled',
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancel_reason = models.TextField(blank=True)
+    
+    # Audit
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='purchase_returns_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='purchase_returns_updated',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'purchasing_returns'
+        ordering = ['-return_date', '-id']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['return_date']),
+            models.Index(fields=['status']),
+            models.Index(fields=['supplier']),
+        ]
+        verbose_name = 'Purchase Return'
+        verbose_name_plural = 'Purchase Returns'
+
+    def __str__(self):
+        return f"{self.code} - {self.return_date}"
+
+    def _search_values(self):
+        return [self.code, self.reference, self.supplier.name if self.supplier else '']
+
+
+class PurchaseReturnLine(models.Model):
+    """Dòng trả hàng nhà cung cấp."""
+    purchase_return = models.ForeignKey(
+        PurchaseReturn,
+        on_delete=models.CASCADE,
+        related_name='lines',
+    )
+    line_number = models.PositiveSmallIntegerField(default=1)
+    
+    # Product
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='purchase_return_lines',
+    )
+    qty = models.DecimalField(max_digits=15, decimal_places=4, validators=[MinValueValidator(Decimal('0.0001'))])
+    unit_price = models.DecimalField(max_digits=18, decimal_places=2)
+    tax_pct = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'), validators=[MinValueValidator(0), MaxValueValidator(100)])
+    
+    note = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        db_table = 'purchasing_return_lines'
+        ordering = ['purchase_return_id', 'line_number']
+        unique_together = [['purchase_return', 'line_number']]
+        verbose_name = 'Purchase Return Line'
+        verbose_name_plural = 'Purchase Return Lines'
+
+    def __str__(self):
+        return f"{self.purchase_return.code}-L{self.line_number}"
+

@@ -783,3 +783,55 @@ class StocktakeLine(models.Model):
     @property
     def variance_qty(self):
         return (self.count_qty or Decimal('0')) - (self.system_qty or Decimal('0'))
+
+
+class StockAlert(models.Model):
+    """Low stock alert - cảnh báo hàng tồn kho thấp."""
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.CASCADE,
+        related_name='stock_alerts',
+    )
+    alert_type = models.CharField(
+        max_length=20,
+        choices=[
+            ('LOW_STOCK', 'Tồn kho thấp'),
+            ('OUT_OF_STOCK', 'Hết hàng'),
+        ],
+        default='LOW_STOCK',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('ACTIVE', 'Đang hoạt động'),
+            ('ACKNOWLEDGED', 'Đã xác nhận'),
+            ('RESOLVED', 'Đã giải quyết'),
+        ],
+        default='ACTIVE',
+        db_index=True,
+    )
+    triggered_at = models.DateTimeField(auto_now_add=True)
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acknowledged_stock_alerts',
+    )
+    current_qty = models.DecimalField(max_digits=18, decimal_places=4)
+    min_stock = models.DecimalField(max_digits=18, decimal_places=4)
+
+    class Meta:
+        db_table = 'inventory_stock_alerts'
+        ordering = ['-triggered_at']
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['product']),
+        ]
+        verbose_name = 'Cảnh báo tồn kho'
+        verbose_name_plural = 'Cảnh báo tồn kho'
+
+    def __str__(self):
+        return f"{self.product.code} - {self.alert_type} ({self.triggered_at})"
+
