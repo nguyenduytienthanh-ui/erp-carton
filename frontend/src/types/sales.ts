@@ -135,6 +135,7 @@ export interface SalesOrder {
   reject_reason?: string;
   void_reason?: string;
   post_number?: string;
+  confirmed_at?: string | null;
   version?: number;
   lines: SalesOrderLine[];
   created_at: string;

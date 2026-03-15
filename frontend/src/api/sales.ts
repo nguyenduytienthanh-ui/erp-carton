@@ -67,6 +67,10 @@ export const salesApi = {
     const response = await axiosInstance.post(`${API_ENDPOINTS.SALES_ORDERS}${id}/reject/`, { reason });
     return response.data;
   },
+  confirmOrder: async (id: number): Promise<{ status: string; confirmed_at?: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.SALES_ORDERS}${id}/confirm_order/`);
+    return response.data;
+  },
   postOrder: async (id: number): Promise<{ status: string; post_number?: string; message?: string }> => {
     const response = await axiosInstance.post(`${API_ENDPOINTS.SALES_ORDERS}${id}/post_document/`);
     return response.data;

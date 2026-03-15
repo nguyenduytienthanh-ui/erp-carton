@@ -926,6 +926,14 @@ export default function SalesOrderList() {
     },
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
+  const confirmMutation = useMutation({
+    mutationFn: salesApi.confirmOrder,
+    onSuccess: async () => {
+      await invalidate();
+      messageApi.success('Đã xác nhận đơn hàng với khách hàng');
+    },
+    onError: (error) => messageApi.error(getToastMessage(error)),
+  });
   const postMutation = useMutation({
     mutationFn: salesApi.postOrder,
     onSuccess: async (data) => {
@@ -1390,6 +1398,14 @@ export default function SalesOrderList() {
             onClick={() => void approveMutation.mutateAsync(row.id)}
           >
             Duyệt
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            disabled={!canSubmit || !['DRAFT', 'SUBMITTED'].includes(row.status) || row.confirmed_at}
+            onClick={() => void confirmMutation.mutateAsync(row.id)}
+          >
+            {row.confirmed_at ? 'Đã xác nhận' : 'Xác nhận'}
           </Button>
           <Button
             size="small"
@@ -2761,6 +2777,7 @@ export default function SalesOrderList() {
             <FormattedPrice value={Number(detailQuery.data?.total || detailOrder?.total || 0)} />
           </Descriptions.Item>
           <Descriptions.Item label="Post #">{detailQuery.data?.post_number || detailOrder?.post_number || '-'}</Descriptions.Item>
+          <Descriptions.Item label="Xác nhận">{detailQuery.data?.confirmed_at ? dayjs(detailQuery.data.confirmed_at).format('DD/MM/YYYY HH:mm') : detailOrder?.confirmed_at ? dayjs(detailOrder.confirmed_at).format('DD/MM/YYYY HH:mm') : '-'}</Descriptions.Item>
         </Descriptions>
         <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button

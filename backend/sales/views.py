@@ -405,6 +405,27 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         return Response({'status': order.status})
 
     @action(detail=True, methods=['post'])
+    def confirm_order(self, request, pk=None):
+        """Confirm order with customer (xác nhận đơn hàng với khách hàng)."""
+        order = self.get_object()
+        if not can_edit_sales_order(request.user, order):
+            return Response({'error': 'Không có quyền hoặc trạng thái không hợp lệ.'}, status=status.HTTP_403_FORBIDDEN)
+        if order.status not in [SalesOrderStatus.DRAFT, SalesOrderStatus.SUBMITTED]:
+            return Response({'error': 'Chỉ có thể xác nhận đơn hàng ở trạng thái Nháp hoặc Đã gửi.'}, status=status.HTTP_400_BAD_REQUEST)
+        order.confirmed_by = request.user
+        order.confirmed_at = timezone.now()
+        order.save(update_fields=['confirmed_by', 'confirmed_at', 'updated_at'])
+        AuditLog.objects.create(
+            user=request.user, action='CONFIRM', entity_type='SalesOrder',
+            entity_id=order.id, entity_code=order.code,
+            old_values={'confirmed_at': None},
+            new_values={'confirmed_at': order.confirmed_at.isoformat()},
+            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        generate_tasks_for_entity('SalesOrder', order.id, order.code, 'CONFIRM', triggered_by=request.user)
+        return Response({'status': 'Xác nhận', 'confirmed_at': order.confirmed_at})
+
+    @action(detail=True, methods=['post'])
     def post_document(self, request, pk=None):
         """Post atomic + idempotent."""
         order = self.get_object()

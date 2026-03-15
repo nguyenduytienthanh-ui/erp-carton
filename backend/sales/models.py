@@ -121,6 +121,13 @@ class SalesOrder(models.Model):
     rejected_at = models.DateTimeField(null=True, blank=True)
     reject_reason = models.TextField(blank=True)
 
+    # Confirmation (xác nhận đơn hàng với khách hàng)
+    confirmed_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sales_orders_confirmed',
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
     # Posting
     posted_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True,
