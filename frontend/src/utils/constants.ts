@@ -16,6 +16,7 @@ export const PAGES = {
   FINANCE_ADVANCE_TRANSACTIONS: 'finance-advance-transactions',
   FINANCE_RECEIVABLES: 'finance-receivables',
   FINANCE_PAYABLES: 'finance-payables',
+  FINANCE_BANK_RECONCILIATION: 'finance-bank-recon',
   PURCHASING_SUPPLIERS: 'purchasing-suppliers',
   PURCHASING_MATERIAL_PRICES: 'purchasing-material-prices',
   PURCHASING_ORDERS: 'purchasing-orders',

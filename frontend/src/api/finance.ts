@@ -531,5 +531,41 @@ export const financeApi = {
     const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_ADVANCE_REMINDER_POLICY_SIMULATE, payload);
     return response.data as AdvanceReminderPolicySimulationResponse;
   },
+
+  // Bank Reconciliation
+  getBankReconciliations: async (params?: Record<string, unknown>): Promise<PaginatedResponse<any>> => {
+    const response = await axiosInstance.get('api/finance/bank-reconciliations/', { params });
+    return response.data;
+  },
+  getBankReconciliation: async (id: number): Promise<any> => {
+    const response = await axiosInstance.get(`api/finance/bank-reconciliations/${id}/`);
+    return response.data;
+  },
+  createBankReconciliation: async (payload: Record<string, unknown>): Promise<any> => {
+    const response = await axiosInstance.post('api/finance/bank-reconciliations/', payload);
+    return response.data;
+  },
+  updateBankReconciliation: async (id: number, payload: Record<string, unknown>): Promise<any> => {
+    const response = await axiosInstance.patch(`api/finance/bank-reconciliations/${id}/`, payload);
+    return response.data;
+  },
+  deleteBankReconciliation: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`api/finance/bank-reconciliations/${id}/`);
+  },
+  approveBankReconciliation: async (id: number): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`api/finance/bank-reconciliations/${id}/approve/`);
+    return response.data;
+  },
+  postBankReconciliation: async (id: number): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`api/finance/bank-reconciliations/${id}/post/`);
+    return response.data;
+  },
+};
+
+export const bankAccountsApi = {
+  getBankAccounts: financeApi.getBankAccounts,
+  createBankAccount: financeApi.createBankAccount,
+  updateBankAccount: financeApi.updateBankAccount,
+  deleteBankAccount: financeApi.deleteBankAccount,
 };
 

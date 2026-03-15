@@ -64,6 +64,7 @@ const AdvanceTransactionList = lazy(() => import('./pages/Finance/AdvanceTransac
 const FinanceSummary = lazy(() => import('./pages/Finance/FinanceSummary'));
 const GeneralLedger = lazy(() => import('./pages/Finance/GeneralLedger'));
 const BankReconciliation = lazy(() => import('./pages/Finance/BankReconciliation'));
+const BankReconciliationList = lazy(() => import('./pages/Finance/BankReconciliationList'));
 const AccountsReceivableList = lazy(() => import('./pages/Finance/AccountsReceivableList'));
 const AccountsPayableList = lazy(() => import('./pages/Finance/AccountsPayableList'));
 const WarehouseList = lazy(() => import('./pages/Inventory/WarehouseList'));
@@ -221,7 +222,7 @@ export default function AppRouter() {
               <Route path="payables" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<AccountsPayableList />)}</FeatureRoute>} />
               <Route path="finance-summary" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<FinanceSummary />)}</FeatureRoute>} />
               <Route path="general-ledger" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<GeneralLedger />)}</FeatureRoute>} />
-              <Route path="bank-reconciliation" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<BankReconciliation />)}</FeatureRoute>} />
+              <Route path="bank-reconciliation" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<BankReconciliationList />)}</FeatureRoute>} />
               <Route
                 path="admin/module-permissions"
                 element={(
