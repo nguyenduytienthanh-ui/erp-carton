@@ -10,6 +10,7 @@ import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { canManageWorkforceData } from '../../utils/authz';
+import { getToastMessage } from '../../shared/apiError';
 
 type EmployeeFilters = {
   status: '' | EmployeeStatus;
@@ -132,6 +133,7 @@ export default function EmployeeList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-employees'] });
       messageApi.success('Đã thêm nhân viên');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const updateMutation = useMutation({
@@ -141,6 +143,7 @@ export default function EmployeeList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-employees'] });
       messageApi.success('Đã cập nhật nhân viên');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const deleteMutation = useMutation({
@@ -149,6 +152,7 @@ export default function EmployeeList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-employees'] });
       messageApi.success('Đã xóa nhân viên');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const createHistoryMutation = useMutation({
     mutationFn: workforceApi.createEmployeeProfileHistory,
@@ -157,6 +161,7 @@ export default function EmployeeList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-employees'] });
       messageApi.success('Đã thêm mốc hiệu lực');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const updateHistoryMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: Partial<EmployeeProfileHistoryPayload> }) =>
@@ -166,6 +171,7 @@ export default function EmployeeList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-employees'] });
       messageApi.success('Đã cập nhật mốc hiệu lực');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const deleteHistoryMutation = useMutation({
     mutationFn: workforceApi.deleteEmployeeProfileHistory,
@@ -174,6 +180,7 @@ export default function EmployeeList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-employees'] });
       messageApi.success('Đã xóa mốc hiệu lực');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const rows = listQuery.data?.results ?? [];

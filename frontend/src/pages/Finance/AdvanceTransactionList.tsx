@@ -32,6 +32,7 @@ import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { canManageFinanceData } from '../../utils/authz';
+import { getToastMessage } from '../../shared/apiError';
 
 type ViewMode = 'advances' | 'settlements';
 type AdvanceFilters = {
@@ -232,6 +233,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions-select'] });
       messageApi.success('Đã thêm phiếu tạm ứng');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const updateAdvanceMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: Record<string, unknown> }) =>
@@ -241,6 +243,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions-select'] });
       messageApi.success('Đã cập nhật phiếu tạm ứng');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const deleteAdvanceMutation = useMutation({
     mutationFn: financeApi.deleteAdvanceTransaction,
@@ -249,6 +252,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions-select'] });
       messageApi.success('Đã xóa phiếu tạm ứng');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const submitAdvanceApprovalMutation = useMutation({
     mutationFn: (id: number) => financeApi.submitAdvanceApproval(id),
@@ -256,6 +260,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
       messageApi.success('Đã gửi duyệt phiếu tạm ứng');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const approveAdvanceLevel1Mutation = useMutation({
     mutationFn: (id: number) => financeApi.approveAdvanceLevel1(id),
@@ -263,6 +268,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
       messageApi.success('Đã duyệt cấp 1');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const approveAdvanceLevel2Mutation = useMutation({
     mutationFn: (id: number) => financeApi.approveAdvanceLevel2(id),
@@ -270,6 +276,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
       messageApi.success('Đã duyệt cấp 2');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const rejectAdvanceApprovalMutation = useMutation({
     mutationFn: ({ id, reason }: { id: number; reason: string }) => financeApi.rejectAdvanceApproval(id, reason),
@@ -277,6 +284,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
       messageApi.success('Đã từ chối phiếu');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const postAdvanceDisbursementMutation = useMutation({
     mutationFn: (id: number) => financeApi.postAdvanceDisbursement(id),
@@ -284,6 +292,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
       messageApi.success('Đã ghi nhận chi tiền tạm ứng');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const reverseAdvanceDisbursementMutation = useMutation({
     mutationFn: (id: number) => financeApi.reverseAdvanceDisbursement(id),
@@ -291,6 +300,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions'] });
       messageApi.success('Đã hủy chứng từ chi tiền tạm ứng');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const createSettlementMutation = useMutation({
@@ -301,6 +311,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions-select'] });
       messageApi.success('Đã thêm quyết toán');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const updateSettlementMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: Record<string, unknown> }) =>
@@ -311,6 +322,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions-select'] });
       messageApi.success('Đã cập nhật quyết toán');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const deleteSettlementMutation = useMutation({
     mutationFn: financeApi.deleteAdvanceSettlement,
@@ -320,6 +332,7 @@ export default function AdvanceTransactionList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-advance-transactions-select'] });
       messageApi.success('Đã xóa quyết toán');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const advances = useMemo(() => advancesQuery.data?.results ?? [], [advancesQuery.data?.results]);
