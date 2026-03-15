@@ -32,7 +32,8 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const ProductList = lazy(() => import('./pages/Products/ProductList'));
 const SalesOrderList = lazy(() => import('./pages/Sales/SalesOrderList'));
 const ShipmentList = lazy(() => import('./pages/Sales/ShipmentList'));
-const QuoteList = lazy(() => import('./pages/Sales/QuoteList'));
+const QuoteList = lazy(() => import('./pages/Sales/QuoteListNew'));
+const QuoteAnalytics = lazy(() => import('./pages/Management/QuoteAnalytics'));
 const CategoryList = lazy(() => import('./pages/Categories/CategoryList'));
 const UnitList = lazy(() => import('./pages/Units/UnitList'));
 const CustomerList = lazy(() => import('./pages/Customers/CustomerList'));
@@ -61,6 +62,7 @@ const SalaryAdvanceList = lazy(() => import('./pages/Workforce/SalaryAdvanceList
 const BankAccountList = lazy(() => import('./pages/Finance/BankAccountList'));
 const TransactionCategoryList = lazy(() => import('./pages/Finance/TransactionCategoryList'));
 const CashBook = lazy(() => import('./pages/Finance/CashBook'));
+const CashBookList = lazy(() => import('./pages/Finance/CashBookList'));
 const AdvanceTransactionList = lazy(() => import('./pages/Finance/AdvanceTransactionList'));
 const FinanceSummary = lazy(() => import('./pages/Finance/FinanceSummary'));
 const GeneralLedger = lazy(() => import('./pages/Finance/GeneralLedger'));
@@ -207,6 +209,7 @@ export default function AppRouter() {
               <Route path="warehouse-transfers" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseTransferList />)}</FeatureRoute>} />
               <Route path="executive-cockpit" element={<FeatureRoute allow={canViewOps} fallbackTo="/task-inbox">{withAsyncBoundary(<ExecutiveCockpit />)}</FeatureRoute>} />
               <Route path="reports" element={<FeatureRoute allow={canViewReports} fallbackTo="/">{withAsyncBoundary(<ReportsCenter />)}</FeatureRoute>} />
+              <Route path="quote-analytics" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<QuoteAnalytics />)}</FeatureRoute>} />
               <Route path="task-operations" element={<FeatureRoute allow={canViewOps} fallbackTo="/task-inbox">{withAsyncBoundary(<TaskOperationsBoard />)}</FeatureRoute>} />
               <Route path="task-inbox" element={withAsyncBoundary(<TaskInbox />)} />
               <Route path="workflow-task-templates" element={<FeatureRoute allow={canManageWorkflow} fallbackTo="/task-inbox">{withAsyncBoundary(<WorkflowTaskTemplateList />)}</FeatureRoute>} />
