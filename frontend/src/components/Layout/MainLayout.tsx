@@ -82,6 +82,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/purchase-requests': () => import('../../pages/Purchasing/PurchaseRequestList'),
   '/purchase-returns': () => import('../../pages/Purchasing/PurchaseReturnList'),
   '/production-orders': () => import('../../pages/Production/ProductionOrderList'),
+  '/material-issues': () => import('../../pages/Production/MaterialIssueList'),
   '/reports': () => import('../../pages/Management/ReportsCenter'),
   '/warehouses': () => import('../../pages/Inventory/WarehouseList'),
   '/warehouse-locations': () => import('../../pages/Inventory/WarehouseLocationList'),
@@ -355,9 +356,19 @@ const MainLayout = () => {
       ],
     } : null,
     canManageProduction ? {
-      key: '/production-orders',
+      key: 'production-group',
       icon: <BuildOutlined />,
-      label: renderMenuLabel('/production-orders', 'Sản xuất'),
+      label: 'Sản xuất',
+      children: [
+        {
+          key: '/production-orders',
+          label: renderMenuLabel('/production-orders', 'Lệnh sản xuất'),
+        },
+        {
+          key: '/material-issues',
+          label: renderMenuLabel('/material-issues', 'Phát hành NVL'),
+        },
+      ],
     } : null,
     (canManageInventory || canManageStocktakeMenu) ? {
       key: 'inventory-group',

@@ -43,6 +43,7 @@ const PurchaseReceiptList = lazy(() => import('./pages/Purchasing/PurchaseReceip
 const PurchaseRequestList = lazy(() => import('./pages/Purchasing/PurchaseRequestList'));
 const PurchaseReturnList = lazy(() => import('./pages/Purchasing/PurchaseReturnList'));
 const ProductionOrderList = lazy(() => import('./pages/Production/ProductionOrderList'));
+const MaterialIssueList = lazy(() => import('./pages/Production/MaterialIssueList'));
 const ExecutiveCockpit = lazy(() => import('./pages/Management/ExecutiveCockpit'));
 const ReportsCenter = lazy(() => import('./pages/Management/ReportsCenter'));
 const TaskOperationsBoard = lazy(() => import('./pages/Tasks/TaskOperationsBoard'));
@@ -195,6 +196,7 @@ export default function AppRouter() {
               <Route path="purchase-requests" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseRequestList />)}</FeatureRoute>} />
               <Route path="purchase-returns" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseReturnList />)}</FeatureRoute>} />
               <Route path="production-orders" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionOrderList />)}</FeatureRoute>} />
+              <Route path="material-issues" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<MaterialIssueList />)}</FeatureRoute>} />
               <Route path="warehouses" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseList />)}</FeatureRoute>} />
               <Route path="warehouse-locations" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseLocationList />)}</FeatureRoute>} />
               <Route path="inventory-stock" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryStockOverview />)}</FeatureRoute>} />
