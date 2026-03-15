@@ -28,6 +28,7 @@ from inventory.models import (
     InventoryTransactionStatus,
     InventoryTransactionType,
     OutboundShipment,
+    StockAlert,
     Stocktake,
     StocktakeStatus,
     Warehouse,
@@ -37,6 +38,7 @@ from inventory.serializers import (
     InventoryReservationSerializer,
     InventoryTransactionSerializer,
     OutboundShipmentSerializer,
+    StockAlertSerializer,
     StocktakeSerializer,
     WarehouseLocationSerializer,
     WarehouseSerializer,
@@ -572,3 +574,173 @@ class InventoryStockViewSet(InventoryManagePermissionMixin, mixins.ListModelMixi
                 'total_available_qty': total_on_hand - total_reserved,
             }
         )
+
+
+class StockAlertViewSet(InventoryManagePermissionMixin, viewsets.ModelViewSet):
+    serializer_class = StockAlertSerializer
+    filter_backends = [django_filters.rest_framework.DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['status']
+    ordering_fields = ['triggered_at', 'product__code', 'alert_type']
+    ordering = ['-triggered_at']
+
+    def get_queryset(self):
+        return StockAlert.objects.select_related('product', 'acknowledged_by')
+
+    def perform_create(self, serializer):
+        serializer.save()
+
+    @action(detail=True, methods=['post'])
+    def acknowledge_alert(self, request, pk=None):
+        alert = self.get_object()
+        if alert.status == 'ACKNOWLEDGED':
+            return Response({'status': alert.status, 'message': 'Cảnh báo đã được xác nhận trước đó.'}, status=400)
+        alert.status = 'ACKNOWLEDGED'
+        alert.acknowledged_by = request.user
+        alert.acknowledged_at = timezone.now()
+        alert.save(update_fields=['status', 'acknowledged_by', 'acknowledged_at', 'updated_at'])
+        serializer = self.get_serializer(alert)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'])
+    def check_low_stock(self, request):
+        balances = build_stock_balance_map()
+        product_ids = {key[0] for key in balances.keys()}
+        products = Product.objects.filter(id__in=product_ids).select_related('unit')
+        created_count = 0
+        for product in products:
+            product_balance = sum(
+                balance['on_hand']
+                for (pid, _, _), balance in balances.items()
+                if pid == product.id
+            )
+            min_stock = product.min_stock or Decimal('0')
+            if product_balance < min_stock:
+                existing_active = StockAlert.objects.filter(
+                    product=product,
+                    status='ACTIVE'
+                ).exists()
+                if not existing_active:
+                    alert_type = 'OUT_OF_STOCK' if product_balance == 0 else 'LOW_STOCK'
+                    StockAlert.objects.create(
+                        product=product,
+                        alert_type=alert_type,
+                        status='ACTIVE',
+                        current_qty=product_balance,
+                        min_stock=min_stock,
+                    )
+                    created_count += 1
+        return Response({
+            'message': f'Kiểm tra tồn kho hoàn tất. Đã tạo {created_count} cảnh báo mới.',
+            'alerts_created': created_count,
+        })
+
+
+# Warehouse Transfer ViewSet
+from inventory.models import WarehouseTransfer, WarehouseTransferLine
+from inventory.serializers import WarehouseTransferSerializer
+
+
+class WarehouseTransferViewSet(InventoryManagePermissionMixin, viewsets.ModelViewSet):
+    """Warehouse Transfers - chuyển hàng giữa kho."""
+    queryset = WarehouseTransfer.objects.select_related('from_warehouse', 'to_warehouse', 'created_by', 'submitted_by', 'posted_by', 'cancelled_by')
+    serializer_class = WarehouseTransferSerializer
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['code', 'reference']
+    ordering_fields = ['transfer_date', 'status']
+    ordering = ['-transfer_date']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        status = self.request.query_params.get('status')
+        if status:
+            qs = qs.filter(status=status)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        if serializer.instance.status != 'DRAFT':
+            raise ValidationError('Chỉ được sửa transfer ở trạng thái Nháp.')
+        serializer.save(updated_by=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def submit_transfer(self, request, pk=None):
+        """DRAFT -> SUBMITTED."""
+        transfer = self.get_object()
+        if transfer.status != 'DRAFT':
+            return Response({'error': 'Chỉ gửi duyệt transfer ở trạng thái Nháp.'}, status=400)
+        if not transfer.lines.exists():
+            return Response({'error': 'Transfer phải có ít nhất 1 dòng hàng.'}, status=400)
+        transfer.status = 'SUBMITTED'
+        transfer.submitted_by = request.user
+        transfer.submitted_at = timezone.now()
+        transfer.save(update_fields=['status', 'submitted_by', 'submitted_at', 'updated_at'])
+        AuditLog.objects.create(
+            user=request.user, action='SUBMIT', entity_type='WarehouseTransfer',
+            entity_id=transfer.id, entity_code=transfer.code,
+            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response({'status': transfer.status})
+
+    @action(detail=True, methods=['post'])
+    def post_transfer(self, request, pk=None):
+        """SUBMITTED -> IN_TRANSIT."""
+        transfer = self.get_object()
+        if transfer.status != 'SUBMITTED':
+            return Response({'error': 'Chỉ post transfer đã gửi.'}, status=400)
+        transfer.status = 'IN_TRANSIT'
+        transfer.posted_by = request.user
+        transfer.posted_at = timezone.now()
+        transfer.save(update_fields=['status', 'posted_by', 'posted_at', 'updated_at'])
+        AuditLog.objects.create(
+            user=request.user, action='POST', entity_type='WarehouseTransfer',
+            entity_id=transfer.id, entity_code=transfer.code,
+            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response({'status': transfer.status})
+
+    @action(detail=True, methods=['post'])
+    def receive_transfer(self, request, pk=None):
+        """IN_TRANSIT -> RECEIVED (update received_qty for each line)."""
+        transfer = self.get_object()
+        if transfer.status != 'IN_TRANSIT':
+            return Response({'error': 'Chỉ nhận transfer đang vận chuyển.'}, status=400)
+        
+        lines_data = request.data.get('lines', [])
+        with transaction.atomic():
+            for line_data in lines_data:
+                line_id = line_data.get('id')
+                received_qty = Decimal(str(line_data.get('received_qty', 0)))
+                if line_id:
+                    line = WarehouseTransferLine.objects.get(id=line_id, transfer=transfer)
+                    line.received_qty = received_qty
+                    line.save(update_fields=['received_qty'])
+            
+            transfer.status = 'RECEIVED'
+            transfer.save(update_fields=['status', 'updated_at'])
+        
+        AuditLog.objects.create(
+            user=request.user, action='RECEIVE', entity_type='WarehouseTransfer',
+            entity_id=transfer.id, entity_code=transfer.code,
+            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response({'status': transfer.status})
+
+    @action(detail=True, methods=['post'])
+    def cancel_transfer(self, request, pk=None):
+        """Cancel transfer."""
+        transfer = self.get_object()
+        reason = (request.data.get('reason') or '').strip() or 'Hủy chuyển kho'
+        transfer.status = 'CANCELLED'
+        transfer.cancelled_by = request.user
+        transfer.cancelled_at = timezone.now()
+        transfer.cancel_reason = reason
+        transfer.save(update_fields=['status', 'cancelled_by', 'cancelled_at', 'cancel_reason', 'updated_at'])
+        AuditLog.objects.create(
+            user=request.user, action='CANCEL', entity_type='WarehouseTransfer',
+            entity_id=transfer.id, entity_code=transfer.code,
+            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response({'status': transfer.status})
+

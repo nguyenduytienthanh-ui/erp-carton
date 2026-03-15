@@ -16,6 +16,7 @@ from inventory.models import (
     OutboundShipmentPackage,
     OutboundShipmentPackageStatus,
     OutboundShipment,
+    StockAlert,
     Stocktake,
     StocktakeLine,
     StocktakeStatus,
@@ -651,3 +652,123 @@ class StocktakeSerializer(serializers.ModelSerializer):
                     note=line_item.get('note', ''),
                 )
         return instance
+
+
+class StockAlertSerializer(serializers.ModelSerializer):
+    product_code = serializers.SerializerMethodField()
+    product_name = serializers.SerializerMethodField()
+    acknowledged_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StockAlert
+        fields = [
+            'id',
+            'product',
+            'product_code',
+            'product_name',
+            'alert_type',
+            'status',
+            'triggered_at',
+            'acknowledged_at',
+            'acknowledged_by',
+            'acknowledged_by_name',
+            'current_qty',
+            'min_stock',
+        ]
+        read_only_fields = [
+            'id',
+            'product',
+            'alert_type',
+            'triggered_at',
+            'product_code',
+            'product_name',
+            'acknowledged_by_name',
+        ]
+
+    def get_product_code(self, obj):
+        if obj.product_id and obj.product:
+            return obj.product.code
+        return None
+
+    def get_product_name(self, obj):
+        if obj.product_id and obj.product:
+            return obj.product.name
+        return None
+
+    def get_acknowledged_by_name(self, obj):
+        user = getattr(obj, 'acknowledged_by', None)
+        if not user:
+            return None
+        return getattr(user, 'full_name', None) or getattr(user, 'username', None)
+
+
+# Warehouse Transfer Serializers
+from inventory import models as inv_models
+
+
+class WarehouseTransferLineSerializer(serializers.ModelSerializer):
+    product_code = serializers.SerializerMethodField()
+    product_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = inv_models.WarehouseTransferLine
+        fields = ['id', 'line_number', 'product', 'product_code', 'product_name', 'qty', 'received_qty', 'note']
+
+    def get_product_code(self, obj):
+        return getattr(obj.product, 'code', None) if obj.product else None
+
+    def get_product_name(self, obj):
+        return getattr(obj.product, 'name', None) if obj.product else None
+
+
+class WarehouseTransferSerializer(serializers.ModelSerializer):
+    lines = WarehouseTransferLineSerializer(many=True, required=False)
+    from_warehouse_code = serializers.SerializerMethodField()
+    to_warehouse_code = serializers.SerializerMethodField()
+
+    class Meta:
+        model = inv_models.WarehouseTransfer
+        fields = [
+            'id', 'code', 'transfer_date', 'status', 'reference',
+            'from_warehouse', 'from_warehouse_code', 'to_warehouse', 'to_warehouse_code',
+            'note', 'created_by', 'created_at', 'submitted_by', 'submitted_at',
+            'posted_by', 'posted_at', 'cancelled_by', 'cancelled_at', 'cancel_reason',
+            'lines',
+        ]
+        read_only_fields = ['code', 'created_by', 'created_at']
+
+    def get_from_warehouse_code(self, obj):
+        return f"{obj.from_warehouse.code} - {obj.from_warehouse.name}" if obj.from_warehouse else None
+
+    def get_to_warehouse_code(self, obj):
+        return f"{obj.to_warehouse.code} - {obj.to_warehouse.name}" if obj.to_warehouse else None
+
+    def create(self, validated_data):
+        from datetime import date
+        lines_data = validated_data.pop('lines', [])
+        transfer_date = validated_data.get('transfer_date')
+        if not transfer_date:
+            transfer_date = date.today()
+        validated_data['code'] = f"TRN-{transfer_date.strftime('%Y%m%d')}-{int(date.today().timestamp()) % 10000}"
+        with transaction.atomic():
+            transfer = inv_models.WarehouseTransfer.objects.create(**validated_data)
+            for i, line_data in enumerate(lines_data, start=1):
+                line_data['line_number'] = line_data.get('line_number') or i
+                line_data['transfer'] = transfer
+                inv_models.WarehouseTransferLine.objects.create(**line_data)
+        return transfer
+
+    def update(self, instance, validated_data):
+        lines_data = validated_data.pop('lines', None)
+        with transaction.atomic():
+            for k, v in validated_data.items():
+                setattr(instance, k, v)
+            instance.save()
+            if lines_data is not None:
+                instance.lines.all().delete()
+                for i, line_data in enumerate(lines_data, start=1):
+                    line_data['line_number'] = line_data.get('line_number') or i
+                    line_data['transfer'] = instance
+                    inv_models.WarehouseTransferLine.objects.create(**line_data)
+        return instance
+

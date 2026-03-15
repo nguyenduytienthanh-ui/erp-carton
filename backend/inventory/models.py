@@ -835,3 +835,106 @@ class StockAlert(models.Model):
     def __str__(self):
         return f"{self.product.code} - {self.alert_type} ({self.triggered_at})"
 
+
+class WarehouseTransfer(models.Model):
+    """Inter-warehouse transfer - chuyển hàng giữa kho."""
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    transfer_date = models.DateField(db_index=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('DRAFT', 'Nháp'),
+            ('SUBMITTED', 'Chờ xác nhận'),
+            ('IN_TRANSIT', 'Đang vận chuyển'),
+            ('RECEIVED', 'Đã nhận'),
+            ('CANCELLED', 'Đã hủy'),
+        ],
+        default='DRAFT',
+        db_index=True,
+    )
+    
+    from_warehouse = models.ForeignKey(
+        Warehouse,
+        on_delete=models.PROTECT,
+        related_name='transfers_from',
+    )
+    to_warehouse = models.ForeignKey(
+        Warehouse,
+        on_delete=models.PROTECT,
+        related_name='transfers_to',
+    )
+    
+    reference = models.CharField(max_length=200, blank=True)
+    note = models.TextField(blank=True)
+    
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='warehouse_transfers_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    submitted_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='warehouse_transfers_submitted',
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    posted_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='warehouse_transfers_posted',
+    )
+    posted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    cancelled_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='warehouse_transfers_cancelled',
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancel_reason = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 'inventory_warehouse_transfers'
+        ordering = ['-transfer_date', '-id']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['transfer_date']),
+            models.Index(fields=['status']),
+        ]
+        verbose_name = 'Chuyển kho'
+        verbose_name_plural = 'Chuyển kho'
+
+    def __str__(self):
+        return f"{self.code} - {self.transfer_date}"
+
+
+class WarehouseTransferLine(models.Model):
+    """Dòng chuyển kho."""
+    transfer = models.ForeignKey(
+        WarehouseTransfer,
+        on_delete=models.CASCADE,
+        related_name='lines',
+    )
+    line_number = models.PositiveSmallIntegerField(default=1)
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.PROTECT,
+        related_name='warehouse_transfer_lines',
+    )
+    qty = models.DecimalField(
+        max_digits=18,
+        decimal_places=4,
+        validators=[MinValueValidator(Decimal('0.0001'))],
+    )
+    received_qty = models.DecimalField(
+        max_digits=18,
+        decimal_places=4,
+        default=Decimal('0'),
+    )
+    note = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        db_table = 'inventory_warehouse_transfer_lines'
+        ordering = ['transfer_id', 'line_number']
+        unique_together = [['transfer', 'line_number']]
+
+    def __str__(self):
+        return f"{self.transfer.code}-L{self.line_number}"
+
+

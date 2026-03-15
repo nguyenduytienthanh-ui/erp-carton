@@ -23,8 +23,10 @@ from inventory.views import (
     InventoryTransactionViewSet,
     InventoryReservationViewSet,
     InventoryStockViewSet,
+    StockAlertViewSet,
     StocktakeViewSet,
     OutboundShipmentViewSet,
+    WarehouseTransferViewSet,
 )
 from sales.views import SalesOrderViewSet, QuoteViewSet
 from purchasing.views import (
@@ -81,8 +83,10 @@ router.register(r'inventory/locations', WarehouseLocationViewSet, basename='inve
 router.register(r'inventory/transactions', InventoryTransactionViewSet, basename='inventory-transaction')
 router.register(r'inventory/reservations', InventoryReservationViewSet, basename='inventory-reservation')
 router.register(r'inventory/stock', InventoryStockViewSet, basename='inventory-stock')
+router.register(r'inventory/stock-alerts', StockAlertViewSet, basename='inventory-stock-alert')
 router.register(r'inventory/stocktakes', StocktakeViewSet, basename='inventory-stocktake')
 router.register(r'inventory/shipments', OutboundShipmentViewSet, basename='inventory-shipment')
+router.register(r'inventory/warehouse-transfers', WarehouseTransferViewSet, basename='inventory-warehouse-transfer')
 router.register(r'purchasing/suppliers', SupplierViewSet, basename='purchasing-supplier')
 router.register(r'purchasing/material-prices', MaterialPurchasePriceViewSet, basename='purchasing-material-price')
 router.register(r'purchasing/orders', PurchaseOrderViewSet, basename='purchasing-order')
