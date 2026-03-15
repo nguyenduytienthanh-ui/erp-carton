@@ -236,3 +236,7 @@ export const inventoryApi = {
     return response.data;
   },
 };
+
+export const warehouseApi = {
+  getWarehouses: inventoryApi.getWarehouses,
+};

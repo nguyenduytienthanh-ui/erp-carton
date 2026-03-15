@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, Form, Input, Modal, Select, Space, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, EyeOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { inventoryApi } from '../../api/inventory';
@@ -12,6 +12,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { getToastMessage } from '../../shared/apiError';
+import WarehouseTransferFormModal from './WarehouseTransferFormModal';
 
 type Filters = {
   status?: string;
@@ -40,6 +41,8 @@ export default function WarehouseTransferList() {
   const [filters, setFilters] = useState<Filters>({});
   const [page, setPage] = useState(1);
   const [detailTransfer, setDetailTransfer] = useState<WarehouseTransfer | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editTransfer, setEditTransfer] = useState<WarehouseTransfer | null>(null);
   const { config, saveConfig } = useUserPreferences(PAGES.INVENTORY_WAREHOUSE_TRANSFERS);
   const pageSize = Number((config as Record<string, unknown>)?.pageSize ?? 20);
   const canManage = canManageInventoryData();
@@ -152,6 +155,16 @@ export default function WarehouseTransferList() {
           <Button
             size="small"
             disabled={!canManage || row.status !== 'DRAFT'}
+            onClick={() => {
+              setEditTransfer(row);
+              setFormOpen(true);
+            }}
+          >
+            Sửa
+          </Button>
+          <Button
+            size="small"
+            disabled={!canManage || row.status !== 'DRAFT'}
             danger
             icon={<DeleteOutlined />}
             onClick={() =>
@@ -196,6 +209,17 @@ export default function WarehouseTransferList() {
       {contextHolder}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h2>Chuyển kho</h2>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          disabled={!canManage}
+          onClick={() => {
+            setEditTransfer(null);
+            setFormOpen(true);
+          }}
+        >
+          Tạo phiếu chuyển
+        </Button>
       </div>
 
       <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -317,6 +341,16 @@ export default function WarehouseTransferList() {
           )}
         </Modal>
       )}
+
+      <WarehouseTransferFormModal
+        open={formOpen}
+        data={editTransfer}
+        onClose={() => {
+          setFormOpen(false);
+          setEditTransfer(null);
+        }}
+        onSuccess={() => setPage(1)}
+      />
     </>
   );
 }

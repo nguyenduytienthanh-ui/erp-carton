@@ -13,6 +13,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { getToastMessage } from '../../shared/apiError';
+import PurchaseReturnFormModal from './PurchaseReturnFormModal';
 
 type Filters = {
   status?: string;
@@ -41,6 +42,8 @@ export default function PurchaseReturnList() {
   const [filters, setFilters] = useState<Filters>({});
   const [page, setPage] = useState(1);
   const [detailReturn, setDetailReturn] = useState<PurchaseReturn | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editReturn, setEditReturn] = useState<PurchaseReturn | null>(null);
   const { config, saveConfig } = useUserPreferences(PAGES.PURCHASING_RETURNS);
   const pageSize = Number((config as Record<string, unknown>)?.pageSize ?? 20);
   const canManage = canManagePurchasingData();
@@ -153,6 +156,16 @@ export default function PurchaseReturnList() {
           <Button
             size="small"
             disabled={!canManage || row.status !== 'DRAFT'}
+            onClick={() => {
+              setEditReturn(row);
+              setFormOpen(true);
+            }}
+          >
+            Sửa
+          </Button>
+          <Button
+            size="small"
+            disabled={!canManage || row.status !== 'DRAFT'}
             danger
             icon={<DeleteOutlined />}
             onClick={() =>
@@ -197,6 +210,17 @@ export default function PurchaseReturnList() {
       {contextHolder}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h2>Phiếu Trả Hàng</h2>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          disabled={!canManage}
+          onClick={() => {
+            setEditReturn(null);
+            setFormOpen(true);
+          }}
+        >
+          Tạo phiếu trả
+        </Button>
       </div>
 
       <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -311,6 +335,16 @@ export default function PurchaseReturnList() {
           )}
         </Modal>
       )}
+
+      <PurchaseReturnFormModal
+        open={formOpen}
+        data={editReturn}
+        onClose={() => {
+          setFormOpen(false);
+          setEditReturn(null);
+        }}
+        onSuccess={() => setPage(1)}
+      />
     </>
   );
 }
