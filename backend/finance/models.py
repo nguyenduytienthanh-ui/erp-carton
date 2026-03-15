@@ -1014,3 +1014,71 @@ class PayableSettlement(SearchTextModelMixin):
         self._build_search_text()
         super().save(*args, **kwargs)
 
+    
+# ============== GENERAL LEDGER ==============
+class GeneralLedgerAccount(models.Model):
+    """Chart of Accounts"""
+    code = models.CharField(max_length=20, unique=True, db_index=True)
+    name = models.CharField(max_length=150)
+    account_type = models.CharField(
+        max_length=20,
+        choices=[
+            ('ASSET', 'Tài sản'),
+            ('LIABILITY', 'Nợ'),
+            ('EQUITY', 'Vốn chủ sở hữu'),
+            ('REVENUE', 'Doanh thu'),
+            ('EXPENSE', 'Chi phí'),
+        ]
+    )
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'finance_gl_accounts'
+        ordering = ['code']
+        verbose_name = 'General Ledger Account'
+        verbose_name_plural = 'General Ledger Accounts'
+    
+    def __str__(self):
+        return f"{self.code} - {self.name}"
+
+
+class GeneralLedgerEntry(models.Model):
+    """GL Entry - Debit/Credit posting"""
+    account = models.ForeignKey(
+        GeneralLedgerAccount,
+        on_delete=models.PROTECT,
+        related_name='entries'
+    )
+    posting_date = models.DateField(db_index=True)
+    debit_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    credit_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    
+    # Reference to source document
+    document_type = models.CharField(max_length=50, db_index=True)  # SalesOrder, PurchaseOrder, etc
+    document_id = models.IntegerField(null=True, blank=True, db_index=True)
+    document_code = models.CharField(max_length=50, blank=True)
+    
+    # Audit info
+    description = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='gl_entries_created'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'finance_gl_entries'
+        ordering = ['-posting_date', '-id']
+        indexes = [
+            models.Index(fields=['account', '-posting_date']),
+            models.Index(fields=['posting_date']),
+            models.Index(fields=['document_type', 'document_id']),
+        ]
+    
+    def __str__(self):
+        return f"{self.account.code} - DR:{self.debit_amount} CR:{self.credit_amount}"

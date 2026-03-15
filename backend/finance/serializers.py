@@ -14,6 +14,8 @@ from .models import (
     ReceivableDocument,
     ReceivableSettlement,
     TransactionCategory,
+    GeneralLedgerAccount,
+    GeneralLedgerEntry,
 )
 
 
@@ -492,3 +494,28 @@ class PayableDocumentSerializer(serializers.ModelSerializer):
         delta = (timezone.localdate() - obj.due_date).days
         return delta if delta > 0 else 0
 
+
+
+# ============== GENERAL LEDGER ==============
+class GeneralLedgerAccountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GeneralLedgerAccount
+        fields = ['id', 'code', 'name', 'account_type', 'description', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class GeneralLedgerEntrySerializer(serializers.ModelSerializer):
+    account_name = serializers.CharField(source='account.name', read_only=True)
+    account_code = serializers.CharField(source='account.code', read_only=True)
+    account_type = serializers.CharField(source='account.account_type', read_only=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True, allow_null=True)
+    
+    class Meta:
+        model = GeneralLedgerEntry
+        fields = [
+            'id', 'account', 'account_name', 'account_code', 'account_type',
+            'posting_date', 'debit_amount', 'credit_amount',
+            'document_type', 'document_id', 'document_code', 'description',
+            'created_by', 'created_by_name', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'created_by']

@@ -55,6 +55,8 @@ from finance.views import (
     PayableDocumentViewSet,
     ReceivableDocumentViewSet,
     TransactionCategoryViewSet,
+    GeneralLedgerAccountViewSet,
+    GeneralLedgerViewSet,
 )
 
 router = DefaultRouter()
@@ -115,6 +117,8 @@ router.register(r'finance/advance-transactions', AdvanceTransactionViewSet, base
 router.register(r'finance/advance-settlements', AdvanceSettlementViewSet, basename='finance-advance-settlement')
 router.register(r'finance/receivables', ReceivableDocumentViewSet, basename='finance-receivable')
 router.register(r'finance/payables', PayableDocumentViewSet, basename='finance-payable')
+router.register(r'finance/general-ledger-accounts', GeneralLedgerAccountViewSet, basename='finance-gl-account')
+router.register(r'finance/general-ledger', GeneralLedgerViewSet, basename='finance-gl-entry')
 
 urlpatterns = [
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
