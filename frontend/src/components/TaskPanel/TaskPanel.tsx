@@ -22,7 +22,6 @@ import {
   Switch,
   Tag,
   Tooltip,
-  Typography,
   Upload,
   message,
 } from 'antd';
@@ -64,8 +63,7 @@ import { attachmentsApi, isImageFile, type AttachmentItem } from '../../api/atta
 import { usersApi, getUserDisplayName } from '../../api/users';
 import { storage } from '../../utils/storage';
 import CommentBox from '../CommentBox/CommentBox';
-
-const { Text } = Typography;
+import { SafeText as Text } from '../SafeText';
 const TASK_ACTIVITY_READ_KEY = 'task_activity_read_map_v1';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -162,6 +160,7 @@ function renderAssigneeDirectoryFilters(directory: AssigneeDirectoryState) {
       <Select
         size="small"
         allowClear
+        virtual={false}
         value={directory.teamId}
         placeholder="Lọc theo team"
         onChange={(value) => directory.setTeamId(value ?? undefined)}
@@ -170,6 +169,7 @@ function renderAssigneeDirectoryFilters(directory: AssigneeDirectoryState) {
       <Select
         size="small"
         allowClear
+        virtual={false}
         value={directory.roleId}
         placeholder="Lọc theo vai trò"
         onChange={(value) => directory.setRoleId(value ?? undefined)}
@@ -230,6 +230,7 @@ function renderFormFields(
             tokenSeparators={[',', ' ']}
             placeholder="VD: phim_in, khuon_be, qc"
             options={[]}
+            virtual={false}
           />
         </Form.Item>
       </div>
@@ -244,6 +245,7 @@ function renderFormFields(
               placeholder="Chọn người..."
               filterOption={false}
               onSearch={directory.setSearch}
+              virtual={false}
               options={directory.users.map((u) => ({
                 value: u.id,
                 label: [
@@ -267,12 +269,13 @@ function renderFormFields(
           placeholder="Không phụ thuộc / Chọn nhiệm vụ cần hoàn thành trước..."
           filterOption={(input, opt) => String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
           options={dependencyOptions}
+          virtual={false}
         />
       </Form.Item>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
         <Form.Item name="priority" label="Ưu tiên" initialValue="MEDIUM" style={{ marginBottom: 10 }}>
-          <Select options={PRIORITY_OPTIONS} />
+          <Select options={PRIORITY_OPTIONS} virtual={false} />
         </Form.Item>
         <Form.Item
           name="is_blocking"
@@ -922,6 +925,7 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
             <Select
               showSearch
               allowClear
+              virtual={false}
               placeholder="Chọn người thực hiện mới..."
               style={{ width: '100%' }}
               value={reassignTo ?? undefined}
@@ -1379,10 +1383,10 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
           marginTop: 12, background: '#fff', border: '1px solid #d9d9d9',
           borderRadius: 10, padding: '14px 16px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
         }}>
-          <Text strong style={{ display: 'block', marginBottom: 12, fontSize: 13 }}>
+          <div style={{ display: 'block', marginBottom: 12, fontSize: 13, fontWeight: 600 }}>
             <PlusOutlined style={{ marginRight: 6, color: '#1677ff' }} />
             Tạo nhiệm vụ mới
-          </Text>
+          </div>
           <Form form={createForm} layout="vertical" size="small" onFinish={handleCreateFinish}>
             {renderFormFields(assigneeDirectory, tasks)}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 4 }}>

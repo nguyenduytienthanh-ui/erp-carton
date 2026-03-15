@@ -1,17 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Card, Empty, Input, Select, Space, Spin, Switch, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, Empty, Input, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ReloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { operationsApi, type OperationLogItem, type OperationSource, type OperationSuccessFilter } from '../../api/operations';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
+import { SafeText as Text, SafeTitle as Title } from '../../components/SafeText';
 import { storage } from '../../utils/storage';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 import { canViewOperationsLog } from '../../utils/authz';
-
-const { Text, Title } = Typography;
 
 const SOURCE_LABELS: Record<string, string> = {
   TASK_BULK: 'Task Bulk',
@@ -85,7 +84,7 @@ export default function OperationsLogDashboard() {
   });
   const livePollingInterval = useRealtimePollingInterval({
     enabled: liveSync,
-    activeMs: 4_000,
+    activeMs: 10_000,
     hiddenMs: false,
   });
 

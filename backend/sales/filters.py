@@ -4,7 +4,7 @@ import django_filters
 from django.conf import settings
 from django.db import models
 from django.utils import timezone as django_tz
-from sales.models import SalesOrder, SalesOrderStatus
+from sales.models import SalesOrder, SalesOrderStatus, Quote, QuoteStatus
 
 
 def _parse_date(value, end_of_day=False):
@@ -105,3 +105,16 @@ class SalesOrderFilter(django_filters.FilterSet):
             lines__delivery_plans__qty__gt=0,
             lines__delivery_plans__delivered_qty__lt=models.F('lines__delivery_plans__qty'),
         ).distinct()
+
+
+class QuoteFilter(django_filters.FilterSet):
+    status = django_filters.ChoiceFilter(choices=QuoteStatus.CHOICES)
+    customer = django_filters.NumberFilter(field_name='customer_id')
+    quote_date__gte = django_filters.DateFilter(field_name='quote_date', lookup_expr='gte')
+    quote_date__lte = django_filters.DateFilter(field_name='quote_date', lookup_expr='lte')
+    valid_until__gte = django_filters.DateFilter(field_name='valid_until', lookup_expr='gte')
+    valid_until__lte = django_filters.DateFilter(field_name='valid_until', lookup_expr='lte')
+
+    class Meta:
+        model = Quote
+        fields = ['status', 'customer', 'quote_date__gte', 'quote_date__lte', 'valid_until__gte', 'valid_until__lte']

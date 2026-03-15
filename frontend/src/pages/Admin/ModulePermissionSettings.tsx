@@ -18,7 +18,10 @@ type ModulePermissionFilters = {
 type PermissionFieldKey =
   | 'workforce_manage'
   | 'finance_manage'
+  | 'purchasing_manage'
+  | 'production_manage'
   | 'ops_view'
+  | 'reports_view'
   | 'workflow_view'
   | 'workflow_manage'
   | 'operations_log_view'
@@ -28,7 +31,10 @@ type PermissionFieldKey =
 const DEFAULT_PERMISSION_FIELDS: Array<{ field: PermissionFieldKey; label: string }> = [
   { field: 'workforce_manage', label: 'Nhân sự' },
   { field: 'finance_manage', label: 'Tài chính' },
+  { field: 'purchasing_manage', label: 'Mua hàng' },
+  { field: 'production_manage', label: 'Sản xuất' },
   { field: 'ops_view', label: 'Điều hành' },
+  { field: 'reports_view', label: 'Trung tâm báo cáo' },
   { field: 'workflow_view', label: 'Workflow xem' },
   { field: 'workflow_manage', label: 'Workflow quản lý' },
   { field: 'operations_log_view', label: 'Nhật ký vận hành' },
@@ -164,7 +170,10 @@ export default function ModulePermissionSettings() {
         role_id: item.role_id,
         workforce_manage: Boolean(item.workforce_manage),
         finance_manage: Boolean(item.finance_manage),
+        purchasing_manage: Boolean(item.purchasing_manage),
+        production_manage: Boolean(item.production_manage),
         ops_view: Boolean(item.ops_view),
+        reports_view: Boolean(item.reports_view),
         workflow_view: Boolean(item.workflow_view),
         workflow_manage: Boolean(item.workflow_manage),
         operations_log_view: Boolean(item.operations_log_view),
@@ -211,7 +220,7 @@ export default function ModulePermissionSettings() {
       )}
     >
       <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-        Bật/tắt quyền quản lý Nhân sự, Tài chính và màn phân quyền cho từng vai trò. Thay đổi có hiệu lực ngay sau khi lưu.
+        Bật/tắt quyền truy cập các module lõi và màn quản trị cho từng vai trò. Thay đổi có hiệu lực ngay sau khi lưu.
       </Typography.Paragraph>
       <div
         style={{

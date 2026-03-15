@@ -19,6 +19,13 @@ class SearchTextModelMixin(models.Model):
         combined = ' '.join(str(p).strip() for p in self._search_values() if p not in (None, ''))
         self.search_text = unidecode(combined).lower() if combined else ''
 
+    def _merge_update_fields(self, update_fields):
+        if update_fields is None:
+            return None
+        fields = set(update_fields)
+        fields.add('search_text')
+        return list(fields)
+
 
 class TransactionCategory(SearchTextModelMixin):
     TYPE_INCOME = 'INCOME'
@@ -81,6 +88,7 @@ class TransactionCategory(SearchTextModelMixin):
         if self.code:
             self.code = str(self.code).strip().upper()
         self._build_search_text()
+        kwargs['update_fields'] = self._merge_update_fields(kwargs.get('update_fields'))
         super().save(*args, **kwargs)
 
 
@@ -137,6 +145,7 @@ class BankAccount(SearchTextModelMixin):
         if self.code:
             self.code = str(self.code).strip().upper()
         self._build_search_text()
+        kwargs['update_fields'] = self._merge_update_fields(kwargs.get('update_fields'))
         super().save(*args, **kwargs)
 
 
@@ -194,6 +203,7 @@ class CashAccount(SearchTextModelMixin):
 
     def save(self, *args, **kwargs):
         self._build_search_text()
+        kwargs['update_fields'] = self._merge_update_fields(kwargs.get('update_fields'))
         super().save(*args, **kwargs)
 
     def current_balance_as_of(self, up_to_date=None, exclude_transaction_id: int | None = None):
@@ -347,6 +357,7 @@ class CashTransaction(SearchTextModelMixin):
 
     def save(self, *args, **kwargs):
         self._build_search_text()
+        kwargs['update_fields'] = self._merge_update_fields(kwargs.get('update_fields'))
         super().save(*args, **kwargs)
 
 
@@ -540,6 +551,7 @@ class AdvanceTransaction(SearchTextModelMixin):
         if self.code:
             self.code = str(self.code).strip().upper()
         self._build_search_text()
+        kwargs['update_fields'] = self._merge_update_fields(kwargs.get('update_fields'))
         super().save(*args, **kwargs)
 
 
@@ -601,6 +613,402 @@ class AdvanceSettlement(SearchTextModelMixin):
             raise ValidationError('Hoàn ứng không được âm.')
         if (self.spent_amount or 0) + (self.refund_amount or 0) <= 0:
             raise ValidationError('Chi thực tế + Hoàn ứng phải lớn hơn 0.')
+
+    def save(self, *args, **kwargs):
+        self._build_search_text()
+        kwargs['update_fields'] = self._merge_update_fields(kwargs.get('update_fields'))
+        super().save(*args, **kwargs)
+
+
+class ReceivableStatus:
+    OPEN = 'OPEN'
+    PARTIAL = 'PARTIAL'
+    SETTLED = 'SETTLED'
+    CANCELLED = 'CANCELLED'
+    CHOICES = [
+        (OPEN, 'Chưa thu'),
+        (PARTIAL, 'Thu một phần'),
+        (SETTLED, 'Đã thu đủ'),
+        (CANCELLED, 'Đã hủy'),
+    ]
+
+
+class PayableStatus:
+    OPEN = 'OPEN'
+    PARTIAL = 'PARTIAL'
+    SETTLED = 'SETTLED'
+    CANCELLED = 'CANCELLED'
+    CHOICES = [
+        (OPEN, 'Chưa chi'),
+        (PARTIAL, 'Chi một phần'),
+        (SETTLED, 'Đã chi đủ'),
+        (CANCELLED, 'Đã hủy'),
+    ]
+
+
+class ReceivableDocument(SearchTextModelMixin):
+    code = models.CharField(max_length=30, unique=True, verbose_name='Mã phải thu')
+    source_sales_order = models.OneToOneField(
+        'sales.SalesOrder',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='receivable_document',
+        verbose_name='Đơn bán nguồn',
+    )
+    customer = models.ForeignKey(
+        'core.Customer',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='receivable_documents',
+        verbose_name='Khách hàng',
+    )
+    customer_snapshot = models.JSONField(default=dict, blank=True, verbose_name='Snapshot khách hàng')
+    document_date = models.DateField(verbose_name='Ngày ghi nhận')
+    due_date = models.DateField(verbose_name='Ngày đến hạn')
+    currency = models.CharField(max_length=3, default='VND', verbose_name='Tiền tệ')
+    exchange_rate = models.DecimalField(max_digits=18, decimal_places=6, default=Decimal('1'), verbose_name='Tỷ giá')
+    subtotal_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0, verbose_name='Tiền hàng')
+    tax_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0, verbose_name='Thuế')
+    total_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0, verbose_name='Tổng phải thu')
+    settled_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0, verbose_name='Đã thu')
+    status = models.CharField(max_length=20, choices=ReceivableStatus.CHOICES, default=ReceivableStatus.OPEN, verbose_name='Trạng thái')
+    reference = models.CharField(max_length=200, blank=True, default='', verbose_name='Tham chiếu')
+    note = models.TextField(blank=True, default='', verbose_name='Ghi chú')
+    version = models.IntegerField(default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_receivables_created',
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_receivables_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'finance_receivable_documents'
+        ordering = ['due_date', '-id']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['document_date']),
+            models.Index(fields=['due_date']),
+            models.Index(fields=['status']),
+            models.Index(fields=['customer']),
+        ]
+
+    def __str__(self):
+        return self.code
+
+    @property
+    def remaining_amount(self):
+        remaining = Decimal(str(self.total_amount or 0)) - Decimal(str(self.settled_amount or 0))
+        return remaining if remaining > 0 else Decimal('0')
+
+    def _search_values(self):
+        snapshot = self.customer_snapshot or {}
+        return [
+            self.code,
+            getattr(getattr(self, 'source_sales_order', None), 'code', None) or '',
+            snapshot.get('code'),
+            snapshot.get('name'),
+            snapshot.get('company_name'),
+            self.document_date.isoformat() if self.document_date else '',
+            self.due_date.isoformat() if self.due_date else '',
+            str(self.total_amount or 0),
+            str(self.settled_amount or 0),
+            str(self.remaining_amount),
+            dict(ReceivableStatus.CHOICES).get(self.status, self.status),
+            self.reference,
+            self.note,
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.code:
+            self.code = str(self.code).strip().upper()
+        self._build_search_text()
+        kwargs['update_fields'] = self._merge_update_fields(kwargs.get('update_fields'))
+        super().save(*args, **kwargs)
+
+
+class ReceivableSettlement(SearchTextModelMixin):
+    SOURCE_CASH = 'CASH'
+    SOURCE_BANK = 'BANK'
+    SOURCE_CHOICES = [
+        (SOURCE_CASH, 'Tiền mặt / Quỹ'),
+        (SOURCE_BANK, 'Ngân hàng'),
+    ]
+
+    receivable_document = models.ForeignKey(
+        ReceivableDocument,
+        on_delete=models.CASCADE,
+        related_name='settlements',
+        verbose_name='Chứng từ phải thu',
+    )
+    settlement_date = models.DateField(verbose_name='Ngày thu tiền')
+    amount = models.DecimalField(max_digits=18, decimal_places=2, verbose_name='Số tiền thu')
+    source_type = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_CASH, verbose_name='Nguồn tiền')
+    source_cash_account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='receivable_settlements_from_cash',
+        verbose_name='Quỹ thu',
+    )
+    source_bank_account = models.ForeignKey(
+        BankAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='receivable_settlements_from_bank',
+        verbose_name='Ngân hàng thu',
+    )
+    cash_transaction = models.OneToOneField(
+        CashTransaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='receivable_settlement',
+        verbose_name='Giao dịch quỹ/ngân hàng',
+    )
+    note = models.TextField(blank=True, default='', verbose_name='Ghi chú')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_receivable_settlements_created',
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_receivable_settlements_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'finance_receivable_settlements'
+        ordering = ['-settlement_date', '-id']
+        indexes = [
+            models.Index(fields=['settlement_date']),
+            models.Index(fields=['receivable_document']),
+        ]
+
+    def __str__(self):
+        return f'THU-{self.receivable_document.code}-{self.id}'
+
+    def _search_values(self):
+        snapshot = self.receivable_document.customer_snapshot if self.receivable_document_id else {}
+        return [
+            self.receivable_document.code if self.receivable_document_id else '',
+            snapshot.get('name'),
+            snapshot.get('company_name'),
+            self.settlement_date.isoformat() if self.settlement_date else '',
+            str(self.amount or 0),
+            self.source_type,
+            dict(self.SOURCE_CHOICES).get(self.source_type, ''),
+            self.note,
+        ]
+
+    def save(self, *args, **kwargs):
+        self._build_search_text()
+        kwargs['update_fields'] = self._merge_update_fields(kwargs.get('update_fields'))
+        super().save(*args, **kwargs)
+
+
+class PayableDocument(SearchTextModelMixin):
+    code = models.CharField(max_length=30, unique=True, verbose_name='Mã phải trả')
+    source_purchase_receipt = models.OneToOneField(
+        'purchasing.PurchaseReceipt',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='payable_document',
+        verbose_name='Phiếu nhập nguồn',
+    )
+    supplier = models.ForeignKey(
+        'purchasing.Supplier',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payable_documents',
+        verbose_name='Nhà cung cấp',
+    )
+    supplier_snapshot = models.JSONField(default=dict, blank=True, verbose_name='Snapshot nhà cung cấp')
+    document_date = models.DateField(verbose_name='Ngày ghi nhận')
+    due_date = models.DateField(verbose_name='Ngày đến hạn')
+    vendor_invoice_no = models.CharField(max_length=100, blank=True, default='', verbose_name='Số hóa đơn NCC')
+    vendor_invoice_date = models.DateField(null=True, blank=True, verbose_name='Ngày hóa đơn NCC')
+    currency = models.CharField(max_length=3, default='VND', verbose_name='Tiền tệ')
+    exchange_rate = models.DecimalField(max_digits=18, decimal_places=6, default=Decimal('1'), verbose_name='Tỷ giá')
+    subtotal_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0, verbose_name='Tiền hàng')
+    tax_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0, verbose_name='Thuế')
+    total_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0, verbose_name='Tổng phải trả')
+    settled_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0, verbose_name='Đã chi')
+    status = models.CharField(max_length=20, choices=PayableStatus.CHOICES, default=PayableStatus.OPEN, verbose_name='Trạng thái')
+    reference = models.CharField(max_length=200, blank=True, default='', verbose_name='Tham chiếu')
+    note = models.TextField(blank=True, default='', verbose_name='Ghi chú')
+    version = models.IntegerField(default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_payables_created',
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_payables_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'finance_payable_documents'
+        ordering = ['due_date', '-id']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['document_date']),
+            models.Index(fields=['due_date']),
+            models.Index(fields=['status']),
+            models.Index(fields=['supplier']),
+        ]
+
+    def __str__(self):
+        return self.code
+
+    @property
+    def remaining_amount(self):
+        remaining = Decimal(str(self.total_amount or 0)) - Decimal(str(self.settled_amount or 0))
+        return remaining if remaining > 0 else Decimal('0')
+
+    def _search_values(self):
+        snapshot = self.supplier_snapshot or {}
+        receipt_code = getattr(getattr(self, 'source_purchase_receipt', None), 'code', '') or ''
+        purchase_order_code = getattr(getattr(getattr(self, 'source_purchase_receipt', None), 'purchase_order', None), 'code', '') or ''
+        return [
+            self.code,
+            receipt_code,
+            purchase_order_code,
+            snapshot.get('code'),
+            snapshot.get('name'),
+            snapshot.get('company_name'),
+            self.document_date.isoformat() if self.document_date else '',
+            self.due_date.isoformat() if self.due_date else '',
+            self.vendor_invoice_no,
+            self.vendor_invoice_date.isoformat() if self.vendor_invoice_date else '',
+            str(self.total_amount or 0),
+            str(self.settled_amount or 0),
+            str(self.remaining_amount),
+            dict(PayableStatus.CHOICES).get(self.status, self.status),
+            self.reference,
+            self.note,
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.code:
+            self.code = str(self.code).strip().upper()
+        self._build_search_text()
+        super().save(*args, **kwargs)
+
+
+class PayableSettlement(SearchTextModelMixin):
+    SOURCE_CASH = 'CASH'
+    SOURCE_BANK = 'BANK'
+    SOURCE_CHOICES = [
+        (SOURCE_CASH, 'Tiền mặt / Quỹ'),
+        (SOURCE_BANK, 'Ngân hàng'),
+    ]
+
+    payable_document = models.ForeignKey(
+        PayableDocument,
+        on_delete=models.CASCADE,
+        related_name='settlements',
+        verbose_name='Chứng từ phải trả',
+    )
+    settlement_date = models.DateField(verbose_name='Ngày thanh toán')
+    amount = models.DecimalField(max_digits=18, decimal_places=2, verbose_name='Số tiền chi')
+    source_type = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_CASH, verbose_name='Nguồn tiền')
+    source_cash_account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payable_settlements_from_cash',
+        verbose_name='Quỹ chi',
+    )
+    source_bank_account = models.ForeignKey(
+        BankAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payable_settlements_from_bank',
+        verbose_name='Ngân hàng chi',
+    )
+    cash_transaction = models.OneToOneField(
+        CashTransaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payable_settlement',
+        verbose_name='Giao dịch quỹ/ngân hàng',
+    )
+    note = models.TextField(blank=True, default='', verbose_name='Ghi chú')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_payable_settlements_created',
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_payable_settlements_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'finance_payable_settlements'
+        ordering = ['-settlement_date', '-id']
+        indexes = [
+            models.Index(fields=['settlement_date']),
+            models.Index(fields=['payable_document']),
+        ]
+
+    def __str__(self):
+        return f'CHI-{self.payable_document.code}-{self.id}'
+
+    def _search_values(self):
+        snapshot = self.payable_document.supplier_snapshot if self.payable_document_id else {}
+        return [
+            self.payable_document.code if self.payable_document_id else '',
+            snapshot.get('name'),
+            snapshot.get('company_name'),
+            self.settlement_date.isoformat() if self.settlement_date else '',
+            str(self.amount or 0),
+            self.source_type,
+            dict(self.SOURCE_CHOICES).get(self.source_type, ''),
+            self.note,
+        ]
 
     def save(self, *args, **kwargs):
         self._build_search_text()

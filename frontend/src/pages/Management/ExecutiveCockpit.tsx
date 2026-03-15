@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Col, Empty, InputNumber, List, Modal, Progress, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Empty, InputNumber, List, Modal, Progress, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -9,11 +9,10 @@ import { notificationsApi } from '../../api/notifications';
 import { usersApi, getUserDisplayName } from '../../api/users';
 import { financeApi } from '../../api/finance';
 import { workforceApi } from '../../api/workforce';
+import { SafeText as Text, SafeTitle as Title } from '../../components/SafeText';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
-
-const { Text, Title } = Typography;
 
 type RiskEntityItem = {
   entity_code: string;

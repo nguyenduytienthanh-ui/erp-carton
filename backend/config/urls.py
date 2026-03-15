@@ -4,6 +4,8 @@ from django.shortcuts import redirect
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+
 from core.views import logout_view
 from core.health import health_check, live_check, ready_check
 
@@ -22,6 +24,8 @@ urlpatterns = [
     path('health/ready/', ready_check, name='health-ready'),
     path('health/', health_check, name='health-check'),
     path('api/auth/logout/', logout_view, name='logout'),
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/', include('core.urls')),
 ]
 

@@ -7,6 +7,8 @@ export type AdvanceTransactionStatus = 'OPEN' | 'PARTIAL' | 'SETTLED' | 'CANCELL
 export type AdvanceTransactionSourceType = 'CASH' | 'BANK';
 export type AdvanceApprovalStatus = 'DRAFT' | 'PENDING_L1' | 'PENDING_L2' | 'APPROVED' | 'REJECTED';
 export type DisbursementStatus = 'NOT_DISBURSED' | 'DISBURSED';
+export type ReceivableStatus = 'OPEN' | 'PARTIAL' | 'SETTLED' | 'CANCELLED';
+export type PayableStatus = 'OPEN' | 'PARTIAL' | 'SETTLED' | 'CANCELLED';
 
 export interface BankAccount {
   id: number;
@@ -116,6 +118,114 @@ export interface AdvanceSettlement {
   note: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ReceivableSettlement {
+  id: number;
+  receivable_document: number;
+  receivable_code?: string;
+  customer_name?: string | null;
+  settlement_date: string;
+  amount: string;
+  source_type: CashTransactionSourceType;
+  source_cash_account?: number | null;
+  source_cash_account_name?: string | null;
+  source_bank_account?: number | null;
+  source_bank_account_code?: string | null;
+  cash_transaction_id?: number | null;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReceivableDocument {
+  id: number;
+  code: string;
+  source_sales_order?: number | null;
+  source_sales_order_code?: string | null;
+  customer?: number | null;
+  customer_code?: string | null;
+  customer_name?: string | null;
+  customer_snapshot?: Record<string, unknown>;
+  document_date: string;
+  due_date: string;
+  currency: string;
+  exchange_rate: string;
+  subtotal_amount: string;
+  tax_amount: string;
+  total_amount: string;
+  settled_amount: string;
+  remaining_amount: string;
+  days_overdue: number;
+  status: ReceivableStatus;
+  reference: string;
+  note: string;
+  version?: number;
+  created_at: string;
+  updated_at: string;
+  settlements: ReceivableSettlement[];
+}
+
+export interface PayableSettlement {
+  id: number;
+  payable_document: number;
+  payable_code?: string;
+  supplier_name?: string | null;
+  settlement_date: string;
+  amount: string;
+  source_type: CashTransactionSourceType;
+  source_cash_account?: number | null;
+  source_cash_account_name?: string | null;
+  source_bank_account?: number | null;
+  source_bank_account_code?: string | null;
+  cash_transaction_id?: number | null;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PayableDocument {
+  id: number;
+  code: string;
+  source_purchase_receipt?: number | null;
+  source_purchase_receipt_code?: string | null;
+  source_purchase_order_code?: string | null;
+  supplier?: number | null;
+  supplier_code?: string | null;
+  supplier_name?: string | null;
+  supplier_snapshot?: Record<string, unknown>;
+  document_date: string;
+  due_date: string;
+  vendor_invoice_no: string;
+  vendor_invoice_date?: string | null;
+  currency: string;
+  exchange_rate: string;
+  subtotal_amount: string;
+  tax_amount: string;
+  total_amount: string;
+  settled_amount: string;
+  remaining_amount: string;
+  days_overdue: number;
+  status: PayableStatus;
+  reference: string;
+  note: string;
+  version?: number;
+  created_at: string;
+  updated_at: string;
+  settlements: PayableSettlement[];
+}
+
+export interface ArApSummaryResponse {
+  count: number;
+  open_count: number;
+  partial_count: number;
+  settled_count: number;
+  cancelled_count: number;
+  overdue_count: number;
+  total_amount: string;
+  settled_amount: string;
+  remaining_amount: string;
+  overdue_amount: string;
 }
 
 export interface PaginatedResponse<T> {

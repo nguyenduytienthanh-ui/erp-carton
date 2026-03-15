@@ -7,7 +7,10 @@ import type {
   InventoryStockRow,
   InventoryStockSummary,
   InventoryTransaction,
+  OutboundShipment,
   PaginatedResponse,
+  Stocktake,
+  StocktakeFormLine,
   Warehouse,
   WarehouseLocation,
 } from '../types/inventory';
@@ -118,6 +121,58 @@ export const inventoryApi = {
   },
   getStockSummary: async (): Promise<InventoryStockSummary> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.INVENTORY_STOCK}summary/`);
+    return response.data;
+  },
+  getNxtReport: async (params: { date_from: string; date_to: string; warehouse?: number }): Promise<{
+    date_from: string;
+    date_to: string;
+    results: Array<{
+      product_id: number;
+      product_code: string;
+      product_name: string;
+      warehouse_id: number | null;
+      warehouse_code: string;
+      warehouse_name: string;
+      opening_qty: string;
+      in_qty: string;
+      out_qty: string;
+      closing_qty: string;
+    }>;
+  }> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.INVENTORY_NXT_REPORT, { params });
+    return response.data;
+  },
+
+  getStocktakes: async (params?: Record<string, unknown>): Promise<PaginatedResponse<Stocktake>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.INVENTORY_STOCKTAKES, { params });
+    return response.data;
+  },
+  getStocktake: async (id: number): Promise<Stocktake> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.INVENTORY_STOCKTAKES}${id}/`);
+    return response.data;
+  },
+  createStocktake: async (payload: { warehouse: number; count_date: string; note?: string; lines_data: StocktakeFormLine[] }): Promise<Stocktake> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.INVENTORY_STOCKTAKES, payload);
+    return response.data;
+  },
+  updateStocktake: async (id: number, payload: Partial<{ warehouse: number; count_date: string; note: string; lines_data: StocktakeFormLine[] }>): Promise<Stocktake> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.INVENTORY_STOCKTAKES}${id}/`, payload);
+    return response.data;
+  },
+  deleteStocktake: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.INVENTORY_STOCKTAKES}${id}/`);
+  },
+  completeStocktake: async (id: number): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_STOCKTAKES}${id}/complete/`);
+    return response.data;
+  },
+
+  getShipments: async (params?: Record<string, unknown>): Promise<PaginatedResponse<OutboundShipment>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.INVENTORY_SHIPMENTS, { params });
+    return response.data;
+  },
+  getShipment: async (id: number): Promise<OutboundShipment> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.INVENTORY_SHIPMENTS}${id}/`);
     return response.data;
   },
 

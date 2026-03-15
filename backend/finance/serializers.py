@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.utils import timezone
 from rest_framework import serializers
 
 from .models import (
@@ -8,6 +9,10 @@ from .models import (
     BankAccount,
     CashAccount,
     CashTransaction,
+    PayableDocument,
+    PayableSettlement,
+    ReceivableDocument,
+    ReceivableSettlement,
     TransactionCategory,
 )
 
@@ -305,4 +310,185 @@ class AdvanceSettlementSerializer(serializers.ModelSerializer):
                     f'Còn được quyết toán tối đa: {max(0, advance_amount - existing_total):,.0f}.'
                 )
         return attrs
+
+
+class ReceivableSettlementSerializer(serializers.ModelSerializer):
+    receivable_code = serializers.CharField(source='receivable_document.code', read_only=True)
+    customer_name = serializers.SerializerMethodField()
+    source_cash_account_name = serializers.CharField(source='source_cash_account.name', read_only=True)
+    source_bank_account_code = serializers.CharField(source='source_bank_account.code', read_only=True)
+    cash_transaction_id = serializers.IntegerField(source='cash_transaction.id', read_only=True)
+
+    class Meta:
+        model = ReceivableSettlement
+        fields = [
+            'id',
+            'receivable_document',
+            'receivable_code',
+            'customer_name',
+            'settlement_date',
+            'amount',
+            'source_type',
+            'source_cash_account',
+            'source_cash_account_name',
+            'source_bank_account',
+            'source_bank_account_code',
+            'cash_transaction_id',
+            'note',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_customer_name(self, obj):
+        snapshot = getattr(obj.receivable_document, 'customer_snapshot', None) or {}
+        return snapshot.get('name') or snapshot.get('company_name')
+
+
+class ReceivableDocumentSerializer(serializers.ModelSerializer):
+    source_sales_order_code = serializers.CharField(source='source_sales_order.code', read_only=True)
+    customer_name = serializers.SerializerMethodField()
+    customer_code = serializers.SerializerMethodField()
+    remaining_amount = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
+    days_overdue = serializers.SerializerMethodField()
+    settlements = ReceivableSettlementSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ReceivableDocument
+        fields = [
+            'id',
+            'code',
+            'source_sales_order',
+            'source_sales_order_code',
+            'customer',
+            'customer_code',
+            'customer_name',
+            'customer_snapshot',
+            'document_date',
+            'due_date',
+            'currency',
+            'exchange_rate',
+            'subtotal_amount',
+            'tax_amount',
+            'total_amount',
+            'settled_amount',
+            'remaining_amount',
+            'days_overdue',
+            'status',
+            'reference',
+            'note',
+            'version',
+            'created_at',
+            'updated_at',
+            'settlements',
+        ]
+        read_only_fields = fields
+
+    def get_customer_name(self, obj):
+        snapshot = obj.customer_snapshot or {}
+        return snapshot.get('name') or snapshot.get('company_name') or getattr(getattr(obj, 'customer', None), 'name', None)
+
+    def get_customer_code(self, obj):
+        snapshot = obj.customer_snapshot or {}
+        return snapshot.get('code') or getattr(getattr(obj, 'customer', None), 'code', None)
+
+    def get_days_overdue(self, obj):
+        if obj.status == 'CANCELLED' or not obj.due_date or obj.remaining_amount <= 0:
+            return 0
+        delta = (timezone.localdate() - obj.due_date).days
+        return delta if delta > 0 else 0
+
+
+class PayableSettlementSerializer(serializers.ModelSerializer):
+    payable_code = serializers.CharField(source='payable_document.code', read_only=True)
+    supplier_name = serializers.SerializerMethodField()
+    source_cash_account_name = serializers.CharField(source='source_cash_account.name', read_only=True)
+    source_bank_account_code = serializers.CharField(source='source_bank_account.code', read_only=True)
+    cash_transaction_id = serializers.IntegerField(source='cash_transaction.id', read_only=True)
+
+    class Meta:
+        model = PayableSettlement
+        fields = [
+            'id',
+            'payable_document',
+            'payable_code',
+            'supplier_name',
+            'settlement_date',
+            'amount',
+            'source_type',
+            'source_cash_account',
+            'source_cash_account_name',
+            'source_bank_account',
+            'source_bank_account_code',
+            'cash_transaction_id',
+            'note',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_supplier_name(self, obj):
+        snapshot = getattr(obj.payable_document, 'supplier_snapshot', None) or {}
+        return snapshot.get('name') or snapshot.get('company_name')
+
+
+class PayableDocumentSerializer(serializers.ModelSerializer):
+    source_purchase_receipt_code = serializers.CharField(source='source_purchase_receipt.code', read_only=True)
+    source_purchase_order_code = serializers.SerializerMethodField()
+    supplier_name = serializers.SerializerMethodField()
+    supplier_code = serializers.SerializerMethodField()
+    remaining_amount = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
+    days_overdue = serializers.SerializerMethodField()
+    settlements = PayableSettlementSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PayableDocument
+        fields = [
+            'id',
+            'code',
+            'source_purchase_receipt',
+            'source_purchase_receipt_code',
+            'source_purchase_order_code',
+            'supplier',
+            'supplier_code',
+            'supplier_name',
+            'supplier_snapshot',
+            'document_date',
+            'due_date',
+            'vendor_invoice_no',
+            'vendor_invoice_date',
+            'currency',
+            'exchange_rate',
+            'subtotal_amount',
+            'tax_amount',
+            'total_amount',
+            'settled_amount',
+            'remaining_amount',
+            'days_overdue',
+            'status',
+            'reference',
+            'note',
+            'version',
+            'created_at',
+            'updated_at',
+            'settlements',
+        ]
+        read_only_fields = fields
+
+    def get_source_purchase_order_code(self, obj):
+        return getattr(getattr(getattr(obj, 'source_purchase_receipt', None), 'purchase_order', None), 'code', None)
+
+    def get_supplier_name(self, obj):
+        snapshot = obj.supplier_snapshot or {}
+        return snapshot.get('name') or snapshot.get('company_name') or getattr(getattr(obj, 'supplier', None), 'name', None)
+
+    def get_supplier_code(self, obj):
+        snapshot = obj.supplier_snapshot or {}
+        return snapshot.get('code') or getattr(getattr(obj, 'supplier', None), 'code', None)
+
+    def get_days_overdue(self, obj):
+        if obj.status == 'CANCELLED' or not obj.due_date or obj.remaining_amount <= 0:
+            return 0
+        delta = (timezone.localdate() - obj.due_date).days
+        return delta if delta > 0 else 0
 

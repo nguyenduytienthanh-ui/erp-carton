@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button, Card, Empty, Input, Select, Space, Spin, Switch, Table, Tag, Typography, message } from 'antd';
+import { Badge, Button, Card, Empty, Input, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { CheckOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -7,11 +7,10 @@ import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { notificationsApi, type NotificationItem } from '../../api/notifications';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
+import { SafeText as Text, SafeTitle as Title } from '../../components/SafeText';
 import { useRowSelection } from '../../hooks/useRowSelection';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
-
-const { Text, Title } = Typography;
 
 type ReadFilter = 'ALL' | 'UNREAD' | 'READ';
 
@@ -62,7 +61,7 @@ export default function NotificationCenter() {
   });
   const livePollingInterval = useRealtimePollingInterval({
     enabled: liveSync,
-    activeMs: 4_000,
+    activeMs: 10_000,
     hiddenMs: false,
   });
 

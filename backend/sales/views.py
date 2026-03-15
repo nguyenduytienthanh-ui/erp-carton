@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from django.db.models import Q, Sum
+from django.db.models import F, Q, Sum
 from django.apps import apps
 from reportlab.graphics import renderPDF
 from reportlab.graphics.barcode.qr import QrCodeWidget
@@ -30,9 +30,9 @@ from core.mixins import get_client_ip
 from core.models import AuditLog, ApprovalHistory, Attachment
 from core.permissions import check_action_permission
 from core.workflow_services import generate_tasks_for_entity
-from sales.models import SalesOrder, SalesOrderStatus
-from sales.serializers import SalesOrderSerializer
-from sales.filters import SalesOrderFilter
+from sales.models import SalesOrder, SalesOrderStatus, Quote, QuoteStatus
+from sales.serializers import SalesOrderSerializer, QuoteSerializer
+from sales.filters import SalesOrderFilter, QuoteFilter
 from sales.services import (
     apply_delivery_plan_delivery,
     apply_delivery_plan_shipment,
@@ -109,6 +109,134 @@ def _sales_order_pdf_response(filename, build_callback):
     response = HttpResponse(buffer.read(), content_type='application/pdf')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
+
+
+def _build_invoice_pdf(pdf_canvas, order):
+    """Vẽ nội dung hóa đơn đơn hàng (header, khách hàng, bảng dòng, tổng)."""
+    from reportlab.platypus import Table, TableStyle
+
+    w, h = A4
+    margin = 40
+    y = h - margin
+    pdf_canvas.setFont('Helvetica-Bold', 14)
+    pdf_canvas.drawString(margin, y, 'HOA DON BAN HANG')
+    y -= 24
+    pdf_canvas.setFont('Helvetica', 10)
+    pdf_canvas.drawString(margin, y, f'Ma don: {order.code}')
+    pdf_canvas.drawString(margin + 220, y, f'Ngay don: {order.order_date}')
+    y -= 18
+    cust = order.customer
+    cust_name = (cust.name if cust else '') or (getattr(cust, 'company_name', None) or '')
+    cust_addr = (getattr(cust, 'address', None) or '') if cust else ''
+    pdf_canvas.drawString(margin, y, f'Khach hang: {cust_name}')
+    y -= 14
+    if cust_addr:
+        pdf_canvas.drawString(margin, y, f'Dia chi: {cust_addr[:80]}')
+        y -= 14
+    y -= 10
+    # Table header
+    col_widths = [30, 70, 180, 50, 70, 85]
+    row_h = 18
+    headers = ['STT', 'Ma SP', 'Ten san pham', 'SL', 'Don gia', 'Thanh tien']
+    data = [headers]
+    for line in order.lines.order_by('line_number'):
+        snap = getattr(line, 'product_snapshot', None) or {}
+        code = line.internal_product_code or snap.get('code') or getattr(line.product, 'code', '')
+        name = snap.get('name') or getattr(line.product, 'name', '') or ''
+        if len(name) > 32:
+            name = name[:29] + '...'
+        data.append([
+            str(line.line_number),
+            code[:14],
+            name,
+            str(line.qty),
+            f'{line.unit_price:,.0f}',
+            f'{line.line_total:,.0f}',
+        ])
+    t = Table(data, colWidths=col_widths, rowHeights=[row_h] * len(data))
+    t.setStyle(TableStyle([
+        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 9),
+        ('FONT', (0, 1), (-1, -1), 'Helvetica', 9),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+        ('ALIGN', (3, 0), (-1, -1), 'RIGHT'),
+    ]))
+    t.wrapOn(pdf_canvas, w - 2 * margin, h)
+    t.drawOn(pdf_canvas, margin, y - len(data) * row_h - 10)
+    y = y - len(data) * row_h - 24
+    pdf_canvas.setFont('Helvetica', 10)
+    pdf_canvas.drawString(margin + 350, y, f'Tong cong: {order.total:,.0f} {order.currency}')
+    if order.discount_total and order.discount_total != 0:
+        y -= 14
+        pdf_canvas.drawString(margin + 350, y, f'Giam tru: {order.discount_total:,.0f}')
+    if order.tax_total and order.tax_total != 0:
+        y -= 14
+        pdf_canvas.drawString(margin + 350, y, f'Thue: {order.tax_total:,.0f}')
+    if order.notes:
+        y -= 20
+        pdf_canvas.setFont('Helvetica', 9)
+        pdf_canvas.drawString(margin, y, f'Ghi chu: {order.notes[:120]}')
+
+
+def _build_quote_pdf(pdf_canvas, quote):
+    """Vẽ nội dung PDF báo giá (header, khách hàng, bảng dòng, tổng)."""
+    from reportlab.platypus import Table, TableStyle
+    w, h = A4
+    margin = 40
+    y = h - margin
+    pdf_canvas.setFont('Helvetica-Bold', 14)
+    pdf_canvas.drawString(margin, y, 'BAO GIA')
+    y -= 24
+    pdf_canvas.setFont('Helvetica', 10)
+    pdf_canvas.drawString(margin, y, f'Ma: {quote.code}')
+    pdf_canvas.drawString(margin + 180, y, f'Ngay: {quote.quote_date}')
+    if quote.valid_until:
+        pdf_canvas.drawString(margin + 320, y, f'Het han: {quote.valid_until}')
+    y -= 18
+    cust = quote.customer
+    cust_name = (cust.name if cust else '') or (getattr(cust, 'company_name', None) or '')
+    cust_addr = (getattr(cust, 'address', None) or '') if cust else ''
+    pdf_canvas.drawString(margin, y, f'Khach hang: {cust_name}')
+    y -= 14
+    if cust_addr:
+        pdf_canvas.drawString(margin, y, f'Dia chi: {cust_addr[:80]}')
+        y -= 14
+    y -= 10
+    col_widths = [30, 70, 160, 50, 70, 70, 85]
+    row_h = 18
+    headers = ['STT', 'Ma SP', 'Ten', 'SL', 'Don gia', 'CK%', 'Thanh tien']
+    data = [headers]
+    for line in quote.lines.order_by('line_number'):
+        code = getattr(line.product, 'code', '') or ''
+        name = (getattr(line.product, 'name', '') or '')[:28]
+        data.append([
+            str(line.line_number),
+            code[:14],
+            name,
+            str(line.qty),
+            f'{line.unit_price:,.0f}',
+            f'{line.discount_pct or 0}',
+            f'{line.line_total:,.0f}',
+        ])
+    t = Table(data, colWidths=col_widths, rowHeights=[row_h] * len(data))
+    t.setStyle(TableStyle([
+        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 9),
+        ('FONT', (0, 1), (-1, -1), 'Helvetica', 9),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+        ('ALIGN', (3, 0), (-1, -1), 'RIGHT'),
+    ]))
+    t.wrapOn(pdf_canvas, w - 2 * margin, h)
+    t.drawOn(pdf_canvas, margin, y - len(data) * row_h - 10)
+    y = y - len(data) * row_h - 24
+    pdf_canvas.setFont('Helvetica', 10)
+    pdf_canvas.drawString(margin + 380, y, f'Tong: {quote.total:,.0f} {quote.currency}')
+    if quote.notes:
+        y -= 18
+        pdf_canvas.setFont('Helvetica', 9)
+        pdf_canvas.drawString(margin, y, f'Ghi chu: {(quote.notes or "")[:120]}')
 
 
 def _build_package_summary(packages):
@@ -317,8 +445,24 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             new_values={'status': SalesOrderStatus.VOID, 'reason': void_reason},
             ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
+        try:
+            from finance.services import cancel_receivable_for_sales_order
+
+            cancel_receivable_for_sales_order(order, actor=request.user, reason=void_reason)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         generate_tasks_for_entity('SalesOrder', order.id, order.code, 'VOID', triggered_by=request.user)
         return Response({'status': order.status})
+
+    @action(detail=True, methods=['get'])
+    def invoice_pdf(self, request, pk=None):
+        """GET: Tải PDF hóa đơn đơn hàng (header, khách hàng, dòng hàng, tổng)."""
+        order = self.get_object()
+        safe_code = (order.code or 'order').replace(' ', '_')
+        return _sales_order_pdf_response(
+            f'hoa_don_{safe_code}.pdf',
+            lambda c: _build_invoice_pdf(c, order),
+        )
 
     @action(detail=True, methods=['get'])
     def approval_history(self, request, pk=None):
@@ -337,6 +481,31 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         order = self.get_object()
         next_states = workflow_get_next_states('SalesOrder', order.status)
         return Response({'current': order.status, 'next_states': next_states})
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        today = timezone.localdate()
+        due_soon_until = today + timedelta(days=3)
+        active_orders = queryset.exclude(status=SalesOrderStatus.VOID)
+        delivery_plans = apps.get_model('sales', 'SalesOrderDeliveryPlan').objects.filter(
+            line__sales_order_id__in=active_orders.values('id'),
+            delivered_qty__lt=F('qty'),
+        )
+        posted_total = Decimal(str(queryset.filter(status=SalesOrderStatus.POSTED).aggregate(total=Sum('total')).get('total') or 0))
+        return Response({
+            'total_orders': int(queryset.count()),
+            'draft_count': int(queryset.filter(status=SalesOrderStatus.DRAFT).count()),
+            'submitted_count': int(queryset.filter(status=SalesOrderStatus.SUBMITTED).count()),
+            'approved_count': int(queryset.filter(status=SalesOrderStatus.APPROVED).count()),
+            'posted_count': int(queryset.filter(status=SalesOrderStatus.POSTED).count()),
+            'void_count': int(queryset.filter(status=SalesOrderStatus.VOID).count()),
+            'pending_approval_count': int(queryset.filter(status=SalesOrderStatus.SUBMITTED).count()),
+            'overdue_delivery_count': int(delivery_plans.filter(delivery_date__lt=today).count()),
+            'due_today_count': int(delivery_plans.filter(delivery_date=today).count()),
+            'due_soon_count': int(delivery_plans.filter(delivery_date__gte=today, delivery_date__lte=due_soon_until).count()),
+            'posted_total': str(posted_total),
+        })
 
     @action(detail=True, methods=['get'])
     def delivery_overview(self, request, pk=None):
@@ -1959,3 +2128,132 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             days_ahead=days_ahead,
         )
         return Response(result)
+
+
+class QuoteViewSet(viewsets.ModelViewSet):
+    """Báo giá (Quote) – CRUD."""
+    serializer_class = QuoteSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [
+        django_filters.rest_framework.DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
+    filterset_class = QuoteFilter
+    search_fields = ['code', 'reference', 'notes']
+    ordering_fields = ['code', 'quote_date', 'status', 'total', 'created_at']
+    ordering = ['-quote_date', '-id']
+
+    def get_queryset(self):
+        return Quote.objects.select_related('customer', 'created_by', 'updated_by').prefetch_related(
+            'lines', 'lines__product',
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        if serializer.instance.status != QuoteStatus.DRAFT:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Chỉ được sửa báo giá ở trạng thái Nháp.')
+        serializer.save(updated_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        if instance.status != QuoteStatus.DRAFT:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Chỉ được xóa báo giá ở trạng thái Nháp.')
+        instance.delete()
+
+    @action(detail=True, methods=['post'])
+    def send(self, request, pk=None):
+        """DRAFT -> SENT (gửi báo giá cho khách)."""
+        quote = self.get_object()
+        if quote.status != QuoteStatus.DRAFT:
+            return Response({'error': 'Chỉ gửi báo giá ở trạng thái Nháp.'}, status=status.HTTP_400_BAD_REQUEST)
+        quote.status = QuoteStatus.SENT
+        quote.save(update_fields=['status', 'updated_at'])
+        return Response({'status': quote.status})
+
+    @action(detail=True, methods=['post'])
+    def accept(self, request, pk=None):
+        """SENT -> ACCEPTED (khách chấp nhận)."""
+        quote = self.get_object()
+        if quote.status != QuoteStatus.SENT:
+            return Response({'error': 'Chỉ chấp nhận báo giá đã gửi.'}, status=status.HTTP_400_BAD_REQUEST)
+        quote.status = QuoteStatus.ACCEPTED
+        quote.save(update_fields=['status', 'updated_at'])
+        return Response({'status': quote.status})
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """SENT -> REJECTED. Body: { reason }."""
+        quote = self.get_object()
+        if quote.status != QuoteStatus.SENT:
+            return Response({'error': 'Chỉ từ chối báo giá đã gửi.'}, status=status.HTTP_400_BAD_REQUEST)
+        quote.status = QuoteStatus.REJECTED
+        quote.save(update_fields=['status', 'updated_at'])
+        return Response({'status': quote.status})
+
+    @action(detail=True, methods=['post'])
+    def convert_to_order(self, request, pk=None):
+        """Tạo đơn hàng từ báo giá (chỉ khi ACCEPTED). Trả về order_id, order_code."""
+        from django.db import transaction
+        from sales.models import SalesOrderLine
+        from sales.document_policy import calc_line_totals
+        quote = self.get_object()
+        if quote.status != QuoteStatus.ACCEPTED:
+            return Response({'error': 'Chỉ chuyển thành đơn hàng khi báo giá đã được chấp nhận.'}, status=400)
+        today = timezone.now().date()
+        order_code = get_next_sales_order_code(today)
+        with transaction.atomic():
+            order = SalesOrder.objects.create(
+                code=order_code,
+                doc_type='SO',
+                order_date=today,
+                delivery_date=None,
+                status=SalesOrderStatus.DRAFT,
+                reference=quote.code or '',
+                customer=quote.customer,
+                currency=quote.currency or 'VND',
+                subtotal=quote.subtotal,
+                discount_total=quote.discount_total,
+                tax_total=quote.tax_total,
+                total=quote.total,
+                notes=quote.notes or '',
+                created_by=request.user,
+                updated_by=request.user,
+                owner=request.user,
+            )
+            for i, qline in enumerate(quote.lines.all().order_by('line_number'), start=1):
+                sub, disc, tax, total = calc_line_totals(
+                    qline.qty, qline.unit_price, qline.discount_pct, qline.tax_pct,
+                )
+                product = qline.product
+                uom = getattr(getattr(product, 'unit', None), 'code', '') or ''
+                SalesOrderLine.objects.create(
+                    sales_order=order,
+                    line_number=i,
+                    product=product,
+                    internal_product_code=getattr(product, 'code', '') or '',
+                    uom=uom,
+                    qty=qline.qty,
+                    unit_price=qline.unit_price,
+                    discount_pct=qline.discount_pct,
+                    tax_pct=qline.tax_pct,
+                    line_subtotal=sub,
+                    discount_amount=disc,
+                    tax_amount=tax,
+                    line_total=total,
+                    note=qline.note or '',
+                )
+        return Response({'order_id': order.id, 'order_code': order.code})
+
+    @action(detail=True, methods=['get'])
+    def quote_pdf(self, request, pk=None):
+        """GET: Tải PDF báo giá."""
+        quote = self.get_object()
+        safe_code = (quote.code or 'quote').replace(' ', '_')
+        return _sales_order_pdf_response(
+            f'bao_gia_{safe_code}.pdf',
+            lambda c: _build_quote_pdf(c, quote),
+        )

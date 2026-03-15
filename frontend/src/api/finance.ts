@@ -17,14 +17,17 @@ import type {
   CrossModuleBootstrapHistoryResponse,
   CrossModuleReadinessResponse,
   AdvanceOverdueReportResponse,
+  ArApSummaryResponse,
   AdvanceSettlement,
   AdvanceTransaction,
   BankAccount,
   CashAccount,
   CashTransaction,
   FinanceLockedMonthsResponse,
+  PayableDocument,
   PaginatedResponse,
   PayrollReconciliationResponse,
+  ReceivableDocument,
   TransactionCategory,
 } from '../types/finance';
 
@@ -298,6 +301,102 @@ export const financeApi = {
   },
   deleteAdvanceSettlement: async (id: number): Promise<void> => {
     await axiosInstance.delete(`${API_ENDPOINTS.FINANCE_ADVANCE_SETTLEMENTS}${id}/`);
+  },
+
+  getReceivables: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ReceivableDocument>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_RECEIVABLES, { params });
+    return response.data;
+  },
+  getReceivable: async (id: number): Promise<ReceivableDocument> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_RECEIVABLES}${id}/`);
+    return response.data;
+  },
+  getReceivableSummary: async (params?: Record<string, unknown>): Promise<ArApSummaryResponse> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_RECEIVABLES}summary/`, { params });
+    return response.data as ArApSummaryResponse;
+  },
+  collectReceivable: async (
+    id: number,
+    payload: {
+      settlement_date?: string;
+      amount: string;
+      source_type?: 'CASH' | 'BANK';
+      source_cash_account?: number | null;
+      source_bank_account?: number | null;
+      note?: string;
+    }
+  ): Promise<ReceivableDocument> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_RECEIVABLES}${id}/collect/`, payload);
+    return response.data;
+  },
+  cancelReceivable: async (id: number, reason: string): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_RECEIVABLES}${id}/cancel/`, { reason });
+    return response.data;
+  },
+
+  getPayables: async (params?: Record<string, unknown>): Promise<PaginatedResponse<PayableDocument>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_PAYABLES, { params });
+    return response.data;
+  },
+  getPayable: async (id: number): Promise<PayableDocument> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_PAYABLES}${id}/`);
+    return response.data;
+  },
+  getPayableSummary: async (params?: Record<string, unknown>): Promise<ArApSummaryResponse> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_PAYABLES}summary/`, { params });
+    return response.data as ArApSummaryResponse;
+  },
+  getCashFlowSummary: async (params: { date_from: string; date_to: string }): Promise<{
+    date_from: string;
+    date_to: string;
+    total_income: string;
+    total_expense: string;
+    cash_delta: string;
+    transactions_count: number;
+  }> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CASH_FLOW_SUMMARY, { params });
+    return response.data;
+  },
+  getGeneralLedger: async (params: {
+    date_from: string;
+    date_to: string;
+    category?: number;
+  }): Promise<{
+    date_from: string;
+    date_to: string;
+    results: Array<{
+      id: number;
+      transaction_date: string;
+      reference: string;
+      category_id: number | null;
+      category_code: string;
+      category_name: string;
+      description: string;
+      transaction_type: string;
+      debit: string;
+      credit: string;
+    }>;
+  }> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_GENERAL_LEDGER, { params });
+    return response.data;
+  },
+  payPayable: async (
+    id: number,
+    payload: {
+      settlement_date?: string;
+      amount: string;
+      source_type?: 'CASH' | 'BANK';
+      source_cash_account?: number | null;
+      source_bank_account?: number | null;
+      note?: string;
+    }
+  ): Promise<PayableDocument> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_PAYABLES}${id}/pay/`, payload);
+    return response.data;
+  },
+  cancelPayable: async (id: number, reason: string): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_PAYABLES}${id}/cancel/`, { reason });
+    return response.data;
   },
 
   getAdvanceOverdueReport: async (params?: {

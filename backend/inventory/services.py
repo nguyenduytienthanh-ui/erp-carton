@@ -41,6 +41,10 @@ def get_next_inventory_shipment_code(tx_date: date | None = None) -> str:
     return _get_next_sequence_code('SHIP', tx_date or timezone.localdate())
 
 
+def get_next_stocktake_code(count_date: date | None = None) -> str:
+    return _get_next_sequence_code('STKT', count_date or timezone.localdate())
+
+
 def _normalize_key(product_id, warehouse_id, location_id):
     return (int(product_id), int(warehouse_id) if warehouse_id else 0, int(location_id) if location_id else 0)
 

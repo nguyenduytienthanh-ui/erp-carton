@@ -236,6 +236,7 @@ const getProductStatusTone = (status: string | null | undefined): 'ok' | 'warn' 
 const PRODUCT_HISTORY_FIELD_LABELS: Record<string, string> = {
   code: 'Mã hàng',
   name: 'Tên hàng',
+  description: 'Mô tả',
   category: 'Danh mục',
   category_name: 'Danh mục',
   unit: 'Đơn vị',
@@ -248,11 +249,28 @@ const PRODUCT_HISTORY_FIELD_LABELS: Record<string, string> = {
   size_production: 'Kích thước SX',
   wave: 'Sóng',
   box_type: 'Kiểu',
+  film_code: 'Mã phim',
+  film_file_url: 'File phim',
+  color_count: 'Số màu',
+  mold_code: 'Mã khuôn',
+  mold_file_url: 'File khuôn',
   note: 'Ghi chú',
   note_other: 'Ghi chú công đoạn khác',
   min_stock: 'Tồn tối thiểu',
   commission_per_unit: 'HHCĐ',
   commission_percent: 'HH%',
+  bundle_fixed_cost_price: 'Giá vốn bộ',
+  bundle_fixed_sale_price: 'Đơn giá bộ',
+  bundle_fixed_commission_per_unit: 'HHCĐ bộ',
+  bundle_fixed_commission_percent: 'HH% bộ',
+  bundle_price_change_reason: 'Lý do thay đổi giá bộ',
+  bundle_price_effective_at: 'Hiệu lực giá bộ',
+  bundle_price_change_status: 'Trạng thái giá bộ',
+  pricing_mode: 'Kiểu tính giá bộ',
+  commission_mode: 'Kiểu tính hoa hồng bộ',
+  delivery_rule: 'Quy tắc giao bộ',
+  primary_product_code: 'Mã đại diện',
+  component_codes: 'Mã thành phần',
   price_change_reason: 'Lý do thay đổi giá',
   price_effective_at: 'Hiệu lực từ',
   effective_at: 'Hiệu lực từ',
@@ -263,6 +281,13 @@ const PRODUCT_HISTORY_FIELD_LABELS: Record<string, string> = {
 };
 
 const getHistoryFieldLabelVi = (field: string): string => PRODUCT_HISTORY_FIELD_LABELS[field] ?? field;
+
+const HISTORY_SCOPE_META: Record<string, { label: string; color: string }> = {
+  PRIMARY_PRODUCT: { label: 'Mã mẹ', color: '#1677ff' },
+  COMPONENT_PRODUCT: { label: 'Mã con', color: '#722ed1' },
+  BUNDLE_CONFIG: { label: 'Cấu hình bộ', color: '#fa8c16' },
+  BUNDLE_FIXED: { label: 'Giá bộ', color: '#13c2c2' },
+};
 
 const formatHistoryValueVi = (value: unknown): string => {
   if (value === null || value === undefined || value === '') return '-';
@@ -312,6 +337,8 @@ const getActivityDedupKey = (item: ActivityItem): string => {
     getHistoryActionCode(item.action),
     item.user ?? '',
     String(tsSec),
+    String(item.details?.entity_scope ?? ''),
+    String(item.details?.related_entity_code ?? ''),
     stableHistoryValue(item.details?.changed_fields ?? []),
     stableHistoryValue(item.details?.old_values ?? {}),
     stableHistoryValue(item.details?.new_values ?? {}),
@@ -707,6 +734,7 @@ const ProductList = () => {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [formMode, setFormMode] = useState<ProductFormMode>('create');
   const [filterModalOpen, setFilterModalOpen] = useState(false);
+  const [showChildren, setShowChildren] = useState(true);
   const [sortField, setSortField] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | null>(null);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
@@ -802,11 +830,12 @@ const ProductList = () => {
   // Áp dụng filters từ preferences: chỉ một lần, khi user chưa tương tác và config load sớm (trong 800ms).
   const appliedInitialPreferencesRef = useRef(false);
   useEffect(() => {
+    if (appliedInitialPreferencesRef.current) return;
     if (!config || Object.keys(config).length === 0) return;
-    if (config.filters && typeof config.filters === 'object') {
-      appliedInitialPreferencesRef.current = true;
-      const withinWindow = Date.now() - mountTimeRef.current <= INITIAL_APPLY_WINDOW_MS;
-      if (withinWindow && !userHasInteractedWithFiltersRef.current) {
+    appliedInitialPreferencesRef.current = true;
+    const withinWindow = Date.now() - mountTimeRef.current <= INITIAL_APPLY_WINDOW_MS;
+    if (withinWindow && !userHasInteractedWithFiltersRef.current) {
+      if (config.filters && typeof config.filters === 'object') {
         const f = config.filters as { filterValues?: FilterValues; activeFilters?: FilterKey[] };
         if (f.filterValues && typeof f.filterValues === 'object') {
           setFilterValues(f.filterValues);
@@ -864,8 +893,13 @@ const ProductList = () => {
     setLocalFilterInput(update);
   }, []);
 
-  // Persist filter changes to preferences (debounced)
+  // Persist filter changes to preferences (debounced) — skip the first run to avoid saving back the initial config load
+  const filterPersistSkipRef = useRef(true);
   useEffect(() => {
+    if (filterPersistSkipRef.current) {
+      filterPersistSkipRef.current = false;
+      return;
+    }
     const t = setTimeout(() => {
       void savePreferences({
         filters: { filterValues, activeFilters },
@@ -1088,7 +1122,40 @@ const ProductList = () => {
   const units = unitsData?.results ?? [];
   const waves = wavesData?.results ?? [];
   const boxTypes = boxTypesData?.results ?? [];
-  const products = productsData?.results ?? [];
+  const rawProducts = productsData?.results ?? [];
+
+  const products = useMemo(() => {
+    const filtered = showChildren ? rawProducts : rawProducts.filter((p) => p.parent == null);
+    if (sortField || intentSearch?.trim()) return filtered;
+    const parents: Product[] = [];
+    const childrenByParent = new Map<number, Product[]>();
+    const orphans: Product[] = [];
+    for (const p of filtered) {
+      if (p.parent == null) {
+        parents.push(p);
+      } else {
+        const siblings = childrenByParent.get(p.parent) ?? [];
+        siblings.push(p);
+        childrenByParent.set(p.parent, siblings);
+      }
+    }
+    for (const p of filtered) {
+      if (p.parent != null && !parents.some((par) => par.id === p.parent)) {
+        orphans.push(p);
+      }
+    }
+    const result: Product[] = [];
+    for (const parent of parents) {
+      result.push(parent);
+      const children = childrenByParent.get(parent.id);
+      if (children) {
+        children.sort((a, b) => a.code.localeCompare(b.code, 'vi'));
+        result.push(...children);
+      }
+    }
+    result.push(...orphans.filter((o) => !result.includes(o)));
+    return result;
+  }, [rawProducts, showChildren, sortField, intentSearch]);
   const selectedProductsForBulk = useMemo(
     () => selectedIds.map((id) => selectedProductMap[id]).filter(Boolean),
     [selectedIds, selectedProductMap],
@@ -1444,38 +1511,61 @@ const ProductList = () => {
       dataIndex: 'code',
       key: 'code',
       sortField: 'code',
-      width: 100,
+      width: 130,
       fixed: 'left' as const,
-      render: (code: string, record: Product) => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <span
-            role="button"
-            tabIndex={0}
-            onClick={() => handleEdit(record)}
-            onKeyDown={(e) => e.key === 'Enter' && handleEdit(record)}
-            style={{ fontWeight: 500, color: theme.colors.primary, cursor: 'pointer' }}
-          >
-            {code ?? '-'}
+      render: (code: string, record: Product) => {
+        const isChild = record.parent != null;
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', width: '100%' }}>
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={() => handleEdit(record)}
+              onKeyDown={(e) => e.key === 'Enter' && handleEdit(record)}
+              style={{
+                fontWeight: 500,
+                color: isChild ? '#cf1322' : theme.colors.primary,
+                cursor: 'pointer',
+                flex: '1 1 auto',
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {isChild ? `  ${code ?? '-'}` : (code ?? '-')}
+            </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, flexShrink: 0, marginLeft: 'auto', paddingLeft: 6 }}>
+              {(record.blocking_tasks_count ?? 0) > 0 && (
+                <Tooltip title={`${record.blocking_tasks_count} nhiệm vụ blocking đang chặn sản xuất`}>
+                  <LockOutlined
+                    style={{ color: '#ff4d4f', fontSize: 12, cursor: 'pointer' }}
+                    onClick={(e) => { e.stopPropagation(); openTaskModal(record); }}
+                  />
+                </Tooltip>
+              )}
+              <Tooltip title="Giao nhiệm vụ nhanh cho mã hàng này">
+                <ProjectOutlined
+                  style={{ color: '#1677ff', fontSize: 12, cursor: 'pointer' }}
+                  onClick={(e) => { e.stopPropagation(); openTaskModal(record); }}
+                />
+              </Tooltip>
+            </span>
           </span>
-          <Tooltip title="Giao nhiệm vụ nhanh cho mã hàng này">
-            <ProjectOutlined
-              style={{ color: '#1677ff', fontSize: 12, cursor: 'pointer' }}
-              onClick={(e) => { e.stopPropagation(); openTaskModal(record); }}
-            />
-          </Tooltip>
-          {(record.blocking_tasks_count ?? 0) > 0 && (
-            <Tooltip title={`${record.blocking_tasks_count} nhiệm vụ blocking đang chặn sản xuất`}>
-              <LockOutlined
-                style={{ color: '#ff4d4f', fontSize: 12, cursor: 'pointer' }}
-                onClick={(e) => { e.stopPropagation(); openTaskModal(record); }}
-              />
-            </Tooltip>
-          )}
-        </span>
+        );
+      },
+    },
+    {
+      title: 'Tên hàng',
+      dataIndex: 'name',
+      key: 'name',
+      sortField: 'name',
+      width: 200,
+      render: (n: string, record: Product) => (
+        <div className={`ant-table-cell-ellipsis ${record.parent != null ? 'cell-text-child' : 'cell-text-primary'}`}>{n ?? '-'}</div>
       ),
     },
-    { title: 'Tên hàng', dataIndex: 'name', key: 'name', sortField: 'name', width: 200, ellipsis: true, render: (n: string) => <span className="cell-text-primary">{n ?? '-'}</span> },
-    { title: 'Danh mục', dataIndex: 'category_name', key: 'category_name', sortField: 'category__name', width: 140, ellipsis: true, render: (t: string) => <span className="cell-text-secondary">{t ?? '-'}</span> },
+    { title: 'Danh mục', dataIndex: 'category_name', key: 'category_name', sortField: 'category__name', width: 140, render: (t: string) => <div className="ant-table-cell-ellipsis cell-text-secondary">{t ?? '-'}</div> },
     {
       title: 'Giá vốn',
       dataIndex: 'cost_price',
@@ -1541,23 +1631,23 @@ const ProductList = () => {
     { title: 'Sóng', dataIndex: 'wave_code', key: 'wave_code', sortField: 'wave__code', width: 56, align: 'center' as const, render: (t: string) => t ?? '-' },
     { title: 'Kiểu', dataIndex: 'box_type_code', key: 'box_type_code', sortField: 'box_type__code', width: 56, align: 'center' as const, render: (t: string) => t ?? '-' },
     { title: 'ĐVT', dataIndex: 'unit_name', key: 'unit_name', sortField: 'unit__code', width: 56, align: 'center' as const, render: (n: string) => (n && n.split(' - ')[0]) || '-' },
-    { title: '+/-', dataIndex: 'delivery_tolerance', key: 'delivery_tolerance', sortField: 'delivery_tolerance', width: 80, ellipsis: true, render: (t: string) => t ?? '-' },
+    { title: '+/-', dataIndex: 'delivery_tolerance', key: 'delivery_tolerance', sortField: 'delivery_tolerance', width: 80, render: (t: string) => t ?? '-' },
     { title: 'Xả', dataIndex: 'process_xa', key: 'process_xa', sortField: 'process_xa', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
     { title: 'In', dataIndex: 'process_in', key: 'process_in', sortField: 'process_in', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
-    { title: 'Mã phim', dataIndex: 'film_code', key: 'film_code', sortField: 'film_code', width: 90, ellipsis: true, render: (t: string) => (t && t.replace(/\.pdf$/i, '')) || '-' },
+    { title: 'Mã phim', dataIndex: 'film_code', key: 'film_code', sortField: 'film_code', width: 90, render: (t: string) => <div className="ant-table-cell-ellipsis">{(t && t.replace(/\.pdf$/i, '')) || '-'}</div> },
     { title: 'Số màu', dataIndex: 'color_count', key: 'color_count', sortField: 'color_count', width: 68, align: 'center' as const, render: (v: number) => v != null ? v : '-' },
     { title: 'C. thấm', dataIndex: 'waterproof', key: 'waterproof', sortField: 'waterproof', width: 72, align: 'center' as const, render: (v: string) => WATERPROOF_LABELS[v as string] ?? (v || '-') },
     { title: 'Có CM', key: 'co_cm', sortField: 'process_can_mang', width: 60, align: 'center' as const, render: (_: unknown, r: Product) => (r.process_can_mang != null && Number(r.process_can_mang) > 0 ? 'Có' : '—') },
     { title: 'C. Màng', dataIndex: 'process_can_mang', key: 'process_can_mang', sortField: 'process_can_mang', width: 72, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
     { title: 'Bồi', dataIndex: 'process_boi', key: 'process_boi', sortField: 'process_boi', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
     { title: 'Bế', dataIndex: 'process_be', key: 'process_be', sortField: 'process_be', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
-    { title: 'Mã khuôn', dataIndex: 'mold_code', key: 'mold_code', sortField: 'mold_code', width: 90, ellipsis: true, render: (t: string) => (t && t.replace(/\.pdf$/i, '')) || '-' },
+    { title: 'Mã khuôn', dataIndex: 'mold_code', key: 'mold_code', sortField: 'mold_code', width: 90, render: (t: string) => <div className="ant-table-cell-ellipsis">{(t && t.replace(/\.pdf$/i, '')) || '-'}</div> },
     { title: 'Chạp', dataIndex: 'process_chap', key: 'process_chap', sortField: 'process_chap', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
     { title: 'Đóng', dataIndex: 'process_dong', key: 'process_dong', sortField: 'process_dong', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
     { title: 'Dán', dataIndex: 'process_dan', key: 'process_dan', sortField: 'process_dan', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
     { title: 'Khác', dataIndex: 'process_khac', key: 'process_khac', sortField: 'process_khac', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
-    { title: 'Ghi chú sản xuất', dataIndex: 'note_other', key: 'note_other', sortField: 'note_other', width: 140, ellipsis: true, render: (t: string) => t ?? '-' },
-    { title: 'Ghi chú mã hàng', dataIndex: 'note', key: 'note', sortField: 'note', width: 140, ellipsis: true, render: (t: string) => t ?? '-' },
+    { title: 'Ghi chú sản xuất', dataIndex: 'note_other', key: 'note_other', sortField: 'note_other', width: 140, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
+    { title: 'Ghi chú mã hàng', dataIndex: 'note', key: 'note', sortField: 'note', width: 140, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
     {
       title: 'Trạng thái',
       dataIndex: 'status',
@@ -1641,6 +1731,14 @@ const ProductList = () => {
         if (!e.currentTarget.contains(e.relatedTarget as Node)) startTransition(() => syncLocalToContext());
       }}
     >
+      <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid #f0f0f0' }}>
+        <Checkbox
+          checked={showChildren}
+          onChange={(e) => setShowChildren(e.target.checked)}
+        >
+          Hiển thị mã hàng con
+        </Checkbox>
+      </div>
       <div style={{ marginBottom: 6, fontWeight: 600, fontSize: 14 }}>
         Chọn bộ lọc — tick để bật và chọn giá trị bên dưới
       </div>
@@ -2556,6 +2654,7 @@ const ProductList = () => {
               {filteredActivity.map((item, idx) => {
                 const isComment = item.type === 'comment';
                 if (isComment) {
+                  const scopeMeta = item.details?.entity_scope ? HISTORY_SCOPE_META[item.details.entity_scope] : null;
                   // ── Comment: chat bubble style ──
                   return (
                     <div
@@ -2581,6 +2680,11 @@ const ProductList = () => {
                           <span style={{ fontWeight: 600, fontSize: 13, color: '#1f2937' }}>
                             {item.user || 'Ẩn danh'}
                           </span>
+                          {scopeMeta && (
+                            <Tag color={scopeMeta.color} style={{ marginInlineEnd: 0 }}>
+                              {scopeMeta.label}{item.details?.related_entity_code ? ` · ${item.details.related_entity_code}` : ''}
+                            </Tag>
+                          )}
                           <span style={{ fontSize: 12, color: '#9ca3af' }}>
                             {new Date(item.timestamp).toLocaleString('vi-VN')}
                           </span>
@@ -2609,14 +2713,22 @@ const ProductList = () => {
                 const oldVals = (item.details?.old_values as Record<string, unknown> | undefined) ?? {};
                 const newVals = (item.details?.new_values as Record<string, unknown> | undefined) ?? {};
                 const fields = Array.from(new Set([...Object.keys(oldVals), ...Object.keys(newVals)]));
+                const scopeMeta = item.details?.entity_scope ? HISTORY_SCOPE_META[item.details.entity_scope] : null;
                 return (
                   <div
                     key={`${item.timestamp}-${idx}`}
                     style={{ border: '1px solid #e6ebf2', borderRadius: 10, padding: '10px 14px', background: '#fafafa' }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: '#1f2937' }}>
-                        {getHistoryActionLabelVi(item.action)}
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: '#1f2937' }}>
+                          {getHistoryActionLabelVi(item.action)}
+                        </div>
+                        {scopeMeta && (
+                          <Tag color={scopeMeta.color} style={{ marginInlineEnd: 0 }}>
+                            {scopeMeta.label}{item.details?.related_entity_code ? ` · ${item.details.related_entity_code}` : ''}
+                          </Tag>
+                        )}
                       </div>
                       <div style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>
                         {item.user || 'Hệ thống'} · {new Date(item.timestamp).toLocaleString('vi-VN')}

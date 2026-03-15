@@ -8,6 +8,7 @@ from .models import (
     ProductBundle,
     ProductBundleComponent,
     PriceChange,
+    BundlePriceChange,
 )
 from core.models import Task
 
@@ -688,3 +689,44 @@ class PriceChangeSerializer(serializers.ModelSerializer):
 
     def get_approved_by_name(self, obj):
         return obj.approved_by.username if obj.approved_by else None
+
+
+class BundlePriceChangeSerializer(serializers.ModelSerializer):
+    bundle = serializers.IntegerField(source='bundle.id', read_only=True)
+    sellable_product = serializers.IntegerField(source='bundle.sellable_product_id', read_only=True)
+    product_code = serializers.CharField(source='bundle.sellable_product.code', read_only=True)
+    submitted_by_name = serializers.SerializerMethodField()
+    approved_by_name = serializers.SerializerMethodField()
+    old_cost_price = serializers.DecimalField(source='old_fixed_cost_price', max_digits=15, decimal_places=2, read_only=True)
+    new_cost_price = serializers.DecimalField(source='new_fixed_cost_price', max_digits=15, decimal_places=2, read_only=True)
+    old_sale_price = serializers.DecimalField(source='old_fixed_sale_price', max_digits=15, decimal_places=2, read_only=True)
+    new_sale_price = serializers.DecimalField(source='new_fixed_sale_price', max_digits=15, decimal_places=2, read_only=True)
+    old_commission_per_unit = serializers.DecimalField(source='old_fixed_commission_per_unit', max_digits=10, decimal_places=2, read_only=True)
+    new_commission_per_unit = serializers.DecimalField(source='new_fixed_commission_per_unit', max_digits=10, decimal_places=2, read_only=True)
+    old_commission_percent = serializers.DecimalField(source='old_fixed_commission_percent', max_digits=5, decimal_places=2, read_only=True)
+    new_commission_percent = serializers.DecimalField(source='new_fixed_commission_percent', max_digits=5, decimal_places=2, read_only=True)
+    record_scope = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BundlePriceChange
+        fields = [
+            'id', 'bundle', 'sellable_product', 'product_code', 'record_scope',
+            'old_cost_price', 'new_cost_price', 'old_sale_price', 'new_sale_price',
+            'old_commission_per_unit', 'new_commission_per_unit',
+            'old_commission_percent', 'new_commission_percent',
+            'delta_cost', 'delta_sale', 'delta_cost_percent', 'delta_sale_percent',
+            'reason', 'source', 'effective_at', 'applied_at', 'status', 'batch_code',
+            'submitted_by', 'submitted_by_name',
+            'approved_by', 'approved_by_name', 'approved_at', 'reject_reason',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_submitted_by_name(self, obj):
+        return obj.submitted_by.username if obj.submitted_by else None
+
+    def get_approved_by_name(self, obj):
+        return obj.approved_by.username if obj.approved_by else None
+
+    def get_record_scope(self, obj):
+        return 'BUNDLE_FIXED'

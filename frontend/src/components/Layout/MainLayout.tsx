@@ -16,10 +16,13 @@ import {
   UserOutlined,
   TeamOutlined,
   ShoppingCartOutlined,
+  BuildOutlined,
+  BarChartOutlined,
   LogoutOutlined,
   BellOutlined,
   SafetyOutlined,
   DatabaseOutlined,
+  CarOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -35,11 +38,15 @@ import {
   canManageFinanceData,
   canAccessSalesOrders,
   canManageInventoryData,
+  canManageStocktake,
+  canManagePurchasingData,
+  canManageProductionData,
   canManageModulePermissionSettings,
   canManageWorkforceData,
   canViewModulePermissionHistory,
   canViewOperationsLog,
   canViewOpsHub,
+  canViewReportsCenter,
   canViewWorkflowData,
   canManageWorkflowData,
 } from '../../utils/authz';
@@ -64,13 +71,22 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/': () => import('../../pages/Dashboard'),
   '/products': () => import('../../pages/Products/ProductList'),
   '/sales-orders': () => import('../../pages/Sales/SalesOrderList'),
+  '/shipments': () => import('../../pages/Sales/ShipmentList'),
+  '/quotes': () => import('../../pages/Sales/QuoteList'),
   '/categories': () => import('../../pages/Categories/CategoryList'),
   '/units': () => import('../../pages/Units/UnitList'),
   '/customers': () => import('../../pages/Customers/CustomerList'),
+  '/suppliers': () => import('../../pages/Purchasing/SupplierList'),
+  '/purchase-orders': () => import('../../pages/Purchasing/PurchaseOrderList'),
+  '/purchase-receipts': () => import('../../pages/Purchasing/PurchaseReceiptList'),
+  '/purchase-requests': () => import('../../pages/Purchasing/PurchaseRequestList'),
+  '/production-orders': () => import('../../pages/Production/ProductionOrderList'),
+  '/reports': () => import('../../pages/Management/ReportsCenter'),
   '/warehouses': () => import('../../pages/Inventory/WarehouseList'),
   '/warehouse-locations': () => import('../../pages/Inventory/WarehouseLocationList'),
   '/inventory-stock': () => import('../../pages/Inventory/InventoryStockOverview'),
   '/inventory-transactions': () => import('../../pages/Inventory/InventoryTransactionList'),
+  '/stocktakes': () => import('../../pages/Inventory/StocktakeList'),
   '/inventory-reservations': () => import('../../pages/Inventory/InventoryReservationList'),
   '/task-inbox': () => import('../../pages/Tasks/TaskInbox'),
   '/executive-cockpit': () => import('../../pages/Management/ExecutiveCockpit'),
@@ -89,7 +105,11 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/bank-accounts': () => import('../../pages/Finance/BankAccountList'),
   '/cash-book': () => import('../../pages/Finance/CashBook'),
   '/advance-transactions': () => import('../../pages/Finance/AdvanceTransactionList'),
+  '/receivables': () => import('../../pages/Finance/AccountsReceivableList'),
+  '/payables': () => import('../../pages/Finance/AccountsPayableList'),
   '/finance-summary': () => import('../../pages/Finance/FinanceSummary'),
+  '/general-ledger': () => import('../../pages/Finance/GeneralLedger'),
+  '/bank-reconciliation': () => import('../../pages/Finance/BankReconciliation'),
   '/admin/module-permissions': () => import('../../pages/Admin/ModulePermissionSettings'),
   '/admin/module-permissions-history': () => import('../../pages/Admin/ModulePermissionHistory'),
 };
@@ -115,24 +135,28 @@ const MainLayout = () => {
   const queryClient = useQueryClient();
   const prefetchedRoutesRef = useRef<Set<string>>(new Set());
   const canViewOps = canViewOpsHub();
+  const canViewReports = canViewReportsCenter();
   const canViewSalesOrders = canAccessSalesOrders();
   const canViewWorkflow = canViewWorkflowData();
   const canManageWorkflow = canManageWorkflowData();
   const canViewOpsLog = canViewOperationsLog();
   const canManageFinance = canManageFinanceData();
   const canManageInventory = canManageInventoryData();
+  const canManageStocktakeMenu = canManageStocktake();
+  const canManagePurchasing = canManagePurchasingData();
+  const canManageProduction = canManageProductionData();
   const canManageWorkforce = canManageWorkforceData();
   const canManageModulePermissions = canManageModulePermissionSettings();
   const canViewRbacAudit = canViewModulePermissionHistory();
   const headerNotificationInterval = useRealtimePollingInterval({
     enabled: true,
-    activeMs: 15_000,
+    activeMs: 30_000, // Increased from 15s to 30s to reduce polling frequency
     hiddenMs: false,
   });
   const unreadQuery = useQuery({
     queryKey: ['header-notifications-unread'],
     queryFn: () => notificationsApi.unread(),
-    staleTime: 5_000,
+    staleTime: 15_000, // Increased from 5s to 15s
     refetchInterval: headerNotificationInterval,
     refetchIntervalInBackground: false,
   });
@@ -145,7 +169,7 @@ const MainLayout = () => {
     queryKey: ['layout-finance-overdue-overview'],
     queryFn: () => financeApi.getAdvanceOverdueOverview(),
     enabled: canManageFinance,
-    staleTime: 30_000,
+    staleTime: 60_000, // Increased from 30s to 60s
     refetchInterval: financeOverdueInterval,
     refetchIntervalInBackground: false,
   });
@@ -158,7 +182,7 @@ const MainLayout = () => {
     queryKey: ['layout-workforce-salary-advance-approval-queue'],
     queryFn: () => workforceApi.getSalaryAdvanceApprovalQueue(),
     enabled: canManageWorkforce,
-    staleTime: 30_000,
+    staleTime: 60_000, // Increased from 30s to 60s
     refetchInterval: workforceApprovalInterval,
     refetchIntervalInBackground: false,
   });
@@ -166,16 +190,16 @@ const MainLayout = () => {
     queryKey: ['layout-operations-log-meta'],
     queryFn: () => operationsApi.meta(),
     enabled: canViewOpsLog,
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    staleTime: 60_000, // Increased from 30s to 60s
+    refetchInterval: 60_000, // Changed from 60s to 120s
     refetchIntervalInBackground: false,
   });
   const rbacHistoryMetaQuery = useQuery({
     queryKey: ['layout-rbac-history-meta'],
     queryFn: () => adminApi.getRoleModulePermissionHistoryMeta(),
     enabled: canViewRbacAudit,
-    staleTime: 60_000,
-    refetchInterval: 120_000,
+    staleTime: 120_000, // Increased from 60s to 120s
+    refetchInterval: 240_000, // Increased from 120s to 240s (4 minutes)
     refetchIntervalInBackground: false,
   });
   const markReadMutation = useMutation({
@@ -254,6 +278,11 @@ const MainLayout = () => {
       icon: <DashboardOutlined />,
       label: renderMenuLabel('/', 'Tổng quan'),
     },
+    canViewReports ? {
+      key: '/reports',
+      icon: <BarChartOutlined />,
+      label: renderMenuLabel('/reports', 'Trung tâm báo cáo'),
+    } : null,
     {
       key: '/products',
       icon: <AppstoreOutlined />,
@@ -263,6 +292,16 @@ const MainLayout = () => {
       key: '/sales-orders',
       icon: <ShoppingCartOutlined />,
       label: renderMenuLabel('/sales-orders', 'Đơn hàng xuất'),
+    } : null,
+    canViewSalesOrders ? {
+      key: '/shipments',
+      icon: <CarOutlined />,
+      label: renderMenuLabel('/shipments', 'Phiếu xuất'),
+    } : null,
+    canViewSalesOrders ? {
+      key: '/quotes',
+      icon: <ShoppingCartOutlined />,
+      label: renderMenuLabel('/quotes', 'Báo giá'),
     } : null,
     {
       key: '/categories',
@@ -279,38 +318,55 @@ const MainLayout = () => {
       icon: <TeamOutlined />,
       label: renderMenuLabel('/customers', 'Khách hàng'),
     },
-    canManageInventory ? {
+    canManagePurchasing ? {
+      key: 'purchasing-group',
+      icon: <ShoppingCartOutlined />,
+      label: 'Mua hàng',
+      children: [
+        {
+          key: '/suppliers',
+          label: renderMenuLabel('/suppliers', 'Nhà cung cấp'),
+        },
+        {
+          key: '/purchase-orders',
+          label: renderMenuLabel('/purchase-orders', 'Đơn mua'),
+        },
+        {
+          key: '/purchase-receipts',
+          label: renderMenuLabel('/purchase-receipts', 'Phiếu nhập mua'),
+        },
+        {
+          key: '/purchase-requests',
+          label: renderMenuLabel('/purchase-requests', 'Yêu cầu mua'),
+        },
+        {
+          key: '/material-prices',
+          label: renderMenuLabel('/material-prices', 'Bảng giá NVL'),
+        },
+      ],
+    } : null,
+    canManageProduction ? {
+      key: '/production-orders',
+      icon: <BuildOutlined />,
+      label: renderMenuLabel('/production-orders', 'Sản xuất'),
+    } : null,
+    (canManageInventory || canManageStocktakeMenu) ? {
       key: 'inventory-group',
       icon: <DatabaseOutlined />,
       label: 'Kho',
       children: [
-        {
-          key: '/inventory-stock',
-          label: renderMenuLabel('/inventory-stock', 'Tồn kho'),
-        },
-        {
-          key: '/inventory-transactions',
-          label: renderMenuLabel('/inventory-transactions', 'Sổ kho'),
-        },
-        {
-          key: '/inventory-reservations',
-          label: renderMenuLabel('/inventory-reservations', 'Reservation'),
-        },
-        {
-          key: '/warehouses',
-          label: renderMenuLabel('/warehouses', 'Kho hàng'),
-        },
-        {
-          key: '/warehouse-locations',
-          label: renderMenuLabel('/warehouse-locations', 'Vị trí kho'),
-        },
+        ...(canManageInventory ? [
+          { key: '/inventory-stock', label: renderMenuLabel('/inventory-stock', 'Tồn kho') },
+          { key: '/inventory-transactions', label: renderMenuLabel('/inventory-transactions', 'Sổ kho') },
+          { key: '/inventory-reservations', label: renderMenuLabel('/inventory-reservations', 'Reservation') },
+          { key: '/warehouses', label: renderMenuLabel('/warehouses', 'Kho hàng') },
+          { key: '/warehouse-locations', label: renderMenuLabel('/warehouse-locations', 'Vị trí kho') },
+        ] : []),
+        ...(canManageStocktakeMenu ? [
+          { key: '/stocktakes', label: renderMenuLabel('/stocktakes', 'Kiểm tồn') },
+        ] : []),
       ],
     } : null,
-    {
-      key: '/pricings',
-      icon: <DollarOutlined />,
-      label: renderMenuLabel('/pricings', 'Bảng giá'),
-    },
     {
       key: 'workforce-group',
       icon: <UserOutlined />,
@@ -370,8 +426,24 @@ const MainLayout = () => {
           ),
         },
         {
+          key: '/receivables',
+          label: renderMenuLabel('/receivables', 'Công nợ phải thu'),
+        },
+        {
+          key: '/payables',
+          label: renderMenuLabel('/payables', 'Công nợ phải trả'),
+        },
+        {
           key: '/finance-summary',
           label: renderMenuLabel('/finance-summary', 'Báo cáo tài chính'),
+        },
+        {
+          key: '/general-ledger',
+          label: renderMenuLabel('/general-ledger', 'Sổ cái'),
+        },
+        {
+          key: '/bank-reconciliation',
+          label: renderMenuLabel('/bank-reconciliation', 'Đối soát ngân hàng'),
         },
       ],
     },
@@ -541,15 +613,15 @@ const MainLayout = () => {
     </div>
   );
 
-  const handleMenuSelect = useCallback(({ key }: { key: string }) => {
-    if (key && !key.endsWith('-group')) {
-      prefetchRouteChunk(key);
-      navigate(key);
-      if (isMobile) {
-        setMobileMenuVisible(false);
-      }
+  const handleMenuClick = useCallback(({ key }: { key: string }) => {
+    if (!key || key.endsWith('-group')) return;
+    if (key === location.pathname) {
+      if (isMobile) setMobileMenuVisible(false);
+      return;
     }
-  }, [navigate, isMobile, prefetchRouteChunk]);
+    navigate(key);
+    if (isMobile) setMobileMenuVisible(false);
+  }, [navigate, isMobile, location.pathname]);
 
   const menuContent = (
     <Menu
@@ -558,7 +630,7 @@ const MainLayout = () => {
       selectedKeys={[location.pathname]}
       openKeys={collapsed && !isMobile ? [] : openMenuKeys}
       items={menuItems}
-      onSelect={handleMenuSelect}
+      onClick={handleMenuClick}
       onOpenChange={(keys) => setOpenMenuKeys(keys as string[])}
     />
   );

@@ -2,6 +2,8 @@ import axiosInstance from './axios';
 import { API_ENDPOINTS } from '../utils/constants';
 import type {
   PaginatedResponse,
+  Quote,
+  QuoteLine,
   SalesOrder,
   SalesOrderDeliveryOverviewItem,
   SalesOrderFormValues,
@@ -20,6 +22,22 @@ type SalesOrderPayload = Omit<SalesOrderFormValues, never>;
 export const salesApi = {
   getOrders: async (params?: Record<string, unknown>): Promise<PaginatedResponse<SalesOrder>> => {
     const response = await axiosInstance.get(API_ENDPOINTS.SALES_ORDERS, { params });
+    return response.data;
+  },
+  getOrderSummary: async (params?: Record<string, unknown>): Promise<{
+    total_orders: number;
+    draft_count: number;
+    submitted_count: number;
+    approved_count: number;
+    posted_count: number;
+    void_count: number;
+    pending_approval_count: number;
+    overdue_delivery_count: number;
+    due_today_count: number;
+    due_soon_count: number;
+    posted_total: string;
+  }> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.SALES_ORDERS}summary/`, { params });
     return response.data;
   },
   getOrder: async (id: number): Promise<SalesOrder> => {
@@ -177,6 +195,12 @@ export const salesApi = {
     const response = await axiosInstance.post(`${API_ENDPOINTS.SALES_ORDERS}${id}/confirm_shipment_delivery/`, payload);
     return response.data;
   },
+  downloadInvoicePdf: async (id: number): Promise<Blob> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.SALES_ORDERS}${id}/invoice_pdf/`, {
+      responseType: 'blob',
+    });
+    return response.data;
+  },
   downloadPackingSlipPdf: async (id: number): Promise<Blob> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.SALES_ORDERS}${id}/packing_slip_pdf/`, {
       responseType: 'blob',
@@ -229,6 +253,48 @@ export const salesApi = {
   downloadShipmentDeliveryProofPdf: async (id: number, shipmentId: number): Promise<Blob> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.SALES_ORDERS}${id}/shipment_delivery_proof_pdf/`, {
       params: { shipment_id: shipmentId },
+      responseType: 'blob',
+    });
+    return response.data;
+  },
+
+  getQuotes: async (params?: Record<string, unknown>): Promise<PaginatedResponse<Quote>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.SALES_QUOTES, { params });
+    return response.data;
+  },
+  getQuote: async (id: number): Promise<Quote> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.SALES_QUOTES}${id}/`);
+    return response.data;
+  },
+  createQuote: async (payload: Partial<Quote> & { quote_date: string; lines?: Partial<QuoteLine>[] }): Promise<Quote> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.SALES_QUOTES, payload);
+    return response.data;
+  },
+  updateQuote: async (id: number, payload: Partial<Quote>): Promise<Quote> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.SALES_QUOTES}${id}/`, payload);
+    return response.data;
+  },
+  deleteQuote: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.SALES_QUOTES}${id}/`);
+  },
+  sendQuote: async (id: number): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.SALES_QUOTES}${id}/send/`);
+    return response.data;
+  },
+  acceptQuote: async (id: number): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.SALES_QUOTES}${id}/accept/`);
+    return response.data;
+  },
+  rejectQuote: async (id: number, reason?: string): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.SALES_QUOTES}${id}/reject/`, { reason: reason ?? '' });
+    return response.data;
+  },
+  convertQuoteToOrder: async (id: number): Promise<{ order_id: number; order_code: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.SALES_QUOTES}${id}/convert_to_order/`);
+    return response.data;
+  },
+  downloadQuotePdf: async (id: number): Promise<Blob> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.SALES_QUOTES}${id}/quote_pdf/`, {
       responseType: 'blob',
     });
     return response.data;

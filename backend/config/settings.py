@@ -54,12 +54,15 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'django.contrib.postgres',
     'rest_framework',
+    'drf_spectacular',
     'django_filters',
     'corsheaders',
     'core.apps.CoreConfig',
     'products',
     'sales',
     'inventory.apps.InventoryConfig',
+    'purchasing.apps.PurchasingConfig',
+    'production.apps.ProductionConfig',
     'workforce.apps.WorkforceConfig',
     'finance.apps.FinanceConfig',
     'django_q',
@@ -189,6 +192,7 @@ SECURE_PROXY_SSL_HEADER = (
 AUTH_USER_MODEL = 'core.User'
 
 REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',

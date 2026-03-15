@@ -5,7 +5,10 @@ export interface RoleModulePermissionItem {
   is_active: boolean;
   workforce_manage: boolean;
   finance_manage: boolean;
+  purchasing_manage: boolean;
+  production_manage: boolean;
   ops_view: boolean;
+  reports_view: boolean;
   workflow_view: boolean;
   workflow_manage: boolean;
   operations_log_view: boolean;
@@ -27,7 +30,10 @@ export interface RoleModulePermissionUpdatePayload {
     role_id: number;
     workforce_manage: boolean;
     finance_manage: boolean;
+    purchasing_manage: boolean;
+    production_manage: boolean;
     ops_view: boolean;
+    reports_view: boolean;
     workflow_view: boolean;
     workflow_manage: boolean;
     operations_log_view: boolean;

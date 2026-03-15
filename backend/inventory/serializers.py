@@ -1,8 +1,11 @@
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
+
+from collections import defaultdict
 
 from inventory.models import (
     InventoryReservation,
@@ -13,13 +16,18 @@ from inventory.models import (
     OutboundShipmentPackage,
     OutboundShipmentPackageStatus,
     OutboundShipment,
+    Stocktake,
+    StocktakeLine,
+    StocktakeStatus,
     Warehouse,
     WarehouseLocation,
     WarehouseLocationType,
 )
 from inventory.services import (
+    build_stock_balance_map,
     get_next_inventory_reservation_code,
     get_next_inventory_transaction_code,
+    get_next_stocktake_code,
     get_stock_balance,
 )
 from sales.services import ensure_sales_order_line_shipment_allowed
@@ -528,3 +536,118 @@ class OutboundShipmentPackageSerializer(serializers.ModelSerializer):
         if not user:
             return None
         return getattr(user, 'full_name', None) or getattr(user, 'username', None)
+
+
+class StocktakeLineSerializer(serializers.ModelSerializer):
+    product_code = serializers.CharField(source='product.code', read_only=True)
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    variance_qty = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StocktakeLine
+        fields = [
+            'id',
+            'stocktake',
+            'product',
+            'product_code',
+            'product_name',
+            'warehouse',
+            'line_number',
+            'system_qty',
+            'count_qty',
+            'variance_qty',
+            'note',
+        ]
+        read_only_fields = ['product_code', 'product_name', 'variance_qty']
+
+    def get_variance_qty(self, obj):
+        return (obj.count_qty or Decimal('0')) - (obj.system_qty or Decimal('0'))
+
+
+class StocktakeSerializer(serializers.ModelSerializer):
+    warehouse_name = serializers.CharField(source='warehouse.name', read_only=True)
+    lines = StocktakeLineSerializer(many=True, read_only=True)
+    lines_data = serializers.ListField(child=serializers.DictField(), write_only=True, required=False)
+
+    class Meta:
+        model = Stocktake
+        fields = [
+            'id',
+            'code',
+            'warehouse',
+            'warehouse_name',
+            'count_date',
+            'status',
+            'note',
+            'created_at',
+            'updated_at',
+            'created_by',
+            'completed_at',
+            'completed_by',
+            'lines',
+            'lines_data',
+        ]
+        read_only_fields = ['code', 'created_at', 'updated_at', 'warehouse_name', 'completed_at', 'completed_by']
+
+    def create(self, validated_data):
+        lines_data = validated_data.pop('lines_data', [])
+        validated_data['code'] = get_next_stocktake_code(validated_data.get('count_date'))
+        warehouse_id = validated_data['warehouse'].id
+        product_ids = [item.get('product_id') or item.get('product') for item in lines_data if item.get('product_id') or item.get('product')]
+        product_ids = [int(x) for x in product_ids if x is not None]
+        balances = build_stock_balance_map(product_ids=product_ids or None, warehouse_ids=[warehouse_id])
+        sum_by_pw = defaultdict(Decimal)
+        for (pid, wid, _), row in balances.items():
+            sum_by_pw[(pid, wid)] = sum_by_pw[(pid, wid)] + row['on_hand']
+        with transaction.atomic():
+            stocktake = Stocktake.objects.create(**validated_data, created_by=self.context['request'].user)
+            for idx, line_item in enumerate(lines_data):
+                product_id = line_item.get('product_id') or line_item.get('product')
+                if not product_id:
+                    continue
+                product_id = int(product_id)
+                count_qty = line_item.get('count_qty', 0)
+                system_qty = sum_by_pw.get((product_id, warehouse_id), Decimal('0'))
+                StocktakeLine.objects.create(
+                    stocktake=stocktake,
+                    product_id=product_id,
+                    warehouse_id=warehouse_id,
+                    line_number=idx + 1,
+                    system_qty=system_qty,
+                    count_qty=count_qty,
+                    note=line_item.get('note', ''),
+                )
+        return stocktake
+
+    def update(self, instance, validated_data):
+        if instance.status != StocktakeStatus.DRAFT:
+            raise serializers.ValidationError('Chỉ được sửa phiếu kiểm tồn ở trạng thái Nháp.')
+        lines_data = validated_data.pop('lines_data', None)
+        for k, v in validated_data.items():
+            setattr(instance, k, v)
+        instance.save()
+        if lines_data is not None:
+            instance.lines.all().delete()
+            warehouse_id = instance.warehouse_id
+            product_ids = [int(item.get('product_id') or item.get('product')) for item in lines_data if item.get('product_id') or item.get('product')]
+            balances = build_stock_balance_map(product_ids=product_ids or None, warehouse_ids=[warehouse_id])
+            sum_by_pw = defaultdict(Decimal)
+            for (pid, wid, _), row in balances.items():
+                sum_by_pw[(pid, wid)] = sum_by_pw[(pid, wid)] + row['on_hand']
+            for idx, line_item in enumerate(lines_data):
+                product_id = line_item.get('product_id') or line_item.get('product')
+                if not product_id:
+                    continue
+                product_id = int(product_id)
+                count_qty = line_item.get('count_qty', 0)
+                system_qty = sum_by_pw.get((product_id, warehouse_id), Decimal('0'))
+                StocktakeLine.objects.create(
+                    stocktake=instance,
+                    product_id=product_id,
+                    warehouse_id=warehouse_id,
+                    line_number=idx + 1,
+                    system_qty=system_qty,
+                    count_qty=count_qty,
+                    note=line_item.get('note', ''),
+                )
+        return instance

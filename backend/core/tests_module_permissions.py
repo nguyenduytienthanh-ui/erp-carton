@@ -22,7 +22,10 @@ class RoleModulePermissionsApiTest(TestCase):
         for resource, action, code, name in [
             ('WORKFORCE', 'MANAGE', 'WORKFORCE_MANAGE', 'Manage Workforce module'),
             ('FINANCE', 'MANAGE', 'FINANCE_MANAGE', 'Manage Finance module'),
+            ('PURCHASING', 'MANAGE', 'PURCHASING_MANAGE', 'Manage purchasing module'),
+            ('PRODUCTION', 'MANAGE', 'PRODUCTION_MANAGE', 'Manage production module'),
             ('OPS', 'VIEW', 'OPS_VIEW', 'View operations cockpit'),
+            ('CORE', 'VIEW_REPORTS', 'CORE_VIEW_REPORTS', 'View reports center'),
             ('WORKFLOW', 'VIEW', 'WORKFLOW_VIEW', 'View workflow boards'),
             ('WORKFLOW', 'MANAGE', 'WORKFLOW_MANAGE', 'Manage workflow templates'),
             ('CORE', 'VIEW_OPERATIONS_LOG', 'CORE_VIEW_OPERATIONS_LOG', 'View operations log'),

@@ -54,9 +54,9 @@
 
 ### 3.2 Sản phẩm – Xuất PDF
 
-- Frontend: `productsApi.exportProducts('pdf', params)` (trong `api/products.ts`).
-- Backend: `/export-excel/` chỉ xử lý `format=excel`; **không có endpoint xuất PDF** cho sản phẩm.
-- Kết luận: **Xuất PDF sản phẩm chưa được implement**.
+- Frontend: `productsApi.exportProducts('pdf', params)` (trong `api/products.ts`), nút "Xuất PDF" trên ProductList.
+- Backend: `GET /api/products/products/export_data/?format=pdf` (ExportExcelMixin.export_data) dùng `core.utils.export_to_pdf` với `get_export_pdf_fields()` và `get_export_headers()` của ProductViewSet.
+- Kết luận: **Xuất PDF sản phẩm đã có** (ProductViewSet kế thừa ExportExcelMixin, có `get_export_pdf_fields()`).
 
 ### 3.3 Sản phẩm – Nhập Excel
 
@@ -92,7 +92,7 @@
    - Cách 2: Giữ `_export_products_excel_logic` nhưng lấy headers/row từ ProductViewSet (helper hoặc mixin) để chỉ có một nơi định nghĩa cấu trúc Excel.
 
 2. **Xuất PDF sản phẩm**  
-   - Thêm endpoint (vd. cùng route với format hoặc `/export-pdf/`) dùng `core.utils.export_to_pdf` với queryset + columns/headers tương tự export Excel (có thể lấy từ cấu hình/template hoặc từ cùng nguồn với export Excel).
+   - Đã có: `GET /api/products/products/export_data/?format=pdf` (ExportExcelMixin), dùng `core.utils.export_to_pdf` với `get_export_pdf_fields()` và `get_export_headers()` của ProductViewSet.
 
 3. **Import**  
    - Giữ Product import riêng (logic theo code); entity đơn giản (vd. Customer) tiếp tục dùng `import_from_excel` + field_mapping.
@@ -114,7 +114,7 @@
 | ExportExcelMixin           | Có, dùng chung | ProductViewSet có, nhưng export thật qua view khác |
 | ImportModal (UI)           | Có, dùng chung | Products đang dùng |
 | Sản phẩm – Xuất Excel      | Có, trùng logic | Chuẩn hóa 1 nguồn (ViewSet hoặc view) |
-| Sản phẩm – Xuất PDF        | Chưa | Thêm endpoint + dùng export_to_pdf |
+| Sản phẩm – Xuất PDF        | Có | ProductViewSet.export_data (format=pdf) + core.utils.export_to_pdf, nút "Xuất PDF" trên ProductList |
 | Sản phẩm – Nhập Excel      | Có | Giữ logic riêng, không dùng import_from_excel |
 | Bug wave/box_type trong export | Đã sửa | Dùng wave.code, box_type.code |
 

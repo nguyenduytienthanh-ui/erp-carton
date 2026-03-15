@@ -1,5 +1,5 @@
 import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Card, Checkbox, Drawer, Empty, Input, List, Modal, Switch, message, Segmented, Select, Space, Spin, Tag, Typography } from 'antd';
+import { Button, Card, Checkbox, Drawer, Empty, Input, List, Modal, Switch, message, Segmented, Select, Space, Spin, Tag } from 'antd';
 import { ReloadOutlined, ProjectOutlined, SwapRightOutlined, WarningOutlined, HistoryOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
@@ -11,12 +11,11 @@ import {
   type WorkflowPipelineTimelineItem,
 } from '../../api/workflowTaskTemplates';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
+import { SafeText as Text } from '../../components/SafeText';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { getEntityTypeLabel } from '../../utils/constants';
 import { storage } from '../../utils/storage';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
-
-const { Text } = Typography;
 const TaskWorkspaceModalLazy = lazy(() => import('../../components/TaskWorkspaceModal/TaskWorkspaceModal'));
 
 function normalizeStepTitle(raw: string): string {
@@ -67,7 +66,7 @@ function normalizeTimelineAction(raw: string | null | undefined): string {
 export default function WorkflowPipelineBoard() {
   type QuickViewMode = 'DEFAULT' | 'MY_ITEMS' | 'MY_TEAM' | 'RISK' | 'FAILED';
   type PipelineFilterSnapshot = {
-    entity_type: 'SalesOrder' | 'Product' | 'Customer';
+    entity_type: string;
     trigger: WftTrigger;
     search: string;
     quick_view: QuickViewMode;
@@ -83,7 +82,7 @@ export default function WorkflowPipelineBoard() {
   };
 
   const { config: savedConfig, saveConfig } = useUserPreferences('workflow-pipeline-board');
-  const [entityType, setEntityType] = useState<'SalesOrder' | 'Product' | 'Customer'>('SalesOrder');
+  const [entityType, setEntityType] = useState<string>('SalesOrder');
   const [trigger, setTrigger] = useState<WftTrigger>('SUBMIT');
   const [search, setSearch] = useState('');
   const [slaFilter, setSlaFilter] = useState<'ALL' | 'OVERDUE' | 'DUE_TODAY' | 'AT_RISK'>('ALL');
@@ -103,7 +102,7 @@ export default function WorkflowPipelineBoard() {
   const deferredSearch = useDeferredValue(search);
   const livePollingInterval = useRealtimePollingInterval({
     enabled: liveSync,
-    activeMs: 4_000,
+    activeMs: 10_000,
     hiddenMs: false,
   });
 
@@ -124,7 +123,7 @@ export default function WorkflowPipelineBoard() {
     if (!templates.length) return entityType;
     const hasCurrent = templates.some((t) => t.entity_type === entityType);
     if (hasCurrent) return entityType;
-    return templates[0].entity_type as 'SalesOrder' | 'Product' | 'Customer';
+    return templates[0].entity_type;
   }, [templates, entityType]);
 
   const triggerOptionsForEntity = useMemo(() => {
@@ -414,7 +413,7 @@ export default function WorkflowPipelineBoard() {
         const quickValue = f.quick_view;
         const slaValue = f.sla_filter;
         if (
-          (entityType !== 'SalesOrder' && entityType !== 'Product' && entityType !== 'Customer')
+          (typeof entityType !== 'string' || !entityType)
           || typeof triggerValue !== 'string'
           || (quickValue !== 'DEFAULT' && quickValue !== 'MY_ITEMS' && quickValue !== 'MY_TEAM' && quickValue !== 'RISK' && quickValue !== 'FAILED')
           || (slaValue !== 'ALL' && slaValue !== 'OVERDUE' && slaValue !== 'DUE_TODAY' && slaValue !== 'AT_RISK')
@@ -485,7 +484,7 @@ export default function WorkflowPipelineBoard() {
     const nextTeam = savedConfig?.team_filter;
     const nextLiveSync = savedConfig?.live_sync;
 
-    if (nextEntityType === 'SalesOrder' || nextEntityType === 'Product' || nextEntityType === 'Customer') {
+    if (typeof nextEntityType === 'string' && nextEntityType) {
       setEntityType(nextEntityType);
     }
     if (typeof nextTrigger === 'string') setTrigger(nextTrigger as WftTrigger);
@@ -601,7 +600,7 @@ export default function WorkflowPipelineBoard() {
               style={{ width: 200 }}
               options={triggerOptionsForEntity}
             />
-            <Select<'SalesOrder' | 'Product' | 'Customer'>
+            <Select<string>
               value={entityType}
               onChange={(v) => {
                 setEntityType(v);
@@ -612,7 +611,7 @@ export default function WorkflowPipelineBoard() {
               options={
                 (availableEntityTypes.length
                   ? availableEntityTypes
-                  : ['SalesOrder', 'Product', 'Customer']
+                  : ['SalesOrder', 'PurchaseOrder', 'ProductionOrder', 'Product', 'Customer']
                 ).map((v) => ({ value: v, label: getEntityTypeLabel(v) }))
               }
             />

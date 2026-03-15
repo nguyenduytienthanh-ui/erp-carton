@@ -158,3 +158,82 @@ export interface InventorySalesOrderOption {
 export interface InventorySalesOrderDetail extends InventorySalesOrderOption {
   lines: InventorySalesOrderLineOption[];
 }
+
+export type StocktakeStatus = 'DRAFT' | 'COMPLETED' | 'CANCELLED';
+
+export interface StocktakeLine {
+  id: number;
+  stocktake: number;
+  product: number;
+  product_code: string;
+  product_name: string;
+  warehouse: number;
+  line_number: number;
+  system_qty: string;
+  count_qty: string;
+  variance_qty: string;
+  note: string;
+}
+
+export interface Stocktake {
+  id: number;
+  code: string;
+  warehouse: number;
+  warehouse_name: string;
+  count_date: string;
+  status: StocktakeStatus;
+  note: string;
+  created_at: string;
+  updated_at: string;
+  created_by?: number | null;
+  completed_at?: string | null;
+  completed_by?: number | null;
+  lines: StocktakeLine[];
+}
+
+export type StocktakeFormLine = { product_id: number; count_qty: number | string; note?: string };
+
+/** Phiếu xuất / Giao hàng (danh sách + chi tiết) */
+export type OutboundShipmentStatus = 'POSTED' | 'CANCELLED';
+
+export interface OutboundShipment {
+  id: number;
+  code: string;
+  sales_order: number | null;
+  sales_order_code: string | null;
+  shipment_date: string;
+  status: OutboundShipmentStatus;
+  reference: string;
+  carrier_name: string;
+  tracking_number: string;
+  vehicle_no: string;
+  driver_name: string;
+  driver_phone: string;
+  note: string;
+  loading_reference: string;
+  handover_receiver_name: string;
+  handover_receiver_phone: string;
+  handover_proof_url: string;
+  loading_confirmation_note: string;
+  loading_confirmed_at: string | null;
+  loading_confirmed_by: number | null;
+  loading_confirmed_by_name: string | null;
+  delivery_reference: string;
+  customer_receiver_name: string;
+  customer_receiver_phone: string;
+  delivery_proof_url: string;
+  delivery_confirmation_note: string;
+  delivered_at_actual: string | null;
+  delivery_confirmed_at: string | null;
+  delivery_confirmed_by: number | null;
+  delivery_confirmed_by_name: string | null;
+  total_qty: string;
+  item_count: number;
+  package_count: number;
+  total_gross_weight_kg: string;
+  verified_package_count: number;
+  loaded_package_count: number;
+  posted_at: string;
+  created_at: string;
+  updated_at: string;
+}

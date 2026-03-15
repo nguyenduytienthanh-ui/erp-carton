@@ -1,5 +1,5 @@
 import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button, Card, Empty, Input, Modal, Segmented, Select, Space, Spin, Switch, Table, Tag, Typography, message } from 'antd';
+import { Badge, Button, Card, Empty, Input, Modal, Segmented, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { EyeOutlined, InboxOutlined, StarFilled, StarOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -7,14 +7,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { TASK_PRIORITY_LABELS, tasksApi, type TaskItem, type TaskPriority, type TaskStatus } from '../../api/tasks';
 import { getUserDisplayName, usersApi } from '../../api/users';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
+import { SafeText as Text } from '../../components/SafeText';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { useRowSelection } from '../../hooks/useRowSelection';
 import { getEntityTypeLabel } from '../../utils/constants';
 import { storage } from '../../utils/storage';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
-
-const { Text } = Typography;
 
 type InboxTab = 'ASSIGNED' | 'CREATED' | 'WATCHING' | 'TEAM' | 'OVERDUE';
 type SortMode = 'SMART' | 'DUE_ASC' | 'DUE_DESC' | 'UPDATED_DESC';
@@ -109,7 +108,7 @@ export default function TaskInbox() {
   });
   const livePollingInterval = useRealtimePollingInterval({
     enabled: liveSync,
-    activeMs: 4_000,
+    activeMs: 10_000,
     hiddenMs: false,
   });
 

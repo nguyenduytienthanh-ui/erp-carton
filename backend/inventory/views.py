@@ -1,7 +1,9 @@
+from datetime import datetime as dt_parse
 from decimal import Decimal
 
 import django_filters
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import filters, mixins, viewsets
 from rest_framework.decorators import action
@@ -15,6 +17,7 @@ from core.permissions import check_action_permission
 from inventory.filters import (
     InventoryReservationFilter,
     InventoryTransactionFilter,
+    OutboundShipmentFilter,
     WarehouseFilter,
     WarehouseLocationFilter,
 )
@@ -23,12 +26,18 @@ from inventory.models import (
     InventoryReservationStatus,
     InventoryTransaction,
     InventoryTransactionStatus,
+    InventoryTransactionType,
+    OutboundShipment,
+    Stocktake,
+    StocktakeStatus,
     Warehouse,
     WarehouseLocation,
 )
 from inventory.serializers import (
     InventoryReservationSerializer,
     InventoryTransactionSerializer,
+    OutboundShipmentSerializer,
+    StocktakeSerializer,
     WarehouseLocationSerializer,
     WarehouseSerializer,
 )
@@ -69,6 +78,15 @@ def _can_manage_inventory(user):
         'quanly',
     }
     return any(role in allowed_roles for role in role_names)
+
+
+def _can_manage_stocktake(user):
+    """Cho phép nếu có INVENTORY:MANAGE hoặc INVENTORY:STOCKTAKE."""
+    if _can_manage_inventory(user):
+        return True
+    if check_action_permission(user, 'INVENTORY', 'STOCKTAKE', strict=True):
+        return True
+    return False
 
 
 class InventoryManagePermissionMixin:
@@ -222,6 +240,72 @@ class InventoryTransactionViewSet(InventoryManagePermissionMixin, viewsets.Model
                     shipment_date=tx.transaction_date,
                 )
 
+    @action(detail=False, methods=['get'])
+    def nxt_report(self, request):
+        """Báo cáo Nhập Xuất Tồn theo kỳ. GET ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD&warehouse=id (optional)"""
+        date_from_s = (request.query_params.get('date_from') or '').strip()
+        date_to_s = (request.query_params.get('date_to') or '').strip()
+        if not date_from_s or not date_to_s:
+            return Response({'error': 'date_from và date_to bắt buộc (YYYY-MM-DD).'}, status=400)
+        try:
+            date_from = dt_parse.strptime(date_from_s, '%Y-%m-%d').date()
+            date_to = dt_parse.strptime(date_to_s, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'error': 'date_from, date_to phải đúng định dạng YYYY-MM-DD.'}, status=400)
+        if date_from > date_to:
+            return Response({'error': 'date_from không được lớn hơn date_to.'}, status=400)
+        warehouse_id = request.query_params.get('warehouse') or request.query_params.get('warehouse_id')
+        if warehouse_id and str(warehouse_id).isdigit():
+            warehouse_id = int(warehouse_id)
+        else:
+            warehouse_id = None
+
+        base = InventoryTransaction.objects.filter(status=InventoryTransactionStatus.POSTED)
+        if warehouse_id:
+            base = base.filter(warehouse_id=warehouse_id)
+        in_types = [InventoryTransactionType.RECEIPT, InventoryTransactionType.ADJUSTMENT_IN]
+        out_types = [InventoryTransactionType.ISSUE, InventoryTransactionType.ADJUSTMENT_OUT]
+
+        def _agg(qs, key_fields):
+            return {
+                (r['product_id'], r['warehouse_id'] or 0): Decimal(str(r['total'] or 0))
+                for r in qs.values('product_id', 'warehouse_id').annotate(total=Sum('quantity'))
+            }
+
+        opening_in = _agg(base.filter(transaction_type__in=in_types, transaction_date__lt=date_from), ('product_id', 'warehouse_id'))
+        opening_out = _agg(base.filter(transaction_type__in=out_types, transaction_date__lt=date_from), ('product_id', 'warehouse_id'))
+        period_in = _agg(base.filter(transaction_type__in=in_types, transaction_date__gte=date_from, transaction_date__lte=date_to), ('product_id', 'warehouse_id'))
+        period_out = _agg(base.filter(transaction_type__in=out_types, transaction_date__gte=date_from, transaction_date__lte=date_to), ('product_id', 'warehouse_id'))
+
+        keys = set(opening_in) | set(opening_out) | set(period_in) | set(period_out)
+        product_ids = [k[0] for k in keys if k[0]]
+        warehouse_ids = [k[1] for k in keys if k[1]]
+        products = {p.id: (p.code or '', p.name or '') for p in Product.objects.filter(id__in=product_ids).only('id', 'code', 'name')}
+        warehouses = {w.id: (w.code or '', w.name or '') for w in Warehouse.objects.filter(id__in=warehouse_ids, deleted_at__isnull=True).only('id', 'code', 'name')}
+        warehouses[0] = ('-', '-')
+
+        rows = []
+        for (pid, wid) in sorted(keys):
+            opening = opening_in.get((pid, wid), Decimal('0')) - opening_out.get((pid, wid), Decimal('0'))
+            in_p = period_in.get((pid, wid), Decimal('0'))
+            out_p = period_out.get((pid, wid), Decimal('0'))
+            closing = opening + in_p - out_p
+            p_code, p_name = products.get(pid, ('', ''))
+            w_code, w_name = warehouses.get(wid, ('-', '-'))
+            rows.append({
+                'product_id': pid,
+                'product_code': p_code,
+                'product_name': p_name,
+                'warehouse_id': wid or None,
+                'warehouse_code': w_code,
+                'warehouse_name': w_name,
+                'opening_qty': str(opening),
+                'in_qty': str(in_p),
+                'out_qty': str(out_p),
+                'closing_qty': str(closing),
+            })
+        return Response({'date_from': date_from_s, 'date_to': date_to_s, 'results': rows})
+
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         tx = self.get_object()
@@ -311,6 +395,70 @@ class InventoryReservationViewSet(InventoryManagePermissionMixin, viewsets.Model
             ]
         )
         return Response({'status': reservation.status})
+
+
+class StocktakePermissionMixin:
+    permission_classes = [IsAuthenticated]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not _can_manage_stocktake(request.user):
+            raise PermissionDenied('Bạn không có quyền kiểm tồn.')
+
+
+class StocktakeViewSet(StocktakePermissionMixin, viewsets.ModelViewSet):
+    serializer_class = StocktakeSerializer
+    filter_backends = [django_filters.rest_framework.DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['warehouse', 'status']
+    ordering_fields = ['count_date', 'code', 'created_at']
+    ordering = ['-count_date', '-id']
+
+    def get_queryset(self):
+        return Stocktake.objects.select_related('warehouse', 'created_by', 'completed_by').prefetch_related('lines', 'lines__product')
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        if serializer.instance.status != StocktakeStatus.DRAFT:
+            raise ValidationError('Chỉ được sửa phiếu kiểm tồn ở trạng thái Nháp.')
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if instance.status != StocktakeStatus.DRAFT:
+            raise ValidationError('Chỉ được xóa phiếu kiểm tồn ở trạng thái Nháp.')
+        instance.delete()
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        stocktake = self.get_object()
+        if stocktake.status != StocktakeStatus.DRAFT:
+            return Response({'error': 'Chỉ hoàn tất phiếu ở trạng thái Nháp.'}, status=400)
+        stocktake.status = StocktakeStatus.COMPLETED
+        stocktake.completed_at = timezone.now()
+        stocktake.completed_by = request.user
+        stocktake.save(update_fields=['status', 'completed_at', 'completed_by', 'updated_at'])
+        return Response({'status': stocktake.status})
+
+
+class OutboundShipmentViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """Danh sách phiếu xuất / giao hàng (read-only)."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = OutboundShipmentSerializer
+    filter_backends = [django_filters.rest_framework.DjangoFilterBackend, filters.OrderingFilter]
+    filterset_class = OutboundShipmentFilter
+    ordering_fields = ['shipment_date', 'code', 'id']
+    ordering = ['-shipment_date', '-id']
+
+    def get_queryset(self):
+        return OutboundShipment.objects.select_related(
+            'sales_order', 'loading_confirmed_by', 'delivery_confirmed_by'
+        ).prefetch_related('packages', 'transactions').order_by('-shipment_date', '-id')
 
 
 class InventoryStockViewSet(InventoryManagePermissionMixin, mixins.ListModelMixin, viewsets.GenericViewSet):

@@ -1024,7 +1024,6 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
       styles={{
         wrapper: { overflowX: 'hidden', overflowY: 'auto' },
         header: { paddingLeft: PADDING_X },
-        content: { overflowX: 'hidden', maxWidth: 1377 },
         body: { padding: 0, maxHeight: 'calc(100vh - 120px)', overflowX: 'hidden', overflowY: 'auto' },
       }}
     >

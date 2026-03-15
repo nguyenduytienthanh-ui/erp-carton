@@ -17,6 +17,7 @@ export interface PriceChangeRecord {
   id: number;
   product: number;
   product_code?: string;
+  record_scope?: 'PRODUCT' | 'BUNDLE_FIXED';
   old_cost_price?: string | null;
   new_cost_price?: string | null;
   old_sale_price?: string | null;
@@ -40,6 +41,11 @@ export interface PriceChangeRecord {
   approved_by_name?: string | null;
   approved_at?: string | null;
   created_at: string;
+}
+
+export interface BundlePriceChangeRecord extends Omit<PriceChangeRecord, 'product'> {
+  bundle: number;
+  sellable_product: number;
 }
 
 export interface BulkPriceChangeItemInput {
@@ -296,6 +302,11 @@ export const productsApi = {
     return response.data;
   },
 
+  getBundlePriceChanges: async (productId: number): Promise<BundlePriceChangeRecord[]> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTS}${productId}/bundle_price_changes/`);
+    return response.data;
+  },
+
   submitPriceChange: async (
     productId: number,
     data: {
@@ -319,6 +330,35 @@ export const productsApi = {
 
   rejectPriceChange: async (productId: number, changeId: number, rejectReason: string): Promise<PriceChangeRecord> => {
     const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}${productId}/reject_price_change/`, {
+      change_id: changeId,
+      reject_reason: rejectReason,
+    });
+    return response.data;
+  },
+
+  submitBundlePriceChange: async (
+    productId: number,
+    data: {
+      new_cost_price?: number;
+      new_sale_price?: number;
+      new_commission_per_unit?: number;
+      new_commission_percent?: number;
+      reason: string;
+      effective_at?: string;
+      batch_code?: string;
+    }
+  ): Promise<BundlePriceChangeRecord> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}${productId}/submit_bundle_price_change/`, data);
+    return response.data;
+  },
+
+  approveBundlePriceChange: async (productId: number, changeId: number): Promise<BundlePriceChangeRecord> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}${productId}/approve_bundle_price_change/`, { change_id: changeId });
+    return response.data;
+  },
+
+  rejectBundlePriceChange: async (productId: number, changeId: number, rejectReason: string): Promise<BundlePriceChangeRecord> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTS}${productId}/reject_bundle_price_change/`, {
       change_id: changeId,
       reject_reason: rejectReason,
     });

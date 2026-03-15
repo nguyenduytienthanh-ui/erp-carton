@@ -1,5 +1,5 @@
 import { Suspense, lazy, useMemo, useState } from 'react';
-import { Button, Card, Descriptions, Drawer, Empty, Input, Select, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd';
+import { Button, Card, Descriptions, Drawer, Empty, Input, Select, Space, Spin, Table, Tag, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { AlertOutlined, ClockCircleOutlined, LockOutlined, ProjectOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -9,9 +9,8 @@ import { tasksApi, type TaskItem } from '../../api/tasks';
 import { productsApi } from '../../api/products';
 import type { Product } from '../../types/product';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
+import { SafeText as Text } from '../../components/SafeText';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
-
-const { Text } = Typography;
 
 type BoardFilter = 'ALL' | 'BLOCKING' | 'HELP' | 'OVERDUE' | 'DEPENDENCY';
 const TaskWorkspaceModalLazy = lazy(() => import('../../components/TaskWorkspaceModal/TaskWorkspaceModal'));

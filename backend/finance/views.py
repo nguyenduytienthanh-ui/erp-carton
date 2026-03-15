@@ -17,6 +17,7 @@ from openpyxl import Workbook
 from core.permissions import check_action_permission
 from core.models import AuditLog, Notification, Permission, Role, Setting, User, WorkflowPipelineEvent
 from workforce.models import Employee, PayrollRecord
+from sales.document_policy import round_money
 
 from .models import (
     AdvanceSettlement,
@@ -24,7 +25,18 @@ from .models import (
     BankAccount,
     CashAccount,
     CashTransaction,
+    PayableDocument,
+    PayableSettlement,
+    PayableStatus,
+    ReceivableDocument,
+    ReceivableSettlement,
+    ReceivableStatus,
     TransactionCategory,
+)
+from .services import (
+    ensure_system_transaction_category,
+    refresh_payable_status,
+    refresh_receivable_status,
 )
 from .reminders import (
     REMINDER_POLICY_SETTING_KEY,
@@ -46,6 +58,10 @@ from .serializers import (
     BankAccountSerializer,
     CashAccountSerializer,
     CashTransactionSerializer,
+    PayableDocumentSerializer,
+    PayableSettlementSerializer,
+    ReceivableDocumentSerializer,
+    ReceivableSettlementSerializer,
     TransactionCategorySerializer,
 )
 
@@ -995,6 +1011,23 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
         if source_cash_account.isdigit():
             queryset = queryset.filter(source_cash_account_id=int(source_cash_account))
 
+        source_bank_account = (params.get('source_bank_account') or '').strip()
+        if source_bank_account.isdigit():
+            queryset = queryset.filter(source_bank_account_id=int(source_bank_account))
+
+        date_from_s = (params.get('transaction_date__gte') or params.get('date_from') or '').strip()
+        date_to_s = (params.get('transaction_date__lte') or params.get('date_to') or '').strip()
+        if date_from_s:
+            try:
+                queryset = queryset.filter(transaction_date__gte=date.fromisoformat(date_from_s))
+            except ValueError:
+                pass
+        if date_to_s:
+            try:
+                queryset = queryset.filter(transaction_date__lte=date.fromisoformat(date_to_s))
+            except ValueError:
+                pass
+
         month = (params.get('month') or '').strip()
         if len(month) == 7 and '-' in month:
             year_str, month_str = month.split('-', 1)
@@ -1306,6 +1339,96 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             return response
 
         return Response(data)
+
+    @action(detail=False, methods=['get'])
+    def cash_flow_summary(self, request):
+        """Báo cáo thu chi theo kỳ (date_from, date_to). GET ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD"""
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem báo cáo thu chi.'}, status=403)
+        date_from_s = (request.query_params.get('date_from') or '').strip()
+        date_to_s = (request.query_params.get('date_to') or '').strip()
+        if not date_from_s or not date_to_s:
+            return Response({'error': 'date_from và date_to bắt buộc (YYYY-MM-DD).'}, status=400)
+        try:
+            date_from = date.fromisoformat(date_from_s)
+            date_to = date.fromisoformat(date_to_s)
+        except ValueError:
+            return Response({'error': 'date_from, date_to phải đúng định dạng YYYY-MM-DD.'}, status=400)
+        if date_from > date_to:
+            return Response({'error': 'date_from không được lớn hơn date_to.'}, status=400)
+
+        tx_qs = CashTransaction.objects.filter(
+            transaction_date__gte=date_from,
+            transaction_date__lte=date_to,
+        )
+        total_income = Decimal(str(
+            tx_qs.filter(transaction_type=CashTransaction.TYPE_INCOME).aggregate(total=Sum('amount')).get('total') or 0
+        ))
+        total_expense = Decimal(str(
+            tx_qs.filter(transaction_type=CashTransaction.TYPE_EXPENSE).aggregate(total=Sum('amount')).get('total') or 0
+        ))
+        return Response({
+            'date_from': date_from_s,
+            'date_to': date_to_s,
+            'total_income': str(total_income),
+            'total_expense': str(total_expense),
+            'cash_delta': str(total_income - total_expense),
+            'transactions_count': tx_qs.count(),
+        })
+
+    @action(detail=False, methods=['get'])
+    def general_ledger(self, request):
+        """Sổ cái: danh sách phát sinh từ giao dịch quỹ (date_from, date_to, category tùy chọn)."""
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem sổ cái.'}, status=403)
+        date_from_s = (request.query_params.get('date_from') or '').strip()
+        date_to_s = (request.query_params.get('date_to') or '').strip()
+        if not date_from_s or not date_to_s:
+            return Response({'error': 'date_from và date_to bắt buộc (YYYY-MM-DD).'}, status=400)
+        try:
+            date_from = date.fromisoformat(date_from_s)
+            date_to = date.fromisoformat(date_to_s)
+        except ValueError:
+            return Response({'error': 'date_from, date_to phải đúng định dạng YYYY-MM-DD.'}, status=400)
+        if date_from > date_to:
+            return Response({'error': 'date_from không được lớn hơn date_to.'}, status=400)
+        category_id = request.query_params.get('category')
+        tx_qs = CashTransaction.objects.filter(
+            transaction_date__gte=date_from,
+            transaction_date__lte=date_to,
+        ).select_related('category', 'source_cash_account', 'target_cash_account')
+        if category_id:
+            tx_qs = tx_qs.filter(category_id=category_id)
+        tx_qs = tx_qs.order_by('transaction_date', 'id')
+        results = []
+        for tx in tx_qs:
+            amount = tx.amount or Decimal('0')
+            debit = '0'
+            credit = '0'
+            if tx.transaction_type == CashTransaction.TYPE_INCOME:
+                credit = str(amount)
+            elif tx.transaction_type == CashTransaction.TYPE_EXPENSE:
+                debit = str(amount)
+            else:
+                debit = str(amount)
+                credit = str(amount)
+            results.append({
+                'id': tx.id,
+                'transaction_date': tx.transaction_date.isoformat(),
+                'reference': tx.reference or '',
+                'category_id': tx.category_id,
+                'category_code': getattr(tx.category, 'code', '') if tx.category_id else '',
+                'category_name': getattr(tx.category, 'name', '') if tx.category_id else '',
+                'description': tx.reason or '',
+                'transaction_type': tx.transaction_type,
+                'debit': debit,
+                'credit': credit,
+            })
+        return Response({
+            'date_from': date_from_s,
+            'date_to': date_to_s,
+            'results': results,
+        })
 
     @action(detail=False, methods=['get'])
     def trend_12m(self, request):
@@ -3737,3 +3860,360 @@ class AdvanceSettlementViewSet(SearchTextMixin, viewsets.ModelViewSet):
         if not _can_manage_finance(request.user):
             return Response({'error': 'Bạn không có quyền xóa quyết toán.'}, status=403)
         return super().destroy(request, *args, **kwargs)
+
+
+class ReceivableDocumentViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
+    serializer_class = ReceivableDocumentSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['document_date', 'due_date', 'total_amount', 'settled_amount', 'created_at']
+    ordering = ['due_date', '-id']
+
+    def get_queryset(self):
+        queryset = ReceivableDocument.objects.select_related(
+            'source_sales_order',
+            'customer',
+        ).prefetch_related(
+            'settlements',
+            'settlements__source_cash_account',
+            'settlements__source_bank_account',
+        )
+        params = self.request.query_params
+        status_value = (params.get('status') or '').strip()
+        if status_value:
+            queryset = queryset.filter(status=status_value)
+        customer_id = (params.get('customer') or '').strip()
+        if customer_id.isdigit():
+            queryset = queryset.filter(customer_id=int(customer_id))
+        document_date_gte = (params.get('document_date__gte') or '').strip()
+        if document_date_gte:
+            queryset = queryset.filter(document_date__gte=document_date_gte)
+        document_date_lte = (params.get('document_date__lte') or '').strip()
+        if document_date_lte:
+            queryset = queryset.filter(document_date__lte=document_date_lte)
+        month = (params.get('month') or '').strip()
+        if len(month) == 7 and '-' in month:
+            year_str, month_str = month.split('-', 1)
+            if year_str.isdigit() and month_str.isdigit():
+                queryset = queryset.filter(
+                    due_date__year=int(year_str),
+                    due_date__month=int(month_str),
+                )
+        overdue_only = str(params.get('overdue_only') or '').strip().lower() in {'1', 'true', 'yes'}
+        if overdue_only:
+            queryset = queryset.exclude(status=ReceivableStatus.CANCELLED).filter(due_date__lt=timezone.localdate())
+        return self.apply_search(queryset)
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        today = timezone.localdate()
+        open_qs = queryset.exclude(status=ReceivableStatus.CANCELLED)
+        total_amount = Decimal(str(open_qs.aggregate(total=Sum('total_amount')).get('total') or 0))
+        settled_amount = Decimal(str(open_qs.aggregate(total=Sum('settled_amount')).get('total') or 0))
+        remaining_amount = total_amount - settled_amount
+        overdue_qs = open_qs.filter(due_date__lt=today).exclude(status=ReceivableStatus.SETTLED)
+        overdue_amount = Decimal(str(overdue_qs.aggregate(total=Sum('total_amount')).get('total') or 0)) - Decimal(str(overdue_qs.aggregate(total=Sum('settled_amount')).get('total') or 0))
+        return Response({
+            'count': queryset.count(),
+            'open_count': int(queryset.filter(status=ReceivableStatus.OPEN).count()),
+            'partial_count': int(queryset.filter(status=ReceivableStatus.PARTIAL).count()),
+            'settled_count': int(queryset.filter(status=ReceivableStatus.SETTLED).count()),
+            'cancelled_count': int(queryset.filter(status=ReceivableStatus.CANCELLED).count()),
+            'overdue_count': int(overdue_qs.count()),
+            'total_amount': str(round_money(total_amount)),
+            'settled_amount': str(round_money(settled_amount)),
+            'remaining_amount': str(round_money(remaining_amount if remaining_amount > 0 else 0)),
+            'overdue_amount': str(round_money(overdue_amount if overdue_amount > 0 else 0)),
+        })
+
+    @action(detail=True, methods=['post'])
+    def collect(self, request, pk=None):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền ghi nhận thu tiền công nợ.'}, status=403)
+        document = self.get_object()
+        settlement_date_raw = request.data.get('settlement_date') or timezone.localdate().isoformat()
+        try:
+            settlement_date = date.fromisoformat(str(settlement_date_raw))
+        except (TypeError, ValueError):
+            return Response({'error': 'Ngày thu tiền không hợp lệ.'}, status=400)
+        _ensure_finance_month_unlocked(
+            _month_from_date_obj(settlement_date),
+            'Tháng tài chính đã khóa, không thể ghi nhận thu tiền.',
+        )
+        try:
+            amount = Decimal(str(request.data.get('amount') or 0))
+        except (InvalidOperation, TypeError, ValueError):
+            return Response({'error': 'Số tiền thu không hợp lệ.'}, status=400)
+        if amount <= 0:
+            return Response({'error': 'Số tiền thu phải lớn hơn 0.'}, status=400)
+        source_type = str(request.data.get('source_type') or CashTransaction.SOURCE_CASH).strip().upper()
+        if source_type not in {CashTransaction.SOURCE_CASH, CashTransaction.SOURCE_BANK}:
+            return Response({'error': 'Nguồn tiền không hợp lệ.'}, status=400)
+
+        category = ensure_system_transaction_category(
+            code='AR_COLLECTION',
+            name='Thu công nợ phải thu',
+            category_type=CashTransaction.TYPE_INCOME,
+            color='#52c41a',
+        )
+        with transaction.atomic():
+            locked_document = ReceivableDocument.objects.select_for_update().get(pk=document.pk)
+            if locked_document.status == ReceivableStatus.CANCELLED:
+                return Response({'error': 'Chứng từ phải thu đã hủy, không thể thu tiền.'}, status=400)
+            if amount > locked_document.remaining_amount:
+                return Response({'error': f'Số tiền thu vượt số còn phải thu ({locked_document.remaining_amount:,.0f}).'}, status=400)
+            tx_serializer = CashTransactionSerializer(data={
+                'transaction_type': CashTransaction.TYPE_INCOME,
+                'source_type': source_type,
+                'source_cash_account': request.data.get('source_cash_account'),
+                'source_bank_account': request.data.get('source_bank_account'),
+                'category': category.id,
+                'transaction_date': settlement_date_raw,
+                'amount': str(amount),
+                'object_name': (locked_document.customer_snapshot or {}).get('company_name') or (locked_document.customer_snapshot or {}).get('name') or '',
+                'reason': f'[AR:{locked_document.id}] Thu công nợ {locked_document.code}',
+                'note': str(request.data.get('note') or '').strip(),
+            })
+            tx_serializer.is_valid(raise_exception=True)
+            cash_tx = tx_serializer.save(created_by=request.user)
+            settlement = ReceivableSettlement.objects.create(
+                receivable_document=locked_document,
+                settlement_date=settlement_date,
+                amount=amount,
+                source_type=source_type,
+                source_cash_account_id=request.data.get('source_cash_account'),
+                source_bank_account_id=request.data.get('source_bank_account'),
+                cash_transaction=cash_tx,
+                note=str(request.data.get('note') or '').strip(),
+                created_by=request.user,
+                updated_by=request.user,
+            )
+            refresh_receivable_status(locked_document, actor=request.user)
+        _log_finance_audit(
+            request.user,
+            action='CREATE',
+            entity_type='FinanceReceivableSettlement',
+            entity_id=int(settlement.id),
+            entity_code=locked_document.code,
+            old_values={},
+            new_values={'receivable_document_id': int(locked_document.id), 'amount': str(amount), 'settlement_date': settlement_date.isoformat()},
+            changed_fields=['amount', 'settlement_date'],
+        )
+        return Response(ReceivableDocumentSerializer(locked_document).data)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền hủy chứng từ phải thu.'}, status=403)
+        document = self.get_object()
+        reason = str(request.data.get('reason') or request.data.get('cancel_reason') or '').strip()
+        if not reason:
+            return Response({'error': 'Bắt buộc nhập lý do hủy chứng từ.'}, status=400)
+        _ensure_finance_month_unlocked(
+            _month_from_date_obj(document.document_date),
+            'Tháng tài chính đã khóa, không thể hủy chứng từ phải thu.',
+        )
+        if document.settled_amount > 0:
+            return Response({'error': 'Chứng từ đã phát sinh thu tiền, không thể hủy.'}, status=400)
+        old_status = document.status
+        document.status = ReceivableStatus.CANCELLED
+        document.note = ((document.note or '').strip() + f'\n[Huỷ] {reason}').strip()
+        document.updated_by = request.user
+        document.save(update_fields=['status', 'note', 'updated_by', 'updated_at'])
+        _log_finance_audit(
+            request.user,
+            action='CANCEL',
+            entity_type='FinanceReceivable',
+            entity_id=int(document.id),
+            entity_code=document.code,
+            old_values={'status': old_status},
+            new_values={'status': document.status, 'reason': reason},
+            changed_fields=['status'],
+        )
+        return Response({'status': document.status})
+
+    @action(detail=True, methods=['get'])
+    def settlements(self, request, pk=None):
+        document = self.get_object()
+        items = document.settlements.select_related('source_cash_account', 'source_bank_account', 'cash_transaction').order_by('-settlement_date', '-id')
+        return Response(ReceivableSettlementSerializer(items, many=True).data)
+
+
+class PayableDocumentViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
+    serializer_class = PayableDocumentSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['document_date', 'due_date', 'total_amount', 'settled_amount', 'created_at']
+    ordering = ['due_date', '-id']
+
+    def get_queryset(self):
+        queryset = PayableDocument.objects.select_related(
+            'source_purchase_receipt',
+            'source_purchase_receipt__purchase_order',
+            'supplier',
+        ).prefetch_related(
+            'settlements',
+            'settlements__source_cash_account',
+            'settlements__source_bank_account',
+        )
+        params = self.request.query_params
+        status_value = (params.get('status') or '').strip()
+        if status_value:
+            queryset = queryset.filter(status=status_value)
+        supplier_id = (params.get('supplier') or '').strip()
+        if supplier_id.isdigit():
+            queryset = queryset.filter(supplier_id=int(supplier_id))
+        document_date_gte = (params.get('document_date__gte') or '').strip()
+        if document_date_gte:
+            queryset = queryset.filter(document_date__gte=document_date_gte)
+        document_date_lte = (params.get('document_date__lte') or '').strip()
+        if document_date_lte:
+            queryset = queryset.filter(document_date__lte=document_date_lte)
+        month = (params.get('month') or '').strip()
+        if len(month) == 7 and '-' in month:
+            year_str, month_str = month.split('-', 1)
+            if year_str.isdigit() and month_str.isdigit():
+                queryset = queryset.filter(
+                    due_date__year=int(year_str),
+                    due_date__month=int(month_str),
+                )
+        overdue_only = str(params.get('overdue_only') or '').strip().lower() in {'1', 'true', 'yes'}
+        if overdue_only:
+            queryset = queryset.exclude(status=PayableStatus.CANCELLED).filter(due_date__lt=timezone.localdate())
+        return self.apply_search(queryset)
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        today = timezone.localdate()
+        open_qs = queryset.exclude(status=PayableStatus.CANCELLED)
+        total_amount = Decimal(str(open_qs.aggregate(total=Sum('total_amount')).get('total') or 0))
+        settled_amount = Decimal(str(open_qs.aggregate(total=Sum('settled_amount')).get('total') or 0))
+        remaining_amount = total_amount - settled_amount
+        overdue_qs = open_qs.filter(due_date__lt=today).exclude(status=PayableStatus.SETTLED)
+        overdue_amount = Decimal(str(overdue_qs.aggregate(total=Sum('total_amount')).get('total') or 0)) - Decimal(str(overdue_qs.aggregate(total=Sum('settled_amount')).get('total') or 0))
+        return Response({
+            'count': queryset.count(),
+            'open_count': int(queryset.filter(status=PayableStatus.OPEN).count()),
+            'partial_count': int(queryset.filter(status=PayableStatus.PARTIAL).count()),
+            'settled_count': int(queryset.filter(status=PayableStatus.SETTLED).count()),
+            'cancelled_count': int(queryset.filter(status=PayableStatus.CANCELLED).count()),
+            'overdue_count': int(overdue_qs.count()),
+            'total_amount': str(round_money(total_amount)),
+            'settled_amount': str(round_money(settled_amount)),
+            'remaining_amount': str(round_money(remaining_amount if remaining_amount > 0 else 0)),
+            'overdue_amount': str(round_money(overdue_amount if overdue_amount > 0 else 0)),
+        })
+
+    @action(detail=True, methods=['post'])
+    def pay(self, request, pk=None):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền ghi nhận chi trả công nợ.'}, status=403)
+        document = self.get_object()
+        settlement_date_raw = request.data.get('settlement_date') or timezone.localdate().isoformat()
+        try:
+            settlement_date = date.fromisoformat(str(settlement_date_raw))
+        except (TypeError, ValueError):
+            return Response({'error': 'Ngày thanh toán không hợp lệ.'}, status=400)
+        _ensure_finance_month_unlocked(
+            _month_from_date_obj(settlement_date),
+            'Tháng tài chính đã khóa, không thể ghi nhận chi trả.',
+        )
+        try:
+            amount = Decimal(str(request.data.get('amount') or 0))
+        except (InvalidOperation, TypeError, ValueError):
+            return Response({'error': 'Số tiền chi không hợp lệ.'}, status=400)
+        if amount <= 0:
+            return Response({'error': 'Số tiền chi phải lớn hơn 0.'}, status=400)
+        source_type = str(request.data.get('source_type') or CashTransaction.SOURCE_CASH).strip().upper()
+        if source_type not in {CashTransaction.SOURCE_CASH, CashTransaction.SOURCE_BANK}:
+            return Response({'error': 'Nguồn tiền không hợp lệ.'}, status=400)
+
+        category = ensure_system_transaction_category(
+            code='AP_PAYMENT',
+            name='Chi trả công nợ phải trả',
+            category_type=CashTransaction.TYPE_EXPENSE,
+            color='#faad14',
+        )
+        with transaction.atomic():
+            locked_document = PayableDocument.objects.select_for_update().get(pk=document.pk)
+            if locked_document.status == PayableStatus.CANCELLED:
+                return Response({'error': 'Chứng từ phải trả đã hủy, không thể thanh toán.'}, status=400)
+            if amount > locked_document.remaining_amount:
+                return Response({'error': f'Số tiền chi vượt số còn phải trả ({locked_document.remaining_amount:,.0f}).'}, status=400)
+            tx_serializer = CashTransactionSerializer(data={
+                'transaction_type': CashTransaction.TYPE_EXPENSE,
+                'source_type': source_type,
+                'source_cash_account': request.data.get('source_cash_account'),
+                'source_bank_account': request.data.get('source_bank_account'),
+                'category': category.id,
+                'transaction_date': settlement_date_raw,
+                'amount': str(amount),
+                'object_name': (locked_document.supplier_snapshot or {}).get('company_name') or (locked_document.supplier_snapshot or {}).get('name') or '',
+                'reason': f'[AP:{locked_document.id}] Chi trả công nợ {locked_document.code}',
+                'note': str(request.data.get('note') or '').strip(),
+            })
+            tx_serializer.is_valid(raise_exception=True)
+            cash_tx = tx_serializer.save(created_by=request.user)
+            settlement = PayableSettlement.objects.create(
+                payable_document=locked_document,
+                settlement_date=settlement_date,
+                amount=amount,
+                source_type=source_type,
+                source_cash_account_id=request.data.get('source_cash_account'),
+                source_bank_account_id=request.data.get('source_bank_account'),
+                cash_transaction=cash_tx,
+                note=str(request.data.get('note') or '').strip(),
+                created_by=request.user,
+                updated_by=request.user,
+            )
+            refresh_payable_status(locked_document, actor=request.user)
+        _log_finance_audit(
+            request.user,
+            action='CREATE',
+            entity_type='FinancePayableSettlement',
+            entity_id=int(settlement.id),
+            entity_code=locked_document.code,
+            old_values={},
+            new_values={'payable_document_id': int(locked_document.id), 'amount': str(amount), 'settlement_date': settlement_date.isoformat()},
+            changed_fields=['amount', 'settlement_date'],
+        )
+        return Response(PayableDocumentSerializer(locked_document).data)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền hủy chứng từ phải trả.'}, status=403)
+        document = self.get_object()
+        reason = str(request.data.get('reason') or request.data.get('cancel_reason') or '').strip()
+        if not reason:
+            return Response({'error': 'Bắt buộc nhập lý do hủy chứng từ.'}, status=400)
+        _ensure_finance_month_unlocked(
+            _month_from_date_obj(document.document_date),
+            'Tháng tài chính đã khóa, không thể hủy chứng từ phải trả.',
+        )
+        if document.settled_amount > 0:
+            return Response({'error': 'Chứng từ đã phát sinh thanh toán, không thể hủy.'}, status=400)
+        old_status = document.status
+        document.status = PayableStatus.CANCELLED
+        document.note = ((document.note or '').strip() + f'\n[Huỷ] {reason}').strip()
+        document.updated_by = request.user
+        document.save(update_fields=['status', 'note', 'updated_by', 'updated_at'])
+        _log_finance_audit(
+            request.user,
+            action='CANCEL',
+            entity_type='FinancePayable',
+            entity_id=int(document.id),
+            entity_code=document.code,
+            old_values={'status': old_status},
+            new_values={'status': document.status, 'reason': reason},
+            changed_fields=['status'],
+        )
+        return Response({'status': document.status})
+
+    @action(detail=True, methods=['get'])
+    def settlements(self, request, pk=None):
+        document = self.get_object()
+        items = document.settlements.select_related('source_cash_account', 'source_bank_account', 'cash_transaction').order_by('-settlement_date', '-id')
+        return Response(PayableSettlementSerializer(items, many=True).data)

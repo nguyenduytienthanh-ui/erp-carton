@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { BarChartOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Col, Empty, Input, InputNumber, List, Modal, Row, Select, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, Col, Empty, Input, InputNumber, List, Modal, Row, Select, Space, Spin, Statistic, Switch, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import {
@@ -15,11 +15,10 @@ import {
   type WorkflowPipelineStepMetric,
 } from '../../api/workflowTaskTemplates';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
+import { SafeText as Text } from '../../components/SafeText';
 import { getEntityTypeLabel } from '../../utils/constants';
 import { storage } from '../../utils/storage';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
-
-const { Text } = Typography;
 
 const WINDOW_OPTIONS = [
   { value: 7, label: '7 ngày' },
@@ -55,7 +54,7 @@ function canManageSchedulerAdmin(): boolean {
 
 export default function WorkflowAnalyticsDashboard() {
   type AutomationProfileKey = 'MORNING' | 'MIDDAY' | 'EOD' | 'CUSTOM';
-  const [entityType, setEntityType] = useState<'SalesOrder' | 'Product' | 'Customer'>('SalesOrder');
+  const [entityType, setEntityType] = useState<string>('SalesOrder');
   const [trigger, setTrigger] = useState<WftTrigger>('SUBMIT');
   const [days, setDays] = useState<number>(30);
   const [selectedProfileKey, setSelectedProfileKey] = useState<AutomationProfileKey>('MORNING');
@@ -95,7 +94,7 @@ export default function WorkflowAnalyticsDashboard() {
   const effectiveEntityType = useMemo(() => {
     if (!templates.length) return entityType;
     if (templates.some((t) => t.entity_type === entityType)) return entityType;
-    return templates[0].entity_type as 'SalesOrder' | 'Product' | 'Customer';
+    return templates[0].entity_type;
   }, [templates, entityType]);
 
   const triggerOptionsForEntity = useMemo(() => {
@@ -616,11 +615,11 @@ export default function WorkflowAnalyticsDashboard() {
             <Tag>{WFT_TRIGGER_LABELS[effectiveTrigger] ?? effectiveTrigger}</Tag>
           </Space>
           <Space wrap>
-            <Select<'SalesOrder' | 'Product' | 'Customer'>
+            <Select<string>
               value={entityType}
               onChange={setEntityType}
               style={{ width: 170 }}
-              options={(availableEntityTypes.length ? availableEntityTypes : ['SalesOrder', 'Product', 'Customer']).map((v) => ({ value: v, label: getEntityTypeLabel(v) }))}
+              options={(availableEntityTypes.length ? availableEntityTypes : ['SalesOrder', 'PurchaseOrder', 'ProductionOrder', 'Product', 'Customer']).map((v) => ({ value: v, label: getEntityTypeLabel(v) }))}
             />
             <Select<WftTrigger>
               value={effectiveTrigger}

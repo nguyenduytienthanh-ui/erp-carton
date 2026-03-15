@@ -411,6 +411,48 @@ export interface ShipmentDeliveryConfirmationResponse {
   total_gross_weight_kg?: string;
 }
 
+/** Báo giá (Quote) */
+export type QuoteStatus = 'DRAFT' | 'SENT' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED';
+
+export interface QuoteLine {
+  id: number;
+  line_number: number;
+  product: number;
+  product_code?: string;
+  product_name?: string;
+  qty: string;
+  unit_price: string;
+  discount_pct: string;
+  tax_pct: string;
+  line_subtotal: string;
+  discount_amount: string;
+  tax_amount: string;
+  line_total: string;
+  note: string;
+}
+
+export interface Quote {
+  id: number;
+  code: string;
+  quote_date: string;
+  valid_until: string | null;
+  status: QuoteStatus;
+  reference: string;
+  customer: number | null;
+  customer_name: string | null;
+  currency: string;
+  subtotal: string;
+  discount_total: string;
+  tax_total: string;
+  total: string;
+  notes: string;
+  created_by: number | null;
+  created_at: string;
+  updated_by: number | null;
+  updated_at: string;
+  lines?: QuoteLine[];
+}
+
 export interface PaginatedResponse<T> {
   count: number;
   next: string | null;

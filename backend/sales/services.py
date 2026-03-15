@@ -228,6 +228,17 @@ def get_next_sales_order_code(order_date):
     return seq.get_next_code()
 
 
+def get_next_quote_code(quote_date):
+    """QT-YYYYMM-NNNNN theo kỳ."""
+    period = quote_date.strftime('%Y%m')
+    seq, _ = PeriodSequence.objects.get_or_create(
+        doc_type='QT',
+        period=period,
+        defaults={'current_number': 0, 'padding': 5},
+    )
+    return seq.get_next_code()
+
+
 def build_posted_snapshot(order):
     """Snapshot customer + lines khi Posted để master đổi không ảnh hưởng chứng từ cũ."""
     customer = order.customer
@@ -425,6 +436,12 @@ def get_sales_order_void_blockers(order):
     )
     if active_shipments.exists():
         blockers.append('Đơn đã có phiếu xuất kho POSTED, cần hủy/chứng từ đảo trước khi void.')
+    try:
+        from finance.services import get_sales_order_void_blockers_from_receivable
+
+        blockers.extend(get_sales_order_void_blockers_from_receivable(order))
+    except Exception:
+        pass
     return blockers
 
 
@@ -471,6 +488,12 @@ def post_sales_order(order, user, request=None):
             ip_address=ip,
             user_agent=ua,
         )
+        try:
+            from finance.services import build_receivable_from_sales_order
+
+            build_receivable_from_sales_order(order, actor=user)
+        except Exception:
+            raise
     return True, 'Posted.'
 
 

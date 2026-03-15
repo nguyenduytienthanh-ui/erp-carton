@@ -348,3 +348,112 @@ class SalesOrderPostingLog(models.Model):
         ordering = ['-posted_at']
         verbose_name = 'Sales Order Posting Log'
         verbose_name_plural = 'Sales Order Posting Logs'
+
+
+class QuoteStatus:
+    DRAFT = 'DRAFT'
+    SENT = 'SENT'
+    ACCEPTED = 'ACCEPTED'
+    REJECTED = 'REJECTED'
+    EXPIRED = 'EXPIRED'
+    CHOICES = [
+        (DRAFT, 'Nháp'),
+        (SENT, 'Đã gửi'),
+        (ACCEPTED, 'Khách chấp nhận'),
+        (REJECTED, 'Từ chối'),
+        (EXPIRED, 'Hết hạn'),
+    ]
+
+
+class Quote(models.Model):
+    """Báo giá (Quote) – chứng từ trước đơn hàng."""
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    quote_date = models.DateField(db_index=True)
+    valid_until = models.DateField(null=True, blank=True, db_index=True)
+    status = models.CharField(
+        max_length=20,
+        choices=QuoteStatus.CHOICES,
+        default=QuoteStatus.DRAFT,
+        db_index=True,
+    )
+    reference = models.CharField(max_length=200, blank=True)
+    customer = models.ForeignKey(
+        'core.Customer',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='quotes',
+    )
+    currency = models.CharField(max_length=3, default='VND')
+    subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    discount_total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    tax_total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='quotes_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='quotes_updated',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sales_quotes'
+        ordering = ['-quote_date', '-id']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['quote_date']),
+            models.Index(fields=['valid_until']),
+            models.Index(fields=['status']),
+        ]
+        verbose_name = 'Quote'
+        verbose_name_plural = 'Quotes'
+
+    def __str__(self):
+        return f"{self.code} - {self.quote_date}"
+
+    def recalc_totals(self):
+        from django.db.models import Sum
+        agg = self.lines.aggregate(
+            sub=Sum('line_subtotal'),
+            disc=Sum('discount_amount'),
+            tax=Sum('tax_amount'),
+            total=Sum('line_total'),
+        )
+        self.subtotal = round_money(agg['sub'] or 0)
+        self.discount_total = round_money(agg['disc'] or 0)
+        self.tax_total = round_money(agg['tax'] or 0)
+        self.total = round_money(agg['total'] or 0)
+        self.save(update_fields=['subtotal', 'discount_total', 'tax_total', 'total', 'updated_at'])
+
+
+class QuoteLine(models.Model):
+    """Dòng báo giá."""
+    quote = models.ForeignKey(Quote, on_delete=models.CASCADE, related_name='lines')
+    line_number = models.PositiveIntegerField()
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.PROTECT,
+        related_name='quote_lines',
+    )
+    qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('1'))
+    unit_price = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    discount_pct = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
+    tax_pct = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
+    line_subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    discount_amount = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    tax_amount = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    line_total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    note = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        db_table = 'sales_quote_lines'
+        ordering = ['quote_id', 'line_number']
+        unique_together = [['quote', 'line_number']]
+        verbose_name = 'Quote Line'
+        verbose_name_plural = 'Quote Lines'
+
+    def __str__(self):
+        return f"{self.quote.code}-L{self.line_number}"

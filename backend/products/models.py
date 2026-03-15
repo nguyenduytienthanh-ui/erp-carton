@@ -979,3 +979,108 @@ class PriceChange(models.Model):
             ).quantize(Decimal('0.01'))
         if save:
             self.save(update_fields=['delta_cost_percent', 'delta_sale_percent', 'updated_at'])
+
+
+class BundlePriceChange(models.Model):
+    """Lịch sử thay đổi giá bộ cố định cho ProductBundle."""
+
+    STATUS_PENDING_APPROVAL = 'PENDING_APPROVAL'
+    STATUS_APPROVED_SCHEDULED = 'APPROVED_SCHEDULED'
+    STATUS_ACTIVE_APPLIED = 'ACTIVE_APPLIED'
+    STATUS_REJECTED = 'REJECTED'
+    STATUS_SUPERSEDED = 'SUPERSEDED'
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING_APPROVAL, 'Chờ duyệt'),
+        (STATUS_APPROVED_SCHEDULED, 'Đã duyệt, chờ hiệu lực'),
+        (STATUS_ACTIVE_APPLIED, 'Đang hiệu lực'),
+        (STATUS_REJECTED, 'Từ chối'),
+        (STATUS_SUPERSEDED, 'Đã bị thay thế'),
+    ]
+
+    SOURCE_SYSTEM = 'SYSTEM'
+    SOURCE_MANUAL = 'MANUAL'
+    SOURCE_IMPORT = 'IMPORT'
+    SOURCE_API = 'API'
+
+    SOURCE_CHOICES = [
+        (SOURCE_SYSTEM, 'Hệ thống'),
+        (SOURCE_MANUAL, 'Thủ công'),
+        (SOURCE_IMPORT, 'Nhập dữ liệu'),
+        (SOURCE_API, 'API'),
+    ]
+
+    bundle = models.ForeignKey(
+        ProductBundle,
+        on_delete=models.CASCADE,
+        related_name='price_changes',
+        verbose_name='Bộ sản phẩm',
+    )
+
+    old_fixed_cost_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    new_fixed_cost_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    old_fixed_sale_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    new_fixed_sale_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    old_fixed_commission_per_unit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    new_fixed_commission_per_unit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    old_fixed_commission_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    new_fixed_commission_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    delta_cost = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    delta_sale = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    delta_cost_percent = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
+    delta_sale_percent = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
+
+    reason = models.TextField(blank=True, default='')
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_MANUAL)
+    effective_at = models.DateTimeField(null=True, blank=True)
+    applied_at = models.DateTimeField(null=True, blank=True)
+    batch_code = models.CharField(max_length=64, blank=True, default='')
+
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_ACTIVE_APPLIED)
+    submitted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='submitted_bundle_price_changes',
+    )
+    approved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='approved_bundle_price_changes',
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    reject_reason = models.TextField(blank=True, default='')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'product_bundle_price_changes'
+        ordering = ['-effective_at', '-created_at']
+        indexes = [
+            models.Index(fields=['bundle', 'created_at']),
+            models.Index(fields=['status', 'created_at']),
+            models.Index(fields=['bundle', 'effective_at']),
+            models.Index(fields=['batch_code']),
+        ]
+
+    def __str__(self):
+        return f"{self.bundle.sellable_product.code} - {self.status} ({self.created_at:%Y-%m-%d %H:%M})"
+
+    def recalculate_delta_percents(self, save=False):
+        self.delta_cost_percent = None
+        self.delta_sale_percent = None
+        if self.old_fixed_cost_price not in (None, Decimal('0')):
+            self.delta_cost_percent = (
+                (self.delta_cost or Decimal('0')) / self.old_fixed_cost_price * Decimal('100')
+            ).quantize(Decimal('0.01'))
+        if self.old_fixed_sale_price not in (None, Decimal('0')):
+            self.delta_sale_percent = (
+                (self.delta_sale or Decimal('0')) / self.old_fixed_sale_price * Decimal('100')
+            ).quantize(Decimal('0.01'))
+        if save:
+            self.save(update_fields=['delta_cost_percent', 'delta_sale_percent', 'updated_at'])

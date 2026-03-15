@@ -23,8 +23,18 @@ from inventory.views import (
     InventoryTransactionViewSet,
     InventoryReservationViewSet,
     InventoryStockViewSet,
+    StocktakeViewSet,
+    OutboundShipmentViewSet,
 )
-from sales.views import SalesOrderViewSet
+from sales.views import SalesOrderViewSet, QuoteViewSet
+from purchasing.views import (
+    MaterialPurchasePriceViewSet,
+    SupplierViewSet,
+    PurchaseOrderViewSet,
+    PurchaseReceiptViewSet,
+    PurchaseRequestViewSet,
+)
+from production.views import ProductionOrderViewSet, ProductionIssueViewSet, ProductionReceiptViewSet
 from workforce.views import (
     AttendanceRecordViewSet,
     BonusPenaltyRecordViewSet,
@@ -39,6 +49,8 @@ from finance.views import (
     BankAccountViewSet,
     CashAccountViewSet,
     CashTransactionViewSet,
+    PayableDocumentViewSet,
+    ReceivableDocumentViewSet,
     TransactionCategoryViewSet,
 )
 
@@ -68,7 +80,18 @@ router.register(r'inventory/locations', WarehouseLocationViewSet, basename='inve
 router.register(r'inventory/transactions', InventoryTransactionViewSet, basename='inventory-transaction')
 router.register(r'inventory/reservations', InventoryReservationViewSet, basename='inventory-reservation')
 router.register(r'inventory/stock', InventoryStockViewSet, basename='inventory-stock')
+router.register(r'inventory/stocktakes', StocktakeViewSet, basename='inventory-stocktake')
+router.register(r'inventory/shipments', OutboundShipmentViewSet, basename='inventory-shipment')
+router.register(r'purchasing/suppliers', SupplierViewSet, basename='purchasing-supplier')
+router.register(r'purchasing/material-prices', MaterialPurchasePriceViewSet, basename='purchasing-material-price')
+router.register(r'purchasing/orders', PurchaseOrderViewSet, basename='purchasing-order')
+router.register(r'purchasing/receipts', PurchaseReceiptViewSet, basename='purchasing-receipt')
+router.register(r'purchasing/requests', PurchaseRequestViewSet, basename='purchasing-request')
+router.register(r'production/orders', ProductionOrderViewSet, basename='production-order')
+router.register(r'production/issues', ProductionIssueViewSet, basename='production-issue')
+router.register(r'production/receipts', ProductionReceiptViewSet, basename='production-receipt')
 router.register(r'sales/orders', SalesOrderViewSet, basename='salesorder')
+router.register(r'sales/quotes', QuoteViewSet, basename='quote')
 router.register(r'tasks', TaskViewSet, basename='task')
 router.register(r'workflow-task-templates', WorkflowTaskTemplateViewSet, basename='workflowtasktemplate')
 router.register(r'workforce/employees', EmployeeViewSet, basename='workforce-employee')
@@ -83,6 +106,8 @@ router.register(r'finance/cash-accounts', CashAccountViewSet, basename='finance-
 router.register(r'finance/cash-transactions', CashTransactionViewSet, basename='finance-cash-transaction')
 router.register(r'finance/advance-transactions', AdvanceTransactionViewSet, basename='finance-advance-transaction')
 router.register(r'finance/advance-settlements', AdvanceSettlementViewSet, basename='finance-advance-settlement')
+router.register(r'finance/receivables', ReceivableDocumentViewSet, basename='finance-receivable')
+router.register(r'finance/payables', PayableDocumentViewSet, basename='finance-payable')
 
 urlpatterns = [
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),

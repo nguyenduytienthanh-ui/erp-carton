@@ -807,12 +807,12 @@ const CustomerList = () => {
         </span>
       ),
     },
-    { title: 'Tên KH', dataIndex: 'name', key: 'name', sortField: 'name', width: 180, ellipsis: true, render: (n: string) => <span className="cell-text-primary">{n ?? '-'}</span> },
-    { title: 'Công ty', dataIndex: 'company_name', key: 'company_name', sortField: 'company_name', width: 160, ellipsis: true, render: (t: string) => <span className="cell-text-secondary">{t ?? '-'}</span> },
+    { title: 'Tên KH', dataIndex: 'name', key: 'name', sortField: 'name', width: 180, render: (n: string) => <div className="ant-table-cell-ellipsis cell-text-primary">{n ?? '-'}</div> },
+    { title: 'Công ty', dataIndex: 'company_name', key: 'company_name', sortField: 'company_name', width: 160, render: (t: string) => <div className="ant-table-cell-ellipsis cell-text-secondary">{t ?? '-'}</div> },
     { title: 'Điện thoại', dataIndex: 'phone', key: 'phone', sortField: 'phone', width: 110, render: (t: string) => t ?? '-' },
-    { title: 'Email', dataIndex: 'email', key: 'email', sortField: 'email', width: 160, ellipsis: true, render: (t: string) => t ?? '-' },
+    { title: 'Email', dataIndex: 'email', key: 'email', sortField: 'email', width: 160, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
     { title: 'Mã số thuế', dataIndex: 'tax_code', key: 'tax_code', sortField: 'tax_code', width: 100, render: (t: string) => t ?? '-' },
-    { title: 'Người liên hệ', dataIndex: 'contact_person', key: 'contact_person', sortField: 'contact_person', width: 120, ellipsis: true, render: (t: string) => t ?? '-' },
+    { title: 'Người liên hệ', dataIndex: 'contact_person', key: 'contact_person', sortField: 'contact_person', width: 120, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
     { title: 'SĐT liên hệ', dataIndex: 'contact_phone', key: 'contact_phone', sortField: 'contact_phone', width: 110, render: (t: string) => t ?? '-' },
     {
       title: 'Hạn TT (ngày)',

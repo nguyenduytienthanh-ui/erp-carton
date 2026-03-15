@@ -5,7 +5,15 @@ from decimal import Decimal
 from django.apps import apps
 from django.db.models import Sum
 from rest_framework import serializers
-from sales.models import SalesOrder, SalesOrderLine, SalesOrderDeliveryPlan, SalesOrderStatus
+from sales.document_policy import calc_line_totals
+from sales.models import (
+    SalesOrder,
+    SalesOrderLine,
+    SalesOrderDeliveryPlan,
+    SalesOrderStatus,
+    Quote,
+    QuoteLine,
+)
 from sales.services import (
     build_sales_order_line_trace_code,
     merge_sales_order_line_product_snapshot,
@@ -309,3 +317,110 @@ class SalesOrderSerializer(serializers.ModelSerializer):
             )
             for plan in delivery_plans
         ])
+
+
+class QuoteLineSerializer(serializers.ModelSerializer):
+    product_code = serializers.CharField(source='product.code', read_only=True)
+    product_name = serializers.CharField(source='product.name', read_only=True)
+
+    class Meta:
+        model = QuoteLine
+        fields = [
+            'id', 'line_number', 'product', 'product_code', 'product_name',
+            'qty', 'unit_price', 'discount_pct', 'tax_pct',
+            'line_subtotal', 'discount_amount', 'tax_amount', 'line_total', 'note',
+        ]
+        read_only_fields = ['line_subtotal', 'discount_amount', 'tax_amount', 'line_total']
+
+    def validate_qty(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError('Số lượng phải > 0.')
+        return value
+
+    def validate(self, attrs):
+        qty = attrs.get('qty', getattr(self.instance, 'qty', None))
+        unit_price = attrs.get('unit_price', getattr(self.instance, 'unit_price', None))
+        discount_pct = attrs.get('discount_pct', getattr(self.instance, 'discount_pct', Decimal('0')))
+        tax_pct = attrs.get('tax_pct', getattr(self.instance, 'tax_pct', Decimal('0')))
+        if qty is not None and unit_price is not None:
+            sub, disc, tax, total = calc_line_totals(qty, unit_price, discount_pct, tax_pct)
+            attrs['line_subtotal'] = sub
+            attrs['discount_amount'] = disc
+            attrs['tax_amount'] = tax
+            attrs['line_total'] = total
+        return attrs
+
+
+class QuoteSerializer(serializers.ModelSerializer):
+    lines = QuoteLineSerializer(many=True, required=False)
+    customer_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Quote
+        fields = [
+            'id', 'code', 'quote_date', 'valid_until', 'status', 'reference',
+            'customer', 'customer_name', 'currency',
+            'subtotal', 'discount_total', 'tax_total', 'total', 'notes',
+            'created_by', 'created_at', 'updated_by', 'updated_at', 'lines',
+        ]
+        read_only_fields = [
+            'code', 'subtotal', 'discount_total', 'tax_total', 'total',
+            'created_by', 'created_at', 'updated_by', 'updated_at',
+        ]
+
+    def get_customer_name(self, obj):
+        if obj.customer_id and getattr(obj, 'customer', None):
+            return obj.customer.name
+        return None
+
+    def create(self, validated_data, **kwargs):
+        from django.db import transaction
+        from sales.services import get_next_quote_code
+        lines_data = validated_data.pop('lines', [])
+        quote_date = validated_data.get('quote_date')
+        if not quote_date:
+            raise serializers.ValidationError({'quote_date': 'Thiếu ngày báo giá.'})
+        validated_data['code'] = get_next_quote_code(quote_date)
+        validated_data.update({k: v for k, v in kwargs.items() if k in ('created_by', 'updated_by')})
+        with transaction.atomic():
+            quote = Quote.objects.create(**validated_data)
+            for i, line_data in enumerate(lines_data, start=1):
+                line_data['line_number'] = line_data.get('line_number') or i
+                line_data['quote'] = quote
+                qty = line_data.get('qty', Decimal('1'))
+                unit_price = line_data.get('unit_price', Decimal('0'))
+                discount_pct = line_data.get('discount_pct', Decimal('0'))
+                tax_pct = line_data.get('tax_pct', Decimal('0'))
+                sub, disc, tax, total = calc_line_totals(qty, unit_price, discount_pct, tax_pct)
+                line_data['line_subtotal'] = sub
+                line_data['discount_amount'] = disc
+                line_data['tax_amount'] = tax
+                line_data['line_total'] = total
+                QuoteLine.objects.create(**line_data)
+            quote.recalc_totals()
+        return quote
+
+    def update(self, instance, validated_data):
+        from django.db import transaction
+        lines_data = validated_data.pop('lines', None)
+        with transaction.atomic():
+            for k, v in validated_data.items():
+                setattr(instance, k, v)
+            instance.save()
+            if lines_data is not None:
+                instance.lines.all().delete()
+                for i, line_data in enumerate(lines_data, start=1):
+                    line_data['line_number'] = line_data.get('line_number') or i
+                    line_data['quote'] = instance
+                    qty = line_data.get('qty', Decimal('1'))
+                    unit_price = line_data.get('unit_price', Decimal('0'))
+                    discount_pct = line_data.get('discount_pct', Decimal('0'))
+                    tax_pct = line_data.get('tax_pct', Decimal('0'))
+                    sub, disc, tax, total = calc_line_totals(qty, unit_price, discount_pct, tax_pct)
+                    line_data['line_subtotal'] = sub
+                    line_data['discount_amount'] = disc
+                    line_data['tax_amount'] = tax
+                    line_data['line_total'] = total
+                    QuoteLine.objects.create(**line_data)
+                instance.recalc_totals()
+        return instance

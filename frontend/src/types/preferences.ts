@@ -15,7 +15,7 @@ export interface PreferencesConfig {
     order: 'asc' | 'desc';
   };
   pageSize?: number;
-  activeTab?: number;
+  activeTab?: number | string;
   expandedSections?: string[];
   theme?: string;
   language?: string;

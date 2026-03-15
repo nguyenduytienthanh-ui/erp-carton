@@ -453,6 +453,48 @@ class InventoryTransaction(models.Model):
         blank=True,
         related_name='inventory_transactions',
     )
+    purchase_order = models.ForeignKey(
+        'purchasing.PurchaseOrder',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='inventory_transactions',
+    )
+    purchase_order_line = models.ForeignKey(
+        'purchasing.PurchaseOrderLine',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='inventory_transactions',
+    )
+    purchase_receipt = models.ForeignKey(
+        'purchasing.PurchaseReceipt',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='inventory_transactions',
+    )
+    production_order = models.ForeignKey(
+        'production.ProductionOrder',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='inventory_transactions',
+    )
+    production_issue = models.ForeignKey(
+        'production.ProductionIssue',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='inventory_transactions',
+    )
+    production_receipt = models.ForeignKey(
+        'production.ProductionReceipt',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='inventory_transactions',
+    )
     reservation = models.ForeignKey(
         'inventory.InventoryReservation',
         on_delete=models.SET_NULL,
@@ -510,6 +552,11 @@ class InventoryTransaction(models.Model):
             models.Index(fields=['status']),
             models.Index(fields=['product', 'warehouse']),
             models.Index(fields=['sales_order']),
+            models.Index(fields=['purchase_order']),
+            models.Index(fields=['purchase_receipt']),
+            models.Index(fields=['production_order']),
+            models.Index(fields=['production_issue']),
+            models.Index(fields=['production_receipt']),
         ]
 
     def __str__(self):
@@ -629,3 +676,110 @@ class InventoryReservation(models.Model):
             - (self.fulfilled_qty or Decimal('0'))
         )
         return remaining if remaining > 0 else Decimal('0')
+
+
+class StocktakeStatus:
+    DRAFT = 'DRAFT'
+    COMPLETED = 'COMPLETED'
+    CANCELLED = 'CANCELLED'
+    CHOICES = [
+        (DRAFT, 'Nháp'),
+        (COMPLETED, 'Đã hoàn tất'),
+        (CANCELLED, 'Đã hủy'),
+    ]
+
+
+class Stocktake(models.Model):
+    """Phiếu kiểm tồn: kho + ngày kiểm, trạng thái."""
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    warehouse = models.ForeignKey(
+        Warehouse,
+        on_delete=models.PROTECT,
+        related_name='stocktakes',
+    )
+    count_date = models.DateField(db_index=True)
+    status = models.CharField(
+        max_length=20,
+        choices=StocktakeStatus.CHOICES,
+        default=StocktakeStatus.DRAFT,
+        db_index=True,
+    )
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_stocktakes',
+    )
+    completed_at = models.DateTimeField(null=True, blank=True)
+    completed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='completed_stocktakes',
+    )
+
+    class Meta:
+        db_table = 'inventory_stocktakes'
+        ordering = ['-count_date', '-id']
+        indexes = [
+            models.Index(fields=['count_date']),
+            models.Index(fields=['status']),
+            models.Index(fields=['warehouse']),
+        ]
+        verbose_name = 'Phiếu kiểm tồn'
+        verbose_name_plural = 'Phiếu kiểm tồn'
+
+    def __str__(self):
+        return f'{self.code} - {self.warehouse_id} - {self.count_date}'
+
+
+class StocktakeLine(models.Model):
+    """Dòng kiểm tồn: sản phẩm, tồn hệ thống, tồn đếm, chênh lệch."""
+    stocktake = models.ForeignKey(
+        Stocktake,
+        on_delete=models.CASCADE,
+        related_name='lines',
+    )
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.PROTECT,
+        related_name='stocktake_lines',
+    )
+    warehouse = models.ForeignKey(
+        Warehouse,
+        on_delete=models.PROTECT,
+        related_name='stocktake_lines',
+    )
+    line_number = models.PositiveIntegerField()
+    system_qty = models.DecimalField(
+        max_digits=18,
+        decimal_places=4,
+        default=Decimal('0'),
+        help_text='Tồn theo hệ thống tại thời điểm kiểm',
+    )
+    count_qty = models.DecimalField(
+        max_digits=18,
+        decimal_places=4,
+        default=Decimal('0'),
+        help_text='Số lượng đếm thực tế',
+    )
+    note = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        db_table = 'inventory_stocktake_lines'
+        unique_together = [['stocktake', 'line_number']]
+        ordering = ['stocktake', 'line_number']
+        verbose_name = 'Dòng kiểm tồn'
+        verbose_name_plural = 'Dòng kiểm tồn'
+
+    def __str__(self):
+        return f'{self.stocktake_id}#{self.line_number}'
+
+    @property
+    def variance_qty(self):
+        return (self.count_qty or Decimal('0')) - (self.system_qty or Decimal('0'))

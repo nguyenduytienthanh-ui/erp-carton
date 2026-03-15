@@ -34,6 +34,12 @@ body {
   transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
 }
 
+/* Sidebar menu item click feedback */
+.app-desktop-sider .ant-menu-dark .ant-menu-item:active {
+  transform: scale(0.97);
+  transition: transform 0.1s ease;
+}
+
 /* Better scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
@@ -420,6 +426,16 @@ body {
 .enterprise-data-table .cell-text-primary {
   font-weight: 500;
   color: #111827;
+}
+
+.enterprise-data-table .cell-text-child {
+  font-weight: 500;
+  color: #cf1322;
+}
+
+.cell-text-child {
+  font-weight: 500;
+  color: #cf1322;
 }
 
 .enterprise-data-table .cell-text-secondary {

@@ -17,6 +17,10 @@ export interface ActivityItem {
     changed_fields?: string[] | null;
     content?: string;
     mentions?: string[];
+    entity_scope?: string;
+    related_entity_id?: number | null;
+    related_entity_code?: string | null;
+    related_entity_name?: string | null;
   };
 }
 
@@ -75,6 +79,9 @@ export function buildHistorySearchContent(
     getHistoryActionLabelVi(item.action),
     item.user ?? '',
     d.content ?? '',
+    d.entity_scope ?? '',
+    d.related_entity_code ?? '',
+    d.related_entity_name ?? '',
     ...allFieldKeys.map((f) => getFieldLabel(f)),
     ...Object.values(oldVals).map(String),
     ...Object.values(newVals).map(String),

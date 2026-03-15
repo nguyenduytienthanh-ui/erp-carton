@@ -1,6 +1,7 @@
 """
 Tests for WorkflowTaskTemplate: generate, idempotency, preview.
 """
+from decimal import Decimal
 from django.test import TestCase
 from django.utils import timezone as django_timezone
 from rest_framework.test import APIClient
@@ -24,6 +25,8 @@ from core.workflow_services import (
     execute_insight_actions_batch,
     get_insight_action_history,
 )
+from products.models import Product, ProductUnit
+from production.models import ProductionOrder, ProductionOrderStatus
 from sales.models import SalesOrder, SalesOrderStatus
 from datetime import date, timedelta
 
@@ -169,6 +172,17 @@ class WorkflowTaskTemplateSerializerValidationTest(TestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn('assign_rule', serializer.errors)
 
+    def test_new_trigger_release_is_supported(self):
+        serializer = WorkflowTaskTemplateSerializer(data={
+            'entity_type': 'ProductionOrder',
+            'trigger': 'RELEASE',
+            'title_template': 'Phát lệnh {entity_code}',
+            'assign_rule': {},
+            'due_in_days': 1,
+            'priority': 'HIGH',
+        })
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
 
 class WorkflowPipelineBoardTest(TestCase):
     def setUp(self):
@@ -213,6 +227,30 @@ class WorkflowPipelineBoardTest(TestCase):
         first_col_cards = data['columns'][0]['cards']
         card = next(c for c in first_col_cards if c['entity_id'] == self.order.id)
         self.assertEqual(card['sla_state'], 'AT_RISK')
+
+    def test_pipeline_board_supports_production_order_entity(self):
+        unit = ProductUnit.objects.create(code='PIPE', name='Pipe Unit')
+        product = Product.objects.create(code='PIPE-FG', name='Pipeline FG', unit=unit, sale_price=Decimal('1'))
+        prod_order = ProductionOrder.objects.create(
+            code='MO-PIPE-001',
+            order_date=date.today(),
+            status=ProductionOrderStatus.RELEASED,
+            product=product,
+            planned_qty=Decimal('10'),
+            owner=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        _make_template(
+            entity_type='ProductionOrder',
+            trigger='RELEASE',
+            title='Chuẩn bị lệnh {entity_code}',
+            sort_order=1,
+            depends_on_previous=False,
+        )
+        data = build_workflow_pipeline_board(entity_type='ProductionOrder', trigger='RELEASE', limit=50)
+        first_col_cards = data['columns'][0]['cards']
+        self.assertTrue(any(c['entity_id'] == prod_order.id for c in first_col_cards))
 
     def test_pipeline_board_marks_over_wip_when_exceed_limit(self):
         first_template = WorkflowTaskTemplate.objects.filter(
@@ -525,6 +563,14 @@ class WorkflowPipelineBoardTest(TestCase):
         self.assertEqual(data['items'][0]['depends_on_previous'], False)
         self.assertTrue(any(str(tag).startswith('sla:') for tag in data['items'][0]['tags']))
 
+    def test_get_workflow_playbook_suggestions_for_purchase_and_production(self):
+        purchase = get_workflow_playbook_suggestions(entity_type='PurchaseOrder')
+        production = get_workflow_playbook_suggestions(entity_type='ProductionOrder')
+        self.assertTrue(purchase['items'])
+        self.assertTrue(production['items'])
+        self.assertEqual(purchase['items'][0]['entity_type'], 'PurchaseOrder')
+        self.assertEqual(production['items'][0]['entity_type'], 'ProductionOrder')
+
     def test_apply_workflow_playbook_creates_templates(self):
         result = apply_workflow_playbook(
             entity_type='SalesOrder',
@@ -577,6 +623,8 @@ class WorkflowPipelineLiveUpdatesApiTest(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.user = _make_user('pipeline_live_user')
+        self.user.is_staff = True
+        self.user.save(update_fields=['is_staff'])
         self.client.force_authenticate(user=self.user)
         self.order = SalesOrder.objects.create(
             code='SO-LIVE-001',

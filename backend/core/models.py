@@ -1514,6 +1514,10 @@ class WorkflowTaskTemplate(models.Model):
     TRIGGER_REJECT = 'REJECT'
     TRIGGER_POST = 'POST'
     TRIGGER_VOID = 'VOID'
+    TRIGGER_RELEASE = 'RELEASE'
+    TRIGGER_ISSUE = 'ISSUE'
+    TRIGGER_RECEIVE = 'RECEIVE'
+    TRIGGER_CANCEL = 'CANCEL'
     TRIGGER_MANUAL = 'MANUAL'
     TRIGGER_CHOICES = [
         (TRIGGER_SUBMIT, 'Nộp duyệt'),
@@ -1521,6 +1525,10 @@ class WorkflowTaskTemplate(models.Model):
         (TRIGGER_REJECT, 'Từ chối'),
         (TRIGGER_POST, 'Đăng sổ (Post)'),
         (TRIGGER_VOID, 'Hủy (Void)'),
+        (TRIGGER_RELEASE, 'Phát lệnh'),
+        (TRIGGER_ISSUE, 'Cấp vật tư'),
+        (TRIGGER_RECEIVE, 'Ghi nhận nhập/nhận'),
+        (TRIGGER_CANCEL, 'Hủy chứng từ'),
         (TRIGGER_MANUAL, 'Thủ công'),
     ]
 

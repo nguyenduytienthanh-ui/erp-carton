@@ -164,6 +164,82 @@ WORKFLOW_PLAYBOOKS = {
             ],
         },
     },
+    'PurchaseOrder': {
+        'STANDARD_PROCUREMENT': {
+            'name': 'Quy trinh mua hang tieu chuan',
+            'description': 'Theo doi don mua tu luc gui duyet den khi nhan hang.',
+            'items': [
+                {
+                    'trigger': 'SUBMIT',
+                    'title_template': 'Rà soát nhu cầu đơn mua {entity_code}',
+                    'description_template': 'Kiểm tra số lượng, giá mua, thời hạn nhận và mức độ cấp bách.',
+                    'due_in_days': 1,
+                    'priority': 'HIGH',
+                    'is_blocking': True,
+                    'blocks_action': 'APPROVE',
+                    'tags': ['mua-hang', 'tham-dinh', 'sla:8h'],
+                },
+                {
+                    'trigger': 'SUBMIT',
+                    'title_template': 'Xác nhận NCC và lead time {entity_code}',
+                    'description_template': 'Làm việc với nhà cung cấp để chốt điều kiện nhận hàng và thanh toán.',
+                    'due_in_days': 1,
+                    'priority': 'MEDIUM',
+                    'is_blocking': True,
+                    'blocks_action': 'APPROVE',
+                    'tags': ['nha-cung-cap', 'lead-time', 'sla:8h'],
+                },
+                {
+                    'trigger': 'APPROVE',
+                    'title_template': 'Theo dõi nhận hàng đơn mua {entity_code}',
+                    'description_template': 'Chủ động bám tiến độ, chuẩn bị kho và xử lý trường hợp giao thiếu.',
+                    'due_in_days': 2,
+                    'priority': 'MEDIUM',
+                    'is_blocking': True,
+                    'blocks_action': 'RECEIVE',
+                    'tags': ['nhan-hang', 'kho', 'sla:24h'],
+                },
+            ],
+        },
+    },
+    'ProductionOrder': {
+        'STANDARD_PRODUCTION': {
+            'name': 'Quy trinh san xuat tieu chuan',
+            'description': 'Theo doi lenh san xuat tu phat lenh den nhap kho thanh pham.',
+            'items': [
+                {
+                    'trigger': 'RELEASE',
+                    'title_template': 'Chuẩn bị vật tư cho lệnh {entity_code}',
+                    'description_template': 'Kiểm tra vật tư, nguồn cấp và sẵn sàng trước khi chạy lệnh.',
+                    'due_in_days': 1,
+                    'priority': 'HIGH',
+                    'is_blocking': True,
+                    'blocks_action': 'ISSUE',
+                    'tags': ['san-xuat', 'vat-tu', 'sla:8h'],
+                },
+                {
+                    'trigger': 'RELEASE',
+                    'title_template': 'Điều phối công đoạn lệnh {entity_code}',
+                    'description_template': 'Theo dõi tiến độ các công đoạn và gỡ nghẽn trong suốt ca sản xuất.',
+                    'due_in_days': 1,
+                    'priority': 'HIGH',
+                    'is_blocking': True,
+                    'blocks_action': 'RECEIVE',
+                    'tags': ['dieu-do', 'cong-doan', 'sla:12h'],
+                },
+                {
+                    'trigger': 'RECEIVE',
+                    'title_template': 'QC thành phẩm lệnh {entity_code}',
+                    'description_template': 'Rà soát thành phẩm đã nhập kho và xác nhận chất lượng cuối.',
+                    'due_in_days': 1,
+                    'priority': 'MEDIUM',
+                    'is_blocking': False,
+                    'blocks_action': '',
+                    'tags': ['qc', 'thanh-pham', 'sla:8h'],
+                },
+            ],
+        },
+    },
 }
 
 
@@ -639,6 +715,42 @@ def build_workflow_pipeline_board(
                 'team': order.team.name if order.team else '',
                 'updated_at': order.updated_at.isoformat() if order.updated_at else None,
             }
+    elif entity_type == 'PurchaseOrder':
+        from purchasing.models import PurchaseOrder
+
+        purchase_orders = list(
+            PurchaseOrder.objects
+            .select_related('owner', 'team')
+            .exclude(status='DRAFT')
+            .order_by('-updated_at', '-id')[:limit]
+        )
+        entities = [o.id for o in purchase_orders]
+        for order in purchase_orders:
+            entity_meta[order.id] = {
+                'entity_code': order.code or f'#{order.id}',
+                'status': order.status or '',
+                'owner': order.owner.get_full_name() if order.owner else '',
+                'team': order.team.name if order.team else '',
+                'updated_at': order.updated_at.isoformat() if order.updated_at else None,
+            }
+    elif entity_type == 'ProductionOrder':
+        from production.models import ProductionOrder
+
+        production_orders = list(
+            ProductionOrder.objects
+            .select_related('owner', 'team')
+            .exclude(status='DRAFT')
+            .order_by('-updated_at', '-id')[:limit]
+        )
+        entities = [o.id for o in production_orders]
+        for order in production_orders:
+            entity_meta[order.id] = {
+                'entity_code': order.code or f'#{order.id}',
+                'status': order.status or '',
+                'owner': order.owner.get_full_name() if order.owner else '',
+                'team': order.team.name if order.team else '',
+                'updated_at': order.updated_at.isoformat() if order.updated_at else None,
+            }
     else:
         pipeline_tasks = (
             Task.objects
@@ -834,6 +946,18 @@ def _can_operate_pipeline(entity_type: str, entity_id: int, actor, current_task=
         from sales.models import SalesOrder
 
         order = SalesOrder.objects.filter(id=entity_id).only('owner_id').first()
+        if order and order.owner_id == actor.id:
+            return True
+    if entity_type == 'PurchaseOrder':
+        from purchasing.models import PurchaseOrder
+
+        order = PurchaseOrder.objects.filter(id=entity_id).only('owner_id').first()
+        if order and order.owner_id == actor.id:
+            return True
+    if entity_type == 'ProductionOrder':
+        from production.models import ProductionOrder
+
+        order = ProductionOrder.objects.filter(id=entity_id).only('owner_id').first()
         if order and order.owner_id == actor.id:
             return True
     return False

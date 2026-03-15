@@ -45,11 +45,32 @@ MODULE_PERMISSION_FIELDS = [
         'changed_type': 'finance',
     },
     {
+        'field': 'purchasing_manage',
+        'label': 'Mua hàng',
+        'resource': 'PURCHASING',
+        'action': 'MANAGE',
+        'changed_type': 'purchasing',
+    },
+    {
+        'field': 'production_manage',
+        'label': 'Sản xuất',
+        'resource': 'PRODUCTION',
+        'action': 'MANAGE',
+        'changed_type': 'production',
+    },
+    {
         'field': 'ops_view',
         'label': 'Điều hành',
         'resource': 'OPS',
         'action': 'VIEW',
         'changed_type': 'ops',
+    },
+    {
+        'field': 'reports_view',
+        'label': 'Trung tâm báo cáo',
+        'resource': 'CORE',
+        'action': 'VIEW_REPORTS',
+        'changed_type': 'reports',
     },
     {
         'field': 'workflow_view',
@@ -2064,36 +2085,115 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({"error": "entity_type and entity_id required"}, status=400)
         
         activities = []
-        
-        # Get audit logs
+
         from .models import AuditLog, Comment
-        
-        audit_logs = AuditLog.objects.filter(
-            entity_type=entity_type,
-            entity_id=entity_id
-        ).order_by('-created_at')[:20]
-        
+
+        related_product_map = {}
+        related_bundle_map = {}
+        related_product_ids = []
+        related_bundle_ids = []
+        root_product = None
+
+        if str(entity_type).lower() == 'product':
+            try:
+                from products.models import Product, ProductBundle
+
+                selected_product = (
+                    Product.objects
+                    .select_related('parent')
+                    .get(pk=entity_id)
+                )
+                root_product = selected_product.parent or selected_product
+                family_products = list(
+                    Product.objects
+                    .filter(models.Q(id=root_product.id) | models.Q(parent_id=root_product.id))
+                    .select_related('parent')
+                    .order_by('id')
+                )
+                related_product_map = {item.id: item for item in family_products}
+                related_product_ids = list(related_product_map.keys())
+                bundles = list(
+                    ProductBundle.objects
+                    .filter(sellable_product_id=root_product.id)
+                    .select_related('sellable_product', 'primary_product')
+                )
+                related_bundle_map = {item.id: item for item in bundles}
+                related_bundle_ids = list(related_bundle_map.keys())
+            except Exception:
+                related_product_ids = [int(entity_id)] if str(entity_id).isdigit() else []
+                related_bundle_ids = []
+
+        if str(entity_type).lower() == 'product' and related_product_ids:
+            audit_logs = (
+                AuditLog.objects
+                .filter(
+                    models.Q(entity_type='Product', entity_id__in=related_product_ids)
+                    | models.Q(entity_type='ProductBundle', entity_id__in=related_bundle_ids)
+                )
+                .select_related('user')
+                .order_by('-created_at')[:80]
+            )
+        else:
+            audit_logs = (
+                AuditLog.objects
+                .filter(entity_type=entity_type, entity_id=entity_id)
+                .select_related('user')
+                .order_by('-created_at')[:20]
+            )
+
         for log in audit_logs:
+            details = {
+                'old_values': log.old_values,
+                'new_values': log.new_values,
+                'changed_fields': log.changed_fields,
+            }
+            if log.entity_type == 'Product':
+                related_product = related_product_map.get(log.entity_id)
+                details.update({
+                    'entity_scope': 'COMPONENT_PRODUCT' if related_product and related_product.parent_id else 'PRIMARY_PRODUCT',
+                    'related_entity_id': related_product.id if related_product else log.entity_id,
+                    'related_entity_code': related_product.code if related_product else log.entity_code,
+                    'related_entity_name': related_product.name if related_product else None,
+                })
+            elif log.entity_type == 'ProductBundle':
+                related_bundle = related_bundle_map.get(log.entity_id)
+                details.update({
+                    'entity_scope': 'BUNDLE_CONFIG',
+                    'related_entity_id': related_bundle.sellable_product_id if related_bundle else None,
+                    'related_entity_code': related_bundle.sellable_product.code if related_bundle else log.entity_code,
+                    'related_entity_name': related_bundle.sellable_product.name if related_bundle else None,
+                })
             activities.append({
                 'type': 'audit',
                 'action': log.action,
                 'user': log.user.username if log.user else None,
                 'timestamp': log.created_at,
-                'details': {
-                    'old_values': log.old_values,
-                    'new_values': log.new_values,
-                    'changed_fields': log.changed_fields,
-                }
+                'details': details,
             })
-        
-        # Get comments
-        comments = Comment.objects.filter(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            is_deleted=False
-        ).order_by('-created_at')[:20]
-        
+
+        if str(entity_type).lower() == 'product' and related_product_ids:
+            comments = (
+                Comment.objects
+                .filter(
+                    entity_type='Product',
+                    entity_id__in=related_product_ids,
+                    is_deleted=False,
+                )
+                .order_by('-created_at')[:40]
+            )
+        else:
+            comments = (
+                Comment.objects
+                .filter(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    is_deleted=False,
+                )
+                .order_by('-created_at')[:20]
+            )
+
         for comment in comments:
+            related_product = related_product_map.get(comment.entity_id)
             activities.append({
                 'type': 'comment',
                 'action': 'COMMENT',
@@ -2102,16 +2202,24 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
                 'details': {
                     'content': comment.content,
                     'mentions': comment.mentions,
+                    'entity_scope': 'COMPONENT_PRODUCT' if related_product and related_product.parent_id else 'PRIMARY_PRODUCT',
+                    'related_entity_id': related_product.id if related_product else comment.entity_id,
+                    'related_entity_code': related_product.code if related_product else None,
+                    'related_entity_name': related_product.name if related_product else None,
                 }
             })
-        
-        # Get product price workflow events (avoid duplicate with direct UPDATE audit logs)
-        if str(entity_type).lower() == 'product':
+
+        if str(entity_type).lower() == 'product' and related_product_ids:
             try:
-                from products.models import PriceChange
-                price_events = PriceChange.objects.filter(
-                    product_id=entity_id
-                ).exclude(status=PriceChange.STATUS_ACTIVE_APPLIED).order_by('-created_at')[:20]
+                from products.models import BundlePriceChange, PriceChange
+
+                price_events = (
+                    PriceChange.objects
+                    .select_related('product', 'submitted_by', 'approved_by')
+                    .filter(product_id__in=related_product_ids)
+                    .exclude(status=PriceChange.STATUS_ACTIVE_APPLIED)
+                    .order_by('-created_at')[:40]
+                )
                 for event in price_events:
                     action = {
                         PriceChange.STATUS_PENDING_APPROVAL: 'SUBMIT',
@@ -2119,10 +2227,11 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
                         PriceChange.STATUS_REJECTED: 'REJECT',
                         PriceChange.STATUS_SUPERSEDED: 'UPDATE',
                     }.get(event.status, 'UPDATE')
+                    actor = event.approved_by if action in {'APPROVE', 'REJECT'} and event.approved_by else event.submitted_by
                     activities.append({
                         'type': 'audit',
                         'action': action,
-                        'user': event.submitted_by.username if event.submitted_by else None,
+                        'user': actor.username if actor else None,
                         'timestamp': event.created_at,
                         'details': {
                             'old_values': {
@@ -2153,10 +2262,70 @@ class ActivityStreamViewSet(viewsets.ReadOnlyModelViewSet):
                                 f"Lý do: {event.reason}"
                                 + (f" | Hiệu lực: {event.effective_at.strftime('%d/%m/%Y %H:%M')}" if event.effective_at else '')
                             ).strip() if event.reason or event.effective_at else None,
+                            'entity_scope': 'COMPONENT_PRODUCT' if event.product.parent_id else 'PRIMARY_PRODUCT',
+                            'related_entity_id': event.product_id,
+                            'related_entity_code': event.product.code,
+                            'related_entity_name': event.product.name,
+                        }
+                    })
+
+                bundle_price_events = (
+                    BundlePriceChange.objects
+                    .select_related('bundle__sellable_product', 'submitted_by', 'approved_by')
+                    .filter(bundle_id__in=related_bundle_ids)
+                    .exclude(status=BundlePriceChange.STATUS_ACTIVE_APPLIED)
+                    .order_by('-created_at')[:40]
+                )
+                for event in bundle_price_events:
+                    action = {
+                        BundlePriceChange.STATUS_PENDING_APPROVAL: 'SUBMIT',
+                        BundlePriceChange.STATUS_APPROVED_SCHEDULED: 'APPROVE',
+                        BundlePriceChange.STATUS_REJECTED: 'REJECT',
+                        BundlePriceChange.STATUS_SUPERSEDED: 'UPDATE',
+                    }.get(event.status, 'UPDATE')
+                    actor = event.approved_by if action in {'APPROVE', 'REJECT'} and event.approved_by else event.submitted_by
+                    activities.append({
+                        'type': 'audit',
+                        'action': action,
+                        'user': actor.username if actor else None,
+                        'timestamp': event.created_at,
+                        'details': {
+                            'old_values': {
+                                'bundle_fixed_cost_price': str(event.old_fixed_cost_price) if event.old_fixed_cost_price is not None else None,
+                                'bundle_fixed_sale_price': str(event.old_fixed_sale_price) if event.old_fixed_sale_price is not None else None,
+                                'bundle_fixed_commission_per_unit': str(event.old_fixed_commission_per_unit) if event.old_fixed_commission_per_unit is not None else None,
+                                'bundle_fixed_commission_percent': str(event.old_fixed_commission_percent) if event.old_fixed_commission_percent is not None else None,
+                            },
+                            'new_values': {
+                                'bundle_fixed_cost_price': str(event.new_fixed_cost_price) if event.new_fixed_cost_price is not None else None,
+                                'bundle_fixed_sale_price': str(event.new_fixed_sale_price) if event.new_fixed_sale_price is not None else None,
+                                'bundle_fixed_commission_per_unit': str(event.new_fixed_commission_per_unit) if event.new_fixed_commission_per_unit is not None else None,
+                                'bundle_fixed_commission_percent': str(event.new_fixed_commission_percent) if event.new_fixed_commission_percent is not None else None,
+                                'bundle_price_change_reason': event.reason or '',
+                                'bundle_price_effective_at': event.effective_at.isoformat() if event.effective_at else None,
+                                'reject_reason': event.reject_reason or '',
+                                'delta_cost_percent': str(event.delta_cost_percent) if event.delta_cost_percent is not None else None,
+                                'delta_sale_percent': str(event.delta_sale_percent) if event.delta_sale_percent is not None else None,
+                                'bundle_price_change_status': event.status,
+                            },
+                            'changed_fields': [
+                                'bundle_fixed_cost_price', 'bundle_fixed_sale_price',
+                                'bundle_fixed_commission_per_unit', 'bundle_fixed_commission_percent',
+                                *(['bundle_price_change_reason'] if event.reason else []),
+                                *(['bundle_price_effective_at'] if event.effective_at else []),
+                                *(['reject_reason'] if event.reject_reason else []),
+                            ],
+                            'content': (
+                                f"Giá bộ cố định | Lý do: {event.reason}"
+                                + (f" | Hiệu lực: {event.effective_at.strftime('%d/%m/%Y %H:%M')}" if event.effective_at else '')
+                            ).strip() if event.reason or event.effective_at else 'Giá bộ cố định',
+                            'entity_scope': 'BUNDLE_FIXED',
+                            'related_entity_id': event.bundle.sellable_product_id,
+                            'related_entity_code': event.bundle.sellable_product.code,
+                            'related_entity_name': event.bundle.sellable_product.name,
                         }
                     })
             except Exception:
-                # Activity stream should still work even if price event query fails.
                 pass
         
         # Sort by timestamp (newest first)

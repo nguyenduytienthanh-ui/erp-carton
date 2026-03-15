@@ -42,6 +42,8 @@ const PAGE_KEY = 'workflow-task-templates-list';
 
 const ENTITY_TYPE_OPTIONS = [
   { value: 'SalesOrder', label: 'Đơn hàng' },
+  { value: 'PurchaseOrder', label: 'Đơn mua' },
+  { value: 'ProductionOrder', label: 'Lệnh sản xuất' },
   { value: 'Product', label: 'Sản phẩm' },
   { value: 'Customer', label: 'Khách hàng' },
 ];
@@ -197,7 +199,7 @@ export default function WorkflowTaskTemplateList() {
   });
 
   const [playbookOpen, setPlaybookOpen] = useState(false);
-  const [playbookEntityType, setPlaybookEntityType] = useState<'SalesOrder' | 'Product' | 'Customer'>('SalesOrder');
+  const [playbookEntityType, setPlaybookEntityType] = useState<string>('SalesOrder');
   const [playbookScenario, setPlaybookScenario] = useState<string | undefined>(undefined);
   const [overwriteExisting, setOverwriteExisting] = useState(false);
 
@@ -348,10 +350,9 @@ export default function WorkflowTaskTemplateList() {
       key: 'title_template',
       dataIndex: 'title_template',
       title: 'Tiêu đề mẫu',
-      ellipsis: true,
       render: (v: string, record) => (
         <Tooltip title={record.description_template || undefined}>
-          <span style={{ fontWeight: 500 }}>{v}</span>
+          <div className="ant-table-cell-ellipsis" style={{ fontWeight: 500 }}>{v}</div>
         </Tooltip>
       ),
     },
@@ -739,13 +740,13 @@ export default function WorkflowTaskTemplateList() {
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Space wrap>
-            <Select<'SalesOrder' | 'Product' | 'Customer'>
+            <Select<string>
               value={playbookEntityType}
               onChange={(v) => {
                 setPlaybookEntityType(v);
                 setPlaybookScenario(undefined);
               }}
-              options={ENTITY_TYPE_OPTIONS.map((x) => ({ value: x.value as 'SalesOrder' | 'Product' | 'Customer', label: x.label }))}
+              options={ENTITY_TYPE_OPTIONS.map((x) => ({ value: x.value, label: x.label }))}
               style={{ width: 240 }}
             />
             <Select<string>

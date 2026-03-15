@@ -788,10 +788,42 @@ export default function SalesOrderList() {
     staleTime: 10_000,
     refetchOnWindowFocus: false,
   });
-  const detailLines = useMemo(
-    () => detailQuery.data?.lines ?? detailOrder?.lines ?? [],
-    [detailQuery.data?.lines, detailOrder?.lines]
-  );
+  const detailLines = useMemo(() => {
+    const lines = detailQuery.data?.lines ?? detailOrder?.lines ?? [];
+    const parents: SalesOrderLine[] = [];
+    const childrenByParent = new Map<number, SalesOrderLine[]>();
+    const orphans: SalesOrderLine[] = [];
+    for (const line of lines) {
+      const parentId = line.product_snapshot?.parent_id;
+      if (parentId == null) {
+        parents.push(line);
+      } else {
+        const siblings = childrenByParent.get(parentId) ?? [];
+        siblings.push(line);
+        childrenByParent.set(parentId, siblings);
+      }
+    }
+    const parentProductIds = new Set(parents.map((p) => p.product));
+    for (const line of lines) {
+      const parentId = line.product_snapshot?.parent_id;
+      if (parentId != null && !parentProductIds.has(parentId)) {
+        orphans.push(line);
+      }
+    }
+    const result: SalesOrderLine[] = [];
+    for (const parent of parents) {
+      result.push(parent);
+      const children = childrenByParent.get(parent.product);
+      if (children) {
+        children.sort((a, b) => (a.line_number ?? 0) - (b.line_number ?? 0));
+        result.push(...children);
+      }
+    }
+    for (const orphan of orphans) {
+      if (!result.includes(orphan)) result.push(orphan);
+    }
+    return result;
+  }, [detailQuery.data?.lines, detailOrder?.lines]);
   const reserveCandidateLines = useMemo(
     () => detailLines.filter((line) => Number(line.remaining_reservation_qty || 0) > 0),
     [detailLines]
@@ -980,6 +1012,13 @@ export default function SalesOrderList() {
       await invalidate();
       messageApi.success('Đã tạo batch reservation');
       setBatchReserveOpen(false);
+    },
+    onError: (error) => messageApi.error(getToastMessage(error)),
+  });
+  const invoicePdfMutation = useMutation({
+    mutationFn: salesApi.downloadInvoicePdf,
+    onSuccess: (blob, id) => {
+      downloadBlobFile(blob, `hoa_don_${detailOrder?.code || id}.pdf`);
     },
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
@@ -2725,6 +2764,12 @@ export default function SalesOrderList() {
         </Descriptions>
         <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button
+            onClick={() => detailOrder && invoicePdfMutation.mutate(detailOrder.id)}
+            loading={invoicePdfMutation.isPending}
+          >
+            In hóa đơn
+          </Button>
+          <Button
             onClick={() => detailOrder && packingSlipMutation.mutate(detailOrder.id)}
             loading={packingSlipMutation.isPending}
           >
@@ -2749,7 +2794,7 @@ export default function SalesOrderList() {
           `Post` chỉ chốt chứng từ bán hàng. Bước trừ tồn thực tế là `Xuất kho` từ reservation bên dưới.
         </div>
 
-        <Divider orientation="left" style={{ marginTop: 24 }}>Dòng hàng</Divider>
+        <Divider style={{ marginTop: 24 }}>Dòng hàng</Divider>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Button
             disabled={!detailOrder || !['APPROVED', 'POSTED'].includes(detailOrder.status) || reserveCandidateLines.length === 0}
@@ -2788,12 +2833,15 @@ export default function SalesOrderList() {
             {
               title: 'Sản phẩm',
               width: 220,
-              render: (_, row) => (
-                <div>
-                  <div>{`${row.product_code || row.internal_product_code || ''} - ${row.product_name_snapshot || row.product_name || ''}`}</div>
-                  <div style={{ color: '#8c8c8c', fontSize: 12 }}>{row.uom || row.product_snapshot?.unit_name || '-'}</div>
-                </div>
-              ),
+              render: (_, row) => {
+                const isChild = row.product_snapshot?.parent_id != null;
+                return (
+                  <div>
+                    <div style={isChild ? { color: '#cf1322' } : undefined}>{`${row.product_code || row.internal_product_code || ''} - ${row.product_name_snapshot || row.product_name || ''}`}</div>
+                    <div style={{ color: '#8c8c8c', fontSize: 12 }}>{row.uom || row.product_snapshot?.unit_name || '-'}</div>
+                  </div>
+                );
+              },
             },
             {
               title: 'Trace / QR value',
@@ -2858,7 +2906,7 @@ export default function SalesOrderList() {
           scroll={{ x: 1950 }}
         />
 
-        <Divider orientation="left" style={{ marginTop: 24 }}>Kế hoạch giao hàng</Divider>
+        <Divider style={{ marginTop: 24 }}>Kế hoạch giao hàng</Divider>
         <Table
           rowKey="delivery_plan_id"
           size="small"
@@ -2890,7 +2938,7 @@ export default function SalesOrderList() {
           scroll={{ x: 1180 }}
         />
 
-        <Divider orientation="left" style={{ marginTop: 24 }}>Đặt trữ (Reservation)</Divider>
+        <Divider style={{ marginTop: 24 }}>Đặt trữ (Reservation)</Divider>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Button
             type="primary"
@@ -2950,7 +2998,7 @@ export default function SalesOrderList() {
           scroll={{ x: 1000 }}
         />
 
-        <Divider orientation="left" style={{ marginTop: 24 }}>Phiếu xuất kho (Shipment)</Divider>
+        <Divider style={{ marginTop: 24 }}>Phiếu xuất kho (Shipment)</Divider>
         <Table
           rowKey="id"
           size="small"

@@ -85,7 +85,11 @@ function ApplyTemplateModal({
         trigger: trigger as WftTrigger,
       }),
     onSuccess: (data) => {
-      message.success(`Đã tạo ${data.created_count} nhiệm vụ từ template.`);
+      if (data.created_count === 0) {
+        message.info('Tất cả nhiệm vụ từ template đã tồn tại, không tạo thêm.');
+      } else {
+        message.success(`Đã tạo ${data.created_count} nhiệm vụ từ template.`);
+      }
       onGenerated();
       onClose();
     },
@@ -106,11 +110,10 @@ function ApplyTemplateModal({
     {
       title: 'Tiêu đề',
       dataIndex: 'title',
-      ellipsis: true,
       render: (v: string, r: GeneratePreviewItem) => (
-        <span style={{ color: r.would_skip ? '#bfbfbf' : undefined, textDecoration: r.would_skip ? 'line-through' : undefined }}>
+        <div className="ant-table-cell-ellipsis" style={r.would_skip ? { color: '#bfbfbf', textDecoration: 'line-through' } : undefined}>
           {v}
-        </span>
+        </div>
       ),
     },
     {
@@ -169,12 +172,25 @@ function ApplyTemplateModal({
           {previewed && toCreate.length > 0 && (
             <Button
               type="primary"
-              onClick={() => generateMutation.mutate()}
+              onClick={() => {
+                Modal.confirm({
+                  title: 'Xác nhận tạo nhiệm vụ',
+                  content: `Bạn sắp tạo ${toCreate.length} nhiệm vụ từ template. Tiếp tục?`,
+                  okText: 'Tạo',
+                  cancelText: 'Hủy',
+                  onOk: () => generateMutation.mutate(),
+                  zIndex: 1070,
+                });
+              }}
               loading={generateMutation.isPending}
+              disabled={generateMutation.isPending}
               icon={<ThunderboltOutlined />}
             >
               Tạo {toCreate.length} nhiệm vụ
             </Button>
+          )}
+          {previewed && toCreate.length === 0 && toSkip.length > 0 && (
+            <Tag color="orange" style={{ lineHeight: '30px' }}>Tất cả đã tồn tại — không cần tạo thêm</Tag>
           )}
         </Space>
       }

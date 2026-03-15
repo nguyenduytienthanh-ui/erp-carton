@@ -70,6 +70,13 @@ export function canViewOpsHub(): boolean {
   return hasAnyRole(authz.roleNames, ['admin', 'manager', 'operation-manager', 'ops-manager', 'quan-ly', 'quanly']);
 }
 
+export function canViewReportsCenter(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'CORE', 'VIEW_REPORTS')) return true;
+  return false;
+}
+
 export function canViewWorkflowData(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
@@ -150,6 +157,200 @@ export function canManageInventoryData(): boolean {
     'ops-manager',
     'product-manager',
     'sales-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+/** Quyền kiểm tồn: INVENTORY:STOCKTAKE hoặc INVENTORY:MANAGE */
+export function canManageStocktake(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'INVENTORY', 'MANAGE')) return true;
+  if (hasPermission(authz.permissions, 'INVENTORY', 'STOCKTAKE')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'operation-manager',
+    'ops-manager',
+    'product-manager',
+    'sales-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canManagePurchasingData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PURCHASING', 'MANAGE')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'operation-manager',
+    'ops-manager',
+    'product-manager',
+    'finance-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canManageProductionData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTION', 'MANAGE')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'operation-manager',
+    'ops-manager',
+    'product-manager',
+    'finance-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canSubmitProductionOrders(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'SUBMIT')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'operation-manager',
+    'ops-manager',
+    'product-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canApproveProductionOrders(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'APPROVE')) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'REJECT')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'finance-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canReleaseProductionOrders(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'RELEASE')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'operation-manager',
+    'ops-manager',
+    'product-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canIssueProductionMaterials(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'ISSUE')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'operation-manager',
+    'ops-manager',
+    'product-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canReceiveProductionOutput(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'RECEIVE')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'operation-manager',
+    'ops-manager',
+    'product-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canCancelProductionOrders(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'CANCEL')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'finance-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canSubmitPurchaseOrders(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PURCHASEORDER', 'SUBMIT')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'operation-manager',
+    'ops-manager',
+    'product-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canApprovePurchaseOrders(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PURCHASEORDER', 'APPROVE')) return true;
+  if (hasPermission(authz.permissions, 'PURCHASEORDER', 'REJECT')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'finance-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canReceivePurchaseOrders(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PURCHASEORDER', 'RECEIVE')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'operation-manager',
+    'ops-manager',
+    'product-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function canCancelPurchaseOrders(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PURCHASEORDER', 'CANCEL')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'finance-manager',
     'quan-ly',
     'quanly',
   ]);

@@ -512,7 +512,7 @@ export default function CashBook() {
             <Select
               value={filters.transaction_type || undefined}
               onChange={(value) => {
-                setFilters({ transaction_type: (value ?? '') as '' | CashTransactionType });
+                setFilters((prev) => ({ ...prev, transaction_type: (value ?? '') as '' | CashTransactionType }));
                 setPage(1);
               }}
               placeholder="Lọc theo loại"
@@ -524,10 +524,21 @@ export default function CashBook() {
               ]}
               allowClear={false}
             />
+            <Select
+              value={filters.source_bank_account && Number.isFinite(filters.source_bank_account) ? filters.source_bank_account : undefined}
+              onChange={(value) => {
+                setFilters((prev) => ({ ...prev, source_bank_account: value != null ? value : '' }));
+                setPage(1);
+              }}
+              placeholder="Ngân hàng (nguồn)"
+              style={{ width: 200 }}
+              allowClear
+              options={bankAccounts.filter((b) => b.is_active).map((b) => ({ value: b.id, label: `${b.code} - ${b.bank_name}` }))}
+            />
             <Button
               onClick={() => {
                 setSearchInput('');
-                setFilters({ transaction_type: '' });
+                setFilters({ transaction_type: '', source_bank_account: '' });
                 setPage(1);
               }}
             >
@@ -550,26 +561,48 @@ export default function CashBook() {
             </div>
           </div>
 
-          <Table
-            rowKey="id"
-            loading={transactionsQuery.isLoading}
-            columns={transactionColumns}
-            dataSource={transactions}
-            scroll={{ x: 1250 }}
-            pagination={{
-              current: page,
-              pageSize,
-              total: transactionTotal,
-              showSizeChanger: true,
-              pageSizeOptions: [10, 20, 50, 100],
-              onChange: async (nextPage, nextPageSize) => {
-                setPage(nextPage);
-                if (nextPageSize !== pageSize) {
-                  await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
-                }
-              },
-            }}
-          />
+          {transactions.length === 0 && !transactionsQuery.isLoading ? (
+            <div style={{ padding: '40px 24px', textAlign: 'center', color: '#8c8c8c' }}>
+              {intentSearch || (intentFilters.transaction_type || intentFilters.source_bank_account) ? (
+                <div>
+                  <div style={{ marginBottom: 12 }}>Không tìm thấy giao dịch phù hợp.</div>
+                  <Button
+                    type="link"
+                    onClick={() => {
+                      setSearchInput('');
+                      setFilters({ transaction_type: '', source_bank_account: '' });
+                      setPage(1);
+                    }}
+                  >
+                    Xóa bộ lọc
+                  </Button>
+                </div>
+              ) : (
+                <div>Chưa có giao dịch. Nhấn <strong>Thêm giao dịch</strong> để thêm mới.</div>
+              )}
+            </div>
+          ) : (
+            <Table
+              rowKey="id"
+              loading={transactionsQuery.isLoading}
+              columns={transactionColumns}
+              dataSource={transactions}
+              scroll={{ x: 1250 }}
+              pagination={{
+                current: page,
+                pageSize,
+                total: transactionTotal,
+                showSizeChanger: true,
+                pageSizeOptions: [10, 20, 50, 100],
+                onChange: async (nextPage, nextPageSize) => {
+                  setPage(nextPage);
+                  if (nextPageSize !== pageSize) {
+                    await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
+                  }
+                },
+              }}
+            />
+          )}
         </>
       )}
 

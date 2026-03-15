@@ -715,3 +715,87 @@ class SalesOrderPdfExportTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('application/pdf', response['Content-Type'])
         self.assertIn('shipment_delivery_proof_', response['Content-Disposition'])
+
+
+class SalesOrderSummaryApiTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='sales_summary_user', password='test', is_staff=True, is_superuser=True)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.unit = ProductUnit.objects.create(code='SUM', name='Summary Unit')
+        self.product = Product.objects.create(code='SUM-BOX', name='Summary Box', unit=self.unit, sale_price=Decimal('100'))
+
+    def test_summary_endpoint_returns_operational_metrics(self):
+        today = timezone.localdate()
+        draft_order = SalesOrder.objects.create(
+            code='SO-SUM-001',
+            doc_type='SO',
+            order_date=today,
+            status=SalesOrderStatus.DRAFT,
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        SalesOrderLine.objects.create(
+            sales_order=draft_order,
+            line_number=1,
+            product=self.product,
+            qty=Decimal('1'),
+            unit_price=Decimal('100'),
+        )
+        draft_order.recalc_totals()
+
+        submitted_order = SalesOrder.objects.create(
+            code='SO-SUM-002',
+            doc_type='SO',
+            order_date=today,
+            status=SalesOrderStatus.SUBMITTED,
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+            submitted_by=self.user,
+            submitted_at=timezone.now(),
+        )
+        SalesOrderLine.objects.create(
+            sales_order=submitted_order,
+            line_number=1,
+            product=self.product,
+            qty=Decimal('2'),
+            unit_price=Decimal('100'),
+        )
+        submitted_order.recalc_totals()
+
+        approved_order = SalesOrder.objects.create(
+            code='SO-SUM-003',
+            doc_type='SO',
+            order_date=today,
+            status=SalesOrderStatus.APPROVED,
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+            approved_by=self.user,
+            approved_at=timezone.now(),
+        )
+        approved_line = SalesOrderLine.objects.create(
+            sales_order=approved_order,
+            line_number=1,
+            product=self.product,
+            qty=Decimal('3'),
+            unit_price=Decimal('100'),
+        )
+        approved_order.recalc_totals()
+        SalesOrderDeliveryPlan.objects.create(
+            line=approved_line,
+            delivery_date=today - timedelta(days=1),
+            qty=Decimal('3'),
+            delivered_qty=Decimal('0'),
+        )
+        ok, msg = post_sales_order(approved_order, self.user)
+        self.assertTrue(ok, msg)
+
+        response = self.client.get('/api/sales/orders/summary/')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['draft_count'], 1)
+        self.assertEqual(response.data['submitted_count'], 1)
+        self.assertEqual(response.data['posted_count'], 1)
+        self.assertEqual(response.data['overdue_delivery_count'], 1)

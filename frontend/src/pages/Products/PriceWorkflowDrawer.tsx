@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Drawer, Empty, Input, InputNumber, Modal, Space, Table, Tag, message } from 'antd';
+import { Alert, Button, Card, Descriptions, Empty, Input, InputNumber, Modal, Segmented, Space, Table, Tag, message } from 'antd';
 import { CheckOutlined, CloseOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import FormattedPrice from '../../components/FormattedPrice';
 import { parseApiError } from '../../shared/apiError';
 import type { Product } from '../../types/product';
-import { productsApi, type PriceChangeRecord } from '../../api/products';
+import { productsApi, type BundlePriceChangeRecord, type PriceChangeRecord } from '../../api/products';
 
 interface PriceWorkflowDrawerProps {
   open: boolean;
@@ -22,6 +22,9 @@ const PRICE_STATUS_META: Record<string, { label: string; color: string }> = {
   REJECTED: { label: 'Từ chối', color: 'red' },
   SUPERSEDED: { label: 'Đã bị thay thế', color: 'default' },
 };
+
+type WorkflowScope = 'PRODUCT' | 'BUNDLE_FIXED';
+type WorkflowRecord = PriceChangeRecord | BundlePriceChangeRecord;
 
 const normalizeDateTimeLocal = (value: string): string | undefined => {
   const raw = value.trim();
@@ -46,6 +49,10 @@ const renderMoneyText = (value?: string | null) => <FormattedPrice value={value 
 
 const renderPercentText = (value?: string | null) => `${toNumber(value).toLocaleString('vi-VN')}%`;
 
+const getScopeTitle = (scope: WorkflowScope): string => (
+  scope === 'PRODUCT' ? 'Giá mã hàng' : 'Giá bộ cố định'
+);
+
 export default function PriceWorkflowDrawer({
   open,
   productId,
@@ -54,9 +61,10 @@ export default function PriceWorkflowDrawer({
   onRefresh,
 }: PriceWorkflowDrawerProps) {
   const queryClient = useQueryClient();
+  const [scope, setScope] = useState<WorkflowScope>('PRODUCT');
   const [submitModalOpen, setSubmitModalOpen] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
-  const [targetRejectChange, setTargetRejectChange] = useState<PriceChangeRecord | null>(null);
+  const [targetRejectChange, setTargetRejectChange] = useState<WorkflowRecord | null>(null);
   const [priceNewCost, setPriceNewCost] = useState<number | null>(null);
   const [priceNewSale, setPriceNewSale] = useState<number | null>(null);
   const [priceNewCommissionPerUnit, setPriceNewCommissionPerUnit] = useState<number | null>(null);
@@ -79,15 +87,91 @@ export default function PriceWorkflowDrawer({
   });
 
   const activeProduct = product ?? initialProduct ?? null;
-  const pendingChanges = useMemo(
-    () => priceChanges.filter((item) => item.status === 'PENDING_APPROVAL'),
-    [priceChanges],
+  const hasBundle = Boolean(activeProduct?.bundle_id && activeProduct?.bundle_definition);
+  const bundleFixedEnabled = activeProduct?.bundle_pricing_mode === 'FIXED_BUNDLE';
+
+  const { data: bundlePriceChanges = [], isLoading: bundleChangesLoading, refetch: refetchBundleChanges } = useQuery({
+    queryKey: ['products', 'bundle-price-changes', productId, activeProduct?.bundle_id ?? null],
+    queryFn: () => productsApi.getBundlePriceChanges(productId!),
+    enabled: open && !!productId && hasBundle,
+  });
+
+  useEffect(() => {
+    if (!open || !activeProduct) return;
+    setScope(activeProduct.bundle_pricing_mode === 'FIXED_BUNDLE' ? 'BUNDLE_FIXED' : 'PRODUCT');
+  }, [open, activeProduct]);
+
+  const currentValues = useMemo(() => {
+    if (!activeProduct) {
+      return {
+        cost: 0,
+        sale: 0,
+        commissionPerUnit: 0,
+        commissionPercent: 0,
+      };
+    }
+    if (scope === 'BUNDLE_FIXED') {
+      const bundle = activeProduct.bundle_definition;
+      return {
+        cost: toNumber(bundle?.fixed_cost_price),
+        sale: toNumber(bundle?.fixed_sale_price),
+        commissionPerUnit: toNumber(bundle?.fixed_commission_per_unit),
+        commissionPercent: toNumber(bundle?.fixed_commission_percent),
+      };
+    }
+    return {
+      cost: toNumber(activeProduct.cost_price),
+      sale: toNumber(activeProduct.sale_price),
+      commissionPerUnit: toNumber(activeProduct.commission_per_unit),
+      commissionPercent: toNumber(activeProduct.commission_percent),
+    };
+  }, [activeProduct, scope]);
+
+  const scheduledBundleChange = useMemo(
+    () => bundlePriceChanges.find((item) => item.status === 'APPROVED_SCHEDULED') ?? null,
+    [bundlePriceChanges]
   );
+
+  const scheduledValues = useMemo(() => {
+    if (scope === 'PRODUCT') {
+      return activeProduct?.has_scheduled_price_change
+        ? {
+            effectiveAt: activeProduct.next_price_effective_at,
+            cost: activeProduct.next_price_cost,
+            sale: activeProduct.next_price_sale,
+            commissionPerUnit: activeProduct.next_price_commission_per_unit,
+            commissionPercent: activeProduct.next_price_commission_percent,
+          }
+        : null;
+    }
+    return scheduledBundleChange
+      ? {
+          effectiveAt: scheduledBundleChange.effective_at,
+          cost: scheduledBundleChange.new_cost_price,
+          sale: scheduledBundleChange.new_sale_price,
+          commissionPerUnit: scheduledBundleChange.new_commission_per_unit,
+          commissionPercent: scheduledBundleChange.new_commission_percent,
+        }
+      : null;
+  }, [activeProduct, scheduledBundleChange, scope]);
+
+  const currentRecords = useMemo<WorkflowRecord[]>(
+    () => (scope === 'PRODUCT' ? priceChanges : bundlePriceChanges),
+    [bundlePriceChanges, priceChanges, scope]
+  );
+
+  const pendingChanges = useMemo(
+    () => currentRecords.filter((item) => item.status === 'PENDING_APPROVAL'),
+    [currentRecords]
+  );
+
+  const currentLoading = productLoading || (scope === 'PRODUCT' ? changesLoading : bundleChangesLoading);
 
   const refreshAll = async () => {
     await Promise.all([
       refetchProduct(),
       refetchChanges(),
+      refetchBundleChanges(),
       queryClient.invalidateQueries({ queryKey: ['products'] }),
       queryClient.invalidateQueries({ queryKey: ['products', 'activity'] }),
     ]);
@@ -96,18 +180,22 @@ export default function PriceWorkflowDrawer({
 
   useEffect(() => {
     if (!open || !activeProduct) return;
-    setPriceNewCost(toNumber(activeProduct.cost_price));
-    setPriceNewSale(toNumber(activeProduct.sale_price));
-    setPriceNewCommissionPerUnit(toNumber(activeProduct.commission_per_unit));
-    setPriceNewCommissionPercent(toNumber(activeProduct.commission_percent));
-  }, [open, activeProduct]);
+    setPriceNewCost(currentValues.cost);
+    setPriceNewSale(currentValues.sale);
+    setPriceNewCommissionPerUnit(currentValues.commissionPerUnit);
+    setPriceNewCommissionPercent(currentValues.commissionPercent);
+  }, [open, activeProduct, currentValues]);
 
   const openSubmitModal = () => {
     if (!activeProduct) return;
-    setPriceNewCost(toNumber(activeProduct.cost_price));
-    setPriceNewSale(toNumber(activeProduct.sale_price));
-    setPriceNewCommissionPerUnit(toNumber(activeProduct.commission_per_unit));
-    setPriceNewCommissionPercent(toNumber(activeProduct.commission_percent));
+    if (scope === 'BUNDLE_FIXED' && !bundleFixedEnabled) {
+      message.warning('Bộ này chưa dùng chế độ Giá bộ cố định.');
+      return;
+    }
+    setPriceNewCost(currentValues.cost);
+    setPriceNewSale(currentValues.sale);
+    setPriceNewCommissionPerUnit(currentValues.commissionPerUnit);
+    setPriceNewCommissionPercent(currentValues.commissionPercent);
     setPriceReason('');
     setPriceEffectiveAt('');
     setSubmitModalOpen(true);
@@ -115,19 +203,25 @@ export default function PriceWorkflowDrawer({
 
   const handleSubmitPriceChange = async () => {
     if (!activeProduct) return;
+    if (scope === 'BUNDLE_FIXED' && !bundleFixedEnabled) {
+      message.warning('Bộ này chưa dùng chế độ Giá bộ cố định.');
+      return;
+    }
     const reason = priceReason.trim();
     if (!reason) {
       message.warning('Vui lòng nhập lý do đề xuất thay đổi giá.');
       return;
     }
-    const currentCost = toNumber(activeProduct.cost_price);
-    const currentSale = toNumber(activeProduct.sale_price);
-    const currentCommissionPerUnit = toNumber(activeProduct.commission_per_unit);
-    const currentCommissionPercent = toNumber(activeProduct.commission_percent);
+
+    const currentCost = currentValues.cost;
+    const currentSale = currentValues.sale;
+    const currentCommissionPerUnit = currentValues.commissionPerUnit;
+    const currentCommissionPercent = currentValues.commissionPercent;
     const nextCost = priceNewCost ?? currentCost;
     const nextSale = priceNewSale ?? currentSale;
     const nextCommissionPerUnit = priceNewCommissionPerUnit ?? currentCommissionPerUnit;
     const nextCommissionPercent = priceNewCommissionPercent ?? currentCommissionPercent;
+
     if (
       nextCost === currentCost
       && nextSale === currentSale
@@ -141,43 +235,59 @@ export default function PriceWorkflowDrawer({
       message.warning('Đơn giá mới phải lớn hơn hoặc bằng giá vốn mới.');
       return;
     }
+
     setSubmitting(true);
     try {
-      await productsApi.submitPriceChange(activeProduct.id, {
-        new_cost_price: nextCost,
-        new_sale_price: nextSale,
-        new_commission_per_unit: nextCommissionPerUnit,
-        new_commission_percent: nextCommissionPercent,
-        reason,
-        effective_at: normalizeDateTimeLocal(priceEffectiveAt),
-      });
-      message.success('Đã gửi đề xuất thay đổi giá.');
+      if (scope === 'PRODUCT') {
+        await productsApi.submitPriceChange(activeProduct.id, {
+          new_cost_price: nextCost,
+          new_sale_price: nextSale,
+          new_commission_per_unit: nextCommissionPerUnit,
+          new_commission_percent: nextCommissionPercent,
+          reason,
+          effective_at: normalizeDateTimeLocal(priceEffectiveAt),
+        });
+      } else {
+        await productsApi.submitBundlePriceChange(activeProduct.id, {
+          new_cost_price: nextCost,
+          new_sale_price: nextSale,
+          new_commission_per_unit: nextCommissionPerUnit,
+          new_commission_percent: nextCommissionPercent,
+          reason,
+          effective_at: normalizeDateTimeLocal(priceEffectiveAt),
+        });
+      }
+      message.success(`Đã gửi đề xuất thay đổi ${scope === 'PRODUCT' ? 'giá mã hàng' : 'giá bộ'}.`);
       setSubmitModalOpen(false);
       await refreshAll();
     } catch (err: unknown) {
       const { generalMessage } = parseApiError(err);
-      message.error(generalMessage || 'Gửi đề xuất thay đổi giá thất bại.');
+      message.error(generalMessage || `Gửi đề xuất thay đổi ${scope === 'PRODUCT' ? 'giá mã hàng' : 'giá bộ'} thất bại.`);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleApprove = async (change: PriceChangeRecord) => {
+  const handleApprove = async (change: WorkflowRecord) => {
     if (!activeProduct) return;
     setSubmitting(true);
     try {
-      await productsApi.approvePriceChange(activeProduct.id, change.id);
-      message.success('Đã duyệt đề xuất giá.');
+      if (scope === 'PRODUCT') {
+        await productsApi.approvePriceChange(activeProduct.id, change.id);
+      } else {
+        await productsApi.approveBundlePriceChange(activeProduct.id, change.id);
+      }
+      message.success(`Đã duyệt đề xuất ${scope === 'PRODUCT' ? 'giá mã hàng' : 'giá bộ'}.`);
       await refreshAll();
     } catch (err: unknown) {
       const { generalMessage } = parseApiError(err);
-      message.error(generalMessage || 'Duyệt đề xuất giá thất bại.');
+      message.error(generalMessage || `Duyệt đề xuất ${scope === 'PRODUCT' ? 'giá mã hàng' : 'giá bộ'} thất bại.`);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const openRejectModal = (change: PriceChangeRecord) => {
+  const openRejectModal = (change: WorkflowRecord) => {
     setTargetRejectChange(change);
     setPriceRejectReason('');
     setRejectModalOpen(true);
@@ -192,14 +302,18 @@ export default function PriceWorkflowDrawer({
     }
     setSubmitting(true);
     try {
-      await productsApi.rejectPriceChange(activeProduct.id, targetRejectChange.id, rejectReason);
-      message.success('Đã từ chối đề xuất giá.');
+      if (scope === 'PRODUCT') {
+        await productsApi.rejectPriceChange(activeProduct.id, targetRejectChange.id, rejectReason);
+      } else {
+        await productsApi.rejectBundlePriceChange(activeProduct.id, targetRejectChange.id, rejectReason);
+      }
+      message.success(`Đã từ chối đề xuất ${scope === 'PRODUCT' ? 'giá mã hàng' : 'giá bộ'}.`);
       setRejectModalOpen(false);
       setTargetRejectChange(null);
       await refreshAll();
     } catch (err: unknown) {
       const { generalMessage } = parseApiError(err);
-      message.error(generalMessage || 'Từ chối đề xuất giá thất bại.');
+      message.error(generalMessage || `Từ chối đề xuất ${scope === 'PRODUCT' ? 'giá mã hàng' : 'giá bộ'} thất bại.`);
     } finally {
       setSubmitting(false);
     }
@@ -210,7 +324,7 @@ export default function PriceWorkflowDrawer({
       title: 'Trạng thái',
       key: 'status',
       width: 160,
-      render: (_: unknown, row: PriceChangeRecord) => {
+      render: (_: unknown, row: WorkflowRecord) => {
         const meta = PRICE_STATUS_META[row.status] ?? { label: row.status, color: 'default' };
         return <Tag color={meta.color}>{meta.label}</Tag>;
       },
@@ -219,7 +333,7 @@ export default function PriceWorkflowDrawer({
       title: 'Giá / hoa hồng mới',
       key: 'next_values',
       width: 260,
-      render: (_: unknown, row: PriceChangeRecord) => (
+      render: (_: unknown, row: WorkflowRecord) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span>Giá vốn: {renderMoneyText(row.new_cost_price)}</span>
           <span>Đơn giá: {renderMoneyText(row.new_sale_price)}</span>
@@ -232,7 +346,7 @@ export default function PriceWorkflowDrawer({
       title: 'Hiệu lực',
       key: 'effective_at',
       width: 170,
-      render: (_: unknown, row: PriceChangeRecord) => (
+      render: (_: unknown, row: WorkflowRecord) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span>{formatDateTime(row.effective_at)}</span>
           <span style={{ color: '#8c8c8c', fontSize: 12 }}>Tạo: {formatDateTime(row.created_at)}</span>
@@ -243,7 +357,7 @@ export default function PriceWorkflowDrawer({
       title: 'Lý do',
       dataIndex: 'reason',
       key: 'reason',
-      ellipsis: true,
+      render: (text: string) => <div className="ant-table-cell-ellipsis">{text ?? '-'}</div>,
     },
     {
       title: 'Batch',
@@ -256,7 +370,7 @@ export default function PriceWorkflowDrawer({
       title: 'Thao tác',
       key: 'actions',
       width: 150,
-      render: (_: unknown, row: PriceChangeRecord) => {
+      render: (_: unknown, row: WorkflowRecord) => {
         if (row.status !== 'PENDING_APPROVAL') return null;
         return (
           <Space>
@@ -286,81 +400,122 @@ export default function PriceWorkflowDrawer({
 
   return (
     <>
-      <Drawer
-        title={activeProduct ? `Quản trị giá - ${activeProduct.code}` : 'Quản trị giá'}
-        placement="right"
-        width={980}
+      <Modal
+        title={activeProduct ? `Quản trị giá — ${activeProduct.code} - ${activeProduct.name}` : 'Quản trị giá'}
         open={open}
-        onClose={onClose}
-        extra={(
-          <Space>
-            <Button icon={<ReloadOutlined />} onClick={() => void refreshAll()} loading={productLoading || changesLoading}>
-              Làm mới
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openSubmitModal} disabled={!activeProduct}>
-              Tạo đề xuất
-            </Button>
-          </Space>
+        onCancel={onClose}
+        width="90vw"
+        style={{ top: 32, maxWidth: 1400 }}
+        styles={{ body: { maxHeight: 'calc(100vh - 160px)', overflowY: 'auto', padding: '16px 24px' } }}
+        footer={(
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              {pendingChanges.length > 0 && <Tag color="gold" style={{ fontSize: 13 }}>{pendingChanges.length} đề xuất chờ duyệt</Tag>}
+            </div>
+            <Space>
+              <Button icon={<ReloadOutlined />} onClick={() => void refreshAll()} loading={currentLoading}>
+                Làm mới
+              </Button>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={openSubmitModal}
+                disabled={!activeProduct || (scope === 'BUNDLE_FIXED' && !bundleFixedEnabled)}
+              >
+                Tạo đề xuất mới
+              </Button>
+              <Button onClick={onClose}>Đóng</Button>
+            </Space>
+          </div>
         )}
+        destroyOnClose
       >
         {!activeProduct && !productLoading ? (
           <Empty description="Không tìm thấy mã hàng." />
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Card size="small">
-              <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr', gap: 16 }}>
-                <div>
-                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Mã hàng / tên hàng</div>
-                  <div style={{ fontWeight: 600 }}>{activeProduct?.code} - {activeProduct?.name}</div>
-                  <div style={{ color: '#595959', marginTop: 6 }}>
-                    Bảng tổng hợp luôn hiển thị giá đang có hiệu lực tại thời điểm hiện tại. Lịch giá đã duyệt nhưng chưa tới ngày áp sẽ nằm riêng ở phần "Giá sắp hiệu lực".
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Giá đang hiệu lực</div>
-                  <div>Giá vốn: {renderMoneyText(activeProduct?.cost_price)}</div>
-                  <div>Đơn giá: {renderMoneyText(activeProduct?.sale_price)}</div>
-                  <div>HHCĐ: {renderMoneyText(activeProduct?.commission_per_unit)}</div>
-                  <div>HH%: {renderPercentText(activeProduct?.commission_percent)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Giá sắp hiệu lực</div>
-                  {activeProduct?.has_scheduled_price_change ? (
-                    <>
-                      <div>Hiệu lực: {formatDateTime(activeProduct.next_price_effective_at)}</div>
-                      <div>Giá vốn: {renderMoneyText(activeProduct.next_price_cost)}</div>
-                      <div>Đơn giá: {renderMoneyText(activeProduct.next_price_sale)}</div>
-                      <div>HHCĐ: {renderMoneyText(activeProduct.next_price_commission_per_unit)}</div>
-                      <div>HH%: {renderPercentText(activeProduct.next_price_commission_percent)}</div>
-                    </>
-                  ) : (
-                    <div style={{ color: '#8c8c8c' }}>Chưa có lịch áp giá tương lai.</div>
-                  )}
-                </div>
-              </div>
-            </Card>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <Segmented<WorkflowScope>
+                value={scope}
+                onChange={(value) => setScope(value)}
+                options={[
+                  { value: 'PRODUCT', label: 'Giá mã hàng' },
+                  { value: 'BUNDLE_FIXED', label: 'Giá bộ cố định', disabled: !hasBundle },
+                ]}
+              />
+              {scope === 'BUNDLE_FIXED' && hasBundle && (
+                <Tag color={bundleFixedEnabled ? 'cyan' : 'default'}>
+                  Kiểu tính giá bộ: {bundleFixedEnabled ? 'FIXED_BUNDLE' : (activeProduct?.bundle_pricing_mode ?? '-')}
+                </Tag>
+              )}
+            </div>
+
+            {scope === 'BUNDLE_FIXED' && !hasBundle && (
+              <Alert type="info" showIcon message="Mã này chưa có cấu hình bộ nên chưa có luồng giá bộ cố định." />
+            )}
+
+            {scope === 'BUNDLE_FIXED' && hasBundle && !bundleFixedEnabled && (
+              <Alert
+                type="warning"
+                showIcon
+                message="Bộ này chưa dùng chế độ Giá bộ cố định."
+                description="Hãy chuyển cấu hình bộ sang FIXED_BUNDLE nếu muốn dùng luồng duyệt giá bộ riêng."
+              />
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <Card size="small" title={`${getScopeTitle(scope)} đang hiệu lực`} styles={{ header: { background: '#f6ffed', borderBottom: '1px solid #b7eb8f' } }}>
+                <Descriptions column={2} size="small" colon={false}>
+                  <Descriptions.Item label="Giá vốn">{renderMoneyText(String(currentValues.cost))}</Descriptions.Item>
+                  <Descriptions.Item label="Đơn giá">{renderMoneyText(String(currentValues.sale))}</Descriptions.Item>
+                  <Descriptions.Item label="HHCĐ">{renderMoneyText(String(currentValues.commissionPerUnit))}</Descriptions.Item>
+                  <Descriptions.Item label="HH%">{renderPercentText(String(currentValues.commissionPercent))}</Descriptions.Item>
+                </Descriptions>
+              </Card>
+
+              <Card
+                size="small"
+                title={`${getScopeTitle(scope)} sắp hiệu lực`}
+                styles={{ header: { background: scheduledValues ? '#e6f4ff' : '#fafafa', borderBottom: scheduledValues ? '1px solid #91caff' : '1px solid #f0f0f0' } }}
+              >
+                {scheduledValues ? (
+                  <Descriptions column={2} size="small" colon={false}>
+                    <Descriptions.Item label="Hiệu lực từ" span={2}>
+                      <Tag color="blue">{formatDateTime(scheduledValues.effectiveAt)}</Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Giá vốn">{renderMoneyText(scheduledValues.cost)}</Descriptions.Item>
+                    <Descriptions.Item label="Đơn giá">{renderMoneyText(scheduledValues.sale)}</Descriptions.Item>
+                    <Descriptions.Item label="HHCĐ">{renderMoneyText(scheduledValues.commissionPerUnit)}</Descriptions.Item>
+                    <Descriptions.Item label="HH%">{renderPercentText(scheduledValues.commissionPercent)}</Descriptions.Item>
+                  </Descriptions>
+                ) : (
+                  <div style={{ color: '#8c8c8c', padding: '8px 0' }}>Chưa có lịch áp giá tương lai.</div>
+                )}
+              </Card>
+            </div>
 
             <Card
               size="small"
-              title="Danh sách đề xuất và lịch sử giá"
-              extra={pendingChanges.length > 0 ? <Tag color="gold">{pendingChanges.length} đề xuất chờ duyệt</Tag> : null}
+              title={`Danh sách đề xuất và lịch sử ${scope === 'PRODUCT' ? 'giá mã hàng' : 'giá bộ cố định'}`}
+              extra={pendingChanges.length > 0 ? <Tag color="gold">{pendingChanges.length} chờ duyệt</Tag> : null}
             >
-              <Table<PriceChangeRecord>
+              <Table<WorkflowRecord>
                 rowKey="id"
                 size="small"
-                loading={changesLoading}
+                loading={currentLoading}
                 columns={priceColumns}
-                dataSource={priceChanges}
-                pagination={{ pageSize: 8, showSizeChanger: false }}
-                locale={{ emptyText: 'Chưa có lịch sử giá.' }}
+                dataSource={currentRecords}
+                pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: ['5', '10', '20', '50'] }}
+                locale={{ emptyText: `Chưa có lịch sử ${scope === 'PRODUCT' ? 'giá mã hàng' : 'giá bộ'}.` }}
+                scroll={{ x: 900 }}
               />
             </Card>
           </div>
         )}
-      </Drawer>
+      </Modal>
 
       <Modal
-        title={`Tạo đề xuất giá${activeProduct ? ` - ${activeProduct.code}` : ''}`}
+        title={`Tạo đề xuất ${scope === 'PRODUCT' ? 'giá mã hàng' : 'giá bộ'}${activeProduct ? ` - ${activeProduct.code}` : ''}`}
         open={submitModalOpen}
         onCancel={() => setSubmitModalOpen(false)}
         onOk={() => void handleSubmitPriceChange()}
@@ -397,18 +552,18 @@ export default function PriceWorkflowDrawer({
           />
         </div>
         <div style={{ marginTop: 12 }}>
-          <div style={{ marginBottom: 6, fontWeight: 600 }}>Lý do thay đổi giá</div>
+          <div style={{ marginBottom: 6, fontWeight: 600 }}>Lý do thay đổi</div>
           <Input.TextArea
             rows={4}
             value={priceReason}
             onChange={(event) => setPriceReason(event.target.value)}
-            placeholder="Nhập lý do đề xuất thay đổi giá hoặc hoa hồng..."
+            placeholder={`Nhập lý do đề xuất thay đổi ${scope === 'PRODUCT' ? 'giá mã hàng' : 'giá bộ cố định'}...`}
           />
         </div>
       </Modal>
 
       <Modal
-        title={`Từ chối đề xuất giá${activeProduct ? ` - ${activeProduct.code}` : ''}`}
+        title={`Từ chối đề xuất ${scope === 'PRODUCT' ? 'giá mã hàng' : 'giá bộ'}${activeProduct ? ` - ${activeProduct.code}` : ''}`}
         open={rejectModalOpen}
         onCancel={() => {
           setRejectModalOpen(false);

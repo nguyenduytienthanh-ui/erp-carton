@@ -7,6 +7,7 @@ from django.utils import timezone as django_tz
 from inventory.models import (
     InventoryReservation,
     InventoryTransaction,
+    OutboundShipment,
     Warehouse,
     WarehouseLocation,
 )
@@ -110,3 +111,14 @@ class InventoryReservationFilter(django_filters.FilterSet):
             'reservation_date__gte',
             'reservation_date__lte',
         ]
+
+
+class OutboundShipmentFilter(django_filters.FilterSet):
+    status = django_filters.CharFilter(field_name='status', lookup_expr='iexact')
+    sales_order = django_filters.NumberFilter(field_name='sales_order__id')
+    shipment_date__gte = django_filters.DateFilter(field_name='shipment_date', lookup_expr='gte')
+    shipment_date__lte = django_filters.DateFilter(field_name='shipment_date', lookup_expr='lte')
+
+    class Meta:
+        model = OutboundShipment
+        fields = ['status', 'sales_order', 'shipment_date__gte', 'shipment_date__lte']

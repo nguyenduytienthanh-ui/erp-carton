@@ -1,7 +1,7 @@
 import axiosInstance from './axios';
 import type { TaskPriority } from './tasks';
 
-export type WftTrigger = 'SUBMIT' | 'APPROVE' | 'REJECT' | 'POST' | 'VOID' | 'MANUAL';
+export type WftTrigger = 'SUBMIT' | 'APPROVE' | 'REJECT' | 'POST' | 'VOID' | 'RELEASE' | 'ISSUE' | 'RECEIVE' | 'CANCEL' | 'MANUAL';
 
 export const WFT_TRIGGER_LABELS: Record<WftTrigger, string> = {
   SUBMIT: 'Nộp duyệt',
@@ -9,6 +9,10 @@ export const WFT_TRIGGER_LABELS: Record<WftTrigger, string> = {
   REJECT: 'Từ chối',
   POST: 'Đăng sổ (Post)',
   VOID: 'Hủy (Void)',
+  RELEASE: 'Phát lệnh',
+  ISSUE: 'Cấp vật tư',
+  RECEIVE: 'Ghi nhận nhập/nhận',
+  CANCEL: 'Hủy chứng từ',
   MANUAL: 'Thủ công',
 };
 

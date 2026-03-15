@@ -29,12 +29,15 @@ from .filters import (
     ProductWaveFilter,
     ProductBoxTypeFilter,
 )
-from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product, ProductBundle, PriceChange
+from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product, ProductBundle, PriceChange, BundlePriceChange
 from .price_services import (
     activate_due_price_changes,
+    activate_due_bundle_price_changes,
     approve_price_change as approve_price_change_service,
+    approve_bundle_price_change as approve_bundle_price_change_service,
     merge_price_values,
     record_direct_price_change,
+    submit_bundle_price_change_request,
     resolve_product_price_as_of,
     submit_price_change_request,
 )
@@ -46,6 +49,7 @@ from .serializers import (
     ProductSerializer,
     ProductBundleSerializer,
     PriceChangeSerializer,
+    BundlePriceChangeSerializer,
 )
 
 
@@ -432,8 +436,9 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
     ordering = ['-created_at']
 
     def get_queryset(self):
-        if self.action in {'list', 'retrieve', 'price_changes'}:
+        if self.action in {'list', 'retrieve', 'price_changes', 'bundle_price_changes'}:
             activate_due_price_changes()
+            activate_due_bundle_price_changes()
         queryset = super().get_queryset()
         user = self.request.user
 
@@ -673,6 +678,71 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             })
         return preview_items
 
+    @staticmethod
+    def _bundle_price_snapshot(bundle):
+        return {
+            'fixed_cost_price': str(bundle.fixed_cost_price or 0),
+            'fixed_sale_price': str(bundle.fixed_sale_price or 0),
+            'fixed_commission_per_unit': str(bundle.fixed_commission_per_unit or 0),
+            'fixed_commission_percent': str(bundle.fixed_commission_percent or 0),
+            'pricing_mode': bundle.pricing_mode,
+            'commission_mode': bundle.get_commission_mode(),
+            'delivery_rule': bundle.delivery_rule,
+            'primary_product_id': bundle.primary_product_id,
+            'primary_product_code': bundle.get_primary_product().code if bundle.get_primary_product() else None,
+            'component_codes': [component.component_product.code for component in bundle.get_active_components()],
+        }
+
+    @staticmethod
+    def _bundle_audit_old_values(price_change):
+        return {
+            'bundle_fixed_cost_price': str(price_change.old_fixed_cost_price or 0),
+            'bundle_fixed_sale_price': str(price_change.old_fixed_sale_price or 0),
+            'bundle_fixed_commission_per_unit': str(price_change.old_fixed_commission_per_unit or 0),
+            'bundle_fixed_commission_percent': str(price_change.old_fixed_commission_percent or 0),
+        }
+
+    @staticmethod
+    def _bundle_audit_new_values(price_change, *, reason='', reject_reason=''):
+        return {
+            'bundle_fixed_cost_price': str(price_change.new_fixed_cost_price or 0),
+            'bundle_fixed_sale_price': str(price_change.new_fixed_sale_price or 0),
+            'bundle_fixed_commission_per_unit': str(price_change.new_fixed_commission_per_unit or 0),
+            'bundle_fixed_commission_percent': str(price_change.new_fixed_commission_percent or 0),
+            'bundle_price_change_reason': reason or price_change.reason,
+            'bundle_price_effective_at': price_change.effective_at.isoformat() if price_change.effective_at else None,
+            'bundle_price_change_id': price_change.id,
+            'bundle_price_change_status': price_change.status,
+            'batch_code': price_change.batch_code or None,
+            'reject_reason': reject_reason or price_change.reject_reason or '',
+        }
+
+    @staticmethod
+    def _bundle_audit_changed_fields(price_change):
+        field_map = [
+            ('old_fixed_cost_price', 'new_fixed_cost_price', 'bundle_fixed_cost_price'),
+            ('old_fixed_sale_price', 'new_fixed_sale_price', 'bundle_fixed_sale_price'),
+            ('old_fixed_commission_per_unit', 'new_fixed_commission_per_unit', 'bundle_fixed_commission_per_unit'),
+            ('old_fixed_commission_percent', 'new_fixed_commission_percent', 'bundle_fixed_commission_percent'),
+        ]
+        return [
+            changed_name
+            for old_field, new_field, changed_name in field_map
+            if getattr(price_change, old_field) != getattr(price_change, new_field)
+        ]
+
+    @staticmethod
+    def _get_bundle_for_price_workflow(product):
+        try:
+            bundle = product.bundle_config
+        except ProductBundle.DoesNotExist:
+            bundle = None
+        if not bundle or not bundle.is_active:
+            raise DRFValidationError({'detail': 'Sản phẩm chưa có cấu hình bộ đang hoạt động.'})
+        if bundle.pricing_mode != ProductBundle.PRICING_MODE_FIXED:
+            raise DRFValidationError({'detail': 'Luồng này chỉ áp dụng cho bộ đang dùng chế độ Giá bộ cố định.'})
+        return bundle
+
     def perform_create(self, serializer):
         from core.models import NumberSequence
         import logging
@@ -874,10 +944,26 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
 
         if request.method == 'DELETE':
             if bundle:
+                old_bundle_values = self._bundle_price_snapshot(bundle)
+                bundle_id = bundle.id
                 bundle.delete()
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='DELETE',
+                    entity_type='ProductBundle',
+                    entity_id=bundle_id,
+                    entity_id_str=str(bundle_id),
+                    entity_code=product.code,
+                    old_values=old_bundle_values,
+                    new_values={'is_active': False},
+                    changed_fields=['bundle_deleted'],
+                    ip_address=get_client_ip(request),
+                    user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+                )
             Product.objects.filter(pk=product.pk).update(is_set=False)
             return Response(status=status.HTTP_204_NO_CONTENT)
 
+        old_bundle_values = self._bundle_price_snapshot(bundle) if bundle else {}
         payload = request.data.copy()
         payload['sellable_product'] = product.id
         serializer = ProductBundleSerializer(
@@ -889,6 +975,27 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         existed = bundle is not None
         saved_bundle = serializer.save(sellable_product=product)
+        new_bundle_values = self._bundle_price_snapshot(saved_bundle)
+        changed_fields = sorted({
+            field
+            for field in set(old_bundle_values) | set(new_bundle_values)
+            if old_bundle_values.get(field) != new_bundle_values.get(field)
+        })
+        if not changed_fields:
+            changed_fields = ['bundle_created' if not existed else 'bundle_updated']
+        AuditLog.objects.create(
+            user=request.user,
+            action='UPDATE' if existed else 'CREATE',
+            entity_type='ProductBundle',
+            entity_id=saved_bundle.id,
+            entity_id_str=str(saved_bundle.id),
+            entity_code=product.code,
+            old_values=old_bundle_values,
+            new_values=new_bundle_values,
+            changed_fields=changed_fields,
+            ip_address=get_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
         return Response(
             ProductBundleSerializer(saved_bundle, context={'request': request}).data,
             status=status.HTTP_200_OK if existed else status.HTTP_201_CREATED,
@@ -1239,6 +1346,150 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         )
         return Response(PriceChangeSerializer(price_change).data)
 
+    @action(detail=True, methods=['get'], url_path='bundle_price_changes')
+    def bundle_price_changes(self, request, pk=None):
+        product = self.get_object()
+        bundle = self._get_bundle_for_price_workflow(product)
+        activate_due_bundle_price_changes(bundle_ids=[bundle.id])
+        queryset = BundlePriceChange.objects.filter(bundle=bundle).order_by('-effective_at', '-created_at')[:100]
+        serializer = BundlePriceChangeSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='submit_bundle_price_change')
+    def submit_bundle_price_change(self, request, pk=None):
+        product = self.get_object()
+        bundle = self._get_bundle_for_price_workflow(product)
+        activate_due_bundle_price_changes(bundle_ids=[bundle.id])
+        reason = (request.data.get('reason') or '').strip()
+        if not reason:
+            return Response({'reason': 'Vui lòng nhập lý do đề xuất thay đổi giá bộ.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        new_cost = self._to_decimal(request.data.get('new_cost_price'))
+        new_sale = self._to_decimal(request.data.get('new_sale_price'))
+        new_commission_per_unit = self._to_decimal(request.data.get('new_commission_per_unit'))
+        new_commission_percent = self._to_decimal(request.data.get('new_commission_percent'))
+        if all(value is None for value in [new_cost, new_sale, new_commission_per_unit, new_commission_percent]):
+            return Response(
+                {'detail': 'Cần nhập ít nhất 1 giá/hoa hồng bộ mới để trình duyệt.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        current_cost = self._to_decimal(bundle.fixed_cost_price)
+        current_sale = self._to_decimal(bundle.fixed_sale_price)
+        next_cost = new_cost if new_cost is not None else current_cost
+        next_sale = new_sale if new_sale is not None else current_sale
+        if next_cost is not None and next_sale is not None and next_sale < next_cost:
+            return Response({'new_sale_price': 'Đơn giá bộ mới phải lớn hơn hoặc bằng giá vốn bộ mới.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        effective_at = self._parse_effective_at(request.data.get('effective_at'))
+        batch_code = (request.data.get('batch_code') or '').strip()
+
+        price_change = submit_bundle_price_change_request(
+            bundle,
+            new_values={
+                'fixed_cost_price': new_cost,
+                'fixed_sale_price': new_sale,
+                'fixed_commission_per_unit': new_commission_per_unit,
+                'fixed_commission_percent': new_commission_percent,
+            },
+            reason=reason,
+            actor=request.user,
+            effective_at=effective_at,
+            source=BundlePriceChange.SOURCE_MANUAL,
+            batch_code=batch_code,
+        )
+        changed_fields = self._bundle_audit_changed_fields(price_change)
+        AuditLog.objects.create(
+            user=request.user,
+            action='SUBMIT',
+            entity_type='ProductBundle',
+            entity_id=bundle.id,
+            entity_id_str=str(bundle.id),
+            entity_code=product.code,
+            old_values=self._bundle_audit_old_values(price_change),
+            new_values=self._bundle_audit_new_values(price_change, reason=reason),
+            changed_fields=changed_fields,
+            ip_address=get_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response(BundlePriceChangeSerializer(price_change).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='approve_bundle_price_change')
+    def approve_bundle_price_change(self, request, pk=None):
+        product = self.get_object()
+        bundle = self._get_bundle_for_price_workflow(product)
+        activate_due_bundle_price_changes(bundle_ids=[bundle.id])
+        change_id = request.data.get('change_id')
+        if not change_id:
+            return Response({'change_id': 'Thiếu change_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            price_change = BundlePriceChange.objects.get(
+                id=change_id,
+                bundle=bundle,
+                status=BundlePriceChange.STATUS_PENDING_APPROVAL,
+            )
+        except BundlePriceChange.DoesNotExist:
+            return Response({'detail': 'Đề xuất giá bộ không tồn tại hoặc đã xử lý.'}, status=status.HTTP_404_NOT_FOUND)
+
+        price_change = approve_bundle_price_change_service(price_change, request.user)
+        AuditLog.objects.create(
+            user=request.user,
+            action='APPROVE',
+            entity_type='ProductBundle',
+            entity_id=bundle.id,
+            entity_id_str=str(bundle.id),
+            entity_code=product.code,
+            old_values=self._bundle_audit_old_values(price_change),
+            new_values=self._bundle_audit_new_values(price_change),
+            changed_fields=self._bundle_audit_changed_fields(price_change),
+            ip_address=get_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response(BundlePriceChangeSerializer(price_change).data)
+
+    @action(detail=True, methods=['post'], url_path='reject_bundle_price_change')
+    def reject_bundle_price_change(self, request, pk=None):
+        product = self.get_object()
+        bundle = self._get_bundle_for_price_workflow(product)
+        activate_due_bundle_price_changes(bundle_ids=[bundle.id])
+        change_id = request.data.get('change_id')
+        reject_reason = (request.data.get('reject_reason') or '').strip()
+        if not change_id:
+            return Response({'change_id': 'Thiếu change_id.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not reject_reason:
+            return Response({'reject_reason': 'Vui lòng nhập lý do từ chối.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            price_change = BundlePriceChange.objects.get(
+                id=change_id,
+                bundle=bundle,
+                status=BundlePriceChange.STATUS_PENDING_APPROVAL,
+            )
+        except BundlePriceChange.DoesNotExist:
+            return Response({'detail': 'Đề xuất giá bộ không tồn tại hoặc đã xử lý.'}, status=status.HTTP_404_NOT_FOUND)
+
+        price_change.status = BundlePriceChange.STATUS_REJECTED
+        price_change.reject_reason = reject_reason
+        price_change.approved_by = request.user
+        price_change.approved_at = timezone.now()
+        price_change.save(update_fields=['status', 'reject_reason', 'approved_by', 'approved_at', 'updated_at'])
+
+        AuditLog.objects.create(
+            user=request.user,
+            action='REJECT',
+            entity_type='ProductBundle',
+            entity_id=bundle.id,
+            entity_id_str=str(bundle.id),
+            entity_code=product.code,
+            old_values=self._bundle_audit_old_values(price_change),
+            new_values=self._bundle_audit_new_values(price_change, reject_reason=reject_reason),
+            changed_fields=self._bundle_audit_changed_fields(price_change),
+            ip_address=get_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response(BundlePriceChangeSerializer(price_change).data)
+
     @action(detail=True, methods=['post'])
     def assign_owner(self, request, pk=None):
         """Gán owner cho sản phẩm"""
@@ -1290,16 +1541,18 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             'Ghi chú công đoạn khác', 'Ghi chú chung',
         ]
 
-    export_pdf_fields = [
-        'code', 'name', 'category__name', 'status',
-        'cost_price', 'sale_price', 'commission_per_unit', 'commission_percent',
-        'size_order', 'size_production', 'wave__code', 'box_type__code', 'unit__name',
-        'delivery_tolerance',
-        'process_xa', 'process_in', 'film_code', 'color_count', 'waterproof',
-        'process_can_mang', 'process_boi', 'process_be', 'mold_code',
-        'process_chap', 'process_dong', 'process_dan', 'process_khac',
-        'note_other', 'note',
-    ]
+    def get_export_pdf_fields(self):
+        """Field paths cho xuất PDF (cùng thứ tự với get_export_headers)."""
+        return [
+            'code', 'name', 'category__name', 'status',
+            'cost_price', 'sale_price', 'commission_per_unit', 'commission_percent',
+            'size_order', 'size_production', 'wave__code', 'box_type__code', 'unit__name',
+            'delivery_tolerance',
+            'process_xa', 'process_in', 'film_code', 'color_count', 'waterproof',
+            'process_can_mang', 'process_boi', 'process_be', 'mold_code',
+            'process_chap', 'process_dong', 'process_dan', 'process_khac',
+            'note_other', 'note',
+        ]
 
     def get_export_row(self, obj):
         """Thứ tự cột trùng Quản lý sản phẩm (không có Tồn TT, không có Mô tả)."""

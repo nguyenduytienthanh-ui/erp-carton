@@ -47,3 +47,45 @@ test('sales user is redirected away from admin permission settings', async ({ pa
   await page.goto('/admin/module-permissions');
   await expect(page).not.toHaveURL(/\/admin\/module-permissions$/);
 });
+
+test('admin user can access new business modules and reports center', async ({ page }) => {
+  await login(page, adminUser.username, adminUser.password);
+  await expect(page).toHaveURL(/\/$/);
+
+  const pagesToCheck = [
+    { path: '/reports', text: 'Trung tâm báo cáo' },
+    { path: '/suppliers', text: 'Nhà cung cấp' },
+    { path: '/purchase-orders', text: 'Đơn mua' },
+    { path: '/purchase-receipts', text: 'Phiếu nhập mua' },
+    { path: '/production-orders', text: 'Sản xuất' },
+    { path: '/receivables', text: 'Công nợ phải thu' },
+    { path: '/payables', text: 'Công nợ phải trả' },
+  ];
+
+  for (const item of pagesToCheck) {
+    await page.goto(item.path);
+    await expect(page.locator('main').getByText(item.text).first()).toBeVisible();
+  }
+});
+
+test('admin workflow pages expose new entity options', async ({ page }) => {
+  await login(page, adminUser.username, adminUser.password);
+  await expect(page).toHaveURL(/\/$/);
+
+  await page.goto('/workflow-task-templates');
+  await expect(page.getByText('Mẫu nhiệm vụ quy trình')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Áp dụng bộ mẫu' }).click();
+  const playbookEntitySelect = page.locator('.ant-modal .ant-select').first();
+  await playbookEntitySelect.click();
+  await expect(page.getByText('Đơn mua')).toBeVisible();
+  await expect(page.getByText('Lệnh sản xuất')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+
+  await page.goto('/workflow-pipeline');
+  await expect(page.getByText('Bảng luồng công việc')).toBeVisible();
+
+  await page.goto('/workflow-analytics');
+  await expect(page.getByText('Phân tích quy trình')).toBeVisible();
+});
