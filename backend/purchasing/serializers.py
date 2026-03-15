@@ -452,3 +452,80 @@ class PurchaseRequestSerializer(serializers.ModelSerializer):
                     line_data['purchase_request'] = instance
                     PurchaseRequestLine.objects.create(**line_data)
         return instance
+
+
+# Purchase Return Serializers
+from purchasing.models import PurchaseReturn, PurchaseReturnLine
+
+
+class PurchaseReturnLineSerializer(serializers.ModelSerializer):
+    product_code = serializers.SerializerMethodField()
+    product_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PurchaseReturnLine
+        fields = ['id', 'line_number', 'product', 'product_code', 'product_name', 'qty', 'unit_price', 'tax_pct', 'note']
+
+    def get_product_code(self, obj):
+        return getattr(obj.product, 'code', None) if obj.product else None
+
+    def get_product_name(self, obj):
+        return getattr(obj.product, 'name', None) if obj.product else None
+
+
+class PurchaseReturnSerializer(serializers.ModelSerializer):
+    lines = PurchaseReturnLineSerializer(many=True, required=False)
+    supplier_name = serializers.SerializerMethodField()
+    purchase_order_code = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PurchaseReturn
+        fields = [
+            'id', 'code', 'return_date', 'status', 'reference',
+            'purchase_order', 'purchase_order_code', 'supplier', 'supplier_name',
+            'subtotal', 'tax_total', 'total',
+            'return_reason', 'return_notes',
+            'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
+            'posted_by', 'posted_at', 'cancelled_by', 'cancelled_at', 'cancel_reason',
+            'created_by', 'created_at', 'updated_by', 'updated_at',
+            'lines',
+        ]
+        read_only_fields = ['code', 'created_by', 'created_at', 'updated_by', 'updated_at']
+
+    def get_supplier_name(self, obj):
+        return getattr(obj.supplier, 'name', None) if obj.supplier else None
+
+    def get_purchase_order_code(self, obj):
+        return getattr(obj.purchase_order, 'code', None) if obj.purchase_order else None
+
+    def create(self, validated_data):
+        from purchasing.services import get_next_po_code
+        from datetime import date
+        lines_data = validated_data.pop('lines', [])
+        return_date = validated_data.get('return_date')
+        if not return_date:
+            return_date = date.today()
+        # Generate code similar to PO
+        validated_data['code'] = f"RET-{return_date.strftime('%Y%m%d')}-{int(date.today().timestamp()) % 10000}"
+        with transaction.atomic():
+            ret = PurchaseReturn.objects.create(**validated_data)
+            for i, line_data in enumerate(lines_data, start=1):
+                line_data['line_number'] = line_data.get('line_number') or i
+                line_data['purchase_return'] = ret
+                PurchaseReturnLine.objects.create(**line_data)
+        return ret
+
+    def update(self, instance, validated_data):
+        lines_data = validated_data.pop('lines', None)
+        with transaction.atomic():
+            for k, v in validated_data.items():
+                setattr(instance, k, v)
+            instance.save()
+            if lines_data is not None:
+                instance.lines.all().delete()
+                for i, line_data in enumerate(lines_data, start=1):
+                    line_data['line_number'] = line_data.get('line_number') or i
+                    line_data['purchase_return'] = instance
+                    PurchaseReturnLine.objects.create(**line_data)
+        return instance
+

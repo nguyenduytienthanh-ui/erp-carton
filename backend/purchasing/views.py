@@ -26,6 +26,8 @@ from purchasing.models import (
     PurchaseRequest,
     PurchaseRequestLine,
     PurchaseRequestStatus,
+    PurchaseReturn,
+    PurchaseReturnStatus,
     Supplier,
 )
 from purchasing.permissions import (
@@ -911,3 +913,123 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         pr.approved_at = None
         pr.save(update_fields=['status', 'rejected_by', 'rejected_at', 'reject_reason', 'approved_by', 'approved_at', 'updated_at'])
         return Response({'status': pr.status})
+
+
+# Purchase Return ViewSet
+from purchasing.serializers import PurchaseReturnSerializer
+
+
+class PurchaseReturnViewSet(viewsets.ModelViewSet):
+    """Purchase Returns to Supplier."""
+    queryset = PurchaseReturn.objects.select_related('supplier', 'purchase_order')
+    serializer_class = PurchaseReturnSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['code', 'reference', 'supplier__name']
+    ordering_fields = ['return_date', 'status', 'created_at']
+    ordering = ['-return_date']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def submit_return(self, request, pk=None):
+        """DRAFT -> SUBMITTED."""
+        ret = self.get_object()
+        if ret.status != PurchaseReturnStatus.DRAFT:
+            return Response({'error': 'Chỉ gửi duyệt phiếu trả ở trạng thái Nháp.'}, status=400)
+        ret.status = PurchaseReturnStatus.SUBMITTED
+        ret.submitted_by = request.user
+        ret.submitted_at = timezone.now()
+        ret.save(update_fields=['status', 'submitted_by', 'submitted_at', 'updated_at'])
+        AuditLog.objects.create(
+            user=request.user, action='SUBMIT', entity_type='PurchaseReturn',
+            entity_id=ret.id, entity_code=ret.code,
+            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response({'status': ret.status})
+
+    @action(detail=True, methods=['post'])
+    def approve_return(self, request, pk=None):
+        """SUBMITTED -> APPROVED."""
+        ret = self.get_object()
+        if ret.status != PurchaseReturnStatus.SUBMITTED:
+            return Response({'error': 'Chỉ duyệt phiếu trả đã gửi.'}, status=400)
+        ret.status = PurchaseReturnStatus.APPROVED
+        ret.approved_by = request.user
+        ret.approved_at = timezone.now()
+        ret.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
+        AuditLog.objects.create(
+            user=request.user, action='APPROVE', entity_type='PurchaseReturn',
+            entity_id=ret.id, entity_code=ret.code,
+            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        generate_tasks_for_entity('PurchaseReturn', ret.id, ret.code, 'APPROVE', triggered_by=request.user)
+        return Response({'status': ret.status})
+
+    @action(detail=True, methods=['post'])
+    def post_return(self, request, pk=None):
+        """APPROVED -> POSTED (reverse inventory & AP)."""
+        ret = self.get_object()
+        if ret.status != PurchaseReturnStatus.APPROVED:
+            return Response({'error': 'Chỉ post phiếu trả đã duyệt.'}, status=400)
+        
+        with transaction.atomic():
+            # Reverse inventory for each line
+            from inventory.models import InventoryTransaction, InventoryTransactionType
+            from inventory.services import update_inventory_qty
+            
+            for line in ret.lines.all():
+                if line.product:
+                    # Create reverse transaction (RETURN to warehouse)
+                    for loc in line.product.warehouse_locations.all():
+                        update_inventory_qty(
+                            product=line.product,
+                            warehouse=loc.warehouse,
+                            location=loc,
+                            qty_change=-line.qty,
+                            transaction_type=InventoryTransactionType.RETURN,
+                            reference_code=ret.code,
+                            reference_type='PurchaseReturn',
+                        )
+            
+            ret.status = PurchaseReturnStatus.POSTED
+            ret.posted_by = request.user
+            ret.posted_at = timezone.now()
+            ret.save(update_fields=['status', 'posted_by', 'posted_at', 'updated_at'])
+            
+            AuditLog.objects.create(
+                user=request.user, action='POST', entity_type='PurchaseReturn',
+                entity_id=ret.id, entity_code=ret.code,
+                ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+            )
+        
+        return Response({'status': ret.status})
+
+    @action(detail=True, methods=['post'])
+    def cancel_return(self, request, pk=None):
+        """Cancel return - any status -> CANCELLED."""
+        ret = self.get_object()
+        reason = (request.data.get('reason') or '').strip() or 'Hủy phiếu trả'
+        ret.status = PurchaseReturnStatus.CANCELLED
+        ret.cancelled_by = request.user
+        ret.cancelled_at = timezone.now()
+        ret.cancel_reason = reason
+        ret.save(update_fields=['status', 'cancelled_by', 'cancelled_at', 'cancel_reason', 'updated_at'])
+        AuditLog.objects.create(
+            user=request.user, action='CANCEL', entity_type='PurchaseReturn',
+            entity_id=ret.id, entity_code=ret.code,
+            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        )
+        return Response({'status': ret.status})
+
