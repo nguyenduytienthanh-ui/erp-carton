@@ -11,12 +11,16 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.permissions import DjangoObjectPermissions
+from django_filters.rest_framework import DjangoFilterBackend
 import django_filters
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.db.models import F, Q, Sum
+from django.db import transaction
 from django.apps import apps
 from reportlab.graphics import renderPDF
 from reportlab.graphics.barcode.qr import QrCodeWidget
@@ -30,8 +34,8 @@ from core.mixins import get_client_ip
 from core.models import AuditLog, ApprovalHistory, Attachment
 from core.permissions import check_action_permission
 from core.workflow_services import generate_tasks_for_entity
-from sales.models import SalesOrder, SalesOrderStatus, Quote, QuoteStatus
-from sales.serializers import SalesOrderSerializer, QuoteSerializer
+from sales.models import SalesOrder, SalesOrderStatus, Quote, QuoteStatus, OutboundShipment, OutboundShipmentStatus, ShipmentLine
+from sales.serializers import SalesOrderSerializer, QuoteSerializer, OutboundShipmentSerializer, ShipmentLineSerializer
 from sales.filters import SalesOrderFilter, QuoteFilter
 from sales.services import (
     apply_delivery_plan_delivery,
@@ -2278,3 +2282,211 @@ class QuoteViewSet(viewsets.ModelViewSet):
             f'bao_gia_{safe_code}.pdf',
             lambda c: _build_quote_pdf(c, quote),
         )
+
+
+# ============== OUTBOUND SHIPMENTS ==============
+class ShipmentViewSet(viewsets.ModelViewSet):
+    """
+    Outbound Shipment Management
+    Workflow: DRAFT -> SUBMITTED -> APPROVED -> PACKED -> IN_TRANSIT -> DELIVERED
+    """
+    queryset = OutboundShipment.objects.all().prefetch_related('lines')
+    serializer_class = OutboundShipmentSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['status', 'customer', 'shipment_date']
+    search_fields = ['code', 'customer__name', 'reference', 'tracking_number']
+    ordering_fields = ['shipment_date', 'status', 'created_at']
+    ordering = ['-shipment_date']
+    
+    def get_permissions(self):
+        """Check sales.manage_shipment permission"""
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), DjangoObjectPermissions()]
+        return [IsAuthenticated()]
+    
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
+    
+    @action(detail=True, methods=['post'])
+    def submit_shipment(self, request, pk=None):
+        """Submit shipment for approval (DRAFT -> SUBMITTED)"""
+        shipment = self.get_object()
+        if shipment.status != OutboundShipmentStatus.DRAFT:
+            return Response(
+                {'error': f'Can only submit DRAFT shipments. Current status: {shipment.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            with transaction.atomic():
+                shipment.status = OutboundShipmentStatus.SUBMITTED
+                shipment.submitted_by = request.user
+                shipment.submitted_at = timezone.now()
+                shipment.save()
+                
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='SUBMIT',
+                    model_name='OutboundShipment',
+                    object_id=shipment.id,
+                    changes={'status': OutboundShipmentStatus.SUBMITTED}
+                )
+            
+            serializer = self.get_serializer(shipment)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def approve_shipment(self, request, pk=None):
+        """Approve shipment (SUBMITTED -> APPROVED)"""
+        shipment = self.get_object()
+        if shipment.status != OutboundShipmentStatus.SUBMITTED:
+            return Response(
+                {'error': f'Can only approve SUBMITTED shipments. Current status: {shipment.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            with transaction.atomic():
+                shipment.status = OutboundShipmentStatus.APPROVED
+                shipment.approved_by = request.user
+                shipment.approved_at = timezone.now()
+                shipment.save()
+                
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='APPROVE',
+                    model_name='OutboundShipment',
+                    object_id=shipment.id,
+                    changes={'status': OutboundShipmentStatus.APPROVED}
+                )
+            
+            serializer = self.get_serializer(shipment)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def pack_shipment(self, request, pk=None):
+        """Pack shipment (APPROVED -> PACKED)"""
+        shipment = self.get_object()
+        if shipment.status != OutboundShipmentStatus.APPROVED:
+            return Response(
+                {'error': f'Can only pack APPROVED shipments. Current status: {shipment.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            with transaction.atomic():
+                shipment.status = OutboundShipmentStatus.PACKED
+                shipment.packed_by = request.user
+                shipment.packed_at = timezone.now()
+                shipment.save()
+                
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='PACK',
+                    model_name='OutboundShipment',
+                    object_id=shipment.id,
+                    changes={'status': OutboundShipmentStatus.PACKED}
+                )
+            
+            serializer = self.get_serializer(shipment)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def send_shipment(self, request, pk=None):
+        """Send shipment (PACKED -> IN_TRANSIT)"""
+        shipment = self.get_object()
+        if shipment.status != OutboundShipmentStatus.PACKED:
+            return Response(
+                {'error': f'Can only send PACKED shipments. Current status: {shipment.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            with transaction.atomic():
+                shipment.status = OutboundShipmentStatus.IN_TRANSIT
+                shipment.save()
+                
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='SEND',
+                    model_name='OutboundShipment',
+                    object_id=shipment.id,
+                    changes={'status': OutboundShipmentStatus.IN_TRANSIT}
+                )
+            
+            serializer = self.get_serializer(shipment)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def confirm_delivery(self, request, pk=None):
+        """Confirm delivery (IN_TRANSIT -> DELIVERED)"""
+        shipment = self.get_object()
+        if shipment.status != OutboundShipmentStatus.IN_TRANSIT:
+            return Response(
+                {'error': f'Can only confirm delivery for IN_TRANSIT shipments. Current status: {shipment.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        actual_delivery_date = request.data.get('actual_delivery_date')
+        delivered_by = request.data.get('delivered_by')
+        delivery_notes = request.data.get('delivery_notes', '')
+        
+        try:
+            with transaction.atomic():
+                shipment.status = OutboundShipmentStatus.DELIVERED
+                shipment.actual_delivery_date = actual_delivery_date or timezone.now().date()
+                shipment.delivered_by = delivered_by
+                shipment.delivery_notes = delivery_notes
+                shipment.delivered_by_user = request.user
+                shipment.save()
+                
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='DELIVER',
+                    model_name='OutboundShipment',
+                    object_id=shipment.id,
+                    changes={'status': OutboundShipmentStatus.DELIVERED}
+                )
+            
+            serializer = self.get_serializer(shipment)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def cancel_shipment(self, request, pk=None):
+        """Cancel shipment"""
+        shipment = self.get_object()
+        if shipment.status == OutboundShipmentStatus.DELIVERED:
+            return Response(
+                {'error': 'Cannot cancel DELIVERED shipments'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            with transaction.atomic():
+                shipment.status = OutboundShipmentStatus.CANCELLED
+                shipment.save()
+                
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='CANCEL',
+                    model_name='OutboundShipment',
+                    object_id=shipment.id,
+                    changes={'status': OutboundShipmentStatus.CANCELLED}
+                )
+            
+            serializer = self.get_serializer(shipment)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

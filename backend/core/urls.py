@@ -28,7 +28,7 @@ from inventory.views import (
     OutboundShipmentViewSet,
     WarehouseTransferViewSet,
 )
-from sales.views import SalesOrderViewSet, QuoteViewSet
+from sales.views import SalesOrderViewSet, QuoteViewSet, ShipmentViewSet
 from purchasing.views import (
     MaterialPurchasePriceViewSet,
     SupplierViewSet,
@@ -98,6 +98,7 @@ router.register(r'production/issues', ProductionIssueViewSet, basename='producti
 router.register(r'production/receipts', ProductionReceiptViewSet, basename='production-receipt')
 router.register(r'sales/orders', SalesOrderViewSet, basename='salesorder')
 router.register(r'sales/quotes', QuoteViewSet, basename='quote')
+router.register(r'sales/shipments', ShipmentViewSet, basename='sales-shipment')
 router.register(r'tasks', TaskViewSet, basename='task')
 router.register(r'workflow-task-templates', WorkflowTaskTemplateViewSet, basename='workflowtasktemplate')
 router.register(r'workforce/employees', EmployeeViewSet, basename='workforce-employee')

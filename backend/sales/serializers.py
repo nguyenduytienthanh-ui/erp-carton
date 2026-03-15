@@ -13,6 +13,8 @@ from sales.models import (
     SalesOrderStatus,
     Quote,
     QuoteLine,
+    OutboundShipment,
+    ShipmentLine,
 )
 from sales.services import (
     build_sales_order_line_trace_code,
@@ -423,4 +425,124 @@ class QuoteSerializer(serializers.ModelSerializer):
                     line_data['line_total'] = total
                     QuoteLine.objects.create(**line_data)
                 instance.recalc_totals()
+        return instance
+
+
+# ============== OUTBOUND SHIPMENTS ==============
+class ShipmentLineSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    product_code = serializers.CharField(source='product.code', read_only=True)
+    
+    class Meta:
+        model = ShipmentLine
+        fields = [
+            'id', 'line_number', 'product', 'product_name', 'product_code',
+            'qty_ordered', 'qty_shipped', 'qty_received',
+            'unit_price', 'discount_pct', 'tax_pct',
+            'weight_per_unit', 'notes', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class OutboundShipmentSerializer(serializers.ModelSerializer):
+    customer_name = serializers.CharField(source='customer.name', read_only=True)
+    sales_order_code = serializers.CharField(source='sales_order.code', read_only=True, allow_null=True)
+    submitted_by_name = serializers.CharField(source='submitted_by.username', read_only=True, allow_null=True)
+    approved_by_name = serializers.CharField(source='approved_by.username', read_only=True, allow_null=True)
+    packed_by_name = serializers.CharField(source='packed_by.username', read_only=True, allow_null=True)
+    delivered_by_user_name = serializers.CharField(source='delivered_by_user.username', read_only=True, allow_null=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True, allow_null=True)
+    
+    lines = ShipmentLineSerializer(many=True, required=False)
+    
+    class Meta:
+        model = OutboundShipment
+        fields = [
+            'id', 'code', 'sales_order', 'sales_order_code',
+            'customer', 'customer_name', 'shipment_date', 'status',
+            'reference', 'carrier', 'tracking_number', 'shipping_address',
+            'expected_delivery_date', 'actual_delivery_date',
+            'delivered_by', 'delivery_notes',
+            'submitted_by', 'submitted_by_name', 'submitted_at',
+            'approved_by', 'approved_by_name', 'approved_at',
+            'packed_by', 'packed_by_name', 'packed_at',
+            'delivered_by_user', 'delivered_by_user_name',
+            'total_qty', 'total_weight_kg', 'notes',
+            'created_at', 'updated_at', 'created_by', 'created_by_name',
+            'lines'
+        ]
+        read_only_fields = [
+            'code', 'created_at', 'updated_at', 'created_by',
+            'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
+            'packed_by', 'packed_at', 'delivered_by_user'
+        ]
+    
+    def create(self, validated_data):
+        from django.db import transaction
+        from django.utils import timezone
+        from core.models import AuditLog
+        
+        lines_data = validated_data.pop('lines', [])
+        request = self.context.get('request')
+        
+        with transaction.atomic():
+            # Generate code
+            from sales.models import PeriodSequence
+            period = timezone.now().strftime('%Y%m')
+            seq, _ = PeriodSequence.objects.get_or_create(
+                doc_type='SHIP',
+                period=period,
+                defaults={'current_number': 0, 'padding': 5}
+            )
+            validated_data['code'] = seq.get_next_code()
+            validated_data['created_by'] = request.user if request else None
+            
+            shipment = OutboundShipment.objects.create(**validated_data)
+            
+            for i, line_data in enumerate(lines_data, start=1):
+                line_data['shipment'] = shipment
+                line_data['line_number'] = i
+                ShipmentLine.objects.create(**line_data)
+            
+            # Audit log
+            if request:
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='CREATE',
+                    model_name='OutboundShipment',
+                    object_id=shipment.id,
+                    changes={'code': shipment.code, 'status': shipment.status}
+                )
+        
+        return shipment
+    
+    def update(self, instance, validated_data):
+        from django.db import transaction
+        from core.models import AuditLog
+        
+        lines_data = validated_data.pop('lines', None)
+        request = self.context.get('request')
+        
+        with transaction.atomic():
+            for k, v in validated_data.items():
+                setattr(instance, k, v)
+            instance.save()
+            
+            if lines_data is not None:
+                instance.lines.all().delete()
+                for i, line_data in enumerate(lines_data, start=1):
+                    line_data['shipment'] = instance
+                    line_data['line_number'] = i
+                    ShipmentLine.objects.create(**line_data)
+            
+            # Audit log
+            if request:
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='UPDATE',
+                    model_name='OutboundShipment',
+                    object_id=instance.id,
+                    changes=validated_data
+                )
+        
         return instance
