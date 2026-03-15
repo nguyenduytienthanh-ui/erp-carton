@@ -109,6 +109,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/cash-book': () => import('../../pages/Finance/CashBook'),
   '/advance-transactions': () => import('../../pages/Finance/AdvanceTransactionList'),
   '/receivables': () => import('../../pages/Finance/AccountsReceivableList'),
+  '/aging-analysis': () => import('../../pages/Finance/AgingAnalysis'),
   '/payables': () => import('../../pages/Finance/AccountsPayableList'),
   '/finance-summary': () => import('../../pages/Finance/FinanceSummary'),
   '/general-ledger': () => import('../../pages/Finance/GeneralLedgerList'),
@@ -438,6 +439,10 @@ const MainLayout = () => {
         {
           key: '/receivables',
           label: renderMenuLabel('/receivables', 'Công nợ phải thu'),
+        },
+        {
+          key: '/aging-analysis',
+          label: renderMenuLabel('/aging-analysis', 'Phân tích quá hạn'),
         },
         {
           key: '/payables',
