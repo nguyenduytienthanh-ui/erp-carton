@@ -26,6 +26,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { canManageWorkforceData } from '../../utils/authz';
+import { getToastMessage } from '../../shared/apiError';
 
 type AttendanceFilters = {
   month: string;
@@ -138,6 +139,7 @@ export default function AttendanceList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-attendance'] });
       messageApi.success('Đã thêm chấm công');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const updateMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: Partial<AttendanceRecordPayload> }) =>
@@ -146,6 +148,7 @@ export default function AttendanceList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-attendance'] });
       messageApi.success('Đã cập nhật chấm công');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const deleteMutation = useMutation({
     mutationFn: workforceApi.deleteAttendanceRecord,
@@ -153,6 +156,7 @@ export default function AttendanceList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-attendance'] });
       messageApi.success('Đã xóa chấm công');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const employees = (employeesQuery.data?.results ?? []).filter(

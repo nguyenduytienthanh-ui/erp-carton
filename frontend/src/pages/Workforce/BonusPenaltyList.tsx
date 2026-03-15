@@ -26,6 +26,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { canManageWorkforceData } from '../../utils/authz';
+import { getToastMessage } from '../../shared/apiError';
 
 type BonusPenaltyFilters = {
   month: string;
@@ -134,6 +135,7 @@ export default function BonusPenaltyList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-bonus-penalty'] });
       messageApi.success('Đã thêm thưởng/phạt');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const updateMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: Partial<BonusPenaltyRecordPayload> }) =>
@@ -142,6 +144,7 @@ export default function BonusPenaltyList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-bonus-penalty'] });
       messageApi.success('Đã cập nhật thưởng/phạt');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const deleteMutation = useMutation({
     mutationFn: workforceApi.deleteBonusPenaltyRecord,
@@ -149,6 +152,7 @@ export default function BonusPenaltyList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-bonus-penalty'] });
       messageApi.success('Đã xóa thưởng/phạt');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const employees = (employeesQuery.data?.results ?? []).filter(

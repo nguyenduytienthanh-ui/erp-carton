@@ -11,6 +11,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { canManageWorkforceData } from '../../utils/authz';
+import { getToastMessage } from '../../shared/apiError';
 
 type SalaryAdvanceFilters = {
   month: string;
@@ -168,6 +169,7 @@ export default function SalaryAdvanceList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
       messageApi.success('Đã thêm ứng lương');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const updateMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: Partial<SalaryAdvanceRecordPayload> }) =>
@@ -176,6 +178,7 @@ export default function SalaryAdvanceList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
       messageApi.success('Đã cập nhật ứng lương');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const deleteMutation = useMutation({
     mutationFn: workforceApi.deleteSalaryAdvance,
@@ -183,6 +186,7 @@ export default function SalaryAdvanceList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
       messageApi.success('Đã xóa ứng lương');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const submitApprovalMutation = useMutation({
     mutationFn: (id: number) => workforceApi.submitSalaryAdvanceApproval(id),
@@ -191,6 +195,7 @@ export default function SalaryAdvanceList() {
       await approvalQueueQuery.refetch();
       messageApi.success('Đã gửi duyệt ứng lương');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const approveLevel1Mutation = useMutation({
     mutationFn: (id: number) => workforceApi.approveSalaryAdvanceLevel1(id),
@@ -199,6 +204,7 @@ export default function SalaryAdvanceList() {
       await approvalQueueQuery.refetch();
       messageApi.success('Đã duyệt L1 ứng lương');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const approveLevel2Mutation = useMutation({
     mutationFn: (id: number) => workforceApi.approveSalaryAdvanceLevel2(id),
@@ -207,6 +213,7 @@ export default function SalaryAdvanceList() {
       await approvalQueueQuery.refetch();
       messageApi.success('Đã duyệt L2 ứng lương');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const rejectApprovalMutation = useMutation({
     mutationFn: ({ id, reason }: { id: number; reason: string }) => workforceApi.rejectSalaryAdvanceApproval(id, reason),
@@ -215,6 +222,7 @@ export default function SalaryAdvanceList() {
       await approvalQueueQuery.refetch();
       messageApi.success('Đã từ chối duyệt ứng lương');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const remindPendingApprovalsMutation = useMutation({
     mutationFn: () => workforceApi.remindSalaryAdvancePendingApprovals({ dry_run: false }),
@@ -222,6 +230,7 @@ export default function SalaryAdvanceList() {
       messageApi.success(`Đã gửi nhắc SLA duyệt ứng lương: ${data.sent_count} người nhận`);
       await approvalSlaOverviewQuery.refetch();
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const postDisbursementMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: DisbursementForm }) =>
@@ -230,6 +239,7 @@ export default function SalaryAdvanceList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
       messageApi.success('Đã ghi nhận chi tiền ứng lương');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const reverseDisbursementMutation = useMutation({
     mutationFn: (id: number) => workforceApi.reverseSalaryAdvanceDisbursement(id),
@@ -237,6 +247,7 @@ export default function SalaryAdvanceList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
       messageApi.success('Đã hủy chứng từ chi tiền ứng lương');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const employees = (employeesQuery.data?.results ?? []).filter(

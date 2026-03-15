@@ -11,6 +11,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { canManageWorkforceData } from '../../utils/authz';
+import { getToastMessage } from '../../shared/apiError';
 
 type PayrollFilters = {
   month: string;
@@ -154,6 +155,7 @@ export default function PayrollList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-salary-advances'] });
       messageApi.success(`Đã tính lương tháng ${data.month} cho ${data.count} nhân viên`);
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const lockMutation = useMutation({
@@ -174,6 +176,7 @@ export default function PayrollList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-payroll-posting-defaults'] });
       messageApi.success('Đã khóa bản ghi lương');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const unlockMutation = useMutation({
@@ -182,6 +185,7 @@ export default function PayrollList() {
       await queryClient.invalidateQueries({ queryKey: ['workforce-payroll'] });
       messageApi.success('Đã mở khóa bản ghi lương');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const lockMonthMutation = useMutation({
@@ -190,6 +194,7 @@ export default function PayrollList() {
       await lockedMonthsQuery.refetch();
       messageApi.success('Đã khóa kỳ lương tháng');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const unlockMonthMutation = useMutation({
@@ -198,6 +203,7 @@ export default function PayrollList() {
       await lockedMonthsQuery.refetch();
       messageApi.success('Đã mở khóa kỳ lương tháng');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
