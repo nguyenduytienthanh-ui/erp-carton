@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, Form, Input, Modal, Select, Space, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EyeOutlined, PlusOutlined, DownloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { purchasingApi } from '../../api/purchasing';
@@ -13,6 +13,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { getToastMessage } from '../../shared/apiError';
+import { downloadCSV } from '../../utils/csvExport';
 import PurchaseReturnFormModal from './PurchaseReturnFormModal';
 
 type Filters = {
@@ -210,17 +211,35 @@ export default function PurchaseReturnList() {
       {contextHolder}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h2>Phiếu Trả Hàng</h2>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          disabled={!canManage}
-          onClick={() => {
-            setEditReturn(null);
-            setFormOpen(true);
-          }}
-        >
-          Tạo phiếu trả
-        </Button>
+        <Space>
+          <Button
+            icon={<DownloadOutlined />}
+            disabled={rows.length === 0}
+            onClick={() => {
+              const exportData = rows.map((r) => ({
+                'Mã trả': r.code,
+                'Ngày trả': r.return_date,
+                'NCC': r.supplier_name,
+                'Trạng thái': STATUS_LABELS[r.status],
+                'Tổng tiền': Number(r.total).toLocaleString('vi-VN'),
+              }));
+              downloadCSV(exportData, 'phieu-tra-hang');
+            }}
+          >
+            Xuất CSV
+          </Button>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            disabled={!canManage}
+            onClick={() => {
+              setEditReturn(null);
+              setFormOpen(true);
+            }}
+          >
+            Tạo phiếu trả
+          </Button>
+        </Space>
       </div>
 
       <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>

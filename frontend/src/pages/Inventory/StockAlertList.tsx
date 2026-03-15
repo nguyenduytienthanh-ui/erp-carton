@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, Form, Input, Modal, Select, Space, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { CheckOutlined, PlusOutlined } from '@ant-design/icons';
+import { CheckOutlined, PlusOutlined, DownloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { inventoryApi } from '../../api/inventory';
@@ -12,6 +12,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { getToastMessage } from '../../shared/apiError';
+import { downloadCSV } from '../../utils/csvExport';
 
 type AlertType = 'LOW_STOCK' | 'OUT_OF_STOCK';
 type AlertStatus = 'ACTIVE' | 'ACKNOWLEDGED' | 'RESOLVED';
@@ -164,6 +165,24 @@ export default function StockAlertList() {
       {contextHolder}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h2>Cảnh báo tồn kho</h2>
+        <Button
+          icon={<DownloadOutlined />}
+          disabled={rows.length === 0}
+          onClick={() => {
+            const exportData = rows.map((r) => ({
+              'Sản phẩm': r.product_name,
+              'Mã SP': r.product_code,
+              'Loại': ALERT_TYPE_LABELS[r.alert_type],
+              'Tồn hiện tại': r.current_qty,
+              'Tồn tối thiểu': r.min_stock,
+              'Trạng thái': STATUS_LABELS[r.status],
+              'Ngày phát sinh': dayjs(r.triggered_at).format('DD/MM/YYYY HH:mm'),
+            }));
+            downloadCSV(exportData, 'canh-bao-ton-kho');
+          }}
+        >
+          Xuất CSV
+        </Button>
       </div>
 
       <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>

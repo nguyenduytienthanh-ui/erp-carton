@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EyeOutlined, PlusOutlined, DownloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { financeApi } from '../../api/finance';
@@ -12,6 +12,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { getToastMessage } from '../../shared/apiError';
+import { downloadCSV } from '../../utils/csvExport';
 
 type Filters = {
   status?: string;
@@ -215,17 +216,37 @@ export default function BankReconciliationList() {
       {contextHolder}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h2>Đối Soát Ngân Hàng</h2>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          disabled={!canManage}
-          onClick={() => {
-            setEditRecon(null);
-            setFormOpen(true);
-          }}
-        >
-          Tạo phiếu đối soát
-        </Button>
+        <Space>
+          <Button
+            icon={<DownloadOutlined />}
+            disabled={rows.length === 0}
+            onClick={() => {
+              const exportData = rows.map((r) => ({
+                'Mã': r.code,
+                'Ngày BĐS': r.statement_date,
+                'Tài khoản': r.bank_account_name,
+                'Sao kê': Number(r.statement_balance).toLocaleString('vi-VN'),
+                'Sổ': Number(r.book_balance).toLocaleString('vi-VN'),
+                'Chênh lệch': Number(r.delta).toLocaleString('vi-VN'),
+                'Trạng thái': STATUS_LABELS[r.status] ?? r.status,
+              }));
+              downloadCSV(exportData, 'doi-soat-ngan-hang');
+            }}
+          >
+            Xuất CSV
+          </Button>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            disabled={!canManage}
+            onClick={() => {
+              setEditRecon(null);
+              setFormOpen(true);
+            }}
+          >
+            Tạo phiếu đối soát
+          </Button>
+        </Space>
       </div>
 
       <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
