@@ -63,6 +63,8 @@ const CashBook = lazy(() => import('./pages/Finance/CashBook'));
 const AdvanceTransactionList = lazy(() => import('./pages/Finance/AdvanceTransactionList'));
 const FinanceSummary = lazy(() => import('./pages/Finance/FinanceSummary'));
 const GeneralLedger = lazy(() => import('./pages/Finance/GeneralLedger'));
+const GeneralLedgerList = lazy(() => import('./pages/Finance/GeneralLedgerList'));
+const TrialBalance = lazy(() => import('./pages/Finance/TrialBalance'));
 const BankReconciliation = lazy(() => import('./pages/Finance/BankReconciliation'));
 const BankReconciliationList = lazy(() => import('./pages/Finance/BankReconciliationList'));
 const AccountsReceivableList = lazy(() => import('./pages/Finance/AccountsReceivableList'));
@@ -221,7 +223,8 @@ export default function AppRouter() {
               <Route path="receivables" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<AccountsReceivableList />)}</FeatureRoute>} />
               <Route path="payables" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<AccountsPayableList />)}</FeatureRoute>} />
               <Route path="finance-summary" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<FinanceSummary />)}</FeatureRoute>} />
-              <Route path="general-ledger" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<GeneralLedger />)}</FeatureRoute>} />
+              <Route path="general-ledger" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<GeneralLedgerList />)}</FeatureRoute>} />
+              <Route path="trial-balance" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<TrialBalance />)}</FeatureRoute>} />
               <Route path="bank-reconciliation" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<BankReconciliationList />)}</FeatureRoute>} />
               <Route
                 path="admin/module-permissions"

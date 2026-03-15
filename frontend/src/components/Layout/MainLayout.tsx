@@ -111,7 +111,8 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/receivables': () => import('../../pages/Finance/AccountsReceivableList'),
   '/payables': () => import('../../pages/Finance/AccountsPayableList'),
   '/finance-summary': () => import('../../pages/Finance/FinanceSummary'),
-  '/general-ledger': () => import('../../pages/Finance/GeneralLedger'),
+  '/general-ledger': () => import('../../pages/Finance/GeneralLedgerList'),
+  '/trial-balance': () => import('../../pages/Finance/TrialBalance'),
   '/bank-reconciliation': () => import('../../pages/Finance/BankReconciliation'),
   '/admin/module-permissions': () => import('../../pages/Admin/ModulePermissionSettings'),
   '/admin/module-permissions-history': () => import('../../pages/Admin/ModulePermissionHistory'),
@@ -449,6 +450,10 @@ const MainLayout = () => {
         {
           key: '/general-ledger',
           label: renderMenuLabel('/general-ledger', 'Sổ cái'),
+        },
+        {
+          key: '/trial-balance',
+          label: renderMenuLabel('/trial-balance', 'Bảng cân đối'),
         },
         {
           key: '/bank-reconciliation',
