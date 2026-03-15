@@ -12,6 +12,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -448,17 +449,19 @@ export default function PurchaseOrderList() {
           <h2 style={{ margin: 0 }}>Đơn mua</h2>
           <div style={{ color: '#8c8c8c' }}>Quản lý đơn mua, duyệt mua và nhập kho mua hàng</div>
         </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          disabled={!canManage}
-          onClick={() => {
-            setEditingOrder(null);
-            setOpenForm(true);
-          }}
-        >
-          Tạo đơn mua
-        </Button>
+        <Tooltip title={supplierOptions.length === 0 ? 'Vui lòng tạo nhà cung cấp trước' : ''}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            disabled={!canManage || supplierOptions.length === 0}
+            onClick={() => {
+              setEditingOrder(null);
+              setOpenForm(true);
+            }}
+          >
+            Tạo đơn mua
+          </Button>
+        </Tooltip>
       </div>
 
       <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -527,6 +530,27 @@ export default function PurchaseOrderList() {
               await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
             }
           },
+        }}
+        locale={{
+          emptyText: rows.length === 0 && !ordersQuery.isLoading ? (
+            <div style={{ padding: 40, color: '#8c8c8c' }}>
+              {(intentSearch || filters.status || filters.supplier) ? (
+                <div>
+                  <div style={{ marginBottom: 12 }}>Không tìm thấy đơn mua phù hợp.</div>
+                  <Button
+                    type="link"
+                    onClick={() => {
+                      setSearchInput('');
+                      setFilters({});
+                      setPage(1);
+                    }}
+                  >
+                    Xóa bộ lọc
+                  </Button>
+                </div>
+              ) : 'Chưa có đơn mua. Nhấn Tạo đơn mua để thêm mới.'}
+            </div>
+          ) : undefined,
         }}
       />
 

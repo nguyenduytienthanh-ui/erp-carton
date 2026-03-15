@@ -304,6 +304,28 @@ export default function MaterialPriceList() {
             }
           },
         }}
+        locale={{
+          emptyText: (listQuery.data?.results?.length ?? 0) === 0 && !listQuery.isLoading ? (
+            <div style={{ padding: 40, color: '#8c8c8c' }}>
+              {(searchInput || filterProduct || filterSupplier) ? (
+                <div>
+                  <div style={{ marginBottom: 12 }}>Không tìm thấy bảng giá phù hợp.</div>
+                  <Button
+                    type="link"
+                    onClick={() => {
+                      setSearchInput('');
+                      setFilterProduct(undefined);
+                      setFilterSupplier(undefined);
+                      setPage(1);
+                    }}
+                  >
+                    Xóa bộ lọc
+                  </Button>
+                </div>
+              ) : 'Chưa có bảng giá NVL.'}
+            </div>
+          ) : undefined,
+        }}
       />
 
       <Modal

@@ -261,6 +261,27 @@ export default function SupplierList() {
             }
           },
         }}
+        locale={{
+          emptyText: (listQuery.data?.results?.length ?? 0) === 0 && !listQuery.isLoading ? (
+            <div style={{ padding: 40, color: '#8c8c8c' }}>
+              {(intentSearch || (filters.activeOnly === false)) ? (
+                <div>
+                  <div style={{ marginBottom: 12 }}>Không tìm thấy nhà cung cấp phù hợp.</div>
+                  <Button
+                    type="link"
+                    onClick={() => {
+                      setSearchInput('');
+                      setFilters({ activeOnly: true });
+                      setPage(1);
+                    }}
+                  >
+                    Xóa bộ lọc
+                  </Button>
+                </div>
+              ) : 'Chưa có nhà cung cấp.'}
+            </div>
+          ) : undefined,
+        }}
       />
 
       <Modal

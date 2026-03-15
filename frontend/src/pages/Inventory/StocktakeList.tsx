@@ -185,6 +185,13 @@ export default function StocktakeList() {
           onChange: setPage,
         }}
         onRow={(row) => ({ onClick: () => setDetailId(row.id), style: { cursor: 'pointer' } })}
+        locale={{
+          emptyText: (listQuery.data?.results?.length ?? 0) === 0 && !listQuery.isLoading ? (
+            <div style={{ padding: 40, color: '#8c8c8c' }}>
+              Chưa có phiếu kiểm tồn. Nhấn Tạo phiếu để thêm mới.
+            </div>
+          ) : undefined,
+        }}
       />
 
       <Modal

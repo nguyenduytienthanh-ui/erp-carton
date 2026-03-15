@@ -235,6 +235,27 @@ export default function PurchaseReceiptList() {
             }
           },
         }}
+        locale={{
+          emptyText: rows.length === 0 && !receiptsQuery.isLoading ? (
+            <div style={{ padding: 40, color: '#8c8c8c' }}>
+              {(intentSearch || filters.status || filters.supplier) ? (
+                <div>
+                  <div style={{ marginBottom: 12 }}>Không tìm thấy phiếu nhập phù hợp.</div>
+                  <Button
+                    type="link"
+                    onClick={() => {
+                      setSearchInput('');
+                      setFilters({});
+                      setPage(1);
+                    }}
+                  >
+                    Xóa bộ lọc
+                  </Button>
+                </div>
+              ) : 'Chưa có phiếu nhập kho.'}
+            </div>
+          ) : undefined,
+        }}
       />
 
       <Modal

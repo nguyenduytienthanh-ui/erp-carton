@@ -793,6 +793,27 @@ export default function ProductionOrderList() {
             }
           },
         }}
+        locale={{
+          emptyText: rows.length === 0 && !ordersQuery.isLoading ? (
+            <div style={{ padding: 40, color: '#8c8c8c' }}>
+              {(intentSearch || filters.status) ? (
+                <div>
+                  <div style={{ marginBottom: 12 }}>Không tìm thấy lệnh sản xuất phù hợp.</div>
+                  <Button
+                    type="link"
+                    onClick={() => {
+                      setSearchInput('');
+                      setFilters({});
+                      setPage(1);
+                    }}
+                  >
+                    Xóa bộ lọc
+                  </Button>
+                </div>
+              ) : 'Chưa có lệnh sản xuất. Nhấn Tạo lệnh sản xuất để thêm mới.'}
+            </div>
+          ) : undefined,
+        }}
       />
 
       <ProductionOrderForm
