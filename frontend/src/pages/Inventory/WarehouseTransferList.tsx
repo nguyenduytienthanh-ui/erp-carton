@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Form, Input, Modal, Select, Space, Table, Tag, message } from 'antd';
+import { Button, Form, Input, Modal, Select, Space, Table, Tag, message, Skeleton } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, EyeOutlined, PlusOutlined, DownloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -315,49 +315,57 @@ export default function WarehouseTransferList() {
           width={900}
           footer={null}
         >
-          {detailQuery.data && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div>
-                <strong>Ngày chuyển:</strong> {detailQuery.data.transfer_date}
-              </div>
-              <div>
-                <strong>Từ kho:</strong> {detailQuery.data.from_warehouse_code}
-              </div>
-              <div>
-                <strong>Đến kho:</strong> {detailQuery.data.to_warehouse_code}
-              </div>
-              <div>
-                <strong>Trạng thái:</strong>{' '}
-                <Tag color={STATUS_COLORS[detailQuery.data.status]}>
-                  {STATUS_LABELS[detailQuery.data.status]}
-                </Tag>
-              </div>
-              {detailQuery.data.reference && (
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <strong>Tham chiếu:</strong> {detailQuery.data.reference}
-                </div>
-              )}
-              {detailQuery.data.note && (
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <strong>Ghi chú:</strong> {detailQuery.data.note}
-                </div>
-              )}
+          {detailQuery.isLoading ? (
+            <Skeleton active paragraph={{ rows: 4 }} />
+          ) : detailQuery.error ? (
+            <div style={{ color: '#ff4d4f', padding: 16, textAlign: 'center' }}>
+              Lỗi: Không thể tải chi tiết phiếu chuyển
             </div>
-          )}
-          {detailQuery.data?.lines && (
-            <Table
-              style={{ marginTop: 16 }}
-              rowKey="id"
-              columns={[
-                { title: 'Sản phẩm', dataIndex: 'product_name', width: 200 },
-                { title: 'Mã', dataIndex: 'product_code', width: 100 },
-                { title: 'Số lượng', dataIndex: 'qty', width: 100 },
-                { title: 'Đã nhận', dataIndex: 'received_qty', width: 100 },
-              ]}
-              dataSource={detailQuery.data.lines}
-              pagination={false}
-            />
-          )}
+          ) : detailQuery.data ? (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <strong>Ngày chuyển:</strong> {detailQuery.data.transfer_date}
+                </div>
+                <div>
+                  <strong>Từ kho:</strong> {detailQuery.data.from_warehouse_code}
+                </div>
+                <div>
+                  <strong>Đến kho:</strong> {detailQuery.data.to_warehouse_code}
+                </div>
+                <div>
+                  <strong>Trạng thái:</strong>{' '}
+                  <Tag color={STATUS_COLORS[detailQuery.data.status]}>
+                    {STATUS_LABELS[detailQuery.data.status]}
+                  </Tag>
+                </div>
+                {detailQuery.data.reference && (
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <strong>Tham chiếu:</strong> {detailQuery.data.reference}
+                  </div>
+                )}
+                {detailQuery.data.note && (
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <strong>Ghi chú:</strong> {detailQuery.data.note}
+                  </div>
+                )}
+              </div>
+              {detailQuery.data?.lines && (
+                <Table
+                  style={{ marginTop: 16 }}
+                  rowKey="id"
+                  columns={[
+                    { title: 'Sản phẩm', dataIndex: 'product_name', width: 200 },
+                    { title: 'Mã', dataIndex: 'product_code', width: 100 },
+                    { title: 'Số lượng', dataIndex: 'qty', width: 100 },
+                    { title: 'Đã nhận', dataIndex: 'received_qty', width: 100 },
+                  ]}
+                  dataSource={detailQuery.data.lines}
+                  pagination={false}
+                />
+              )}
+            </>
+          ) : null}
         </Modal>
       )}
 

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message } from 'antd';
+import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message, Skeleton } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, EyeOutlined, PlusOutlined, DownloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -323,7 +323,13 @@ export default function BankReconciliationList() {
           width={800}
           footer={null}
         >
-          {detailQuery.data && (
+          {detailQuery.isLoading ? (
+            <Skeleton active paragraph={{ rows: 4 }} />
+          ) : detailQuery.error ? (
+            <div style={{ color: '#ff4d4f', padding: 16, textAlign: 'center' }}>
+              Lỗi: Không thể tải chi tiết phiếu đối soát
+            </div>
+          ) : detailQuery.data ? (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div>
                 <strong>Ngày BĐS:</strong> {detailQuery.data.statement_date}
@@ -360,7 +366,7 @@ export default function BankReconciliationList() {
                 </div>
               )}
             </div>
-          )}
+          ) : null}
         </Modal>
       )}
 

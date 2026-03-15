@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Form, Input, Modal, Select, Space, Table, Tag, message } from 'antd';
+import { Button, Form, Input, Modal, Select, Space, Table, Tag, message, Skeleton } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, EyeOutlined, PlusOutlined, DownloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -316,42 +316,50 @@ export default function PurchaseReturnList() {
           width={900}
           footer={null}
         >
-          {detailQuery.data && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div>
-                <strong>Ngày trả:</strong> {detailQuery.data.return_date}
-              </div>
-              <div>
-                <strong>NCC:</strong> {detailQuery.data.supplier_name}
-              </div>
-              <div>
-                <strong>Lý do:</strong> {detailQuery.data.return_reason}
-              </div>
-              <div>
-                <strong>Trạng thái:</strong>{' '}
-                <Tag color={STATUS_COLORS[detailQuery.data.status]}>
-                  {STATUS_LABELS[detailQuery.data.status]}
-                </Tag>
-              </div>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <strong>Ghi chú:</strong> {detailQuery.data.return_notes}
-              </div>
+          {detailQuery.isLoading ? (
+            <Skeleton active paragraph={{ rows: 4 }} />
+          ) : detailQuery.error ? (
+            <div style={{ color: '#ff4d4f', padding: 16, textAlign: 'center' }}>
+              Lỗi: Không thể tải chi tiết phiếu trả
             </div>
-          )}
-          {detailQuery.data?.lines && (
-            <Table
-              style={{ marginTop: 16 }}
-              rowKey="id"
-              columns={[
-                { title: 'Sản phẩm', dataIndex: 'product_name', width: 200 },
-                { title: 'Mã', dataIndex: 'product_code', width: 100 },
-                { title: 'Số lượng', dataIndex: 'qty', width: 100 },
-                { title: 'Đơn giá', dataIndex: 'unit_price', width: 120, render: (v) => Number(v).toLocaleString() },
-              ]}
-              dataSource={detailQuery.data.lines}
-              pagination={false}
-            />
-          )}
+          ) : detailQuery.data ? (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <strong>Ngày trả:</strong> {detailQuery.data.return_date}
+                </div>
+                <div>
+                  <strong>NCC:</strong> {detailQuery.data.supplier_name}
+                </div>
+                <div>
+                  <strong>Lý do:</strong> {detailQuery.data.return_reason}
+                </div>
+                <div>
+                  <strong>Trạng thái:</strong>{' '}
+                  <Tag color={STATUS_COLORS[detailQuery.data.status]}>
+                    {STATUS_LABELS[detailQuery.data.status]}
+                  </Tag>
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <strong>Ghi chú:</strong> {detailQuery.data.return_notes}
+                </div>
+              </div>
+              {detailQuery.data?.lines && (
+                <Table
+                  style={{ marginTop: 16 }}
+                  rowKey="id"
+                  columns={[
+                    { title: 'Sản phẩm', dataIndex: 'product_name', width: 200 },
+                    { title: 'Mã', dataIndex: 'product_code', width: 100 },
+                    { title: 'Số lượng', dataIndex: 'qty', width: 100 },
+                    { title: 'Đơn giá', dataIndex: 'unit_price', width: 120, render: (v) => Number(v).toLocaleString() },
+                  ]}
+                  dataSource={detailQuery.data.lines}
+                  pagination={false}
+                />
+              )}
+            </>
+          ) : null}
         </Modal>
       )}
 
