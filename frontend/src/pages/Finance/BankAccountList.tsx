@@ -10,6 +10,7 @@ import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { canManageFinanceData } from '../../utils/authz';
+import { getToastMessage } from '../../shared/apiError';
 
 type BankFilters = { activeOnly: boolean };
 
@@ -78,6 +79,7 @@ export default function BankAccountList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-bank-accounts'] });
       messageApi.success('Đã thêm tài khoản ngân hàng');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const updateMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: Partial<BankAccountForm> }) =>
@@ -86,6 +88,7 @@ export default function BankAccountList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-bank-accounts'] });
       messageApi.success('Đã cập nhật tài khoản ngân hàng');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const deleteMutation = useMutation({
     mutationFn: financeApi.deleteBankAccount,
@@ -93,6 +96,7 @@ export default function BankAccountList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-bank-accounts'] });
       messageApi.success('Đã xóa tài khoản ngân hàng');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const rows = listQuery.data?.results ?? [];
@@ -231,6 +235,27 @@ export default function BankAccountList() {
               await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
             }
           },
+        }}
+        locale={{
+          emptyText: rows.length === 0 && !listQuery.isLoading ? (
+            <div style={{ padding: 40, color: '#8c8c8c' }}>
+              {(intentSearch || !filters.activeOnly) ? (
+                <div>
+                  <div style={{ marginBottom: 12 }}>Không tìm thấy tài khoản ngân hàng phù hợp.</div>
+                  <Button
+                    type="link"
+                    onClick={() => {
+                      setSearchInput('');
+                      setFilters({ activeOnly: true });
+                      setPage(1);
+                    }}
+                  >
+                    Xóa bộ lọc
+                  </Button>
+                </div>
+              ) : 'Chưa có tài khoản ngân hàng.'}
+            </div>
+          ) : undefined,
         }}
       />
 

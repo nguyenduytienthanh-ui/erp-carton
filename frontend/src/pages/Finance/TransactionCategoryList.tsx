@@ -10,6 +10,7 @@ import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { canManageFinanceData } from '../../utils/authz';
+import { getToastMessage } from '../../shared/apiError';
 
 type CategoryFilters = {
   category_type: '' | TransactionCategoryType;
@@ -87,6 +88,7 @@ export default function TransactionCategoryList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-transaction-categories'] });
       messageApi.success('Đã thêm loại thu chi');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const updateMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: Partial<CategoryForm> }) =>
@@ -95,6 +97,7 @@ export default function TransactionCategoryList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-transaction-categories'] });
       messageApi.success('Đã cập nhật loại thu chi');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
   const deleteMutation = useMutation({
     mutationFn: financeApi.deleteTransactionCategory,
@@ -102,6 +105,7 @@ export default function TransactionCategoryList() {
       await queryClient.invalidateQueries({ queryKey: ['finance-transaction-categories'] });
       messageApi.success('Đã xóa loại thu chi');
     },
+    onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
   const rows = listQuery.data?.results ?? [];
@@ -249,6 +253,27 @@ export default function TransactionCategoryList() {
               await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
             }
           },
+        }}
+        locale={{
+          emptyText: rows.length === 0 && !listQuery.isLoading ? (
+            <div style={{ padding: 40, color: '#8c8c8c' }}>
+              {(intentSearch || filters.category_type) ? (
+                <div>
+                  <div style={{ marginBottom: 12 }}>Không tìm thấy loại thu chi phù hợp.</div>
+                  <Button
+                    type="link"
+                    onClick={() => {
+                      setSearchInput('');
+                      setFilters({ category_type: '' });
+                      setPage(1);
+                    }}
+                  >
+                    Xóa bộ lọc
+                  </Button>
+                </div>
+              ) : 'Chưa có loại thu chi.'}
+            </div>
+          ) : undefined,
         }}
       />
 
