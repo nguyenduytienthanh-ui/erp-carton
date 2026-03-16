@@ -46,10 +46,15 @@ const PurchaseOrderList = lazy(() => import('./pages/Purchasing/PurchaseOrderLis
 const PurchaseReceiptList = lazy(() => import('./pages/Purchasing/PurchaseReceiptList'));
 const PurchaseRequestList = lazy(() => import('./pages/Purchasing/PurchaseRequestList'));
 const PurchaseReturnList = lazy(() => import('./pages/Purchasing/PurchaseReturnList'));
+const PurchaseOrderForecast = lazy(() => import('./pages/Purchasing/PurchaseOrderForecast'));
+const SupplierPerformanceAnalytics = lazy(() => import('./pages/Purchasing/SupplierPerformanceAnalytics'));
 const ProductionOrderList = lazy(() => import('./pages/Production/ProductionOrderList'));
 const MaterialIssueList = lazy(() => import('./pages/Production/MaterialIssueList'));
 const ExecutiveCockpit = lazy(() => import('./pages/Management/ExecutiveCockpit'));
 const ReportsCenter = lazy(() => import('./pages/Management/ReportsCenter'));
+const ProductionCostingReport = lazy(() => import('./pages/Management/ProductionCostingReport'));
+const ProfitReport = lazy(() => import('./pages/Management/ProfitReport'));
+const EmployeePerformanceReport = lazy(() => import('./pages/Management/EmployeePerformanceReport'));
 const TaskOperationsBoard = lazy(() => import('./pages/Tasks/TaskOperationsBoard'));
 const TaskInbox = lazy(() => import('./pages/Tasks/TaskInbox'));
 const WorkflowTaskTemplateList = lazy(() => import('./pages/WorkflowTaskTemplates/WorkflowTaskTemplateList'));
@@ -65,13 +70,10 @@ const SalaryAdvanceList = lazy(() => import('./pages/Workforce/SalaryAdvanceList
 const BankAccountList = lazy(() => import('./pages/Finance/BankAccountList'));
 const TransactionCategoryList = lazy(() => import('./pages/Finance/TransactionCategoryList'));
 const CashBook = lazy(() => import('./pages/Finance/CashBook'));
-const CashBookList = lazy(() => import('./pages/Finance/CashBookList'));
 const AdvanceTransactionList = lazy(() => import('./pages/Finance/AdvanceTransactionList'));
 const FinanceSummary = lazy(() => import('./pages/Finance/FinanceSummary'));
-const GeneralLedger = lazy(() => import('./pages/Finance/GeneralLedger'));
 const GeneralLedgerList = lazy(() => import('./pages/Finance/GeneralLedgerList'));
 const TrialBalance = lazy(() => import('./pages/Finance/TrialBalance'));
-const BankReconciliation = lazy(() => import('./pages/Finance/BankReconciliation'));
 const BankReconciliationList = lazy(() => import('./pages/Finance/BankReconciliationList'));
 const BudgetManagement = lazy(() => import('./pages/Finance/BudgetManagement'));
 const BIDashboard = lazy(() => import('./pages/Management/BIDashboard'));
@@ -206,6 +208,8 @@ export default function AppRouter() {
               <Route path="purchase-receipts" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseReceiptList />)}</FeatureRoute>} />
               <Route path="purchase-requests" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseRequestList />)}</FeatureRoute>} />
               <Route path="purchase-returns" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseReturnList />)}</FeatureRoute>} />
+              <Route path="purchase-order-forecast" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseOrderForecast />)}</FeatureRoute>} />
+              <Route path="supplier-analytics" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<SupplierPerformanceAnalytics />)}</FeatureRoute>} />
               <Route path="production-orders" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionOrderList />)}</FeatureRoute>} />
               <Route path="material-issues" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<MaterialIssueList />)}</FeatureRoute>} />
               <Route path="warehouses" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseList />)}</FeatureRoute>} />
@@ -219,6 +223,9 @@ export default function AppRouter() {
               <Route path="warehouse-transfers" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseTransferList />)}</FeatureRoute>} />
               <Route path="executive-cockpit" element={<FeatureRoute allow={canViewOps} fallbackTo="/task-inbox">{withAsyncBoundary(<ExecutiveCockpit />)}</FeatureRoute>} />
               <Route path="reports" element={<FeatureRoute allow={canViewReports} fallbackTo="/">{withAsyncBoundary(<ReportsCenter />)}</FeatureRoute>} />
+              <Route path="production-costing" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionCostingReport />)}</FeatureRoute>} />
+              <Route path="profit-report" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<ProfitReport />)}</FeatureRoute>} />
+              <Route path="employee-performance" element={<FeatureRoute allow={canManageWorkforce} fallbackTo="/">{withAsyncBoundary(<EmployeePerformanceReport />)}</FeatureRoute>} />
               <Route path="quote-analytics" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<QuoteAnalytics />)}</FeatureRoute>} />
               <Route path="bi-dashboard" element={<FeatureRoute allow={canViewOps} fallbackTo="/">{withAsyncBoundary(<BIDashboard />)}</FeatureRoute>} />
               <Route path="task-operations" element={<FeatureRoute allow={canViewOps} fallbackTo="/task-inbox">{withAsyncBoundary(<TaskOperationsBoard />)}</FeatureRoute>} />

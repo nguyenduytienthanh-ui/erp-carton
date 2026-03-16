@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 
 import { generalLedgerApi } from '../../api/generalLedger';
-import { TrialBalanceRow } from '../../types/generalLedger';
+import type { TrialBalanceRow } from '../../types/generalLedger';
 import { downloadCSV } from '../../utils/csvExport';
 
 const TrialBalance: React.FC = () => {
@@ -199,7 +199,7 @@ const TrialBalance: React.FC = () => {
         ) : []}
         loading={isLoading}
         pagination={false}
-        rowKey={(_, index) => index}
+        rowKey={(record) => record.account_code}
         scroll={{ x: 600 }}
         locale={{
           emptyText: <Empty description="Chọn ngày để xem bảng cân đối" />,

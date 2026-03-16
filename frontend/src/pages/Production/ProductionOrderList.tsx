@@ -2,12 +2,12 @@ import React, { useState } from 'react';
 import {
   Table, Button, Space, Input, Select, Modal, Skeleton, Empty, message, Tag, Row, Col, Card, Statistic, Progress,
 } from 'antd';
-import { EyeOutlined, DeleteOutlined, PlayCircleOutlined, CheckCircleOutlined, StopOutlined, DownloadOutlined } from '@ant-design/icons';
+import { EyeOutlined, DeleteOutlined, UploadOutlined, CheckCircleOutlined, StopOutlined, DownloadOutlined, InboxOutlined, ToolOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 
-import { productionOrdersApi } from '../../api/productionOrders';
-import { ProductionOrder, ProductionOrderStatus } from '../../types/productionOrders';
+import { productionApi } from '../../api/production';
+import type { ProductionOrder, ProductionOrderStatus } from '../../types/production';
 import { getToastMessage } from '../../utils/authz';
 import { downloadCSV } from '../../utils/csvExport';
 
@@ -28,68 +28,103 @@ const ProductionOrderList: React.FC = () => {
 
   const { data, isLoading } = useQuery({
     queryKey: ['production-orders', params],
-    queryFn: () => productionOrdersApi.getOrders(params),
+    queryFn: () => productionApi.getOrders(params),
   });
+
+  const refreshOrders = () => {
+    queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+  };
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => productionOrdersApi.deleteOrder(id),
+    mutationFn: (id: number) => productionApi.deleteOrder(id),
     onSuccess: () => {
       message.success('Xóa lệnh sản xuất thành công');
-      queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+      refreshOrders();
     },
-    onError: (error) => {
-      message.error(getToastMessage(error, 'Xóa lệnh sản xuất thất bại'));
-    },
+    onError: (error) => message.error(getToastMessage(error, 'Xóa lệnh sản xuất thất bại')),
   });
 
-  const startMutation = useMutation({
-    mutationFn: (id: number) => productionOrdersApi.startProduction(id),
+  const submitMutation = useMutation({
+    mutationFn: (id: number) => productionApi.submitOrder(id),
     onSuccess: () => {
-      message.success('Bắt đầu sản xuất thành công');
-      queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+      message.success('Đã gửi duyệt lệnh sản xuất');
+      refreshOrders();
     },
-    onError: (error) => {
-      message.error(getToastMessage(error, 'Bắt đầu sản xuất thất bại'));
-    },
+    onError: (error) => message.error(getToastMessage(error, 'Gửi duyệt thất bại')),
   });
 
-  const completeMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: any }) => productionOrdersApi.completeProduction(id, data),
+  const approveMutation = useMutation({
+    mutationFn: (id: number) => productionApi.approveOrder(id),
     onSuccess: () => {
-      message.success('Hoàn thành sản xuất thành công');
-      queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+      message.success('Đã duyệt lệnh sản xuất');
+      refreshOrders();
     },
-    onError: (error) => {
-      message.error(getToastMessage(error, 'Hoàn thành sản xuất thất bại'));
+    onError: (error) => message.error(getToastMessage(error, 'Duyệt lệnh sản xuất thất bại')),
+  });
+
+  const releaseMutation = useMutation({
+    mutationFn: (id: number) => productionApi.releaseOrder(id),
+    onSuccess: () => {
+      message.success('Đã phát lệnh sản xuất');
+      refreshOrders();
     },
+    onError: (error) => message.error(getToastMessage(error, 'Phát lệnh sản xuất thất bại')),
+  });
+
+  const issueMutation = useMutation({
+    mutationFn: (id: number) => productionApi.issueMaterials(id, {}),
+    onSuccess: () => {
+      message.success('Đã cấp vật tư');
+      refreshOrders();
+    },
+    onError: (error) => message.error(getToastMessage(error, 'Cấp vật tư thất bại')),
+  });
+
+  const receiveMutation = useMutation({
+    mutationFn: (id: number) => productionApi.receiveOutput(id, {}),
+    onSuccess: () => {
+      message.success('Đã nhập kho thành phẩm');
+      refreshOrders();
+    },
+    onError: (error) => message.error(getToastMessage(error, 'Nhập kho thành phẩm thất bại')),
   });
 
   const cancelMutation = useMutation({
-    mutationFn: ({ id, reason }: { id: number; reason: string }) => 
-      productionOrdersApi.cancelOrder(id, reason),
+    mutationFn: ({ id, reason }: { id: number; reason: string }) => productionApi.cancelOrder(id, reason),
     onSuccess: () => {
       message.success('Hủy lệnh sản xuất thành công');
-      queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+      refreshOrders();
     },
-    onError: (error) => {
-      message.error(getToastMessage(error, 'Hủy lệnh sản xuất thất bại'));
-    },
+    onError: (error) => message.error(getToastMessage(error, 'Hủy lệnh sản xuất thất bại')),
   });
 
   const statusColor: Record<ProductionOrderStatus, string> = {
     DRAFT: 'default',
-    PLANNED: 'blue',
-    IN_PROGRESS: 'processing',
+    SUBMITTED: 'processing',
+    APPROVED: 'blue',
+    REJECTED: 'error',
+    RELEASED: 'cyan',
+    IN_PROGRESS: 'gold',
     COMPLETED: 'success',
     CANCELLED: 'error',
   };
 
   const statusLabel: Record<ProductionOrderStatus, string> = {
     DRAFT: 'Nháp',
-    PLANNED: 'Lên kế hoạch',
+    SUBMITTED: 'Chờ duyệt',
+    APPROVED: 'Đã duyệt',
+    REJECTED: 'Từ chối',
+    RELEASED: 'Đã phát lệnh',
     IN_PROGRESS: 'Đang sản xuất',
     COMPLETED: 'Hoàn thành',
     CANCELLED: 'Đã hủy',
+  };
+
+  const getProgressPercent = (order: ProductionOrder) => {
+    const planned = Number(order.planned_qty || 0);
+    const produced = Number(order.produced_qty || 0);
+    if (!planned) return 0;
+    return Math.min(100, Math.round((produced / planned) * 100));
   };
 
   const handleExportCSV = () => {
@@ -97,10 +132,11 @@ const ProductionOrderList: React.FC = () => {
       const csvData = data.results.map((order: ProductionOrder) => ({
         'Mã LSX': order.code,
         'Sản phẩm': order.product_name,
-        'SL': order.quantity,
+        'SL kế hoạch': Number(order.planned_qty || 0).toLocaleString('vi-VN'),
+        'SL hoàn thành': Number(order.produced_qty || 0).toLocaleString('vi-VN'),
         'Trạng thái': statusLabel[order.status],
-        'Tiến độ': `${order.progress_percentage || 0}%`,
-        'Ngày kết thúc': dayjs(order.target_end_date).format('DD/MM/YYYY'),
+        'Tiến độ': `${getProgressPercent(order)}%`,
+        'Ngày kết thúc': order.planned_end_date ? dayjs(order.planned_end_date).format('DD/MM/YYYY') : '',
       }));
       downloadCSV(csvData, 'lenh-san-xuat');
     }
@@ -108,9 +144,9 @@ const ProductionOrderList: React.FC = () => {
 
   // Tính thống kê
   const allOrders = data?.results || [];
-  const inProgress = allOrders.filter((o: ProductionOrder) => o.status === 'IN_PROGRESS').length;
+  const inProgress = allOrders.filter((o: ProductionOrder) => ['RELEASED', 'IN_PROGRESS'].includes(o.status)).length;
   const completed = allOrders.filter((o: ProductionOrder) => o.status === 'COMPLETED').length;
-  const totalQty = allOrders.reduce((sum: number, o: ProductionOrder) => sum + o.quantity, 0);
+  const totalQty = allOrders.reduce((sum: number, o: ProductionOrder) => sum + Number(o.planned_qty || 0), 0);
 
   const columns = [
     {
@@ -128,10 +164,11 @@ const ProductionOrderList: React.FC = () => {
     },
     {
       title: 'SL',
-      dataIndex: 'quantity',
-      key: 'quantity',
-      width: 80,
+      dataIndex: 'planned_qty',
+      key: 'planned_qty',
+      width: 100,
       align: 'right' as const,
+      render: (value: string) => Number(value || 0).toLocaleString('vi-VN'),
     },
     {
       title: 'Trạng thái',
@@ -144,33 +181,30 @@ const ProductionOrderList: React.FC = () => {
     },
     {
       title: 'Tiến độ',
-      dataIndex: 'progress_percentage',
       key: 'progress_percentage',
       width: 150,
-      render: (percent: number) => (
+      render: (_: unknown, row: ProductionOrder) => {
+        const percent = getProgressPercent(row);
+        return (
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Progress 
-            type="circle" 
-            percent={percent || 0} 
-            width={40}
-            format={(p) => `${p}%`}
-          />
-          <span>{percent || 0}%</span>
+          <Progress percent={percent} size="small" style={{ marginBottom: 0, minWidth: 100 }} />
+          <span>{percent}%</span>
         </div>
-      ),
+      );
+      },
     },
     {
       title: 'Ngày kết thúc',
-      dataIndex: 'target_end_date',
-      key: 'target_end_date',
+      dataIndex: 'planned_end_date',
+      key: 'planned_end_date',
       width: 120,
-      render: (date: string) => dayjs(date).format('DD/MM/YYYY'),
+      render: (date: string | null) => date ? dayjs(date).format('DD/MM/YYYY') : '-',
     },
     {
       title: 'Hành động',
       key: 'actions',
       width: 200,
-      render: (_, row: ProductionOrder) => (
+      render: (_: unknown, row: ProductionOrder) => (
         <Space wrap size="small">
           <Button 
             size="small" 
@@ -200,55 +234,74 @@ const ProductionOrderList: React.FC = () => {
               </Button>
             </>
           )}
-          {row.status === 'PLANNED' && (
+          {row.status === 'DRAFT' && (
             <Button
               size="small"
               type="primary"
-              icon={<PlayCircleOutlined />}
-              onClick={() => startMutation.mutate(row.id!)}
+              icon={<UploadOutlined />}
+              onClick={() => submitMutation.mutate(row.id)}
             >
-              Bắt đầu
+              Gửi duyệt
             </Button>
           )}
-          {row.status === 'IN_PROGRESS' && (
+          {row.status === 'SUBMITTED' && (
             <>
               <Button
                 size="small"
                 type="primary"
                 icon={<CheckCircleOutlined />}
-                onClick={() => {
-                  Modal.confirm({
-                    title: 'Hoàn thành sản xuất',
-                    content: `Hoàn thành lệnh ${row.code}?`,
-                    okText: 'Hoàn thành',
-                    cancelText: 'Không',
-                    onOk: () => completeMutation.mutate({ 
-                      id: row.id!, 
-                      data: { completed_quantity: row.quantity } 
-                    }),
-                  });
-                }}
+                onClick={() => approveMutation.mutate(row.id)}
               >
-                Hoàn thành
+                Duyệt
+              </Button>
+            </>
+          )}
+          {row.status === 'APPROVED' && (
+            <Button
+              size="small"
+              type="primary"
+              icon={<ToolOutlined />}
+              onClick={() => releaseMutation.mutate(row.id)}
+            >
+              Phát lệnh
+            </Button>
+          )}
+          {['RELEASED', 'IN_PROGRESS'].includes(row.status) && (
+            <>
+              <Button
+                size="small"
+                onClick={() => issueMutation.mutate(row.id)}
+              >
+                Cấp NVL
               </Button>
               <Button
                 size="small"
-                danger
-                icon={<StopOutlined />}
-                onClick={() => {
-                  Modal.confirm({
-                    title: 'Hủy sản xuất',
-                    content: `Hủy lệnh ${row.code}?`,
-                    okText: 'Hủy',
-                    cancelText: 'Không',
-                    okButtonProps: { danger: true },
-                    onOk: () => cancelMutation.mutate({ id: row.id!, reason: 'Người dùng hủy' }),
-                  });
-                }}
+                type="primary"
+                icon={<InboxOutlined />}
+                onClick={() => receiveMutation.mutate(row.id)}
               >
-                Hủy
+                Nhập TP
               </Button>
             </>
+          )}
+          {!['COMPLETED', 'CANCELLED'].includes(row.status) && (
+            <Button
+              size="small"
+              danger
+              icon={<StopOutlined />}
+              onClick={() => {
+                Modal.confirm({
+                  title: 'Hủy sản xuất',
+                  content: `Hủy lệnh ${row.code}?`,
+                  okText: 'Hủy',
+                  cancelText: 'Không',
+                  okButtonProps: { danger: true },
+                  onOk: () => cancelMutation.mutate({ id: row.id, reason: 'Người dùng hủy' }),
+                });
+              }}
+            >
+              Hủy
+            </Button>
           )}
         </Space>
       ),
@@ -311,7 +364,9 @@ const ProductionOrderList: React.FC = () => {
           style={{ width: '150px' }}
           options={[
             { label: 'Nháp', value: 'DRAFT' },
-            { label: 'Lên kế hoạch', value: 'PLANNED' },
+            { label: 'Chờ duyệt', value: 'SUBMITTED' },
+            { label: 'Đã duyệt', value: 'APPROVED' },
+            { label: 'Đã phát lệnh', value: 'RELEASED' },
             { label: 'Đang sản xuất', value: 'IN_PROGRESS' },
             { label: 'Hoàn thành', value: 'COMPLETED' },
             { label: 'Đã hủy', value: 'CANCELLED' },
@@ -356,23 +411,30 @@ const ProductionOrderList: React.FC = () => {
               <Col span={12}>
                 <p><strong>Mã lệnh:</strong> {detailModal.code}</p>
                 <p><strong>Sản phẩm:</strong> {detailModal.product_name}</p>
-                <p><strong>Số lượng:</strong> {detailModal.quantity} {detailModal.uom}</p>
+                <p><strong>SL kế hoạch:</strong> {Number(detailModal.planned_qty || 0).toLocaleString('vi-VN')}</p>
+                <p><strong>SL hoàn thành:</strong> {Number(detailModal.produced_qty || 0).toLocaleString('vi-VN')}</p>
               </Col>
               <Col span={12}>
                 <p><strong>Trạng thái:</strong> <Tag color={statusColor[detailModal.status]}>{statusLabel[detailModal.status]}</Tag></p>
-                <p><strong>Ngày kết thúc:</strong> {dayjs(detailModal.target_end_date).format('DD/MM/YYYY')}</p>
-                <p><strong>Tiến độ:</strong> {detailModal.progress_percentage || 0}%</p>
+                <p><strong>Ngày kết thúc:</strong> {detailModal.planned_end_date ? dayjs(detailModal.planned_end_date).format('DD/MM/YYYY') : '-'}</p>
+                <p><strong>Tiến độ:</strong> {getProgressPercent(detailModal)}%</p>
               </Col>
             </Row>
 
             <Progress 
-              percent={detailModal.progress_percentage || 0}
+              percent={getProgressPercent(detailModal)}
               status={detailModal.status === 'COMPLETED' ? 'success' : 'active'}
               style={{ marginBottom: '20px' }}
             />
 
             {detailModal.notes && (
               <p><strong>Ghi chú:</strong> {detailModal.notes}</p>
+            )}
+            {detailModal.cancel_reason && (
+              <p><strong>Lý do hủy:</strong> {detailModal.cancel_reason}</p>
+            )}
+            {detailModal.reject_reason && (
+              <p><strong>Lý do từ chối:</strong> {detailModal.reject_reason}</p>
             )}
           </div>
         )}

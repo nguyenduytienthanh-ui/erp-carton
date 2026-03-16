@@ -986,8 +986,9 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         
         with transaction.atomic():
             # Reverse inventory for each line
-            from inventory.models import InventoryTransaction, InventoryTransactionType
             from inventory.services import update_inventory_qty
+            from finance.models import PayableDocument, PayableStatus
+            from finance.services import refresh_payable_status
             
             for line in ret.lines.all():
                 if line.product:
@@ -1002,6 +1003,58 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
                             reference_code=ret.code,
                             reference_type='PurchaseReturn',
                         )
+
+            reduction_amount = Decimal(str(ret.total or 0))
+            payable_qs = PayableDocument.objects.select_for_update().exclude(status=PayableStatus.CANCELLED)
+            if ret.purchase_order_id:
+                payable_qs = payable_qs.filter(source_purchase_receipt__purchase_order_id=ret.purchase_order_id)
+            else:
+                payable_qs = payable_qs.filter(supplier_id=ret.supplier_id)
+
+            payable_docs = list(payable_qs.order_by('due_date', 'id'))
+            if reduction_amount > 0:
+                if not payable_docs:
+                    raise ValidationError({'error': 'Không tìm thấy công nợ phải trả phù hợp để giảm khi post phiếu trả hàng.'})
+
+                remaining_to_reduce = reduction_amount
+                for payable in payable_docs:
+                    total_amount = Decimal(str(payable.total_amount or 0))
+                    settled_amount = Decimal(str(payable.settled_amount or 0))
+                    reducible_amount = total_amount - settled_amount
+                    if reducible_amount <= 0:
+                        continue
+                    applied = reducible_amount if reducible_amount <= remaining_to_reduce else remaining_to_reduce
+                    if applied <= 0:
+                        continue
+
+                    old_total = total_amount
+                    new_total = total_amount - applied
+                    if old_total > 0:
+                        ratio = new_total / old_total
+                        payable.subtotal_amount = (Decimal(str(payable.subtotal_amount or 0)) * ratio).quantize(Decimal('0.01'))
+                        payable.tax_amount = (Decimal(str(payable.tax_amount or 0)) * ratio).quantize(Decimal('0.01'))
+                    payable.total_amount = new_total.quantize(Decimal('0.01'))
+                    payable.reference = (payable.reference or '')[:200]
+                    payable.note = ((payable.note or '').strip() + f'\n[Giảm tự động từ trả hàng {ret.code}] -{applied:,.2f}').strip()
+                    payable.updated_by = request.user
+                    payable.save(update_fields=['subtotal_amount', 'tax_amount', 'total_amount', 'note', 'updated_by', 'updated_at'])
+                    if payable.total_amount <= 0 and settled_amount <= 0:
+                        payable.status = PayableStatus.CANCELLED
+                        payable.save(update_fields=['status', 'updated_at'])
+                    else:
+                        refresh_payable_status(payable, actor=request.user)
+
+                    remaining_to_reduce -= applied
+                    if remaining_to_reduce <= 0:
+                        break
+
+                if remaining_to_reduce > 0:
+                    raise ValidationError({
+                        'error': (
+                            'Tổng công nợ phải trả khả dụng không đủ để giảm theo giá trị trả hàng. '
+                            f'Còn chưa phân bổ: {remaining_to_reduce:,.2f}'
+                        )
+                    })
             
             ret.status = PurchaseReturnStatus.POSTED
             ret.posted_by = request.user

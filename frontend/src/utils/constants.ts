@@ -2,6 +2,8 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0
 
 export const PAGES = {
   PRODUCTS_LIST: 'products-list',
+  PRODUCTS_CATEGORIES: 'products-categories',
+  PRODUCTS_UNITS: 'products-units',
   PRODUCTS_FORM: 'products-form',
   CUSTOMERS_LIST: 'customers-list',
   ORDERS_LIST: 'orders-list',
@@ -129,16 +131,22 @@ export const API_ENDPOINTS = {
   PURCHASING_ORDERS: '/purchasing/orders/',
   PURCHASING_RECEIPTS: '/purchasing/receipts/',
   PURCHASING_REQUESTS: '/purchasing/requests/',
+  PURCHASING_FORECAST: '/purchasing/forecast/',
+  PURCHASING_SUPPLIER_ANALYTICS: '/purchasing/supplier-analytics/',
   PRODUCTION_ORDERS: '/production/orders/',
   PRODUCTION_ISSUES: '/production/issues/',
   PRODUCTION_RECEIPTS: '/production/receipts/',
   SALES_ORDERS: '/sales/orders/',
   SALES_QUOTES: '/sales/quotes/',
+  SALES_SHIPMENTS: '/sales/shipments/',
 
   // Admin
   ROLES: '/roles/',
   ROLE_MODULE_PERMISSIONS: '/roles/module_permissions/',
   ROLE_MODULE_PERMISSIONS_HISTORY: '/roles/module_permissions_history/',
+
+  // Reports (Phase 5)
+  REPORTS_CUSTOM: '/reports/custom/',
 };
 
 export const STORAGE_KEYS = {

@@ -1,4 +1,5 @@
 import { storage } from './storage';
+import { getToastMessage as sharedGetToastMessage } from '../shared/apiError';
 
 type UserRoleLike = {
   name?: string;
@@ -416,4 +417,25 @@ export function canManageModulePermissionSettings(): boolean {
   if (authz.isStaff || authz.isSuperuser) return true;
   if (hasPermission(authz.permissions, 'CORE', 'MANAGE_RBAC')) return true;
   return hasAnyRole(authz.roleNames, ['admin', 'manager', 'quan-ly', 'quanly']);
+}
+
+export function canManageProductData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PRODUCT', 'MANAGE')) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTS', 'MANAGE')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'product-manager',
+    'operation-manager',
+    'ops-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
+export function getToastMessage(error: unknown, fallback = 'Có lỗi xảy ra'): string {
+  const message = sharedGetToastMessage(error);
+  return message || fallback;
 }

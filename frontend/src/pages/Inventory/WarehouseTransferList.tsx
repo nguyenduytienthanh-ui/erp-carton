@@ -142,7 +142,7 @@ export default function WarehouseTransferList() {
       dataIndex: 'status',
       width: 120,
       render: (status: WarehouseTransferStatus) => (
-        <Tag color={STATUS_COLORS[status]}>{STATUS_LABELS[status]}</Tag>
+        <Tag color={STATUS_COLORS[status as keyof typeof STATUS_COLORS]}>{STATUS_LABELS[status as keyof typeof STATUS_LABELS]}</Tag>
       ),
     },
     {
@@ -220,7 +220,7 @@ export default function WarehouseTransferList() {
                 'Ngày': r.transfer_date,
                 'Từ kho': r.from_warehouse_code,
                 'Đến kho': r.to_warehouse_code,
-                'Trạng thái': STATUS_LABELS[r.status],
+                'Trạng thái': STATUS_LABELS[r.status as keyof typeof STATUS_LABELS],
               }));
               downloadCSV(exportData, 'phieu-chuyen-kho');
             }}
@@ -335,8 +335,8 @@ export default function WarehouseTransferList() {
                 </div>
                 <div>
                   <strong>Trạng thái:</strong>{' '}
-                  <Tag color={STATUS_COLORS[detailQuery.data.status]}>
-                    {STATUS_LABELS[detailQuery.data.status]}
+                  <Tag color={STATUS_COLORS[detailQuery.data.status as keyof typeof STATUS_COLORS]}>
+                    {STATUS_LABELS[detailQuery.data.status as keyof typeof STATUS_LABELS]}
                   </Tag>
                 </div>
                 {detailQuery.data.reference && (

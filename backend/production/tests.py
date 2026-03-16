@@ -152,7 +152,7 @@ class ProductionWorkflowTests(APITestCase):
                 'items': [
                     {
                         'quantity': '5',
-                        'unit_cost': '25000',
+                        'unit_cost': '28000',
                     }
                 ],
             },
@@ -174,6 +174,8 @@ class ProductionWorkflowTests(APITestCase):
         self.assertEqual(receipt_tx.transaction_type, 'RECEIPT')
         self.assertEqual(issue_tx.production_order_id, order_id)
         self.assertEqual(receipt_tx.production_order_id, order_id)
+        self.finished_product.refresh_from_db()
+        self.assertEqual(str(self.finished_product.cost_price), '28000.00')
 
     def test_cancel_production_issue_rolls_back_issued_qty(self):
         order = self._create_production_order(planned_qty='4')

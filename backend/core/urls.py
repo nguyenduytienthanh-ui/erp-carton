@@ -50,6 +50,7 @@ from finance.views import (
     AdvanceSettlementViewSet,
     AdvanceTransactionViewSet,
     BankAccountViewSet,
+    BankReconciliationViewSet,
     CashAccountViewSet,
     CashTransactionViewSet,
     PayableDocumentViewSet,
@@ -58,6 +59,17 @@ from finance.views import (
     GeneralLedgerAccountViewSet,
     GeneralLedgerViewSet,
 )
+
+try:
+    from phase5_viewsets import (
+        PurchaseOrderForecastViewSet,
+        SupplierPerformanceViewSet,
+        InventoryForecastViewSet,
+        CustomReportViewSet,
+    )
+    _phase5_available = True
+except ImportError:
+    _phase5_available = False
 
 router = DefaultRouter()
 router.register(r'column-permissions', ColumnPermissionViewSet, basename='column-permission')
@@ -110,6 +122,7 @@ router.register(r'workforce/bonus-penalty-records', BonusPenaltyRecordViewSet, b
 router.register(r'workforce/salary-advances', SalaryAdvanceRecordViewSet, basename='workforce-salary-advance')
 router.register(r'workforce/payroll-records', PayrollRecordViewSet, basename='workforce-payroll-record')
 router.register(r'finance/bank-accounts', BankAccountViewSet, basename='finance-bank-account')
+router.register(r'finance/bank-reconciliations', BankReconciliationViewSet, basename='finance-bank-reconciliation')
 router.register(r'finance/transaction-categories', TransactionCategoryViewSet, basename='finance-transaction-category')
 router.register(r'finance/cash-accounts', CashAccountViewSet, basename='finance-cash-account')
 router.register(r'finance/cash-transactions', CashTransactionViewSet, basename='finance-cash-transaction')
@@ -119,6 +132,12 @@ router.register(r'finance/receivables', ReceivableDocumentViewSet, basename='fin
 router.register(r'finance/payables', PayableDocumentViewSet, basename='finance-payable')
 router.register(r'finance/general-ledger-accounts', GeneralLedgerAccountViewSet, basename='finance-gl-account')
 router.register(r'finance/general-ledger', GeneralLedgerViewSet, basename='finance-gl-entry')
+
+if _phase5_available:
+    router.register(r'purchasing/forecast', PurchaseOrderForecastViewSet, basename='po-forecast')
+    router.register(r'purchasing/supplier-analytics', SupplierPerformanceViewSet, basename='supplier-analytics')
+    router.register(r'inventory/forecast', InventoryForecastViewSet, basename='inventory-forecast')
+    router.register(r'reports/custom', CustomReportViewSet, basename='custom-reports')
 
 urlpatterns = [
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),

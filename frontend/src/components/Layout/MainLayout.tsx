@@ -90,6 +90,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/purchase-returns': () => import('../../pages/Purchasing/PurchaseReturnList'),
   '/production-orders': () => import('../../pages/Production/ProductionOrderList'),
   '/material-issues': () => import('../../pages/Production/MaterialIssueList'),
+  '/production-costing': () => import('../../pages/Management/ProductionCostingReport'),
   '/reports': () => import('../../pages/Management/ReportsCenter'),
   '/warehouses': () => import('../../pages/Inventory/WarehouseList'),
   '/warehouse-locations': () => import('../../pages/Inventory/WarehouseLocationList'),
@@ -115,15 +116,16 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/transaction-categories': () => import('../../pages/Finance/TransactionCategoryList'),
   '/bank-accounts': () => import('../../pages/Finance/BankAccountList'),
   '/cash-book': () => import('../../pages/Finance/CashBook'),
-  '/cash-book-list': () => import('../../pages/Finance/CashBookList'),
   '/advance-transactions': () => import('../../pages/Finance/AdvanceTransactionList'),
   '/receivables': () => import('../../pages/Finance/AccountsReceivableList'),
   '/aging-analysis': () => import('../../pages/Finance/AgingAnalysis'),
   '/payables': () => import('../../pages/Finance/AccountsPayableList'),
   '/finance-summary': () => import('../../pages/Finance/FinanceSummary'),
+  '/profit-report': () => import('../../pages/Management/ProfitReport'),
   '/general-ledger': () => import('../../pages/Finance/GeneralLedgerList'),
   '/trial-balance': () => import('../../pages/Finance/TrialBalance'),
-  '/bank-reconciliation': () => import('../../pages/Finance/BankReconciliation'),
+  '/bank-reconciliation': () => import('../../pages/Finance/BankReconciliationList'),
+  '/employee-performance': () => import('../../pages/Management/EmployeePerformanceReport'),
   '/admin/module-permissions': () => import('../../pages/Admin/ModulePermissionSettings'),
   '/admin/module-permissions-history': () => import('../../pages/Admin/ModulePermissionHistory'),
 };
@@ -378,6 +380,14 @@ const MainLayout = () => {
           label: renderMenuLabel('/purchase-returns', 'Phiếu trả hàng'),
         },
         {
+          key: '/purchase-order-forecast',
+          label: renderMenuLabel('/purchase-order-forecast', 'Dự báo đơn mua'),
+        },
+        {
+          key: '/supplier-analytics',
+          label: renderMenuLabel('/supplier-analytics', 'Phân tích nhà cung cấp'),
+        },
+        {
           key: '/material-prices',
           label: renderMenuLabel('/material-prices', 'Bảng giá NVL'),
         },
@@ -395,6 +405,10 @@ const MainLayout = () => {
         {
           key: '/material-issues',
           label: renderMenuLabel('/material-issues', 'Phát hành NVL'),
+        },
+        {
+          key: '/production-costing',
+          label: renderMenuLabel('/production-costing', 'Giá vốn sau sản xuất'),
         },
       ],
     } : null,
@@ -448,6 +462,10 @@ const MainLayout = () => {
             </span>
           ),
         },
+        {
+          key: '/employee-performance',
+          label: renderMenuLabel('/employee-performance', 'Đánh giá nhân viên'),
+        },
       ],
     },
     {
@@ -491,6 +509,10 @@ const MainLayout = () => {
         {
           key: '/finance-summary',
           label: renderMenuLabel('/finance-summary', 'Báo cáo tài chính'),
+        },
+        {
+          key: '/profit-report',
+          label: renderMenuLabel('/profit-report', 'Báo cáo lợi nhuận'),
         },
         {
           key: '/budget-management',

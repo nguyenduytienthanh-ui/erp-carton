@@ -202,7 +202,7 @@ const DiscountManagement: React.FC = () => {
       title: 'Hành động',
       key: 'actions',
       width: 150,
-      render: (_, row: any) => (
+      render: (_: unknown, row: any) => (
         <Space wrap size="small">
           <Button
             size="small"

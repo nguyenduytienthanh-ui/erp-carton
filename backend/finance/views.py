@@ -25,6 +25,8 @@ from .models import (
     AdvanceSettlement,
     AdvanceTransaction,
     BankAccount,
+    BankReconciliation,
+    BankReconciliationStatus,
     CashAccount,
     CashTransaction,
     PayableDocument,
@@ -60,6 +62,7 @@ from .serializers import (
     AdvanceSettlementSerializer,
     AdvanceTransactionSerializer,
     BankAccountSerializer,
+    BankReconciliationSerializer,
     CashAccountSerializer,
     CashTransactionSerializer,
     PayableDocumentSerializer,
@@ -123,6 +126,21 @@ def _normalize_month(value: str) -> str:
     if y_int < 2000 or y_int > 3000 or m_int < 1 or m_int > 12:
         return ''
     return f'{y_int}-{str(m_int).zfill(2)}'
+
+
+def _get_next_bank_reconciliation_code(statement_date_value: date | None = None) -> str:
+    dt = statement_date_value or timezone.localdate()
+    prefix = f'BR{dt.strftime("%Y%m")}'
+    latest = (
+        BankReconciliation.objects.filter(code__startswith=prefix)
+        .order_by('-code')
+        .values_list('code', flat=True)
+        .first()
+    )
+    seq = 1
+    if latest and latest[-4:].isdigit():
+        seq = int(latest[-4:]) + 1
+    return f'{prefix}-{seq:04d}'
 
 
 def _month_from_date_obj(value) -> str:
@@ -922,6 +940,145 @@ class BankAccountViewSet(SearchTextMixin, viewsets.ModelViewSet):
             old_values=snap, new_values={}, changed_fields=['deleted'],
         )
         return response
+
+
+class BankReconciliationViewSet(SearchTextMixin, viewsets.ModelViewSet):
+    queryset = BankReconciliation.objects.select_related('bank_account', 'approved_by', 'posted_by')
+    serializer_class = BankReconciliationSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['statement_date', 'status', 'created_at']
+    ordering = ['-statement_date', '-id']
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        status_value = (self.request.query_params.get('status') or '').strip()
+        if status_value:
+            queryset = queryset.filter(status=status_value)
+        return self.apply_search(queryset)
+
+    def perform_create(self, serializer):
+        if not _can_manage_finance(self.request.user):
+            raise PermissionDenied('Bạn không có quyền tạo phiếu đối soát ngân hàng.')
+        statement_date_value = serializer.validated_data.get('statement_date')
+        instance = serializer.save(
+            code=_get_next_bank_reconciliation_code(statement_date_value),
+            created_by=self.request.user,
+            updated_by=self.request.user,
+        )
+        _log_finance_audit(
+            self.request.user,
+            action='CREATE',
+            entity_type='FinanceBankReconciliation',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values={},
+            new_values={
+                'statement_date': instance.statement_date.isoformat() if instance.statement_date else '',
+                'status': instance.status,
+                'statement_balance': str(instance.statement_balance),
+                'book_balance': str(instance.book_balance),
+                'delta': str(instance.delta),
+            },
+            changed_fields=['statement_date', 'status', 'statement_balance', 'book_balance', 'delta'],
+        )
+
+    def perform_update(self, serializer):
+        if not _can_manage_finance(self.request.user):
+            raise PermissionDenied('Bạn không có quyền cập nhật phiếu đối soát ngân hàng.')
+        if serializer.instance.status != BankReconciliationStatus.DRAFT:
+            raise ValidationError({'status': 'Chỉ được sửa phiếu đối soát ở trạng thái nháp.'})
+        old = serializer.instance
+        old_snap = {
+            'statement_date': old.statement_date.isoformat() if old.statement_date else '',
+            'status': old.status,
+            'statement_balance': str(old.statement_balance),
+            'book_balance': str(old.book_balance),
+            'delta': str(old.delta),
+        }
+        instance = serializer.save(updated_by=self.request.user)
+        _log_finance_audit(
+            self.request.user,
+            action='UPDATE',
+            entity_type='FinanceBankReconciliation',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values=old_snap,
+            new_values={
+                'statement_date': instance.statement_date.isoformat() if instance.statement_date else '',
+                'status': instance.status,
+                'statement_balance': str(instance.statement_balance),
+                'book_balance': str(instance.book_balance),
+                'delta': str(instance.delta),
+            },
+            changed_fields=list(serializer.validated_data.keys()),
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xóa phiếu đối soát ngân hàng.'}, status=403)
+        instance = self.get_object()
+        if instance.status != BankReconciliationStatus.DRAFT:
+            return Response({'error': 'Chỉ được xóa phiếu đối soát ở trạng thái nháp.'}, status=400)
+        snap = {'code': instance.code, 'status': instance.status}
+        response = super().destroy(request, *args, **kwargs)
+        _log_finance_audit(
+            request.user,
+            action='DELETE',
+            entity_type='FinanceBankReconciliation',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values=snap,
+            new_values={},
+            changed_fields=['deleted'],
+        )
+        return response
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền duyệt phiếu đối soát.'}, status=403)
+        instance = self.get_object()
+        if instance.status != BankReconciliationStatus.DRAFT:
+            return Response({'error': 'Chỉ được duyệt phiếu ở trạng thái nháp.'}, status=400)
+        instance.status = BankReconciliationStatus.APPROVED
+        instance.approved_by = request.user
+        instance.approved_at = timezone.now()
+        instance.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
+        _log_finance_audit(
+            request.user,
+            action='APPROVE',
+            entity_type='FinanceBankReconciliation',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values={'status': BankReconciliationStatus.DRAFT},
+            new_values={'status': instance.status},
+            changed_fields=['status'],
+        )
+        return Response({'status': instance.status})
+
+    @action(detail=True, methods=['post'])
+    def post(self, request, pk=None):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền post phiếu đối soát.'}, status=403)
+        instance = self.get_object()
+        if instance.status != BankReconciliationStatus.APPROVED:
+            return Response({'error': 'Chỉ được post phiếu đã duyệt.'}, status=400)
+        instance.status = BankReconciliationStatus.POSTED
+        instance.posted_by = request.user
+        instance.posted_at = timezone.now()
+        instance.save(update_fields=['status', 'posted_by', 'posted_at', 'updated_at'])
+        _log_finance_audit(
+            request.user,
+            action='POST',
+            entity_type='FinanceBankReconciliation',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values={'status': BankReconciliationStatus.APPROVED},
+            new_values={'status': instance.status},
+            changed_fields=['status'],
+        )
+        return Response({'status': instance.status})
 
 
 class CashAccountViewSet(SearchTextMixin, viewsets.ModelViewSet):

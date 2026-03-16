@@ -137,7 +137,7 @@ export default function PurchaseReturnList() {
       dataIndex: 'status',
       width: 120,
       render: (status: PurchaseReturnStatus) => (
-        <Tag color={STATUS_COLORS[status]}>{STATUS_LABELS[status]}</Tag>
+        <Tag color={STATUS_COLORS[status as keyof typeof STATUS_COLORS]}>{STATUS_LABELS[status as keyof typeof STATUS_LABELS]}</Tag>
       ),
     },
     {
@@ -220,7 +220,7 @@ export default function PurchaseReturnList() {
                 'Mã trả': r.code,
                 'Ngày trả': r.return_date,
                 'NCC': r.supplier_name,
-                'Trạng thái': STATUS_LABELS[r.status],
+                'Trạng thái': STATUS_LABELS[r.status as keyof typeof STATUS_LABELS],
                 'Tổng tiền': Number(r.total).toLocaleString('vi-VN'),
               }));
               downloadCSV(exportData, 'phieu-tra-hang');
@@ -336,8 +336,8 @@ export default function PurchaseReturnList() {
                 </div>
                 <div>
                   <strong>Trạng thái:</strong>{' '}
-                  <Tag color={STATUS_COLORS[detailQuery.data.status]}>
-                    {STATUS_LABELS[detailQuery.data.status]}
+                  <Tag color={STATUS_COLORS[detailQuery.data.status as keyof typeof STATUS_COLORS]}>
+                    {STATUS_LABELS[detailQuery.data.status as keyof typeof STATUS_LABELS]}
                   </Tag>
                 </div>
                 <div style={{ gridColumn: '1 / -1' }}>

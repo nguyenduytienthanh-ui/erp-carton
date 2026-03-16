@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import {
-  Card, Row, Col, Statistic, LineChart, BarChart, PieChart, Select, DatePicker, Space, Skeleton, Table, Tag,
+  Card, Row, Col, Statistic, DatePicker, Space, Table,
 } from 'antd';
-import { ArrowUpOutlined, ArrowDownOutlined, DownloadOutlined } from '@ant-design/icons';
+import { ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 
 import { downloadCSV } from '../../utils/csvExport';
@@ -208,7 +208,6 @@ const SalesAnalyticsDashboard: React.FC = () => {
                 value={metrics.revenue_growth}
                 suffix="%"
                 valueStyle={{ color: '#52c41a' }}
-                suffix={<ArrowUpOutlined style={{ color: '#52c41a' }} />}
               />
             </Card>
           </Col>

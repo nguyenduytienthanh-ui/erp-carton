@@ -234,7 +234,7 @@ function NestedLinesTable({ products }: { products: any[] }) {
       <Table
         dataSource={lines || []}
         columns={columns}
-        rowKey={(_, index) => index}
+        rowKey={(record, index) => record.id ?? `${record.line_number}-${index ?? 0}`}
         pagination={false}
         size="small"
       />

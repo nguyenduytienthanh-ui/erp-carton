@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Button, Form, Input, Modal, Space, Table, Tree, message } from 'antd';
+import { Button, Form, Input, Modal, Space, Table, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { DataNode } from 'antd/es/tree';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
@@ -33,7 +33,7 @@ type CategoryForm = Omit<ProductCategory, 'id' | 'created_at' | 'updated_at' | '
 const emptyForm: CategoryForm = {
   code: '',
   name: '',
-  parent: null,
+  parent: undefined,
   is_active: true,
 };
 

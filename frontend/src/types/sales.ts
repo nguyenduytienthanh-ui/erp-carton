@@ -460,3 +460,5 @@ export interface PaginatedResponse<T> {
   previous: string | null;
   results: T[];
 }
+
+export type { ProductCategory, ProductUnit } from './product';

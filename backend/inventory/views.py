@@ -689,16 +689,37 @@ class WarehouseTransferViewSet(InventoryManagePermissionMixin, viewsets.ModelVie
         transfer = self.get_object()
         if transfer.status != 'SUBMITTED':
             return Response({'error': 'Chỉ post transfer đã gửi.'}, status=400)
-        transfer.status = 'IN_TRANSIT'
-        transfer.posted_by = request.user
-        transfer.posted_at = timezone.now()
-        transfer.save(update_fields=['status', 'posted_by', 'posted_at', 'updated_at'])
+        from inventory.serializers import InventoryTransactionSerializer
+        with transaction.atomic():
+            locked_transfer = WarehouseTransfer.objects.select_for_update().prefetch_related('lines').get(pk=transfer.pk)
+            for line in locked_transfer.lines.select_related('product').all():
+                serializer = InventoryTransactionSerializer(data={
+                    'transaction_type': InventoryTransactionType.ISSUE,
+                    'transaction_date': locked_transfer.transfer_date,
+                    'reference': locked_transfer.code,
+                    'reason': f'Xuất chuyển kho {locked_transfer.code}',
+                    'note': line.note or locked_transfer.note or '',
+                    'product': line.product_id,
+                    'warehouse': locked_transfer.from_warehouse_id,
+                    'quantity': str(line.qty),
+                    'unit_cost': str(getattr(line.product, 'cost_price', Decimal('0')) or 0),
+                })
+                serializer.is_valid(raise_exception=True)
+                serializer.save(
+                    created_by=request.user,
+                    updated_by=request.user,
+                    posted_by=request.user,
+                )
+            locked_transfer.status = 'IN_TRANSIT'
+            locked_transfer.posted_by = request.user
+            locked_transfer.posted_at = timezone.now()
+            locked_transfer.save(update_fields=['status', 'posted_by', 'posted_at', 'updated_at'])
         AuditLog.objects.create(
             user=request.user, action='POST', entity_type='WarehouseTransfer',
             entity_id=transfer.id, entity_code=transfer.code,
             ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
-        return Response({'status': transfer.status})
+        return Response({'status': 'IN_TRANSIT'})
 
     @action(detail=True, methods=['post'])
     def receive_transfer(self, request, pk=None):
@@ -708,17 +729,38 @@ class WarehouseTransferViewSet(InventoryManagePermissionMixin, viewsets.ModelVie
             return Response({'error': 'Chỉ nhận transfer đang vận chuyển.'}, status=400)
         
         lines_data = request.data.get('lines', [])
+        from inventory.serializers import InventoryTransactionSerializer
         with transaction.atomic():
-            for line_data in lines_data:
-                line_id = line_data.get('id')
-                received_qty = Decimal(str(line_data.get('received_qty', 0)))
-                if line_id:
-                    line = WarehouseTransferLine.objects.get(id=line_id, transfer=transfer)
-                    line.received_qty = received_qty
-                    line.save(update_fields=['received_qty'])
-            
-            transfer.status = 'RECEIVED'
-            transfer.save(update_fields=['status', 'updated_at'])
+            locked_transfer = WarehouseTransfer.objects.select_for_update().prefetch_related('lines').get(pk=transfer.pk)
+            line_payloads = {int(item.get('id')): item for item in lines_data if item.get('id')}
+            for line in locked_transfer.lines.select_related('product').all():
+                payload = line_payloads.get(line.id, {})
+                received_qty = Decimal(str(payload.get('received_qty') or line.qty))
+                if received_qty < 0 or received_qty > line.qty:
+                    raise ValidationError({'received_qty': f'Số lượng nhận của dòng {line.line_number} phải từ 0 đến {line.qty}.'})
+                line.received_qty = received_qty
+                line.save(update_fields=['received_qty'])
+                if received_qty > 0:
+                    serializer = InventoryTransactionSerializer(data={
+                        'transaction_type': InventoryTransactionType.RECEIPT,
+                        'transaction_date': locked_transfer.transfer_date,
+                        'reference': locked_transfer.code,
+                        'reason': f'Nhập chuyển kho {locked_transfer.code}',
+                        'note': line.note or locked_transfer.note or '',
+                        'product': line.product_id,
+                        'warehouse': locked_transfer.to_warehouse_id,
+                        'quantity': str(received_qty),
+                        'unit_cost': str(getattr(line.product, 'cost_price', Decimal('0')) or 0),
+                    })
+                    serializer.is_valid(raise_exception=True)
+                    serializer.save(
+                        created_by=request.user,
+                        updated_by=request.user,
+                        posted_by=request.user,
+                    )
+
+            locked_transfer.status = 'RECEIVED'
+            locked_transfer.save(update_fields=['status', 'updated_at'])
         
         AuditLog.objects.create(
             user=request.user, action='RECEIVE', entity_type='WarehouseTransfer',
@@ -731,16 +773,40 @@ class WarehouseTransferViewSet(InventoryManagePermissionMixin, viewsets.ModelVie
     def cancel_transfer(self, request, pk=None):
         """Cancel transfer."""
         transfer = self.get_object()
+        if transfer.status == 'RECEIVED':
+            return Response({'error': 'Transfer đã nhận hoàn tất, không thể hủy.'}, status=400)
         reason = (request.data.get('reason') or '').strip() or 'Hủy chuyển kho'
-        transfer.status = 'CANCELLED'
-        transfer.cancelled_by = request.user
-        transfer.cancelled_at = timezone.now()
-        transfer.cancel_reason = reason
-        transfer.save(update_fields=['status', 'cancelled_by', 'cancelled_at', 'cancel_reason', 'updated_at'])
+        from inventory.serializers import InventoryTransactionSerializer
+        with transaction.atomic():
+            locked_transfer = WarehouseTransfer.objects.select_for_update().prefetch_related('lines').get(pk=transfer.pk)
+            if locked_transfer.status == 'IN_TRANSIT':
+                for line in locked_transfer.lines.select_related('product').all():
+                    serializer = InventoryTransactionSerializer(data={
+                        'transaction_type': InventoryTransactionType.RECEIPT,
+                        'transaction_date': timezone.localdate().isoformat(),
+                        'reference': locked_transfer.code,
+                        'reason': f'Hoàn nhập do hủy chuyển kho {locked_transfer.code}',
+                        'note': line.note or locked_transfer.note or reason,
+                        'product': line.product_id,
+                        'warehouse': locked_transfer.from_warehouse_id,
+                        'quantity': str(line.qty),
+                        'unit_cost': str(getattr(line.product, 'cost_price', Decimal('0')) or 0),
+                    })
+                    serializer.is_valid(raise_exception=True)
+                    serializer.save(
+                        created_by=request.user,
+                        updated_by=request.user,
+                        posted_by=request.user,
+                    )
+            locked_transfer.status = 'CANCELLED'
+            locked_transfer.cancelled_by = request.user
+            locked_transfer.cancelled_at = timezone.now()
+            locked_transfer.cancel_reason = reason
+            locked_transfer.save(update_fields=['status', 'cancelled_by', 'cancelled_at', 'cancel_reason', 'updated_at'])
         AuditLog.objects.create(
             user=request.user, action='CANCEL', entity_type='WarehouseTransfer',
             entity_id=transfer.id, entity_code=transfer.code,
             ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
-        return Response({'status': transfer.status})
+        return Response({'status': 'CANCELLED'})
 

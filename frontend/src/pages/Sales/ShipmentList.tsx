@@ -7,7 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 
 import { shipmentsApi } from '../../api/shipments';
-import { OutboundShipment, OutboundShipmentStatus } from '../../types/shipments';
+import type { OutboundShipment, OutboundShipmentStatus } from '../../types/shipments';
 import { getToastMessage } from '../../utils/authz';
 import { downloadCSV } from '../../utils/csvExport';
 import ShipmentFormModal from './ShipmentFormModal';
@@ -183,7 +183,7 @@ const ShipmentList: React.FC = () => {
       title: 'Hành động',
       key: 'actions',
       width: 400,
-      render: (_, row: OutboundShipment) => (
+      render: (_: unknown, row: OutboundShipment) => (
         <Space wrap size="small">
           <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailShipment(row)}>
             Xem

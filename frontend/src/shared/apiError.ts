@@ -82,7 +82,7 @@ export function parseApiError(err: unknown): ApiErrorMap {
 }
 
 /** Lấy message tổng hợp để hiển thị toast từ lỗi API */
-export function getToastMessage(err: unknown): string {
+export function getToastMessage(err: unknown, fallback = 'Có lỗi xảy ra.'): string {
   const { generalMessage } = parseApiError(err);
-  return generalMessage || 'Có lỗi xảy ra.';
+  return generalMessage || fallback;
 }

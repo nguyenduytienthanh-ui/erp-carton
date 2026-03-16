@@ -9,7 +9,7 @@ import dayjs from 'dayjs';
 import { shipmentsApi } from '../../api/shipments';
 import { customersApi } from '../../api/customers';
 import { productsApi } from '../../api/products';
-import { OutboundShipment, ShipmentLine } from '../../types/shipments';
+import type { OutboundShipment, ShipmentLine } from '../../types/shipments';
 import { getToastMessage } from '../../utils/authz';
 
 interface ShipmentFormModalProps {
@@ -137,7 +137,7 @@ const ShipmentFormModal: React.FC<ShipmentFormModalProps> = ({
     {
       title: 'Sản phẩm',
       width: 200,
-      render: (_, __, index: number) => (
+      render: (_: unknown, __: unknown, index: number) => (
         <Select
           placeholder="Chọn sản phẩm"
           value={lines[index]?.product || undefined}
@@ -152,7 +152,7 @@ const ShipmentFormModal: React.FC<ShipmentFormModalProps> = ({
     {
       title: 'SL gửi',
       width: 100,
-      render: (_, __, index: number) => (
+      render: (_: unknown, __: unknown, index: number) => (
         <InputNumber
           value={lines[index]?.qty_shipped}
           onChange={(val) => handleLineChange(index, 'qty_shipped', val)}
@@ -163,7 +163,7 @@ const ShipmentFormModal: React.FC<ShipmentFormModalProps> = ({
     {
       title: 'Giá',
       width: 100,
-      render: (_, __, index: number) => (
+      render: (_: unknown, __: unknown, index: number) => (
         <InputNumber
           value={lines[index]?.unit_price}
           onChange={(val) => handleLineChange(index, 'unit_price', val)}
@@ -174,7 +174,7 @@ const ShipmentFormModal: React.FC<ShipmentFormModalProps> = ({
     {
       title: 'Ghi chú',
       width: 150,
-      render: (_, __, index: number) => (
+      render: (_: unknown, __: unknown, index: number) => (
         <Input.TextArea
           value={lines[index]?.notes || ''}
           onChange={(e) => handleLineChange(index, 'notes', e.target.value)}
@@ -185,7 +185,7 @@ const ShipmentFormModal: React.FC<ShipmentFormModalProps> = ({
     {
       title: '',
       width: 50,
-      render: (_, __, index: number) => (
+      render: (_: unknown, __: unknown, index: number) => (
         <Popconfirm
           title="Xóa dòng"
           description="Xóa dòng này?"
@@ -240,7 +240,7 @@ const ShipmentFormModal: React.FC<ShipmentFormModalProps> = ({
           columns={columns}
           dataSource={lines}
           pagination={false}
-          rowKey={(_, index) => index}
+          rowKey={(record, index) => record.id ?? `${record.line_number}-${index ?? 0}`}
         />
         <Button icon={<PlusOutlined />} onClick={handleAddLine} style={{ marginTop: '10px' }}>
           Thêm dòng

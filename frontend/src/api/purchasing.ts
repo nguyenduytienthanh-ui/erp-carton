@@ -222,4 +222,20 @@ export const purchasingApi = {
     const response = await axiosInstance.post(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/cancel_return/`, { reason: reason ?? '' });
     return response.data;
   },
+
+  getPurchaseOrderForecast: async (params?: { lead_time?: number; months?: number }): Promise<any[]> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_FORECAST}forecast/`, { params });
+    return Array.isArray(response.data) ? response.data : response.data?.results ?? [];
+  },
+  getSupplierAnalytics: async (): Promise<any[]> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.PURCHASING_SUPPLIER_ANALYTICS);
+    return Array.isArray(response.data) ? response.data : response.data?.results ?? [];
+  },
+};
+
+export const suppliersApi = {
+  getSuppliers: purchasingApi.getSuppliers,
+  createSupplier: purchasingApi.createSupplier,
+  updateSupplier: purchasingApi.updateSupplier,
+  deleteSupplier: purchasingApi.deleteSupplier,
 };

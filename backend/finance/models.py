@@ -620,6 +620,102 @@ class AdvanceSettlement(SearchTextModelMixin):
         super().save(*args, **kwargs)
 
 
+class BankReconciliationStatus:
+    DRAFT = 'DRAFT'
+    APPROVED = 'APPROVED'
+    POSTED = 'POSTED'
+    CHOICES = [
+        (DRAFT, 'Nháp'),
+        (APPROVED, 'Đã duyệt'),
+        (POSTED, 'Đã post'),
+    ]
+
+
+class BankReconciliation(SearchTextModelMixin):
+    code = models.CharField(max_length=30, unique=True, verbose_name='Mã đối soát')
+    statement_date = models.DateField(verbose_name='Ngày sao kê')
+    statement_balance = models.DecimalField(max_digits=18, decimal_places=2, default=0, verbose_name='Số dư sao kê')
+    bank_account = models.ForeignKey(
+        BankAccount,
+        on_delete=models.PROTECT,
+        related_name='bank_reconciliations',
+        verbose_name='Tài khoản ngân hàng',
+    )
+    book_balance = models.DecimalField(max_digits=18, decimal_places=2, default=0, verbose_name='Số dư sổ')
+    delta = models.DecimalField(max_digits=18, decimal_places=2, default=0, verbose_name='Chênh lệch')
+    status = models.CharField(max_length=20, choices=BankReconciliationStatus.CHOICES, default=BankReconciliationStatus.DRAFT)
+    reference = models.CharField(max_length=200, blank=True, default='', verbose_name='Tham chiếu')
+    note = models.TextField(blank=True, default='', verbose_name='Ghi chú')
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_bank_reconciliations_approved',
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    posted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_bank_reconciliations_posted',
+    )
+    posted_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_bank_reconciliations_created',
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_bank_reconciliations_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'finance_bank_reconciliations'
+        ordering = ['-statement_date', '-id']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['statement_date']),
+            models.Index(fields=['status']),
+            models.Index(fields=['bank_account']),
+        ]
+
+    def __str__(self):
+        return self.code
+
+    def _search_values(self):
+        return [
+            self.code,
+            self.statement_date.isoformat() if self.statement_date else '',
+            getattr(self.bank_account, 'code', ''),
+            getattr(self.bank_account, 'account_number', ''),
+            getattr(self.bank_account, 'bank_name', ''),
+            str(self.statement_balance or 0),
+            str(self.book_balance or 0),
+            str(self.delta or 0),
+            dict(BankReconciliationStatus.CHOICES).get(self.status, self.status),
+            self.reference,
+            self.note,
+        ]
+
+    def save(self, *args, **kwargs):
+        self.delta = Decimal(str(self.statement_balance or 0)) - Decimal(str(self.book_balance or 0))
+        if self.code:
+            self.code = str(self.code).strip().upper()
+        self._build_search_text()
+        kwargs['update_fields'] = self._merge_update_fields(kwargs.get('update_fields'))
+        super().save(*args, **kwargs)
+
+
 class ReceivableStatus:
     OPEN = 'OPEN'
     PARTIAL = 'PARTIAL'

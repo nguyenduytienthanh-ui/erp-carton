@@ -78,7 +78,7 @@ const BudgetManagement: React.FC = () => {
       key: 'percentage',
       width: 100,
       align: 'center' as const,
-      render: (_, row: any) => {
+      render: (_: unknown, row: any) => {
         const pct = (row.actual_amount / row.budgeted_amount * 100).toFixed(0);
         return <span style={{ color: pct > '100' ? '#ff4d4f' : '#52c41a' }}>{pct}%</span>;
       },

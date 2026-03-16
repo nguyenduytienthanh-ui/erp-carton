@@ -151,7 +151,7 @@ const CustomerPortal: React.FC = () => {
       title: 'Hành động',
       key: 'actions',
       width: 100,
-      render: (_, row: any) => (
+      render: (_: unknown, row: any) => (
         <Button size="small" icon={<EyeOutlined />} onClick={() => { setSelectedOrder(row); setDetailOpen(true); }}>
           Xem
         </Button>
@@ -263,7 +263,6 @@ const CustomerPortal: React.FC = () => {
                 <Statistic
                   title="Tổng đơn hàng"
                   value={customer.total_orders}
-                  icon={<ShoppingCartOutlined />}
                 />
               </Col>
               <Col span={6}>

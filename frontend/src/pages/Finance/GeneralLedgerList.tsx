@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
 import {
-  Table, Button, Space, Input, Select, Modal, Skeleton, Empty, message, Tag, DatePicker,
+  Table, Button, Input, Select, Modal, Skeleton, Empty, Tag,
 } from 'antd';
-import { EyeOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { EyeOutlined } from '@ant-design/icons';
+import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 
 import { generalLedgerApi } from '../../api/generalLedger';
-import { GeneralLedgerEntry } from '../../types/generalLedger';
-import { getToastMessage } from '../../utils/authz';
+import type { GeneralLedgerEntry } from '../../types/generalLedger';
 import { downloadCSV } from '../../utils/csvExport';
 
 const GeneralLedgerList: React.FC = () => {
@@ -18,9 +17,6 @@ const GeneralLedgerList: React.FC = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [detailEntry, setDetailEntry] = useState<GeneralLedgerEntry | null>(null);
-  const [accounts, setAccounts] = useState<any[]>([]);
-  const queryClient = useQueryClient();
-
   const params = {
     search: search || undefined,
     account: account || undefined,
@@ -37,10 +33,8 @@ const GeneralLedgerList: React.FC = () => {
   const { data: accountsData } = useQuery({
     queryKey: ['gl-accounts'],
     queryFn: () => generalLedgerApi.getAccounts({ page_size: 1000 }),
-    onSuccess: (data) => {
-      setAccounts(data?.results || []);
-    },
   });
+  const accounts = accountsData?.results || [];
 
   const accountTypeColor: Record<string, string> = {
     ASSET: 'blue',
@@ -139,7 +133,7 @@ const GeneralLedgerList: React.FC = () => {
       title: 'Hành động',
       key: 'actions',
       width: 80,
-      render: (_, row: GeneralLedgerEntry) => (
+      render: (_: unknown, row: GeneralLedgerEntry) => (
         <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailEntry(row)}>
           Xem
         </Button>

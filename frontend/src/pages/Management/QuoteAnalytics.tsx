@@ -1,60 +1,65 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
-  Card, Row, Col, Statistic, Table, Tag, Button, DatePicker, Space, Skeleton, message,
+  Card, Row, Col, Statistic, Table, Button, DatePicker, Space, Skeleton,
 } from 'antd';
 import { ArrowUpOutlined, DownloadOutlined, PercentageOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
+import { useQuery } from '@tanstack/react-query';
 
+import { salesApi } from '../../api/sales';
 import { downloadCSV } from '../../utils/csvExport';
 
 const QuoteAnalytics: React.FC = () => {
   const [startDate, setStartDate] = useState<Dayjs>(dayjs().startOf('month'));
   const [endDate, setEndDate] = useState<Dayjs>(dayjs());
 
-  // Mock data - replace with actual API
-  const metrics = {
-    total_quotes: 45,
-    total_value: 5000000000,
-    converted_quotes: 30,
-    conversion_rate: 66.67,
-    rejected_quotes: 8,
-    expired_quotes: 7,
-    average_conversion_time: 12,
-    average_deal_size: 111111111,
-  };
+  const { data: quotesResponse, isLoading } = useQuery({
+    queryKey: ['quote-analytics', startDate.format('YYYY-MM-DD'), endDate.format('YYYY-MM-DD')],
+    queryFn: () =>
+      salesApi.getQuotes({
+        quote_date__gte: startDate.format('YYYY-MM-DD'),
+        quote_date__lte: endDate.format('YYYY-MM-DD'),
+        page_size: 500,
+      }),
+  });
 
-  const conversions = [
-    {
-      id: 1,
-      quote_code: 'Q001',
-      order_code: 'ĐB001',
-      customer_name: 'Công ty A',
-      quote_value: 100000000,
-      order_value: 100000000,
-      conversion_date: '2026-03-05',
+  const { metrics, conversions } = useMemo(() => {
+    const results = quotesResponse?.results ?? [];
+    const totalValue = results.reduce((sum: number, q: any) => sum + Number(q.total || 0), 0);
+    const accepted = results.filter((q: any) => q.status === 'ACCEPTED');
+    const convertedCount = accepted.length;
+    const totalCount = results.length;
+    const conversionRate = totalCount > 0 ? (convertedCount / totalCount) * 100 : 0;
+    const rejectedCount = results.filter((q: any) => q.status === 'REJECTED').length;
+    const expiredCount = results.filter(
+      (q: any) => q.valid_until && dayjs(q.valid_until).isBefore(dayjs()) && q.status !== 'ACCEPTED' && q.status !== 'REJECTED'
+    ).length;
+    const avgDeal = convertedCount > 0 ? totalValue / convertedCount : 0;
+
+    const conversionsList = accepted.map((q: any) => ({
+      id: q.id,
+      quote_code: q.code,
+      order_code: q.sales_order_code ?? '—',
+      customer_name: q.customer_name ?? '—',
+      quote_value: Number(q.total || 0),
+      order_value: Number(q.total || 0),
+      conversion_date: q.quote_date || q.updated_at,
       conversion_rate: 100,
-    },
-    {
-      id: 2,
-      quote_code: 'Q002',
-      order_code: 'ĐB002',
-      customer_name: 'Công ty B',
-      quote_value: 150000000,
-      order_value: 140000000,
-      conversion_date: '2026-03-07',
-      conversion_rate: 93.33,
-    },
-    {
-      id: 3,
-      quote_code: 'Q003',
-      order_code: 'ĐB003',
-      customer_name: 'Công ty C',
-      quote_value: 80000000,
-      order_value: 85000000,
-      conversion_date: '2026-03-10',
-      conversion_rate: 106.25,
-    },
-  ];
+    }));
+
+    return {
+      metrics: {
+        total_quotes: totalCount,
+        total_value: totalValue,
+        converted_quotes: convertedCount,
+        conversion_rate: conversionRate,
+        rejected_quotes: rejectedCount,
+        expired_quotes: expiredCount,
+        average_deal_size: avgDeal,
+      },
+      conversions: conversionsList,
+    };
+  }, [quotesResponse]);
 
   const handleExportCSV = () => {
     const csvData = conversions.map((c: any) => ({
@@ -124,6 +129,14 @@ const QuoteAnalytics: React.FC = () => {
       render: (date: string) => dayjs(date).format('DD/MM/YYYY'),
     },
   ];
+
+  if (isLoading) {
+    return (
+      <div style={{ padding: '20px' }}>
+        <Skeleton active />
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: '20px' }}>
@@ -207,16 +220,7 @@ const QuoteAnalytics: React.FC = () => {
           <Col span={8}>
             <Card>
               <Statistic
-                title="Trung bình thời gian chuyển đổi"
-                value={metrics.average_conversion_time}
-                suffix="ngày"
-              />
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card>
-              <Statistic
-                title="Trung bình giá trị đơn hàng"
+                title="Trung bình giá trị báo giá (đã chuyển)"
                 value={metrics.average_deal_size}
                 prefix="₫"
                 formatter={(val) => (Number(val) || 0).toLocaleString('vi-VN')}
@@ -226,7 +230,11 @@ const QuoteAnalytics: React.FC = () => {
           <Col span={8}>
             <Card>
               <Statistic title="Từ chối" value={metrics.rejected_quotes} valueStyle={{ color: '#ff4d4f' }} />
-              <Statistic title="Hết hạn" value={metrics.expired_quotes} valueStyle={{ color: '#d9d9d9' }} />
+            </Card>
+          </Col>
+          <Col span={8}>
+            <Card>
+              <Statistic title="Hết hạn / Chưa quyết" value={metrics.expired_quotes} valueStyle={{ color: '#d9d9d9' }} />
             </Card>
           </Col>
         </Row>

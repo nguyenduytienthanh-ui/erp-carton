@@ -195,6 +195,20 @@ export const financeApi = {
     });
     return response.data as FinanceMonthCloseCheckResponse;
   },
+  getCashFlowSummary: async (params: {
+    date_from: string;
+    date_to: string;
+  }): Promise<{
+    date_from: string;
+    date_to: string;
+    total_income: string;
+    total_expense: string;
+    cash_delta: string;
+    transactions_count: number;
+  }> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CASH_FLOW_SUMMARY, { params });
+    return response.data;
+  },
   getCrossModuleReadiness: async (): Promise<CrossModuleReadinessResponse> => {
     const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CROSS_MODULE_READINESS);
     return response.data as CrossModuleReadinessResponse;
@@ -345,17 +359,6 @@ export const financeApi = {
   getPayableSummary: async (params?: Record<string, unknown>): Promise<ArApSummaryResponse> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_PAYABLES}summary/`, { params });
     return response.data as ArApSummaryResponse;
-  },
-  getCashFlowSummary: async (params: { date_from: string; date_to: string }): Promise<{
-    date_from: string;
-    date_to: string;
-    total_income: string;
-    total_expense: string;
-    cash_delta: string;
-    transactions_count: number;
-  }> => {
-    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CASH_FLOW_SUMMARY, { params });
-    return response.data;
   },
   getGeneralLedger: async (params: {
     date_from: string;
@@ -534,30 +537,30 @@ export const financeApi = {
 
   // Bank Reconciliation
   getBankReconciliations: async (params?: Record<string, unknown>): Promise<PaginatedResponse<any>> => {
-    const response = await axiosInstance.get('api/finance/bank-reconciliations/', { params });
+    const response = await axiosInstance.get('/finance/bank-reconciliations/', { params });
     return response.data;
   },
   getBankReconciliation: async (id: number): Promise<any> => {
-    const response = await axiosInstance.get(`api/finance/bank-reconciliations/${id}/`);
+    const response = await axiosInstance.get(`/finance/bank-reconciliations/${id}/`);
     return response.data;
   },
   createBankReconciliation: async (payload: Record<string, unknown>): Promise<any> => {
-    const response = await axiosInstance.post('api/finance/bank-reconciliations/', payload);
+    const response = await axiosInstance.post('/finance/bank-reconciliations/', payload);
     return response.data;
   },
   updateBankReconciliation: async (id: number, payload: Record<string, unknown>): Promise<any> => {
-    const response = await axiosInstance.patch(`api/finance/bank-reconciliations/${id}/`, payload);
+    const response = await axiosInstance.patch(`/finance/bank-reconciliations/${id}/`, payload);
     return response.data;
   },
   deleteBankReconciliation: async (id: number): Promise<void> => {
-    await axiosInstance.delete(`api/finance/bank-reconciliations/${id}/`);
+    await axiosInstance.delete(`/finance/bank-reconciliations/${id}/`);
   },
   approveBankReconciliation: async (id: number): Promise<{ status: string }> => {
-    const response = await axiosInstance.post(`api/finance/bank-reconciliations/${id}/approve/`);
+    const response = await axiosInstance.post(`/finance/bank-reconciliations/${id}/approve/`);
     return response.data;
   },
   postBankReconciliation: async (id: number): Promise<{ status: string }> => {
-    const response = await axiosInstance.post(`api/finance/bank-reconciliations/${id}/post/`);
+    const response = await axiosInstance.post(`/finance/bank-reconciliations/${id}/post/`);
     return response.data;
   },
 };

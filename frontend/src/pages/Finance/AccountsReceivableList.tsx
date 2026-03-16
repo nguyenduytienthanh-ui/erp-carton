@@ -1,30 +1,32 @@
 import React, { useState } from 'react';
 import {
-  Table, Button, Space, Input, Select, Modal, Skeleton, Empty, message, Tag, DatePicker, Row, Col, Card, Statistic, Tabs,
+  Table, Button, Space, Input, Select, Modal, Skeleton, Empty, message, Tag, Row, Col, Card, Statistic, Tabs, Form, DatePicker, InputNumber,
 } from 'antd';
 import { EyeOutlined, DeleteOutlined, DownloadOutlined, DollarOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 
 import { accountsReceivableApi } from '../../api/accountsReceivable';
-import { ReceivableDocument, ReceivableDocumentStatus } from '../../types/accountsReceivable';
-import { getToastMessage } from '../../utils/authz';
+import { financeApi } from '../../api/finance';
+import type { ReceivableDocument, ReceivableDocumentStatus } from '../../types/accountsReceivable';
+import { getToastMessage } from '../../shared/apiError';
 import { downloadCSV } from '../../utils/csvExport';
 
 const AccountsReceivableList: React.FC = () => {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<ReceivableDocumentStatus | ''>('');
-  const [customerFilter, setCustomerFilter] = useState('');
   const [agingBucket, setAgingBucket] = useState<string>('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [detailModal, setDetailModal] = useState<ReceivableDocument | null>(null);
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [paymentDoc, setPaymentDoc] = useState<ReceivableDocument | null>(null);
+  const [paymentForm] = Form.useForm();
   const queryClient = useQueryClient();
 
   const params = {
     search: search || undefined,
     status: status || undefined,
-    customer_name: customerFilter || undefined,
     aging_bucket: agingBucket || undefined,
     page,
     page_size: pageSize,
@@ -35,15 +37,16 @@ const AccountsReceivableList: React.FC = () => {
     queryFn: () => accountsReceivableApi.getReceivables(params),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: number) => accountsReceivableApi.deleteReceivable(id),
-    onSuccess: () => {
-      message.success('Xóa công nợ thành công');
-      queryClient.invalidateQueries({ queryKey: ['receivables'] });
-    },
-    onError: (error) => {
-      message.error(getToastMessage(error, 'Xóa công nợ thất bại'));
-    },
+  const cashAccountsQuery = useQuery({
+    queryKey: ['receivable-cash-accounts'],
+    queryFn: () => financeApi.getCashAccounts({ page_size: 1000, is_active: 'true' }),
+    enabled: paymentOpen,
+  });
+
+  const bankAccountsQuery = useQuery({
+    queryKey: ['receivable-bank-accounts'],
+    queryFn: () => financeApi.getBankAccounts({ page_size: 1000, is_active: 'true' }),
+    enabled: paymentOpen,
   });
 
   const cancelMutation = useMutation({
@@ -55,6 +58,32 @@ const AccountsReceivableList: React.FC = () => {
     },
     onError: (error) => {
       message.error(getToastMessage(error, 'Hủy công nợ thất bại'));
+    },
+  });
+
+  const paymentMutation = useMutation({
+    mutationFn: async (payload: {
+      id: number;
+      settlement_date: string;
+      amount: number;
+      source_type: 'CASH' | 'BANK';
+      source_cash_account?: number;
+      source_bank_account?: number;
+      note?: string;
+    }) => {
+      const { id, ...body } = payload;
+      return accountsReceivableApi.receivePayment(id, body);
+    },
+    onSuccess: (updated) => {
+      message.success('Thu tiền thành công');
+      setDetailModal(updated);
+      setPaymentDoc(updated);
+      setPaymentOpen(false);
+      paymentForm.resetFields();
+      queryClient.invalidateQueries({ queryKey: ['receivables'] });
+    },
+    onError: (error) => {
+      message.error(getToastMessage(error, 'Thu tiền thất bại'));
     },
   });
 
@@ -172,7 +201,7 @@ const AccountsReceivableList: React.FC = () => {
       title: 'Hành động',
       key: 'actions',
       width: 150,
-      render: (_, row: ReceivableDocument) => (
+      render: (_: unknown, row: ReceivableDocument) => (
         <Space wrap size="small">
           <Button 
             size="small" 
@@ -181,6 +210,24 @@ const AccountsReceivableList: React.FC = () => {
           >
             Xem
           </Button>
+          {row.status !== 'CANCELLED' && row.status !== 'PAID' && (
+            <Button
+              size="small"
+              type="primary"
+              icon={<DollarOutlined />}
+              onClick={() => {
+                setPaymentDoc(row);
+                paymentForm.setFieldsValue({
+                  settlement_date: dayjs(),
+                  amount: row.outstanding_amount,
+                  source_type: 'CASH',
+                });
+                setPaymentOpen(true);
+              }}
+            >
+              Thu tiền
+            </Button>
+          )}
           {row.status !== 'CANCELLED' && row.status !== 'PAID' && (
             <Button
               size="small"
@@ -375,6 +422,72 @@ const AccountsReceivableList: React.FC = () => {
             ]}
           />
         )}
+      </Modal>
+
+      <Modal
+        title={paymentDoc ? `Thu tiền - ${paymentDoc.code}` : 'Thu tiền'}
+        open={paymentOpen}
+        onCancel={() => {
+          setPaymentOpen(false);
+          setPaymentDoc(null);
+          paymentForm.resetFields();
+        }}
+        confirmLoading={paymentMutation.isPending}
+        onOk={async () => {
+          const values = await paymentForm.validateFields();
+          await paymentMutation.mutateAsync({
+            id: paymentDoc!.id!,
+            settlement_date: values.settlement_date.format('YYYY-MM-DD'),
+            amount: Number(values.amount),
+            source_type: values.source_type,
+            source_cash_account: values.source_cash_account,
+            source_bank_account: values.source_bank_account,
+            note: values.note,
+          });
+        }}
+      >
+        <Form form={paymentForm} layout="vertical">
+          <Form.Item label="Ngày thu" name="settlement_date" rules={[{ required: true, message: 'Chọn ngày thu' }]}>
+            <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" />
+          </Form.Item>
+          <Form.Item label="Số tiền" name="amount" rules={[{ required: true, message: 'Nhập số tiền' }]}>
+            <InputNumber style={{ width: '100%' }} min={0} />
+          </Form.Item>
+          <Form.Item label="Nguồn tiền" name="source_type" rules={[{ required: true }]}>
+            <Select
+              options={[
+                { label: 'Tiền mặt / Quỹ', value: 'CASH' },
+                { label: 'Ngân hàng', value: 'BANK' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate>
+            {({ getFieldValue }) => (
+              getFieldValue('source_type') === 'BANK' ? (
+                <Form.Item label="Tài khoản ngân hàng" name="source_bank_account" rules={[{ required: true, message: 'Chọn tài khoản ngân hàng' }]}>
+                  <Select
+                    options={(bankAccountsQuery.data?.results ?? []).map((item) => ({
+                      value: item.id,
+                      label: `${item.code} - ${item.account_number}`,
+                    }))}
+                  />
+                </Form.Item>
+              ) : (
+                <Form.Item label="Quỹ / Tài khoản tiền mặt" name="source_cash_account" rules={[{ required: true, message: 'Chọn quỹ' }]}>
+                  <Select
+                    options={(cashAccountsQuery.data?.results ?? []).map((item) => ({
+                      value: item.id,
+                      label: item.name,
+                    }))}
+                  />
+                </Form.Item>
+              )
+            )}
+          </Form.Item>
+          <Form.Item label="Ghi chú" name="note">
+            <Input.TextArea rows={3} />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );

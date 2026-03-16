@@ -7,6 +7,7 @@ from .models import (
     AdvanceSettlement,
     AdvanceTransaction,
     BankAccount,
+    BankReconciliation,
     CashAccount,
     CashTransaction,
     PayableDocument,
@@ -31,6 +32,64 @@ class BankAccountSerializer(serializers.ModelSerializer):
         model = BankAccount
         fields = '__all__'
         read_only_fields = ['created_by', 'updated_by', 'created_at', 'updated_at', 'search_text']
+
+
+class BankReconciliationSerializer(serializers.ModelSerializer):
+    bank_account_code = serializers.CharField(source='bank_account.code', read_only=True)
+    bank_account_name = serializers.SerializerMethodField()
+
+    def get_bank_account_name(self, obj):
+        if not getattr(obj, 'bank_account', None):
+            return None
+        parts = [
+            getattr(obj.bank_account, 'bank_name', '') or '',
+            getattr(obj.bank_account, 'account_number', '') or '',
+        ]
+        return ' - '.join([part for part in parts if part]).strip() or obj.bank_account.code
+
+    class Meta:
+        model = BankReconciliation
+        fields = [
+            'id',
+            'code',
+            'statement_date',
+            'statement_balance',
+            'bank_account',
+            'bank_account_code',
+            'bank_account_name',
+            'book_balance',
+            'delta',
+            'status',
+            'reference',
+            'note',
+            'approved_by',
+            'approved_at',
+            'posted_by',
+            'posted_at',
+            'created_by',
+            'updated_by',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'code',
+            'delta',
+            'status',
+            'approved_by',
+            'approved_at',
+            'posted_by',
+            'posted_at',
+            'created_by',
+            'updated_by',
+            'created_at',
+            'updated_at',
+        ]
+
+    def validate(self, attrs):
+        bank_account = attrs.get('bank_account') or getattr(self.instance, 'bank_account', None)
+        if bank_account and not getattr(bank_account, 'is_active', False):
+            raise serializers.ValidationError({'bank_account': 'Tài khoản ngân hàng đã ngừng sử dụng.'})
+        return attrs
 
 
 class CashAccountSerializer(serializers.ModelSerializer):

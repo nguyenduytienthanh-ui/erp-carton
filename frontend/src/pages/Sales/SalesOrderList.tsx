@@ -1402,7 +1402,7 @@ export default function SalesOrderList() {
           <Button
             size="small"
             type="primary"
-            disabled={!canSubmit || !['DRAFT', 'SUBMITTED'].includes(row.status) || row.confirmed_at}
+            disabled={!canSubmit || !['DRAFT', 'SUBMITTED'].includes(row.status) || !!row.confirmed_at}
             onClick={() => void confirmMutation.mutateAsync(row.id)}
           >
             {row.confirmed_at ? 'Đã xác nhận' : 'Xác nhận'}

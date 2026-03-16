@@ -713,6 +713,12 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 )
                 add_produced_qty(order_locked, quantity)
             receipt.recalc_totals()
+            if receipt.total_qty and receipt.total_amount and receipt.total_qty > 0:
+                actual_unit_cost = (Decimal(str(receipt.total_amount)) / Decimal(str(receipt.total_qty))).quantize(Decimal('0.01'))
+                product = order_locked.product
+                if product and actual_unit_cost > 0 and Decimal(str(product.cost_price or 0)) != actual_unit_cost:
+                    product.cost_price = actual_unit_cost
+                    product.save(update_fields=['cost_price', 'updated_at'])
             sync_production_order_status(order_locked, actor=request.user)
 
         _log_production_audit(

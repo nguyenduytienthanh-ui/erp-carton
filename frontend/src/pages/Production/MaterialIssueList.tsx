@@ -7,7 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 
 import { productionOrdersApi } from '../../api/productionOrders';
-import { ProductionIssue } from '../../types/productionOrders';
+import type { ProductionIssue } from '../../types/productionOrders';
 import { getToastMessage } from '../../utils/authz';
 import { downloadCSV } from '../../utils/csvExport';
 
@@ -32,7 +32,7 @@ const MaterialIssueList: React.FC = () => {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => productionOrdersApi.issueMateri als(0, data),
+    mutationFn: (data: any) => productionOrdersApi.issueMaterials(0, data),
     onSuccess: () => {
       message.success('Phát hành nguyên vật liệu thành công');
       form.resetFields();
@@ -124,7 +124,7 @@ const MaterialIssueList: React.FC = () => {
       title: 'Hành động',
       key: 'actions',
       width: 150,
-      render: (_, row: ProductionIssue) => (
+      render: (_: unknown, row: ProductionIssue) => (
         <Space wrap size="small">
           <Button 
             size="small" 

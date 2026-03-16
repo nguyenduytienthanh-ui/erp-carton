@@ -1,5 +1,5 @@
-import { axiosInstance } from './config';
-import { PaginatedResponse } from '../types/common';
+import axiosInstance from './axios';
+import type { PaginatedResponse } from '../types/production';
 
 export const productionOrdersApi = {
   // Lấy danh sách lệnh sản xuất
@@ -51,7 +51,7 @@ export const productionOrdersApi = {
   },
 
   // Phát hành nguyên vật liệu
-  issueMateri als: async (id: number, data: any): Promise<any> => {
+  issueMaterials: async (_id: number, data: any): Promise<any> => {
     const response = await axiosInstance.post(`api/production/issues/`, data);
     return response.data;
   },

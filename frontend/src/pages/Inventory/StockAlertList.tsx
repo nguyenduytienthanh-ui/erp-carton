@@ -172,10 +172,10 @@ export default function StockAlertList() {
             const exportData = rows.map((r) => ({
               'Sản phẩm': r.product_name,
               'Mã SP': r.product_code,
-              'Loại': ALERT_TYPE_LABELS[r.alert_type],
+              'Loại': ALERT_TYPE_LABELS[r.alert_type as keyof typeof ALERT_TYPE_LABELS],
               'Tồn hiện tại': r.current_qty,
               'Tồn tối thiểu': r.min_stock,
-              'Trạng thái': STATUS_LABELS[r.status],
+              'Trạng thái': STATUS_LABELS[r.status as keyof typeof STATUS_LABELS],
               'Ngày phát sinh': dayjs(r.triggered_at).format('DD/MM/YYYY HH:mm'),
             }));
             downloadCSV(exportData, 'canh-bao-ton-kho');

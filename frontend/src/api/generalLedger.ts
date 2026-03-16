@@ -1,5 +1,5 @@
-import { axiosInstance } from './config';
-import { PaginatedResponse } from '../types/common';
+import axiosInstance from './axios';
+import type { PaginatedResponse } from '../types/finance';
 
 export const generalLedgerApi = {
   // Accounts

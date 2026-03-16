@@ -6,8 +6,8 @@ import { EyeOutlined, DeleteOutlined, PlusOutlined, CheckOutlined, CloseOutlined
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 
-import { purchaseRequestApi } from '../../api/purchaseRequest';
-import { PurchaseRequest, PurchaseRequestStatus } from '../../types/purchaseRequest';
+import { purchasingApi } from '../../api/purchasing';
+import type { PurchaseRequest, PurchaseRequestStatus } from '../../types/purchasing';
 import { getToastMessage } from '../../utils/authz';
 import { downloadCSV } from '../../utils/csvExport';
 
@@ -33,11 +33,11 @@ const PurchaseRequestList: React.FC = () => {
 
   const { data, isLoading } = useQuery({
     queryKey: ['purchase-requests', params],
-    queryFn: () => purchaseRequestApi.getRequests(params),
+    queryFn: () => purchasingApi.getPurchaseRequests(params),
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => purchaseRequestApi.createRequest(data),
+    mutationFn: (data: any) => purchasingApi.createPurchaseRequest(data),
     onSuccess: () => {
       message.success('Tạo yêu cầu mua thành công');
       form.resetFields();
@@ -51,7 +51,7 @@ const PurchaseRequestList: React.FC = () => {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: any) => purchaseRequestApi.updateRequest(editRequest!.id!, data),
+    mutationFn: (data: any) => purchasingApi.updatePurchaseRequest(editRequest!.id!, data),
     onSuccess: () => {
       message.success('Cập nhật yêu cầu mua thành công');
       form.resetFields();
@@ -65,7 +65,7 @@ const PurchaseRequestList: React.FC = () => {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => purchaseRequestApi.deleteRequest(id),
+    mutationFn: (id: number) => purchasingApi.deletePurchaseRequest(id),
     onSuccess: () => {
       message.success('Xóa yêu cầu mua thành công');
       queryClient.invalidateQueries({ queryKey: ['purchase-requests'] });
@@ -76,7 +76,7 @@ const PurchaseRequestList: React.FC = () => {
   });
 
   const submitMutation = useMutation({
-    mutationFn: (id: number) => purchaseRequestApi.submitRequest(id),
+    mutationFn: (id: number) => purchasingApi.submitPurchaseRequest(id),
     onSuccess: () => {
       message.success('Gửi yêu cầu mua thành công');
       queryClient.invalidateQueries({ queryKey: ['purchase-requests'] });
@@ -87,7 +87,7 @@ const PurchaseRequestList: React.FC = () => {
   });
 
   const approveMutation = useMutation({
-    mutationFn: (id: number) => purchaseRequestApi.approveRequest(id),
+    mutationFn: (id: number) => purchasingApi.approvePurchaseRequest(id),
     onSuccess: () => {
       message.success('Phê duyệt yêu cầu mua thành công');
       queryClient.invalidateQueries({ queryKey: ['purchase-requests'] });
@@ -98,7 +98,7 @@ const PurchaseRequestList: React.FC = () => {
   });
 
   const rejectMutation = useMutation({
-    mutationFn: (id: number) => purchaseRequestApi.rejectRequest(id, rejectReason),
+    mutationFn: (id: number) => purchasingApi.rejectPurchaseRequest(id, rejectReason),
     onSuccess: () => {
       message.success('Từ chối yêu cầu mua thành công');
       setShowRejectModal(false);
@@ -188,7 +188,7 @@ const PurchaseRequestList: React.FC = () => {
       title: 'Hành động',
       key: 'actions',
       width: 280,
-      render: (_, row: PurchaseRequest) => (
+      render: (_: unknown, row: PurchaseRequest) => (
         <Space wrap size="small">
           <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailRequest(row)}>
             Xem

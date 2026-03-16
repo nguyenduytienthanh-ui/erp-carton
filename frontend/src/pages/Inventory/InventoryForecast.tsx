@@ -125,7 +125,7 @@ const InventoryForecast: React.FC = () => {
       title: 'Hành động',
       key: 'actions',
       width: 120,
-      render: (_, row: any) => (
+      render: (_: unknown, row: any) => (
         <Button size="small" type={row.status === 'ALERT' ? 'primary' : 'default'}>
           {row.status === 'ALERT' ? 'Đặt hàng' : 'Chi tiết'}
         </Button>
