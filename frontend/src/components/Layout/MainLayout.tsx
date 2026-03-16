@@ -74,6 +74,12 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/shipments': () => import('../../pages/Sales/ShipmentList'),
   '/quotes': () => import('../../pages/Sales/QuoteListNew'),
   '/quote-analytics': () => import('../../pages/Management/QuoteAnalytics'),
+  '/sales-analytics': () => import('../../pages/Sales/SalesAnalyticsDashboard'),
+  '/discount-management': () => import('../../pages/Sales/DiscountManagement'),
+  '/customer-portal': () => import('../../pages/Sales/CustomerPortal'),
+  '/inventory-forecast': () => import('../../pages/Inventory/InventoryForecast'),
+  '/budget-management': () => import('../../pages/Finance/BudgetManagement'),
+  '/bi-dashboard': () => import('../../pages/Management/BIDashboard'),
   '/categories': () => import('../../pages/Categories/CategoryList'),
   '/units': () => import('../../pages/Units/UnitList'),
   '/customers': () => import('../../pages/Customers/CustomerList'),
@@ -316,6 +322,16 @@ const MainLayout = () => {
       icon: <BarChartOutlined />,
       label: renderMenuLabel('/quote-analytics', 'Phân tích báo giá'),
     } : null,
+    canViewSalesOrders ? {
+      key: '/sales-analytics',
+      icon: <BarChartOutlined />,
+      label: renderMenuLabel('/sales-analytics', 'Phân tích bán hàng'),
+    } : null,
+    canViewSalesOrders ? {
+      key: '/discount-management',
+      icon: <DollarOutlined />,
+      label: renderMenuLabel('/discount-management', 'Quản lý chiết khấu'),
+    } : null,
     {
       key: '/categories',
       icon: <TagsOutlined />,
@@ -330,6 +346,11 @@ const MainLayout = () => {
       key: '/customers',
       icon: <TeamOutlined />,
       label: renderMenuLabel('/customers', 'Khách hàng'),
+    },
+    {
+      key: '/customer-portal',
+      icon: <UserOutlined />,
+      label: renderMenuLabel('/customer-portal', 'Cổng khách hàng'),
     },
     canManagePurchasing ? {
       key: 'purchasing-group',
@@ -384,6 +405,7 @@ const MainLayout = () => {
       children: [
         ...(canManageInventory ? [
           { key: '/inventory-stock', label: renderMenuLabel('/inventory-stock', 'Tồn kho') },
+          { key: '/inventory-forecast', label: renderMenuLabel('/inventory-forecast', 'Dự báo tồn kho') },
           { key: '/inventory-transactions', label: renderMenuLabel('/inventory-transactions', 'Sổ kho') },
           { key: '/inventory-reservations', label: renderMenuLabel('/inventory-reservations', 'Reservation') },
           { key: '/stock-alerts', label: renderMenuLabel('/stock-alerts', 'Cảnh báo tồn kho') },
@@ -471,6 +493,10 @@ const MainLayout = () => {
           label: renderMenuLabel('/finance-summary', 'Báo cáo tài chính'),
         },
         {
+          key: '/budget-management',
+          label: renderMenuLabel('/budget-management', 'Quản lý ngân sách'),
+        },
+        {
           key: '/general-ledger',
           label: renderMenuLabel('/general-ledger', 'Sổ cái'),
         },
@@ -507,6 +533,10 @@ const MainLayout = () => {
         {
           key: '/executive-cockpit',
           label: renderMenuLabel('/executive-cockpit', 'Điều hành tổng hợp'),
+        },
+        {
+          key: '/bi-dashboard',
+          label: renderMenuLabel('/bi-dashboard', 'BI Dashboard'),
         },
         {
           key: '/task-operations',
