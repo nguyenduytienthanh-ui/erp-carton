@@ -2,19 +2,34 @@ import axiosInstance from './axios';
 import { API_ENDPOINTS } from '../utils/constants';
 import type {
   MaterialPurchasePrice,
+  PurchaseForecastRow,
   PaginatedResponse,
   PurchaseApprovalHistoryItem,
   PurchaseOrder,
+  CreatePurchaseOrderFromForecastPayload,
   PurchaseOrderFormValues,
   PurchaseReceipt,
   PurchaseRequest,
   PurchaseRequestLine,
+  PurchaseReturn,
+  PurchaseReturnLine,
+  PurchaseWorkflowStateSummary,
+  SupplierAnalyticsRow,
   Supplier,
 } from '../types/purchasing';
 
 
 type SupplierPayload = Omit<Supplier, 'id' | 'created_at' | 'updated_at'>;
 type PurchaseOrderPayload = Omit<PurchaseOrderFormValues, never>;
+type PurchaseReturnPayload = {
+  return_date: string;
+  supplier: number;
+  return_reason: string;
+  return_notes: string;
+  reference?: string;
+  purchase_order?: number | null;
+  lines?: Array<Partial<Omit<PurchaseReturnLine, 'id'>>>;
+};
 
 
 export const purchasingApi = {
@@ -134,6 +149,10 @@ export const purchasingApi = {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_ORDERS}${id}/approval_history/`);
     return response.data;
   },
+  getPurchaseRequestApprovalHistory: async (id: number): Promise<PurchaseApprovalHistoryItem[]> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_REQUESTS}${id}/approval_history/`);
+    return response.data;
+  },
   getOrderNextStates: async (id: number): Promise<{ current: string; next_states: string[] }> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_ORDERS}${id}/next_states/`);
     return response.data;
@@ -145,6 +164,14 @@ export const purchasingApi = {
   },
   getReceipt: async (id: number): Promise<PurchaseReceipt> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_RECEIPTS}${id}/`);
+    return response.data;
+  },
+  getReceiptLifecycleHistory: async (id: number): Promise<PurchaseApprovalHistoryItem[]> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_RECEIPTS}${id}/lifecycle_history/`);
+    return response.data;
+  },
+  getReceiptNextStates: async (id: number): Promise<PurchaseWorkflowStateSummary> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_RECEIPTS}${id}/next_states/`);
     return response.data;
   },
   cancelReceipt: async (id: number, reason: string): Promise<{ status: string }> => {
@@ -187,19 +214,19 @@ export const purchasingApi = {
   },
 
   // Purchase Returns
-  getPurchaseReturns: async (params?: Record<string, unknown>): Promise<PaginatedResponse<any>> => {
+  getPurchaseReturns: async (params?: Record<string, unknown>): Promise<PaginatedResponse<PurchaseReturn>> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}`, { params });
     return response.data;
   },
-  getPurchaseReturn: async (id: number): Promise<any> => {
+  getPurchaseReturn: async (id: number): Promise<PurchaseReturn> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/`);
     return response.data;
   },
-  createPurchaseReturn: async (payload: Record<string, unknown>): Promise<any> => {
+  createPurchaseReturn: async (payload: PurchaseReturnPayload): Promise<PurchaseReturn> => {
     const response = await axiosInstance.post(API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns'), payload);
     return response.data;
   },
-  updatePurchaseReturn: async (id: number, payload: Record<string, unknown>): Promise<any> => {
+  updatePurchaseReturn: async (id: number, payload: PurchaseReturnPayload): Promise<PurchaseReturn> => {
     const response = await axiosInstance.patch(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/`, payload);
     return response.data;
   },
@@ -222,12 +249,28 @@ export const purchasingApi = {
     const response = await axiosInstance.post(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/cancel_return/`, { reason: reason ?? '' });
     return response.data;
   },
+  getPurchaseReturnApprovalHistory: async (id: number): Promise<PurchaseApprovalHistoryItem[]> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/approval_history/`);
+    return response.data;
+  },
+  getPurchaseReturnLifecycleHistory: async (id: number): Promise<PurchaseApprovalHistoryItem[]> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/lifecycle_history/`);
+    return response.data;
+  },
+  getPurchaseReturnNextStates: async (id: number): Promise<PurchaseWorkflowStateSummary> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/next_states/`);
+    return response.data;
+  },
 
-  getPurchaseOrderForecast: async (params?: { lead_time?: number; months?: number }): Promise<any[]> => {
+  getPurchaseOrderForecast: async (params?: { lead_time?: number; months?: number }): Promise<PurchaseForecastRow[]> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_FORECAST}forecast/`, { params });
     return Array.isArray(response.data) ? response.data : response.data?.results ?? [];
   },
-  getSupplierAnalytics: async (): Promise<any[]> => {
+  createPurchaseOrderFromForecast: async (payload: CreatePurchaseOrderFromForecastPayload): Promise<PurchaseOrder> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PURCHASING_FORECAST}create_po_from_forecast/`, payload);
+    return response.data;
+  },
+  getSupplierAnalytics: async (): Promise<SupplierAnalyticsRow[]> => {
     const response = await axiosInstance.get(API_ENDPOINTS.PURCHASING_SUPPLIER_ANALYTICS);
     return Array.isArray(response.data) ? response.data : response.data?.results ?? [];
   },

@@ -1,5 +1,5 @@
 import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Card, Checkbox, Drawer, Empty, Input, List, Modal, Switch, message, Segmented, Select, Space, Spin, Tag } from 'antd';
+import { Alert, Button, Card, Checkbox, Col, Drawer, Empty, Input, List, Modal, Row, Segmented, Select, Space, Spin, Statistic, Switch, Tag, message } from 'antd';
 import { ReloadOutlined, ProjectOutlined, SwapRightOutlined, WarningOutlined, HistoryOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
@@ -13,7 +13,7 @@ import {
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { SafeText as Text } from '../../components/SafeText';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
-import { getEntityTypeLabel } from '../../utils/constants';
+import { getEntityTypeLabel, PAGES } from '../../utils/constants';
 import { storage } from '../../utils/storage';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 const TaskWorkspaceModalLazy = lazy(() => import('../../components/TaskWorkspaceModal/TaskWorkspaceModal'));
@@ -63,6 +63,51 @@ function normalizeTimelineAction(raw: string | null | undefined): string {
   return raw;
 }
 
+function normalizeTaskStatus(raw: string | null | undefined): string {
+  if (!raw) return '-';
+  const key = raw.toUpperCase();
+  if (key === 'TODO') return 'Chờ thực hiện';
+  if (key === 'IN_PROGRESS') return 'Đang xử lý';
+  if (key === 'DONE') return 'Hoàn thành';
+  if (key === 'CANCELLED') return 'Đã hủy';
+  return raw;
+}
+
+const PRIORITY_LABELS: Record<'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT', string> = {
+  LOW: 'Thấp',
+  MEDIUM: 'Trung bình',
+  HIGH: 'Cao',
+  URGENT: 'Khẩn',
+};
+
+const PRIORITY_COLORS: Record<'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT', string> = {
+  LOW: 'default',
+  MEDIUM: 'blue',
+  HIGH: 'orange',
+  URGENT: 'red',
+};
+
+const QUICK_VIEW_LABELS: Record<'DEFAULT' | 'MY_ITEMS' | 'MY_TEAM' | 'RISK' | 'FAILED', string> = {
+  DEFAULT: 'Mặc định',
+  MY_ITEMS: 'Của tôi',
+  MY_TEAM: 'Nhóm tôi',
+  RISK: 'Rủi ro',
+  FAILED: 'Thất bại',
+};
+
+const SUMMARY_TILE_STYLE = {
+  minHeight: 116,
+  borderRadius: 18,
+  padding: '16px',
+  display: 'flex',
+  flexDirection: 'column' as const,
+  justifyContent: 'space-between',
+  background: 'linear-gradient(160deg, #ffffff 0%, #f7fbff 100%)',
+  border: '1px solid #d6e4ff',
+  boxShadow: '0 12px 30px rgba(15, 23, 42, 0.06)',
+  height: '100%',
+};
+
 export default function WorkflowPipelineBoard() {
   type QuickViewMode = 'DEFAULT' | 'MY_ITEMS' | 'MY_TEAM' | 'RISK' | 'FAILED';
   type PipelineFilterSnapshot = {
@@ -81,7 +126,11 @@ export default function WorkflowPipelineBoard() {
     filters: PipelineFilterSnapshot;
   };
 
-  const { config: savedConfig, saveConfig } = useUserPreferences('workflow-pipeline-board');
+  const {
+    config: savedConfig,
+    saveConfig,
+    isLoading: isPreferencesLoading,
+  } = useUserPreferences(PAGES.WORKFLOW_PIPELINE_BOARD);
   const [entityType, setEntityType] = useState<string>('SalesOrder');
   const [trigger, setTrigger] = useState<WftTrigger>('SUBMIT');
   const [search, setSearch] = useState('');
@@ -89,7 +138,7 @@ export default function WorkflowPipelineBoard() {
   const [ownerFilter, setOwnerFilter] = useState<string>('ALL');
   const [teamFilter, setTeamFilter] = useState<string>('ALL');
   const [quickView, setQuickView] = useState<QuickViewMode>('DEFAULT');
-  const [selectedPresetId, setSelectedPresetId] = useState<string>('NONE');
+  const [selectedPresetId, setSelectedPresetId] = useState<string>();
   const [isPresetModalOpen, setIsPresetModalOpen] = useState(false);
   const [presetName, setPresetName] = useState('');
   const [selectedCard, setSelectedCard] = useState<WorkflowPipelineCard | null>(null);
@@ -370,6 +419,30 @@ export default function WorkflowPipelineBoard() {
     [filteredColumns]
   );
 
+  const boardSummary = useMemo(() => {
+    const summary = {
+      overdue: 0,
+      dueToday: 0,
+      atRisk: 0,
+      blocked: 0,
+      pinned: 0,
+      failed: 0,
+      unassigned: 0,
+    };
+    filteredColumns.forEach((col) => {
+      col.cards.forEach((card) => {
+        if (card.sla_state === 'OVERDUE') summary.overdue += 1;
+        if (card.sla_state === 'DUE_TODAY') summary.dueToday += 1;
+        if (card.sla_state === 'AT_RISK') summary.atRisk += 1;
+        if (card.current_task_is_blocking) summary.blocked += 1;
+        if (card.current_task_is_pinned) summary.pinned += 1;
+        if (!card.owner) summary.unassigned += 1;
+      });
+      if (col.id === 'failed') summary.failed += col.cards.length;
+    });
+    return summary;
+  }, [filteredColumns]);
+
   const allEntityIds = useMemo(() => {
     const ids = new Set<number>();
     (boardQuery.data?.columns ?? []).forEach((col) => {
@@ -379,6 +452,18 @@ export default function WorkflowPipelineBoard() {
   }, [boardQuery.data?.columns]);
 
   const selectedEffectiveIds = selectedEntityIds.filter((id) => allEntityIds.has(id));
+
+  const activeFilterTags = useMemo(() => {
+    const tags: string[] = [];
+    if (quickView !== 'DEFAULT') tags.push(`Góc nhìn: ${QUICK_VIEW_LABELS[quickView]}`);
+    if (slaFilter !== 'ALL') {
+      tags.push(`SLA: ${slaFilter === 'OVERDUE' ? 'Quá hạn' : slaFilter === 'DUE_TODAY' ? 'Đến hạn hôm nay' : 'Sắp quá hạn'}`);
+    }
+    if (ownerFilter !== 'ALL') tags.push(`Người phụ trách: ${ownerFilter}`);
+    if (teamFilter !== 'ALL') tags.push(`Nhóm: ${teamFilter}`);
+    if (search.trim()) tags.push(`Tìm kiếm: ${search.trim()}`);
+    return tags;
+  }, [ownerFilter, quickView, search, slaFilter, teamFilter]);
 
   const ownerOptions = useMemo(() => {
     const set = new Set<string>();
@@ -438,6 +523,42 @@ export default function WorkflowPipelineBoard() {
       .filter((v): v is PipelineNamedPreset => v !== null);
   }, [savedConfig?.saved_views]);
 
+  const selectedPreset = useMemo(
+    () => namedPresets.find((preset) => preset.id === selectedPresetId) ?? null,
+    [namedPresets, selectedPresetId]
+  );
+
+  const boardCommandSummary = useMemo(() => ({
+    hotColumns: filteredColumns.filter((col) =>
+      col.cards.some((card) => card.sla_state !== 'ON_TRACK' || card.current_task_is_blocking)
+    ).length,
+    emptyColumns: filteredColumns.filter((col) => col.cards.length === 0).length,
+    overWipColumns: filteredColumns.filter((col) => col.is_over_wip).length,
+    presetCount: namedPresets.length,
+  }), [filteredColumns, namedPresets.length]);
+
+  const boardStatusAlert = useMemo(() => {
+    if (boardSummary.failed > 0 || boardSummary.overdue > 0 || boardSummary.blocked > 0) {
+      return {
+        type: 'warning' as const,
+        message: 'Pipeline đang có thẻ cần xử lý ưu tiên.',
+        description: `Hiện có ${boardSummary.overdue} thẻ quá hạn, ${boardSummary.blocked} thẻ đang chặn và ${boardSummary.failed} thẻ ở cột thất bại.`,
+      };
+    }
+    if (boardCommandSummary.overWipColumns > 0 || boardSummary.unassigned > 0 || boardSummary.atRisk > 0) {
+      return {
+        type: 'info' as const,
+        message: 'Pipeline ổn định nhưng vẫn còn điểm cần điều phối.',
+        description: `Có ${boardCommandSummary.overWipColumns} cột vượt WIP, ${boardSummary.unassigned} thẻ chưa phụ trách và ${boardSummary.atRisk} thẻ đang tiệm cận SLA.`,
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'Pipeline đang ở trạng thái kiểm soát tốt.',
+      description: `Tổng ${totalCards} thẻ đang được theo dõi, ${boardCommandSummary.presetCount} mẫu lọc cá nhân sẵn sàng cho các ca vận hành.`,
+    };
+  }, [boardCommandSummary.overWipColumns, boardCommandSummary.presetCount, boardSummary.atRisk, boardSummary.blocked, boardSummary.failed, boardSummary.overdue, boardSummary.unassigned, totalCards]);
+
   const buildCurrentSnapshot = (): PipelineFilterSnapshot => ({
     entity_type: entityType,
     trigger,
@@ -448,6 +569,51 @@ export default function WorkflowPipelineBoard() {
     team_filter: teamFilter,
     live_sync: liveSync,
   });
+
+  const parseFilterSnapshot = (value: unknown): PipelineFilterSnapshot | null => {
+    if (!value || typeof value !== 'object') return null;
+    const obj = value as Record<string, unknown>;
+    const entityTypeValue = obj.entity_type;
+    const triggerValue = obj.trigger;
+    const quickValue = obj.quick_view;
+    const slaValue = obj.sla_filter;
+    if (
+      typeof entityTypeValue !== 'string'
+      || !entityTypeValue
+      || typeof triggerValue !== 'string'
+      || (quickValue !== 'DEFAULT' && quickValue !== 'MY_ITEMS' && quickValue !== 'MY_TEAM' && quickValue !== 'RISK' && quickValue !== 'FAILED')
+      || (slaValue !== 'ALL' && slaValue !== 'OVERDUE' && slaValue !== 'DUE_TODAY' && slaValue !== 'AT_RISK')
+    ) {
+      return null;
+    }
+    return {
+      entity_type: entityTypeValue,
+      trigger: triggerValue as WftTrigger,
+      search: typeof obj.search === 'string' ? obj.search : '',
+      quick_view: quickValue,
+      sla_filter: slaValue,
+      owner_filter: typeof obj.owner_filter === 'string' ? obj.owner_filter : 'ALL',
+      team_filter: typeof obj.team_filter === 'string' ? obj.team_filter : 'ALL',
+      live_sync: obj.live_sync !== false,
+    };
+  };
+
+  const savedViewSnapshot = useMemo(() => {
+    const directSnapshot = parseFilterSnapshot((savedConfig as Record<string, unknown>)?.saved_view_snapshot);
+    if (directSnapshot) return directSnapshot;
+    return parseFilterSnapshot(savedConfig);
+  }, [savedConfig]);
+
+  const resetBoardFilters = () => {
+    setSearch('');
+    setQuickView('DEFAULT');
+    setSlaFilter('ALL');
+    setOwnerFilter('ALL');
+    setTeamFilter('ALL');
+    setSelectedEntityIds([]);
+    setSelectedPresetId(undefined);
+    message.success('Đã đưa bảng luồng về trạng thái mặc định.');
+  };
 
   const applyFilterSnapshot = (snapshot: PipelineFilterSnapshot) => {
     setEntityType(snapshot.entity_type);
@@ -466,6 +632,7 @@ export default function WorkflowPipelineBoard() {
       await saveConfig({
         ...savedConfig,
         ...currentSnapshot,
+        saved_view_snapshot: currentSnapshot,
         saved_views: namedPresets,
       });
       message.success('Đã lưu bộ lọc luồng công việc.');
@@ -475,29 +642,11 @@ export default function WorkflowPipelineBoard() {
   };
 
   const applySavedFilters = () => {
-    const nextEntityType = savedConfig?.entity_type;
-    const nextTrigger = savedConfig?.trigger;
-    const nextSearch = savedConfig?.search;
-    const nextQuickView = savedConfig?.quick_view;
-    const nextSla = savedConfig?.sla_filter;
-    const nextOwner = savedConfig?.owner_filter;
-    const nextTeam = savedConfig?.team_filter;
-    const nextLiveSync = savedConfig?.live_sync;
-
-    if (typeof nextEntityType === 'string' && nextEntityType) {
-      setEntityType(nextEntityType);
+    if (!savedViewSnapshot) {
+      message.warning('Chưa có chế độ xem đã lưu.');
+      return;
     }
-    if (typeof nextTrigger === 'string') setTrigger(nextTrigger as WftTrigger);
-    if (typeof nextSearch === 'string') setSearch(nextSearch);
-    if (nextQuickView === 'DEFAULT' || nextQuickView === 'MY_ITEMS' || nextQuickView === 'MY_TEAM' || nextQuickView === 'RISK' || nextQuickView === 'FAILED') {
-      setQuickView(nextQuickView);
-    }
-    if (nextSla === 'ALL' || nextSla === 'OVERDUE' || nextSla === 'DUE_TODAY' || nextSla === 'AT_RISK') {
-      setSlaFilter(nextSla);
-    }
-    if (typeof nextOwner === 'string') setOwnerFilter(nextOwner);
-    if (typeof nextTeam === 'string') setTeamFilter(nextTeam);
-    if (typeof nextLiveSync === 'boolean') setLiveSync(nextLiveSync);
+    applyFilterSnapshot(savedViewSnapshot);
     message.success('Đã áp dụng bộ lọc đã lưu.');
   };
 
@@ -519,6 +668,7 @@ export default function WorkflowPipelineBoard() {
       await saveConfig({
         ...savedConfig,
         ...currentSnapshot,
+        saved_view_snapshot: currentSnapshot,
         saved_views: nextPresets,
       });
       setSelectedPresetId(nextPreset.id);
@@ -551,9 +701,10 @@ export default function WorkflowPipelineBoard() {
       await saveConfig({
         ...savedConfig,
         ...buildCurrentSnapshot(),
+        saved_view_snapshot: buildCurrentSnapshot(),
         saved_views: nextPresets,
       });
-      setSelectedPresetId('NONE');
+      setSelectedPresetId(undefined);
       message.success(`Đã xóa mẫu lọc "${preset.name}".`);
     } catch {
       message.error('Không thể xóa mẫu lọc.');
@@ -580,52 +731,163 @@ export default function WorkflowPipelineBoard() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <Card size="small">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <Space wrap>
+              <Text strong style={{ fontSize: 18 }}>Trung tâm điều phối quy trình</Text>
+              <Tag color="blue">{getEntityTypeLabel(effectiveEntityType)}</Tag>
+              <Tag>{WFT_TRIGGER_LABELS[effectiveTrigger] ?? effectiveTrigger}</Tag>
+            </Space>
+            <div style={{ color: '#666', fontSize: 13, marginTop: 6, maxWidth: 760 }}>
+              Theo dõi luồng xử lý theo thời gian thực, nhận diện cột nóng, thẻ chặn và áp dụng nhanh các mẫu lọc cho từng ca vận hành.
+            </div>
+          </div>
           <Space wrap>
-            <Text strong style={{ fontSize: 16 }}>Bảng luồng công việc</Text>
-            <Tag color="blue">{getEntityTypeLabel(effectiveEntityType)}</Tag>
-            <Tag>{totalCards} thẻ</Tag>
+            <Tag color="processing" style={{ marginInlineEnd: 0 }}>
+              Dữ liệu: {getEntityTypeLabel(effectiveEntityType)} / {WFT_TRIGGER_LABELS[effectiveTrigger] ?? effectiveTrigger}
+            </Tag>
+            {selectedPreset ? (
+              <Tag color="purple" style={{ marginInlineEnd: 0 }}>
+                Mẫu đang dùng: {selectedPreset.name}
+              </Tag>
+            ) : null}
+            {liveSync ? (
+              <Tag color={pipelineLiveQuery.data?.has_changes ? 'gold' : 'cyan'} style={{ marginInlineEnd: 0 }}>
+                Trực tiếp: {pipelineLiveQuery.isFetching ? 'đang kiểm tra thay đổi' : 'đang hoạt động'}
+              </Tag>
+            ) : (
+              <Tag color="default" style={{ marginInlineEnd: 0 }}>
+                Trực tiếp: đang tắt
+              </Tag>
+            )}
+            <Button icon={<ReloadOutlined />} loading={boardQuery.isFetching} onClick={() => boardQuery.refetch()}>
+              Tải lại
+            </Button>
           </Space>
+        </div>
+
+        <Row gutter={[12, 12]} style={{ marginTop: 16 }}>
+          <Col xs={12} md={8} xl={3}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Tổng thẻ" value={totalCards} valueStyle={{ color: '#1677ff' }} />
+              <Text type="secondary">Tổng số thẻ đang hiển thị trên bảng luồng.</Text>
+            </div>
+          </Col>
+          <Col xs={12} md={8} xl={4}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Quá hạn" value={boardSummary.overdue} valueStyle={{ color: boardSummary.overdue > 0 ? '#cf1322' : undefined }} />
+              <Text type="secondary">Thẻ đã vượt SLA hiện tại.</Text>
+            </div>
+          </Col>
+          <Col xs={12} md={8} xl={4}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Đến hạn hôm nay" value={boardSummary.dueToday} valueStyle={{ color: boardSummary.dueToday > 0 ? '#d48806' : undefined }} />
+              <Text type="secondary">Cần xử lý dứt điểm trong ngày.</Text>
+            </div>
+          </Col>
+          <Col xs={12} md={8} xl={4}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Sắp quá hạn" value={boardSummary.atRisk} valueStyle={{ color: boardSummary.atRisk > 0 ? '#fa8c16' : undefined }} />
+              <Text type="secondary">Đang tiệm cận ngưỡng cảnh báo.</Text>
+            </div>
+          </Col>
+          <Col xs={12} md={8} xl={4}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Đang chặn" value={boardSummary.blocked} valueStyle={{ color: boardSummary.blocked > 0 ? '#cf1322' : undefined }} />
+              <Text type="secondary">Thẻ có nhiệm vụ chặn sản xuất.</Text>
+            </div>
+          </Col>
+          <Col xs={12} md={8} xl={4}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Thất bại" value={boardSummary.failed} valueStyle={{ color: boardSummary.failed > 0 ? '#cf1322' : undefined }} />
+              <Text type="secondary">Nằm ở cột thất bại cần khôi phục.</Text>
+            </div>
+          </Col>
+          <Col xs={12} md={8} xl={4}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Chưa phụ trách" value={boardSummary.unassigned} valueStyle={{ color: boardSummary.unassigned > 0 ? '#722ed1' : undefined }} />
+              <Text type="secondary">Thẻ chưa có người xử lý chính.</Text>
+            </div>
+          </Col>
+          <Col xs={12} md={8} xl={3}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Vượt WIP" value={boardCommandSummary.overWipColumns} valueStyle={{ color: boardCommandSummary.overWipColumns > 0 ? '#cf1322' : undefined }} />
+              <Text type="secondary">Số cột đang vượt giới hạn công việc song song.</Text>
+            </div>
+          </Col>
+          <Col xs={12} md={8} xl={3}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Mẫu lọc" value={boardCommandSummary.presetCount} valueStyle={{ color: '#531dab' }} />
+              <Text type="secondary">Mẫu cá nhân đã lưu để đổi góc nhìn nhanh.</Text>
+            </div>
+          </Col>
+        </Row>
+        <Alert
+          style={{ marginTop: 12 }}
+          showIcon
+          type={boardStatusAlert.type}
+          message={boardStatusAlert.message}
+          description={boardStatusAlert.description}
+        />
+
+        <div
+          data-testid="workflow-pipeline-command-strip"
+          style={{
+            marginTop: 12,
+            padding: '12px 14px',
+            borderRadius: 16,
+            border: '1px solid #e5eefc',
+            background: 'linear-gradient(180deg, #fcfdff 0%, #f7fbff 100%)',
+          }}
+        >
           <Space wrap>
-            <Input
-              placeholder="Tìm mã đơn, bước, người phụ trách..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              style={{ width: 280 }}
-              suffix={search ? <QuickClearIcon onClear={() => setSearch('')} title="Xóa tìm kiếm" /> : undefined}
-            />
-            <Select<WftTrigger>
-              value={effectiveTrigger}
-              onChange={setTrigger}
-              style={{ width: 200 }}
-              options={triggerOptionsForEntity}
-            />
-            <Select<string>
-              value={entityType}
-              onChange={(v) => {
-                setEntityType(v);
-                setSelectedCard(null);
-                setTimelineCard(null);
-              }}
-              style={{ width: 170 }}
-              options={
-                (availableEntityTypes.length
-                  ? availableEntityTypes
-                  : ['SalesOrder', 'PurchaseOrder', 'ProductionOrder', 'Product', 'Customer']
-                ).map((v) => ({ value: v, label: getEntityTypeLabel(v) }))
-              }
-            />
-            <Select<'ALL' | 'OVERDUE' | 'DUE_TODAY' | 'AT_RISK'>
-              value={slaFilter}
-              onChange={setSlaFilter}
-              style={{ width: 170 }}
-              options={[
-                { value: 'ALL', label: 'Tất cả SLA' },
-                { value: 'OVERDUE', label: 'Chỉ quá hạn' },
-                { value: 'DUE_TODAY', label: 'Đến hạn hôm nay' },
-                { value: 'AT_RISK', label: 'Sắp quá hạn' },
-              ]}
-            />
+            <div data-testid="workflow-pipeline-search" style={{ display: 'inline-block' }}>
+              <Input
+                placeholder="Tìm mã đơn, bước, người phụ trách..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{ width: 280 }}
+                suffix={search ? <QuickClearIcon onClear={() => setSearch('')} title="Xóa tìm kiếm" /> : undefined}
+              />
+            </div>
+            <div data-testid="workflow-pipeline-trigger-filter" style={{ display: 'inline-block' }}>
+              <Select<WftTrigger>
+                value={effectiveTrigger}
+                onChange={setTrigger}
+                style={{ width: 200 }}
+                options={triggerOptionsForEntity}
+              />
+            </div>
+            <div data-testid="workflow-pipeline-entity-filter" style={{ display: 'inline-block' }}>
+              <Select<string>
+                value={entityType}
+                onChange={(v) => {
+                  setEntityType(v);
+                  setSelectedCard(null);
+                  setTimelineCard(null);
+                }}
+                style={{ width: 170 }}
+                options={
+                  (availableEntityTypes.length
+                    ? availableEntityTypes
+                    : ['SalesOrder', 'PurchaseOrder', 'ProductionOrder', 'Product', 'Customer']
+                  ).map((v) => ({ value: v, label: getEntityTypeLabel(v) }))
+                }
+              />
+            </div>
+            <div data-testid="workflow-pipeline-sla-filter" style={{ display: 'inline-block' }}>
+              <Select<'ALL' | 'OVERDUE' | 'DUE_TODAY' | 'AT_RISK'>
+                value={slaFilter}
+                onChange={setSlaFilter}
+                style={{ width: 170 }}
+                options={[
+                  { value: 'ALL', label: 'Tất cả SLA' },
+                  { value: 'OVERDUE', label: 'Chỉ quá hạn' },
+                  { value: 'DUE_TODAY', label: 'Đến hạn hôm nay' },
+                  { value: 'AT_RISK', label: 'Sắp quá hạn' },
+                ]}
+              />
+            </div>
             <Select<string>
               value={ownerFilter}
               onChange={setOwnerFilter}
@@ -644,38 +906,39 @@ export default function WorkflowPipelineBoard() {
                 ...teamOptions.map((v) => ({ value: v, label: v })),
               ]}
             />
-            <Button icon={<ReloadOutlined />} loading={boardQuery.isFetching} onClick={() => boardQuery.refetch()}>
-              Tải lại
+            <Button
+              data-testid="workflow-pipeline-save-view"
+              onClick={() => void saveCurrentFilters()}
+              disabled={isPreferencesLoading}
+            >
+              Lưu bộ lọc hiện tại
             </Button>
-            <Button onClick={() => void saveCurrentFilters()}>Lưu bộ lọc</Button>
-            <Button onClick={applySavedFilters}>Dùng bộ lọc đã lưu</Button>
-            <Button onClick={() => setIsPresetModalOpen(true)}>Lưu mẫu lọc mới</Button>
-            <Select<string>
-              value={selectedPresetId}
-              onChange={setSelectedPresetId}
-              style={{ width: 200 }}
-              options={[
-                { value: 'NONE', label: 'Chọn mẫu lọc cá nhân' },
-                ...namedPresets.map((p) => ({ value: p.id, label: p.name })),
-              ]}
-            />
-            <Button onClick={applyNamedPreset}>Áp dụng mẫu lọc</Button>
-            <Button danger onClick={() => void deleteNamedPreset()}>
-              Xóa mẫu lọc
+            <Button
+              data-testid="workflow-pipeline-restore-view"
+              onClick={applySavedFilters}
+              disabled={isPreferencesLoading}
+            >
+              Khôi phục bộ lọc đã lưu
             </Button>
+            <Button
+              data-testid="workflow-pipeline-open-preset-modal"
+              onClick={() => {
+                setPresetName(selectedPreset?.name ?? '');
+                setIsPresetModalOpen(true);
+              }}
+              disabled={isPreferencesLoading}
+            >
+              Tạo mẫu lọc mới
+            </Button>
+            <Button onClick={resetBoardFilters}>Đưa về mặc định</Button>
           </Space>
         </div>
-        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <Tag color="processing">Bộ dữ liệu: {getEntityTypeLabel(effectiveEntityType)} / {WFT_TRIGGER_LABELS[effectiveTrigger] ?? effectiveTrigger}</Tag>
+
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <Space size={6}>
-            <Text type="secondary">Đồng bộ realtime</Text>
+            <Text type="secondary">Theo dõi trực tiếp</Text>
             <Switch checked={liveSync} onChange={setLiveSync} size="small" />
           </Space>
-          {liveSync && (
-            <Tag color={pipelineLiveQuery.data?.has_changes ? 'gold' : 'cyan'}>
-              Realtime: {pipelineLiveQuery.isFetching ? 'đang kiểm tra' : 'đang chạy'}
-            </Tag>
-          )}
           <Segmented<QuickViewMode>
             value={quickView}
             onChange={(v) => setQuickView(v as QuickViewMode)}
@@ -687,11 +950,43 @@ export default function WorkflowPipelineBoard() {
               { label: 'Thất bại', value: 'FAILED' },
             ]}
           />
+          <div data-testid="workflow-pipeline-preset-select" style={{ display: 'inline-block' }}>
+            <Select<string>
+              allowClear
+              value={selectedPresetId}
+              onChange={(value) => setSelectedPresetId(value)}
+              disabled={isPreferencesLoading}
+              style={{ width: 220 }}
+              options={namedPresets.map((preset) => ({ value: preset.id, label: preset.name }))}
+              placeholder="Chọn mẫu lọc cá nhân"
+            />
+          </div>
+          <Button data-testid="workflow-pipeline-apply-preset" onClick={applyNamedPreset} disabled={isPreferencesLoading}>
+            Áp dụng mẫu lọc
+          </Button>
+          <Button
+            danger
+            data-testid="workflow-pipeline-delete-preset"
+            disabled={!selectedPreset || isPreferencesLoading}
+            onClick={() => void deleteNamedPreset()}
+          >
+            Xóa mẫu lọc
+          </Button>
           {isFallbackCombo && (
             <Tag color="gold">
               Đã tự chuyển từ {getEntityTypeLabel(entityType)} / {WFT_TRIGGER_LABELS[trigger] ?? trigger} sang bộ có mẫu đang bật
             </Tag>
           )}
+          <Tag color={boardCommandSummary.hotColumns > 0 ? 'volcano' : 'default'}>
+            Cột nóng: {boardCommandSummary.hotColumns}
+          </Tag>
+          <Tag color={boardCommandSummary.emptyColumns > 0 ? 'default' : 'success'}>
+            Cột trống: {boardCommandSummary.emptyColumns}
+          </Tag>
+          {selectedEffectiveIds.length > 0 && <Tag color="purple">Đã chọn {selectedEffectiveIds.length} thẻ</Tag>}
+          {activeFilterTags.map((label) => (
+            <Tag key={label}>{label}</Tag>
+          ))}
         </div>
         {!!boardQuery.data?.meta?.message && (
           <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -749,23 +1044,32 @@ export default function WorkflowPipelineBoard() {
           />
         </Card>
       ) : (
-        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: `repeat(${Math.max(filteredColumns.length, 1)}, minmax(220px, 1fr))`, alignItems: 'start' }}>
+        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', alignItems: 'start' }}>
           {filteredColumns.map((col) => (
             <Card
               key={col.id}
               size="small"
-              title={(
-                <Space>
-                  <span>{normalizeColumnTitle(col.title)}</span>
-                  <Tag>{col.cards.length}</Tag>
-                  {col.wip_limit ? <Tag color="cyan">Giới hạn WIP {col.wip_limit}</Tag> : null}
-                  {col.is_over_wip ? (
-                    <Tag color="red" icon={<ExclamationCircleOutlined />}>
-                      Vượt giới hạn WIP
-                    </Tag>
-                  ) : null}
-                </Space>
-              )}
+              title={(() => {
+                const columnRiskCount = col.cards.filter((card) => card.sla_state !== 'ON_TRACK').length;
+                const columnBlockingCount = col.cards.filter((card) => card.current_task_is_blocking).length;
+                const columnUnassignedCount = col.cards.filter((card) => !card.owner).length;
+
+                return (
+                  <Space size={6} wrap>
+                    <span>{normalizeColumnTitle(col.title)}</span>
+                    <Tag>{col.cards.length}</Tag>
+                    {columnRiskCount > 0 ? <Tag color="gold">Rủi ro {columnRiskCount}</Tag> : null}
+                    {columnBlockingCount > 0 ? <Tag color="error">Chặn {columnBlockingCount}</Tag> : null}
+                    {columnUnassignedCount > 0 ? <Tag color="purple">Chưa giao {columnUnassignedCount}</Tag> : null}
+                    {col.wip_limit ? <Tag color="cyan">Giới hạn WIP {col.wip_limit}</Tag> : null}
+                    {col.is_over_wip ? (
+                      <Tag color="red" icon={<ExclamationCircleOutlined />}>
+                        Vượt giới hạn WIP
+                      </Tag>
+                    ) : null}
+                  </Space>
+                );
+              })()}
               bodyStyle={{ padding: 8, minHeight: 220 }}
               onDragOver={(e) => e.preventDefault()}
               onDrop={() => {
@@ -778,86 +1082,123 @@ export default function WorkflowPipelineBoard() {
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Trống" />
               ) : (
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                  {col.cards.map((card) => (
-                    <div
-                      key={`${col.id}-${card.entity_id}`}
-                      draggable
-                      onDragStart={() => setDraggingCard(card)}
-                      onDragEnd={() => setDraggingCard(null)}
-                      style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 10, background: '#fafafa' }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                        <Space size={6}>
-                          <Checkbox
-                            checked={selectedEffectiveIds.includes(card.entity_id)}
-                            onChange={(e) => toggleSelectCard(card.entity_id, e.target.checked)}
-                          />
-                          <Tag color="blue" style={{ marginInlineEnd: 0 }}>{card.entity_code}</Tag>
-                        </Space>
-                        <Tag style={{ marginInlineEnd: 0 }}>{normalizeOrderStatus(card.order_status)}</Tag>
-                      </div>
-                      <div style={{ fontSize: 12, color: '#595959', marginBottom: 4 }}>{normalizeStepTitle(card.current_step)}</div>
-                      <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 8 }}>
-                        {card.owner || 'Chưa có người phụ trách'}{card.team ? ` • ${card.team}` : ''}
-                      </div>
-                      <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                        <Space size={4} wrap>
+                  {col.cards.map((card) => {
+                    const isSelected = selectedEffectiveIds.includes(card.entity_id);
+                    const cardBorderColor = isSelected
+                      ? '#1677ff'
+                      : card.current_task_is_blocking
+                        ? '#ffd591'
+                        : card.sla_state === 'OVERDUE'
+                          ? '#ffa39e'
+                          : card.sla_state === 'AT_RISK'
+                            ? '#ffe58f'
+                            : '#f0f0f0';
+                    const cardBackground = card.current_task_is_blocking
+                      ? '#fff7e6'
+                      : card.sla_state === 'OVERDUE'
+                        ? '#fff1f0'
+                        : card.sla_state === 'AT_RISK'
+                          ? '#fffbe6'
+                          : '#fafafa';
+
+                    return (
+                      <div
+                        key={`${col.id}-${card.entity_id}`}
+                        draggable
+                        onDragStart={() => setDraggingCard(card)}
+                        onDragEnd={() => setDraggingCard(null)}
+                        style={{
+                          border: `1px solid ${cardBorderColor}`,
+                          borderRadius: 12,
+                          padding: 12,
+                          background: cardBackground,
+                          boxShadow: isSelected ? '0 0 0 2px rgba(22, 119, 255, 0.12)' : 'none',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>
+                          <Space size={6}>
+                            <Checkbox
+                              checked={isSelected}
+                              onChange={(e) => toggleSelectCard(card.entity_id, e.target.checked)}
+                            />
+                            <Tag color="blue" style={{ marginInlineEnd: 0 }}>{card.entity_code}</Tag>
+                          </Space>
+                          <Tag style={{ marginInlineEnd: 0 }}>{normalizeOrderStatus(card.order_status)}</Tag>
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{normalizeStepTitle(card.current_step)}</div>
+                        <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 8 }}>
+                          {card.owner || 'Chưa có người phụ trách'}{card.team ? ` • ${card.team}` : ''}
+                        </div>
+                        <Space size={4} wrap style={{ marginBottom: 8 }}>
                           {renderSlaTag(card)}
-                          {card.current_task_due_date && <Tag>{dayjs(card.current_task_due_date).format('DD/MM/YYYY')}</Tag>}
+                          {card.current_task_priority && (
+                            <Tag color={PRIORITY_COLORS[card.current_task_priority]}>{PRIORITY_LABELS[card.current_task_priority]}</Tag>
+                          )}
+                          {card.current_task_status && <Tag>{normalizeTaskStatus(card.current_task_status)}</Tag>}
+                          {card.current_task_is_blocking && <Tag color="red">Chặn</Tag>}
+                          {card.current_task_is_pinned && <Tag color="magenta">Ghim</Tag>}
+                          {card.current_task_due_date && <Tag>Hạn {dayjs(card.current_task_due_date).format('DD/MM')}</Tag>}
                         </Space>
-                        {col.id !== 'done' && col.id !== 'failed' && (
+                        {card.updated_at && (
+                          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 8 }}>
+                            Cập nhật {dayjs(card.updated_at).format('DD/MM HH:mm')}
+                          </div>
+                        )}
+                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                          {col.id !== 'done' && col.id !== 'failed' && (
+                            <Button
+                              size="small"
+                              icon={<SwapRightOutlined />}
+                              loading={advanceMutation.isPending}
+                              onClick={() => advanceMutation.mutate(card)}
+                              style={{ width: '100%' }}
+                            >
+                              Chuyển bước tiếp
+                            </Button>
+                          )}
                           <Button
                             size="small"
-                            icon={<SwapRightOutlined />}
-                            loading={advanceMutation.isPending}
-                            onClick={() => advanceMutation.mutate(card)}
+                            icon={<ProjectOutlined />}
+                            onClick={() => setSelectedCard(card)}
                             style={{ width: '100%' }}
                           >
-                            Chuyển bước tiếp
+                            Mở không gian công việc
                           </Button>
-                        )}
-                        <Button
-                          size="small"
-                          icon={<ProjectOutlined />}
-                          onClick={() => setSelectedCard(card)}
-                          style={{ width: '100%' }}
-                        >
-                          Mở công việc
-                        </Button>
-                        <Button
-                          size="small"
-                          icon={<HistoryOutlined />}
-                          onClick={() => setTimelineCard(card)}
-                          style={{ width: '100%' }}
-                        >
-                          Dòng thời gian
-                        </Button>
-                        {col.id !== 'failed' && (
                           <Button
                             size="small"
-                            danger
-                            icon={<WarningOutlined />}
-                            loading={moveMutation.isPending}
-                            onClick={() => moveMutation.mutate({ card, targetColumnId: 'failed' })}
+                            icon={<HistoryOutlined />}
+                            onClick={() => setTimelineCard(card)}
                             style={{ width: '100%' }}
                           >
-                            Đánh dấu thất bại
+                            Xem dòng thời gian
                           </Button>
-                        )}
-                        {col.id === 'failed' && (
-                          <Button
-                            size="small"
-                            icon={<SwapRightOutlined />}
-                            loading={retryFailedMutation.isPending}
-                            onClick={() => retryFailedMutation.mutate(card)}
-                            style={{ width: '100%' }}
-                          >
-                            Khôi phục xử lý
-                          </Button>
-                        )}
-                      </Space>
-                    </div>
-                  ))}
+                          {col.id !== 'failed' && (
+                            <Button
+                              size="small"
+                              danger
+                              icon={<WarningOutlined />}
+                              loading={moveMutation.isPending}
+                              onClick={() => moveMutation.mutate({ card, targetColumnId: 'failed' })}
+                              style={{ width: '100%' }}
+                            >
+                              Chuyển sang thất bại
+                            </Button>
+                          )}
+                          {col.id === 'failed' && (
+                            <Button
+                              size="small"
+                              icon={<SwapRightOutlined />}
+                              loading={retryFailedMutation.isPending}
+                              onClick={() => retryFailedMutation.mutate(card)}
+                              style={{ width: '100%' }}
+                            >
+                              Khôi phục xử lý
+                            </Button>
+                          )}
+                        </Space>
+                      </div>
+                    );
+                  })}
                 </Space>
               )}
             </Card>
@@ -924,6 +1265,7 @@ export default function WorkflowPipelineBoard() {
         cancelText="Hủy"
       >
         <Input
+          data-testid="workflow-pipeline-preset-name"
           value={presetName}
           onChange={(e) => setPresetName(e.target.value)}
           placeholder="Ví dụ: Ca sáng / Nhóm in / Rủi ro cao"

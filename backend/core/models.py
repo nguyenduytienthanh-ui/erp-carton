@@ -602,6 +602,8 @@ class AuditLog(models.Model):
             models.Index(fields=['entity_type', 'entity_id']),
             models.Index(fields=['user', 'created_at']),
             models.Index(fields=['action', 'created_at']),
+            models.Index(fields=['-created_at', '-id'], name='auditlog_created_desc_idx'),
+            models.Index(fields=['entity_type', '-created_at', '-id'], name='auditlog_type_created_idx'),
         ]
         verbose_name = 'Audit Log'
         verbose_name_plural = 'Audit Logs'
@@ -1137,6 +1139,8 @@ class UserSession(models.Model):
         ordering = ['-login_at']
         indexes = [
             models.Index(fields=['user', 'is_active']),
+            models.Index(fields=['is_active', '-last_active', '-id'], name='usersession_active_last_idx'),
+            models.Index(fields=['user', 'is_active', '-last_active'], name='usersession_user_active_idx'),
         ]
         verbose_name = 'User Session'
         verbose_name_plural = 'User Sessions'
@@ -1644,3 +1648,6 @@ class WorkflowPipelineEvent(models.Model):
 
     def __str__(self):
         return f'[{self.entity_type}:{self.entity_id}] {self.action} {self.from_step} -> {self.to_step}'
+
+
+from .reporting_models import CustomReportDefinition, CustomReportRun  # noqa: E402,F401

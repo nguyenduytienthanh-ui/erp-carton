@@ -611,6 +611,94 @@ class ShipmentLine(models.Model):
         db_table = 'sales_shipment_lines'
         ordering = ['line_number']
         unique_together = [['shipment', 'line_number']]
-    
+
     def __str__(self):
         return f"{self.shipment.code} - Line {self.line_number}"
+
+
+class SalesDiscountRule(models.Model):
+    TYPE_PERCENTAGE = 'PERCENTAGE'
+    TYPE_FIXED = 'FIXED'
+    TYPE_CHOICES = [
+        (TYPE_PERCENTAGE, 'Phần trăm'),
+        (TYPE_FIXED, 'Cố định'),
+    ]
+
+    APPLIES_ALL_PRODUCTS = 'ALL_PRODUCTS'
+    APPLIES_SPECIFIC_PRODUCTS = 'SPECIFIC_PRODUCTS'
+    APPLIES_SPECIFIC_CUSTOMERS = 'SPECIFIC_CUSTOMERS'
+    APPLIES_VOLUME_BASED = 'VOLUME_BASED'
+    APPLICABLE_CHOICES = [
+        (APPLIES_ALL_PRODUCTS, 'Tất cả sản phẩm'),
+        (APPLIES_SPECIFIC_PRODUCTS, 'Sản phẩm chọn'),
+        (APPLIES_SPECIFIC_CUSTOMERS, 'Khách hàng chọn'),
+        (APPLIES_VOLUME_BASED, 'Theo số lượng'),
+    ]
+
+    STATUS_ACTIVE = 'ACTIVE'
+    STATUS_INACTIVE = 'INACTIVE'
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, 'Hoạt động'),
+        (STATUS_INACTIVE, 'Không hoạt động'),
+    ]
+
+    code = models.CharField(max_length=30, unique=True, db_index=True)
+    name = models.CharField(max_length=200)
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_PERCENTAGE)
+    value = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    applicable_to = models.CharField(max_length=30, choices=APPLICABLE_CHOICES, default=APPLIES_ALL_PRODUCTS)
+    min_order_value = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    min_quantity = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    max_discount_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    start_date = models.DateField(db_index=True)
+    end_date = models.DateField(null=True, blank=True, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)
+    usage_count = models.PositiveIntegerField(default=0)
+    total_discount_value = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    note = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_discount_rules_created',
+    )
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_discount_rules_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sales_discount_rules'
+        ordering = ['-created_at', 'code']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['status']),
+            models.Index(fields=['type']),
+            models.Index(fields=['applicable_to']),
+            models.Index(fields=['start_date', 'end_date']),
+        ]
+
+    def __str__(self):
+        return f'{self.code} - {self.name}'
+
+    @property
+    def is_currently_active(self):
+        today = timezone.localdate()
+        if self.status != self.STATUS_ACTIVE:
+            return False
+        if self.start_date and self.start_date > today:
+            return False
+        if self.end_date and self.end_date < today:
+            return False
+        return True
+
+    def save(self, *args, **kwargs):
+        if self.code:
+            self.code = str(self.code).strip().upper()
+        super().save(*args, **kwargs)

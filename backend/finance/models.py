@@ -1175,6 +1175,53 @@ class GeneralLedgerEntry(models.Model):
             models.Index(fields=['posting_date']),
             models.Index(fields=['document_type', 'document_id']),
         ]
-    
+
     def __str__(self):
         return f"{self.account.code} - DR:{self.debit_amount} CR:{self.credit_amount}"
+
+
+class BudgetPlan(models.Model):
+    department = models.CharField(max_length=100, db_index=True)
+    category = models.CharField(max_length=200, db_index=True)
+    fiscal_year = models.PositiveIntegerField(db_index=True)
+    budgeted_amount = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    actual_amount = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    committed_amount = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    note = models.TextField(blank=True, default='')
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_budget_plans_created',
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_budget_plans_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'finance_budget_plans'
+        ordering = ['-fiscal_year', 'department', 'category', '-id']
+        indexes = [
+            models.Index(fields=['fiscal_year']),
+            models.Index(fields=['department']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return f'{self.fiscal_year} - {self.department} - {self.category}'
+
+    @property
+    def available_amount(self):
+        return Decimal(str(self.budgeted_amount or 0)) - Decimal(str(self.actual_amount or 0)) - Decimal(str(self.committed_amount or 0))
+
+    @property
+    def status(self):
+        return 'OVER_BUDGET' if self.available_amount < 0 else 'ON_TRACK'

@@ -32,14 +32,30 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config('DEBUG', default=False, cast=bool)
+def _bool_config(name, default=False):
+    value = config(name, default=default)
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {'1', 'true', 'yes', 'on', 'y'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'off', 'n', '', 'release', 'prod', 'production'}:
+        return False
+    return bool(default)
 
-APP_ENV = config('APP_ENV', default='development')
 
-ALLOWED_HOSTS = config(
+DEBUG = _bool_config('DEBUG', default=False)
+
+APP_ENV = str(config('APP_ENV', default='development')).strip().lower()
+IS_PRODUCTION = APP_ENV == 'production'
+
+
+def _csv_config(name, default=''):
+    return [item for item in config(name, default=default, cast=Csv()) if str(item).strip()]
+
+ALLOWED_HOSTS = _csv_config(
     'ALLOWED_HOSTS',
-    default='127.0.0.1,localhost,10.169.62.194',
-    cast=Csv(),
+    default='' if IS_PRODUCTION else '127.0.0.1,localhost,10.169.62.194',
 )
 
 
@@ -54,6 +70,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'django.contrib.postgres',
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
     'drf_spectacular',
     'django_filters',
     'corsheaders',
@@ -158,33 +175,35 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS
-CORS_ALLOWED_ORIGINS = config(
+_local_frontend_origins = (
+    'http://localhost:5173,http://localhost:5174,'
+    'http://127.0.0.1:5173,http://127.0.0.1:5174,'
+    'http://10.169.62.194:5173,http://10.169.62.194:5174'
+)
+CORS_ALLOWED_ORIGINS = _csv_config(
     'CORS_ALLOWED_ORIGINS',
-    default=(
-        'http://localhost:5173,http://localhost:5174,'
-        'http://127.0.0.1:5173,http://127.0.0.1:5174,'
-        'http://10.169.62.194:5173,http://10.169.62.194:5174'
-    ),
-    cast=Csv(),
+    default='' if IS_PRODUCTION else _local_frontend_origins,
 )
-CSRF_TRUSTED_ORIGINS = config(
+CSRF_TRUSTED_ORIGINS = _csv_config(
     'CSRF_TRUSTED_ORIGINS',
-    default='http://localhost:5173,http://127.0.0.1:5173',
-    cast=Csv(),
+    default='' if IS_PRODUCTION else 'http://localhost:5173,http://127.0.0.1:5173',
 )
-CORS_ALLOW_CREDENTIALS = True
-SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=False, cast=bool)
-CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=False, cast=bool)
-SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=False, cast=bool)
-SECURE_CONTENT_TYPE_NOSNIFF = config('SECURE_CONTENT_TYPE_NOSNIFF', default=True, cast=bool)
-SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default=0, cast=int)
-SECURE_HSTS_INCLUDE_SUBDOMAINS = config('SECURE_HSTS_INCLUDE_SUBDOMAINS', default=False, cast=bool)
-SECURE_HSTS_PRELOAD = config('SECURE_HSTS_PRELOAD', default=False, cast=bool)
+CORS_ALLOW_CREDENTIALS = _bool_config('CORS_ALLOW_CREDENTIALS', default=not IS_PRODUCTION)
+SESSION_COOKIE_SECURE = _bool_config('SESSION_COOKIE_SECURE', default=IS_PRODUCTION)
+CSRF_COOKIE_SECURE = _bool_config('CSRF_COOKIE_SECURE', default=IS_PRODUCTION)
+SESSION_COOKIE_HTTPONLY = _bool_config('SESSION_COOKIE_HTTPONLY', default=True)
+SESSION_COOKIE_SAMESITE = config('SESSION_COOKIE_SAMESITE', default='Lax')
+CSRF_COOKIE_SAMESITE = config('CSRF_COOKIE_SAMESITE', default='Lax')
+SECURE_SSL_REDIRECT = _bool_config('SECURE_SSL_REDIRECT', default=IS_PRODUCTION)
+SECURE_CONTENT_TYPE_NOSNIFF = _bool_config('SECURE_CONTENT_TYPE_NOSNIFF', default=True)
+SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default=31_536_000 if IS_PRODUCTION else 0, cast=int)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _bool_config('SECURE_HSTS_INCLUDE_SUBDOMAINS', default=IS_PRODUCTION)
+SECURE_HSTS_PRELOAD = _bool_config('SECURE_HSTS_PRELOAD', default=False)
 X_FRAME_OPTIONS = config('X_FRAME_OPTIONS', default='DENY')
 REFERRER_POLICY = config('REFERRER_POLICY', default='same-origin')
 SECURE_PROXY_SSL_HEADER = (
     ('HTTP_X_FORWARDED_PROTO', 'https')
-    if config('USE_X_FORWARDED_PROTO', default=False, cast=bool)
+    if _bool_config('USE_X_FORWARDED_PROTO', default=False)
     else None
 )
 
@@ -194,7 +213,7 @@ AUTH_USER_MODEL = 'core.User'
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'core.authentication.SessionAwareJWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
         'rest_framework.authentication.BasicAuthentication',
     ],
@@ -211,19 +230,57 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=config('JWT_ACCESS_TOKEN_MINUTES', default=60, cast=int)),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=config('JWT_REFRESH_TOKEN_DAYS', default=7, cast=int)),
+    'ROTATE_REFRESH_TOKENS': _bool_config('JWT_ROTATE_REFRESH_TOKENS', default=False),
+    'BLACKLIST_AFTER_ROTATION': _bool_config('JWT_BLACKLIST_AFTER_ROTATION', default=True),
+    'UPDATE_LAST_LOGIN': _bool_config('JWT_UPDATE_LAST_LOGIN', default=False),
+    'AUTH_HEADER_TYPES': tuple(_csv_config('JWT_AUTH_HEADER_TYPES', default='Bearer')),
 }
 
-PERMISSION_STRICT_DEFAULT = config('PERMISSION_STRICT_DEFAULT', default=False, cast=bool)
+PERMISSION_STRICT_DEFAULT = _bool_config('PERMISSION_STRICT_DEFAULT', default=False)
 
 # Media files (uploads)
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = config('MEDIA_URL', default='/media/')
+MEDIA_ROOT = Path(config('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
+BACKUP_ROOT = Path(config('BACKUP_ROOT', default=str(BASE_DIR / 'backups')))
+BACKUP_RETENTION_DAYS = config('BACKUP_RETENTION_DAYS', default=14 if IS_PRODUCTION else 7, cast=int)
+BACKUP_STALE_HOURS = config('BACKUP_STALE_HOURS', default=48 if IS_PRODUCTION else 168, cast=int)
+AUDIT_LOG_RETENTION_DAYS = config('AUDIT_LOG_RETENTION_DAYS', default=365 if IS_PRODUCTION else 90, cast=int)
+AUDIT_EXPORT_MAX_ROWS = config('AUDIT_EXPORT_MAX_ROWS', default=5000, cast=int)
+INCIDENT_RUNBOOK_URL = config('INCIDENT_RUNBOOK_URL', default='')
+INCIDENT_CONTACT_EMAILS = _csv_config('INCIDENT_CONTACT_EMAILS', default='')
+ALERT_EMAIL_RECIPIENTS = _csv_config('ALERT_EMAIL_RECIPIENTS', default='')
+ALERT_SLACK_WEBHOOK_URL = config('ALERT_SLACK_WEBHOOK_URL', default='')
+ALERT_TELEGRAM_BOT_TOKEN = config('ALERT_TELEGRAM_BOT_TOKEN', default='')
+ALERT_TELEGRAM_CHAT_ID = config('ALERT_TELEGRAM_CHAT_ID', default='')
+ALERT_REQUIRED_CHANNEL_COUNT = config('ALERT_REQUIRED_CHANNEL_COUNT', default=1 if IS_PRODUCTION else 0, cast=int)
+ALERT_REQUIRED_CHANNELS = _csv_config('ALERT_REQUIRED_CHANNELS', default='')
+ALERT_HTTP_TIMEOUT_SECONDS = config('ALERT_HTTP_TIMEOUT_SECONDS', default=10, cast=int)
+DB_SLOW_QUERY_THRESHOLD_MS = config('DB_SLOW_QUERY_THRESHOLD_MS', default=1500, cast=int)
+LARGE_DATA_WARNING_ROWS = config('LARGE_DATA_WARNING_ROWS', default=1000, cast=int)
+LARGE_DATA_CRITICAL_ROWS = config('LARGE_DATA_CRITICAL_ROWS', default=10000, cast=int)
 
-# File backend - save emails to files for testing
-EMAIL_BACKEND = 'django.core.mail.backends.filebased.EmailBackend'
-EMAIL_FILE_PATH = BASE_DIR / 'sent_emails'
+# Email
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='ERP Carton <noreply@localhost>')
+SERVER_EMAIL = config('SERVER_EMAIL', default=DEFAULT_FROM_EMAIL)
+EMAIL_BACKEND = config(
+    'EMAIL_BACKEND',
+    default='django.core.mail.backends.smtp.EmailBackend'
+    if IS_PRODUCTION
+    else 'django.core.mail.backends.filebased.EmailBackend',
+)
+EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=15, cast=int)
+EMAIL_HOST = config('EMAIL_HOST', default='')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = _bool_config('EMAIL_USE_TLS', default=IS_PRODUCTION)
+EMAIL_USE_SSL = _bool_config('EMAIL_USE_SSL', default=False)
+EMAIL_FILE_PATH = Path(config('EMAIL_FILE_PATH', default=str(BASE_DIR / 'sent_emails')))
+if EMAIL_BACKEND == 'django.core.mail.backends.filebased.EmailBackend':
+    EMAIL_FILE_PATH.mkdir(parents=True, exist_ok=True)
 
 # Django-Q Configuration
 Q_CLUSTER = {
@@ -239,7 +296,7 @@ Q_CLUSTER = {
 }
 
 LOG_LEVEL = config('LOG_LEVEL', default='INFO')
-LOG_TO_FILE = config('LOG_TO_FILE', default=False, cast=bool)
+LOG_TO_FILE = _bool_config('LOG_TO_FILE', default=False)
 LOG_DIR = Path(config('LOG_DIR', default=str(BASE_DIR / 'logs')))
 LOG_FILE_MAX_BYTES = config('LOG_FILE_MAX_BYTES', default=10_485_760, cast=int)
 LOG_FILE_BACKUP_COUNT = config('LOG_FILE_BACKUP_COUNT', default=5, cast=int)
@@ -294,5 +351,5 @@ if sentry_sdk and SENTRY_DSN:
         integrations=[DjangoIntegration()] if DjangoIntegration else [],
         traces_sample_rate=config('SENTRY_TRACES_SAMPLE_RATE', default=0.0, cast=float),
         profiles_sample_rate=config('SENTRY_PROFILES_SAMPLE_RATE', default=0.0, cast=float),
-        send_default_pii=config('SENTRY_SEND_DEFAULT_PII', default=False, cast=bool),
+        send_default_pii=_bool_config('SENTRY_SEND_DEFAULT_PII', default=False),
     )

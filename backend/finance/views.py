@@ -17,7 +17,7 @@ from unidecode import unidecode
 from openpyxl import Workbook
 
 from core.permissions import check_action_permission
-from core.models import AuditLog, Notification, Permission, Role, Setting, User, WorkflowPipelineEvent
+from core.models import ApprovalHistory, AuditLog, Notification, Permission, Role, Setting, User, WorkflowPipelineEvent
 from workforce.models import Employee, PayrollRecord
 from sales.document_policy import round_money
 
@@ -204,6 +204,69 @@ def _log_finance_audit(user, action: str, entity_type: str, entity_id: int, enti
         new_values=new_values if isinstance(new_values, dict) else {},
         changed_fields=changed_fields if isinstance(changed_fields, list) else [],
     )
+
+
+def _finance_approval_history_label(action: str, level: int = 1) -> str:
+    normalized = str(action or '').upper()
+    if normalized == 'SUBMIT':
+        return 'Gửi duyệt'
+    if normalized == 'RESUBMIT':
+        return 'Gửi lại'
+    if normalized == 'APPROVE' and int(level or 1) >= 2:
+        return 'Duyệt cấp 2'
+    if normalized == 'APPROVE':
+        return 'Duyệt cấp 1'
+    if normalized == 'REJECT':
+        return 'Từ chối'
+    if normalized == 'REVOKE':
+        return 'Thu hồi'
+    return normalized or 'Cập nhật'
+
+
+def _serialize_finance_approval_history_row(item: ApprovalHistory) -> dict:
+    action_key = str(item.action or '').upper()
+    if action_key == 'APPROVE':
+        action_key = 'APPROVE_L2' if int(item.level or 1) >= 2 else 'APPROVE_L1'
+    return {
+        'action': action_key,
+        'action_label': _finance_approval_history_label(item.action, int(item.level or 1)),
+        'level': int(item.level or 1),
+        'user': getattr(item.user, 'username', None),
+        'comments': item.comments,
+        'created_at': item.created_at,
+    }
+
+
+def _serialize_finance_approval_history_log(log: AuditLog) -> dict | None:
+    old_values = log.old_values or {}
+    new_values = log.new_values or {}
+    changed_fields = {str(field) for field in (log.changed_fields or [])}
+    old_status = str(old_values.get('approval_status') or '').upper()
+    new_status = str(new_values.get('approval_status') or '').upper()
+    action = ''
+    level = 1
+    if new_status == AdvanceTransaction.APPROVAL_PENDING_L1:
+        action = 'RESUBMIT' if old_status == AdvanceTransaction.APPROVAL_REJECTED else 'SUBMIT'
+    elif new_status == AdvanceTransaction.APPROVAL_PENDING_L2 or 'approved_level1_at' in changed_fields:
+        action = 'APPROVE_L1'
+        level = 1
+    elif new_status == AdvanceTransaction.APPROVAL_APPROVED:
+        action = 'APPROVE_L2' if 'approved_level2_at' in changed_fields else 'APPROVE_L1'
+        level = 2 if action == 'APPROVE_L2' else 1
+    elif new_status == AdvanceTransaction.APPROVAL_REJECTED:
+        action = 'REJECT'
+        level = 2 if old_status == AdvanceTransaction.APPROVAL_PENDING_L2 else 1
+    if not action:
+        return None
+    base_action = 'APPROVE' if action.startswith('APPROVE') else action
+    return {
+        'action': action,
+        'action_label': _finance_approval_history_label(base_action, level),
+        'level': level,
+        'user': getattr(log.user, 'username', None),
+        'comments': str(new_values.get('rejection_reason') or ''),
+        'created_at': log.created_at,
+    }
 
 
 def _approved_advance_queryset():
@@ -3097,7 +3160,15 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             entity_code='FINANCE_ADVANCE_APPROVAL_SLA_POLICY',
             old_values=old_policy,
             new_values=policy,
-            changed_fields=['sla_hours_l1', 'sla_hours_l2', 'remind_every_hours', 'window_days'],
+            changed_fields=[
+                'sla_hours_l1',
+                'sla_hours_l2',
+                'remind_every_hours',
+                'escalation_hours_l1',
+                'escalation_hours_l2',
+                'escalation_cooldown_hours',
+                'window_days',
+            ],
         )
         return Response({'success': True, 'policy': policy})
 
@@ -3134,6 +3205,14 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 'updated_at',
                 'search_text',
             ])
+            ApprovalHistory.objects.create(
+                entity_type='AdvanceTransaction',
+                entity_id=advance.id,
+                entity_code=advance.code,
+                action='RESUBMIT' if old_status == AdvanceTransaction.APPROVAL_REJECTED else 'SUBMIT',
+                user=request.user,
+                level=1,
+            )
             _log_finance_audit(
                 request.user,
                 action='UPDATE',
@@ -3167,6 +3246,14 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             advance.approved_level1_by = request.user
             advance.updated_by = request.user
             advance.save(update_fields=['approval_status', 'approved_level1_at', 'approved_level1_by', 'updated_by', 'updated_at', 'search_text'])
+            ApprovalHistory.objects.create(
+                entity_type='AdvanceTransaction',
+                entity_id=advance.id,
+                entity_code=advance.code,
+                action='APPROVE',
+                user=request.user,
+                level=1,
+            )
             _log_finance_audit(
                 request.user,
                 action='UPDATE',
@@ -3201,6 +3288,14 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             advance.approved_level2_by = request.user
             advance.updated_by = request.user
             advance.save(update_fields=['approval_status', 'approved_level2_at', 'approved_level2_by', 'updated_by', 'updated_at', 'search_text'])
+            ApprovalHistory.objects.create(
+                entity_type='AdvanceTransaction',
+                entity_id=advance.id,
+                entity_code=advance.code,
+                action='APPROVE',
+                user=request.user,
+                level=2,
+            )
             _log_finance_audit(
                 request.user,
                 action='UPDATE',
@@ -3234,6 +3329,15 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             advance.rejection_reason = reason[:255]
             advance.updated_by = request.user
             advance.save(update_fields=['approval_status', 'rejected_at', 'rejected_by', 'rejection_reason', 'updated_by', 'updated_at', 'search_text'])
+            ApprovalHistory.objects.create(
+                entity_type='AdvanceTransaction',
+                entity_id=advance.id,
+                entity_code=advance.code,
+                action='REJECT',
+                user=request.user,
+                comments=advance.rejection_reason,
+                level=1 if old_status == AdvanceTransaction.APPROVAL_PENDING_L1 else 2,
+            )
             _log_finance_audit(
                 request.user,
                 action='UPDATE',
@@ -3245,6 +3349,31 @@ class AdvanceTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 changed_fields=['approval_status', 'rejection_reason'],
             )
         return Response({'success': True, 'approval_status': advance.approval_status})
+
+    @action(detail=True, methods=['get'])
+    def approval_history(self, request, pk=None):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xem lịch sử duyệt phiếu tạm ứng.'}, status=403)
+        advance = self.get_object()
+        history_rows = list(
+            ApprovalHistory.objects.filter(
+                entity_type='AdvanceTransaction',
+                entity_id=advance.id,
+            ).order_by('-created_at').select_related('user')
+        )
+        if history_rows:
+            return Response([_serialize_finance_approval_history_row(item) for item in history_rows])
+        audit_rows = (
+            AuditLog.objects.filter(
+                entity_type='FinanceAdvanceApproval',
+                entity_id=advance.id,
+            ).order_by('-created_at', '-id').select_related('user')
+        )
+        return Response([
+            serialized
+            for serialized in (_serialize_finance_approval_history_log(log) for log in audit_rows)
+            if serialized
+        ])
 
     @action(detail=True, methods=['post'])
     def post_disbursement(self, request, pk=None):

@@ -593,6 +593,7 @@ class StocktakeSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         lines_data = validated_data.pop('lines_data', [])
         validated_data['code'] = get_next_stocktake_code(validated_data.get('count_date'))
+        created_by = validated_data.pop('created_by', None) or getattr(self.context.get('request'), 'user', None)
         warehouse_id = validated_data['warehouse'].id
         product_ids = [item.get('product_id') or item.get('product') for item in lines_data if item.get('product_id') or item.get('product')]
         product_ids = [int(x) for x in product_ids if x is not None]
@@ -601,7 +602,7 @@ class StocktakeSerializer(serializers.ModelSerializer):
         for (pid, wid, _), row in balances.items():
             sum_by_pw[(pid, wid)] = sum_by_pw[(pid, wid)] + row['on_hand']
         with transaction.atomic():
-            stocktake = Stocktake.objects.create(**validated_data, created_by=self.context['request'].user)
+            stocktake = Stocktake.objects.create(**validated_data, created_by=created_by)
             for idx, line_item in enumerate(lines_data):
                 product_id = line_item.get('product_id') or line_item.get('product')
                 if not product_id:
@@ -749,7 +750,7 @@ class WarehouseTransferSerializer(serializers.ModelSerializer):
         transfer_date = validated_data.get('transfer_date')
         if not transfer_date:
             transfer_date = date.today()
-        validated_data['code'] = f"TRN-{transfer_date.strftime('%Y%m%d')}-{int(date.today().timestamp()) % 10000}"
+        validated_data['code'] = f"TRN-{transfer_date.strftime('%Y%m%d')}-{int(timezone.now().timestamp()) % 10000}"
         with transaction.atomic():
             transfer = inv_models.WarehouseTransfer.objects.create(**validated_data)
             for i, line_data in enumerate(lines_data, start=1):
@@ -771,4 +772,3 @@ class WarehouseTransferSerializer(serializers.ModelSerializer):
                     line_data['transfer'] = instance
                     inv_models.WarehouseTransferLine.objects.create(**line_data)
         return instance
-

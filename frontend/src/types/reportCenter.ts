@@ -9,7 +9,7 @@ export interface Report {
   period_start: string;
   period_end: string;
   status: 'DRAFT' | 'GENERATED' | 'FINALIZED' | 'ARCHIVED';
-  data?: any;
+  data?: Record<string, unknown> | null;
   
   // Metadata
   generated_by_name?: string;
@@ -25,7 +25,7 @@ export interface ReportTemplate {
   name: string;
   description?: string;
   report_type: ReportType;
-  template_config?: any;
+  template_config?: Record<string, unknown> | null;
   is_active: boolean;
   created_at?: string;
 }

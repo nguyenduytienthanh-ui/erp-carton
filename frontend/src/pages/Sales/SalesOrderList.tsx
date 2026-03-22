@@ -58,6 +58,18 @@ type Filters = {
   customer?: number;
 };
 
+type SalesOrderViewSnapshot = {
+  search: string;
+  status?: string;
+  customer?: number;
+};
+
+type SalesOrderNamedPreset = {
+  id: string;
+  name: string;
+  filters: SalesOrderViewSnapshot;
+};
+
 type ReasonModalState =
   | { type: 'reject'; order: SalesOrder }
   | { type: 'void'; order: SalesOrder }
@@ -238,6 +250,16 @@ function parseFilters(raw: string): Filters {
   } catch {
     return {};
   }
+}
+
+function parseViewSnapshot(value: unknown): SalesOrderViewSnapshot | null {
+  if (!value || typeof value !== 'object') return null;
+  const obj = value as Record<string, unknown>;
+  return {
+    search: typeof obj.search === 'string' ? obj.search : '',
+    status: typeof obj.status === 'string' ? obj.status : undefined,
+    customer: typeof obj.customer === 'number' ? obj.customer : undefined,
+  };
 }
 
 function toNumber(value: string | number | null | undefined): number {
@@ -670,6 +692,9 @@ export default function SalesOrderList() {
   const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState('');
   const [filters, setFilters] = useState<Filters>({});
+  const [selectedPresetId, setSelectedPresetId] = useState<string>();
+  const [isPresetModalOpen, setIsPresetModalOpen] = useState(false);
+  const [presetName, setPresetName] = useState('');
   const [page, setPage] = useState(1);
   const [editingOrder, setEditingOrder] = useState<SalesOrder | null>(null);
   const [openEditModal, setOpenEditModal] = useState(false);
@@ -711,8 +736,13 @@ export default function SalesOrderList() {
   const canApprove = canApproveSalesOrders();
   const canPost = canPostSalesOrders();
   const canVoid = canVoidSalesOrders();
-  const { config, saveConfig } = useUserPreferences(PAGES.SALES_ORDERS);
-  const pageSize = Number((config as Record<string, unknown>)?.pageSize ?? 20);
+  const {
+    config,
+    saveConfig,
+    isLoading: isPreferencesLoading,
+  } = useUserPreferences(PAGES.SALES_ORDERS);
+  const configRecord = config as Record<string, unknown>;
+  const pageSize = Number(configRecord.pageSize ?? 20);
   const liveLines = Form.useWatch('lines', form);
 
   const { intentSearch, intentFilters } = useSearchFilterIntent({
@@ -971,7 +1001,7 @@ export default function SalesOrderList() {
       }),
     onSuccess: async (data) => {
       await invalidate();
-      messageApi.success(`Đã tạo shipment ${data.shipment_code}`);
+      messageApi.success(`Đã tạo phiếu xuất ${data.shipment_code}`);
     },
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
@@ -980,7 +1010,7 @@ export default function SalesOrderList() {
       salesApi.cancelShipment(orderId, { shipment_id: shipmentId, reason }),
     onSuccess: async (data) => {
       await invalidate();
-      messageApi.success(`Đã hủy shipment ${data.shipment_code}`);
+      messageApi.success(`Đã hủy phiếu xuất ${data.shipment_code}`);
     },
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
@@ -988,7 +1018,7 @@ export default function SalesOrderList() {
     mutationFn: inventoryApi.createReservation,
     onSuccess: async () => {
       await invalidate();
-      messageApi.success('Đã tạo reservation từ đơn hàng');
+      messageApi.success('Đã tạo phiếu giữ chỗ từ đơn hàng');
     },
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
@@ -1018,7 +1048,7 @@ export default function SalesOrderList() {
     },
     onSuccess: async () => {
       await invalidate();
-      messageApi.success('Đã tạo batch reservation');
+      messageApi.success('Đã tạo giữ chỗ hàng loạt');
       setBatchReserveOpen(false);
     },
     onError: (error) => messageApi.error(getToastMessage(error)),
@@ -1099,7 +1129,7 @@ export default function SalesOrderList() {
       await invalidate();
       setShipmentLoadingProofModal(null);
       shipmentLoadingProofForm.resetFields();
-      messageApi.success(`Đã xác nhận bàn giao xe cho shipment ${data.shipment_code}`);
+      messageApi.success(`Đã xác nhận bàn giao xe cho phiếu xuất ${data.shipment_code}`);
     },
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
@@ -1126,7 +1156,7 @@ export default function SalesOrderList() {
       await invalidate();
       setShipmentDeliveryProofModal(null);
       shipmentDeliveryProofForm.resetFields();
-      messageApi.success(`Đã xác nhận giao xong cho shipment ${data.shipment_code}`);
+      messageApi.success(`Đã xác nhận giao xong cho phiếu xuất ${data.shipment_code}`);
     },
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
@@ -1179,8 +1209,8 @@ export default function SalesOrderList() {
       setSelectedPackageIds([]);
       messageApi.success(
         data.scan_status === 'ALREADY_VERIFIED'
-          ? `Kiện ${data.package.package_code} đã verify trước đó`
-          : `Đã verify kiện ${data.package.package_code}`
+          ? `Kiện ${data.package.package_code} đã được xác minh trước đó`
+          : `Đã xác minh kiện ${data.package.package_code}`
       );
     },
     onError: (error) => messageApi.error(getToastMessage(error)),
@@ -1195,7 +1225,7 @@ export default function SalesOrderList() {
         setShipmentPackages(overview.results ?? []);
       }
       setSelectedPackageIds([]);
-      messageApi.success(`Đã xác nhận bốc xếp ${data.loaded_count} kiện cho shipment ${data.shipment_code}`);
+      messageApi.success(`Đã xác nhận bốc xếp ${data.loaded_count} kiện cho phiếu xuất ${data.shipment_code}`);
     },
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
@@ -1227,7 +1257,7 @@ export default function SalesOrderList() {
       }),
     onSuccess: async (data) => {
       await invalidate();
-      messageApi.success(`Đã lưu ${data.package_count} kiện cho shipment ${data.shipment_code}`);
+      messageApi.success(`Đã lưu ${data.package_count} kiện cho phiếu xuất ${data.shipment_code}`);
     },
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
@@ -1271,6 +1301,151 @@ export default function SalesOrderList() {
       ),
     [rows]
   );
+  const namedPresets = useMemo<SalesOrderNamedPreset[]>(() => {
+    const raw = configRecord.saved_views;
+    if (!Array.isArray(raw)) return [];
+    return raw.flatMap((value) => {
+      if (!value || typeof value !== 'object') return [];
+      const obj = value as Record<string, unknown>;
+      if (typeof obj.id !== 'string' || typeof obj.name !== 'string') return [];
+      const filtersValue = parseViewSnapshot(obj.filters);
+      if (!filtersValue) return [];
+      return [{ id: obj.id, name: obj.name, filters: filtersValue }];
+    });
+  }, [configRecord.saved_views]);
+  const selectedPreset = useMemo(
+    () => namedPresets.find((preset) => preset.id === selectedPresetId) ?? null,
+    [namedPresets, selectedPresetId]
+  );
+  const savedViewSnapshot = useMemo(() => {
+    const directSnapshot = parseViewSnapshot(configRecord.saved_view_snapshot);
+    if (directSnapshot) return directSnapshot;
+    return parseViewSnapshot({
+      search: configRecord.search,
+      status: configRecord.status,
+      customer: configRecord.customer,
+    });
+  }, [configRecord.saved_view_snapshot, configRecord.search, configRecord.status, configRecord.customer]);
+  const activeFilterTags = useMemo(() => {
+    const tags: string[] = [];
+    if (intentSearch.trim()) {
+      tags.push(`Tìm kiếm: ${intentSearch.trim()}`);
+    }
+    if (filters.status) {
+      tags.push(`Trạng thái: ${STATUS_LABELS[filters.status] ?? filters.status}`);
+    }
+    if (filters.customer) {
+      const customer = (customerQuery.data?.results ?? []).find((item) => item.id === filters.customer);
+      tags.push(`Khách hàng: ${customer ? `${customer.code} - ${customer.name}` : filters.customer}`);
+    }
+    return tags;
+  }, [customerQuery.data?.results, filters.customer, filters.status, intentSearch]);
+  const commandContextTags = useMemo(() => {
+    if (!selectedPreset) return activeFilterTags;
+    return [...activeFilterTags, `Mẫu đang dùng: ${selectedPreset.name}`];
+  }, [activeFilterTags, selectedPreset]);
+
+  const buildCurrentSnapshot = (): SalesOrderViewSnapshot => ({
+    search: searchInput,
+    status: filters.status,
+    customer: filters.customer,
+  });
+
+  const applySnapshot = (snapshot: SalesOrderViewSnapshot) => {
+    setSearchInput(snapshot.search);
+    setFilters({
+      status: snapshot.status,
+      customer: snapshot.customer,
+    });
+    setPage(1);
+  };
+
+  const saveCurrentView = async () => {
+    const currentSnapshot = buildCurrentSnapshot();
+    try {
+      await saveConfig({
+        ...config,
+        pageSize,
+        ...currentSnapshot,
+        saved_view_snapshot: currentSnapshot,
+        saved_views: namedPresets,
+      });
+      messageApi.success('Đã lưu chế độ xem đơn hàng.');
+    } catch {
+      messageApi.error('Không thể lưu chế độ xem đơn hàng.');
+    }
+  };
+
+  const applySavedView = () => {
+    if (!savedViewSnapshot) {
+      messageApi.warning('Chưa có chế độ xem đã lưu.');
+      return;
+    }
+    applySnapshot(savedViewSnapshot);
+    messageApi.success('Đã áp dụng chế độ xem đã lưu.');
+  };
+
+  const saveNamedPreset = async () => {
+    const name = presetName.trim();
+    if (!name) {
+      messageApi.error('Vui lòng nhập tên mẫu lọc.');
+      return;
+    }
+    const currentSnapshot = buildCurrentSnapshot();
+    const existing = namedPresets.find((preset) => preset.name.toLowerCase() === name.toLowerCase());
+    const nextPreset: SalesOrderNamedPreset = existing
+      ? { ...existing, name, filters: currentSnapshot }
+      : { id: `${Date.now()}`, name, filters: currentSnapshot };
+    const nextPresets = existing
+      ? namedPresets.map((preset) => (preset.id === existing.id ? nextPreset : preset))
+      : [...namedPresets, nextPreset];
+    try {
+      await saveConfig({
+        ...config,
+        pageSize,
+        ...currentSnapshot,
+        saved_view_snapshot: currentSnapshot,
+        saved_views: nextPresets,
+      });
+      setSelectedPresetId(nextPreset.id);
+      setPresetName('');
+      setIsPresetModalOpen(false);
+      messageApi.success(existing ? 'Đã cập nhật mẫu lọc.' : 'Đã lưu mẫu lọc mới.');
+    } catch {
+      messageApi.error('Không thể lưu mẫu lọc.');
+    }
+  };
+
+  const applyNamedPreset = () => {
+    if (!selectedPreset) {
+      messageApi.warning('Vui lòng chọn mẫu lọc.');
+      return;
+    }
+    applySnapshot(selectedPreset.filters);
+    messageApi.success(`Đã áp dụng mẫu lọc "${selectedPreset.name}".`);
+  };
+
+  const deleteNamedPreset = async () => {
+    if (!selectedPreset) {
+      messageApi.warning('Vui lòng chọn mẫu lọc để xóa.');
+      return;
+    }
+    const currentSnapshot = buildCurrentSnapshot();
+    const nextPresets = namedPresets.filter((preset) => preset.id !== selectedPreset.id);
+    try {
+      await saveConfig({
+        ...config,
+        pageSize,
+        ...currentSnapshot,
+        saved_view_snapshot: currentSnapshot,
+        saved_views: nextPresets,
+      });
+      setSelectedPresetId(undefined);
+      messageApi.success(`Đã xóa mẫu lọc "${selectedPreset.name}".`);
+    } catch {
+      messageApi.error('Không thể xóa mẫu lọc.');
+    }
+  };
 
   const openReservations = useMemo(
     () => (reservationOverviewQuery.data?.results ?? []).filter((item) => item.status === 'OPEN' && Number(item.active_qty || 0) > 0),
@@ -1335,16 +1510,16 @@ export default function SalesOrderList() {
     { title: 'KH', dataIndex: 'customer_name', width: 220, render: (value) => value || '-' },
     { title: 'Tham chiếu', dataIndex: 'reference', width: 180, render: (value) => value || '-' },
     {
-      title: 'Fulfillment',
+      title: 'Thực hiện đơn',
       width: 250,
       render: (_, row) => {
         const metrics = getOrderFulfillmentMetrics(row);
         return (
           <div>
-            <div>Thiếu reserve: <strong>{metrics.remainingReserveQty}</strong></div>
+            <div>Thiếu giữ chỗ: <strong>{metrics.remainingReserveQty}</strong></div>
             <div>Đã xuất: <strong>{metrics.shippedQty}</strong> / {metrics.orderedQty}</div>
             <Space wrap size={4}>
-              {metrics.remainingReserveQty > 0 ? <Tag color="orange">Cần reserve</Tag> : <Tag color="green">Reserve ổn</Tag>}
+              {metrics.remainingReserveQty > 0 ? <Tag color="orange">Cần giữ chỗ</Tag> : <Tag color="green">Giữ chỗ ổn</Tag>}
               {metrics.overduePlans > 0 ? <Tag color="red">Quá hạn giao</Tag> : null}
               {metrics.dueSoonPlans > 0 ? <Tag color="gold">Sắp đến hạn</Tag> : null}
               {metrics.shippedQty > 0 && metrics.shippedQty < metrics.orderedQty ? <Tag color="blue">Xuất một phần</Tag> : null}
@@ -1370,12 +1545,14 @@ export default function SalesOrderList() {
           <Button
             size="small"
             icon={<EyeOutlined />}
+            data-testid={`sales-order-view-${row.id}`}
             onClick={() => setDetailOrder(row)}
           >
             Xem
           </Button>
           <Button
             size="small"
+            data-testid={`sales-order-edit-${row.id}`}
             disabled={row.status !== 'DRAFT'}
             onClick={() => {
               setEditingOrder(row);
@@ -1387,6 +1564,7 @@ export default function SalesOrderList() {
           </Button>
           <Button
             size="small"
+            data-testid={`sales-order-submit-${row.id}`}
             disabled={!canSubmit || row.status !== 'DRAFT'}
             onClick={() => void submitMutation.mutateAsync(row.id)}
           >
@@ -1394,6 +1572,7 @@ export default function SalesOrderList() {
           </Button>
           <Button
             size="small"
+            data-testid={`sales-order-approve-${row.id}`}
             disabled={!canApprove || row.status !== 'SUBMITTED'}
             onClick={() => void approveMutation.mutateAsync(row.id)}
           >
@@ -1402,6 +1581,7 @@ export default function SalesOrderList() {
           <Button
             size="small"
             type="primary"
+            data-testid={`sales-order-confirm-${row.id}`}
             disabled={!canSubmit || !['DRAFT', 'SUBMITTED'].includes(row.status) || !!row.confirmed_at}
             onClick={() => void confirmMutation.mutateAsync(row.id)}
           >
@@ -1410,6 +1590,7 @@ export default function SalesOrderList() {
           <Button
             size="small"
             danger
+            data-testid={`sales-order-reject-${row.id}`}
             disabled={!canApprove || row.status !== 'SUBMITTED'}
             onClick={() => {
               setReasonModal({ type: 'reject', order: row });
@@ -1420,26 +1601,29 @@ export default function SalesOrderList() {
           </Button>
           <Button
             size="small"
+            data-testid={`sales-order-post-${row.id}`}
             disabled={!canPost || row.status !== 'APPROVED'}
             onClick={() => void postMutation.mutateAsync(row.id)}
           >
-            Post
+            Ghi sổ
           </Button>
           <Button
             size="small"
             danger
+            data-testid={`sales-order-void-${row.id}`}
             disabled={!canVoid || !['APPROVED', 'POSTED'].includes(row.status)}
             onClick={() => {
               setReasonModal({ type: 'void', order: row });
               setReasonText('');
             }}
           >
-            Void
+            Hủy chứng từ
           </Button>
           <Button
             size="small"
             danger
             icon={<DeleteOutlined />}
+            data-testid={`sales-order-delete-${row.id}`}
             disabled={row.status !== 'DRAFT'}
             onClick={() =>
               Modal.confirm({
@@ -1488,7 +1672,7 @@ export default function SalesOrderList() {
     if (!detailOrder) return;
     const values = await shipmentForm.validateFields();
     if (!(values.items ?? []).some((item) => item.reservation_id && Number(item.quantity ?? 0) > 0)) {
-      messageApi.error('Cần ít nhất 1 reservation hợp lệ để xuất kho.');
+      messageApi.error('Cần ít nhất 1 phiếu giữ chỗ hợp lệ để xuất kho.');
       return;
     }
     await shipMutation.mutateAsync({ id: detailOrder.id, payload: values });
@@ -1500,7 +1684,7 @@ export default function SalesOrderList() {
     const values = await reserveForm.validateFields();
     const selectedStock = values.stock_key ? reserveStockMap.get(values.stock_key) : undefined;
     if (!selectedStock) {
-      messageApi.error('Cần chọn kho/vị trí để reserve.');
+      messageApi.error('Cần chọn kho hoặc vị trí để giữ chỗ.');
       return;
     }
     await createReservationMutation.mutateAsync({
@@ -1524,7 +1708,7 @@ export default function SalesOrderList() {
       (item.allocations ?? []).some((allocation) => allocation.stock_key && Number(allocation.reserved_qty ?? 0) > 0)
     );
     if (!hasAnyAllocation) {
-      messageApi.error('Cần ít nhất 1 phân bổ reservation hợp lệ.');
+      messageApi.error('Cần ít nhất 1 phân bổ giữ chỗ hợp lệ.');
       return;
     }
     await batchReserveMutation.mutateAsync({ orderId: detailOrder.id, payload: values });
@@ -1547,7 +1731,7 @@ export default function SalesOrderList() {
 
   const onSubmitCancelShipment = async () => {
     if (!detailOrder || !shipmentCancelModal || !shipmentCancelReason.trim()) {
-      messageApi.error('Bạn cần nhập lý do hủy shipment.');
+      messageApi.error('Bạn cần nhập lý do hủy phiếu xuất.');
       return;
     }
     await cancelShipmentMutation.mutateAsync({
@@ -1613,7 +1797,7 @@ export default function SalesOrderList() {
 
   const onSubmitScanShipmentPackage = async () => {
     if (!detailOrder || !shipmentScanModal || !shipmentScanCode.trim()) {
-      messageApi.error('Nhập mã kiện hoặc QR để scan.');
+      messageApi.error('Nhập mã kiện hoặc QR để quét.');
       return;
     }
     await scanShipmentPackageMutation.mutateAsync({
@@ -1689,19 +1873,26 @@ export default function SalesOrderList() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ margin: 0 }}>Đơn hàng xuất</h2>
-          <div style={{ color: '#8c8c8c' }}>Quản lý đơn khách hàng, duyệt, post và theo dõi reservation theo đơn</div>
+          <div style={{ color: '#8c8c8c' }}>Quản lý đơn khách hàng, duyệt, ghi sổ và theo dõi giữ chỗ theo đơn</div>
         </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => {
-            setEditingOrder(null);
-            form.setFieldsValue(emptyFormValues);
-            setOpenEditModal(true);
-          }}
-        >
-          Tạo đơn hàng
-        </Button>
+        <Space wrap>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              setEditingOrder(null);
+              form.setFieldsValue(emptyFormValues);
+              setOpenEditModal(true);
+            }}
+          >
+            Tạo đơn hàng
+          </Button>
+          {selectedPreset ? (
+            <Tag color="purple" style={{ marginInlineEnd: 0 }}>
+              Mẫu đang dùng: {selectedPreset.name}
+            </Tag>
+          ) : null}
+        </Space>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
@@ -1709,58 +1900,120 @@ export default function SalesOrderList() {
         <Card><Statistic title="Nháp" value={stats.DRAFT ?? 0} /></Card>
         <Card><Statistic title="Chờ duyệt" value={stats.SUBMITTED ?? 0} /></Card>
         <Card><Statistic title="Đã duyệt" value={stats.APPROVED ?? 0} /></Card>
-        <Card><Statistic title="Đã post" value={stats.POSTED ?? 0} /></Card>
-        <Card><Statistic title="Cần reserve" value={fulfillmentStats.needReserve} /></Card>
+        <Card><Statistic title="Đã ghi sổ" value={stats.POSTED ?? 0} /></Card>
+        <Card><Statistic title="Cần giữ chỗ" value={fulfillmentStats.needReserve} /></Card>
         <Card><Statistic title="Quá hạn giao" value={fulfillmentStats.overdue} /></Card>
         <Card><Statistic title="Xuất một phần" value={fulfillmentStats.partialShipment} /></Card>
       </div>
 
       <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <Input
-          value={searchInput}
-          onChange={(e) => {
-            setSearchInput(e.target.value);
+        <div data-testid="sales-orders-search" style={{ display: 'inline-block' }}>
+          <Input
+            value={searchInput}
+            onChange={(e) => {
+              setSearchInput(e.target.value);
+              setPage(1);
+            }}
+            placeholder="Tìm mã đơn, tham chiếu, ghi chú..."
+            style={{ width: 320 }}
+            suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined}
+          />
+        </div>
+        <div data-testid="sales-orders-status-filter" style={{ display: 'inline-block' }}>
+          <Select
+            allowClear
+            placeholder="Lọc theo trạng thái"
+            style={{ width: 180 }}
+            value={filters.status}
+            onChange={(value) => {
+              setFilters((prev) => ({ ...prev, status: value }));
+              setPage(1);
+            }}
+            options={[
+              { label: 'Nháp', value: 'DRAFT' },
+              { label: 'Chờ duyệt', value: 'SUBMITTED' },
+              { label: 'Đã duyệt', value: 'APPROVED' },
+              { label: 'Từ chối', value: 'REJECTED' },
+              { label: 'Đã vào sổ', value: 'POSTED' },
+              { label: 'Đã hủy', value: 'VOID' },
+            ]}
+          />
+        </div>
+        <div data-testid="sales-orders-customer-filter" style={{ display: 'inline-block' }}>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="Lọc theo khách hàng"
+            style={{ width: 260 }}
+            value={filters.customer}
+            onChange={(value) => {
+              setFilters((prev) => ({ ...prev, customer: value }));
+              setPage(1);
+            }}
+            options={(customerQuery.data?.results ?? []).map((item) => ({
+              label: `${item.code} - ${item.name}`,
+              value: item.id,
+            }))}
+          />
+        </div>
+        <Button
+          onClick={() => {
+            setSearchInput('');
+            setFilters({});
             setPage(1);
+            setSelectedPresetId(undefined);
           }}
-          placeholder="Tìm mã đơn, tham chiếu, ghi chú..."
-          style={{ width: 320 }}
-          suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined}
-        />
-        <Select
-          allowClear
-          placeholder="Lọc theo trạng thái"
-          style={{ width: 180 }}
-          value={filters.status}
-          onChange={(value) => {
-            setFilters((prev) => ({ ...prev, status: value }));
-            setPage(1);
-          }}
-          options={[
-            { label: 'Nháp', value: 'DRAFT' },
-            { label: 'Chờ duyệt', value: 'SUBMITTED' },
-            { label: 'Đã duyệt', value: 'APPROVED' },
-            { label: 'Từ chối', value: 'REJECTED' },
-            { label: 'Đã vào sổ', value: 'POSTED' },
-            { label: 'Đã hủy', value: 'VOID' },
-          ]}
-        />
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="Lọc theo khách hàng"
-          style={{ width: 260 }}
-          value={filters.customer}
-          onChange={(value) => {
-            setFilters((prev) => ({ ...prev, customer: value }));
-            setPage(1);
-          }}
-          options={(customerQuery.data?.results ?? []).map((item) => ({
-            label: `${item.code} - ${item.name}`,
-            value: item.id,
-          }))}
-        />
+        >
+          Xóa bộ lọc
+        </Button>
       </div>
+      <div
+        data-testid="sales-orders-command-strip"
+        style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}
+      >
+        <Button data-testid="sales-orders-save-view" onClick={() => void saveCurrentView()} disabled={isPreferencesLoading}>
+          Lưu chế độ xem
+        </Button>
+        <Button data-testid="sales-orders-restore-view" onClick={applySavedView} disabled={isPreferencesLoading}>
+          Áp dụng chế độ đã lưu
+        </Button>
+        <Button
+          data-testid="sales-orders-open-preset-modal"
+          onClick={() => {
+            setPresetName(selectedPreset?.name ?? '');
+            setIsPresetModalOpen(true);
+          }}
+          disabled={isPreferencesLoading}
+        >
+          Lưu mẫu mới
+        </Button>
+        <div data-testid="sales-orders-preset-select" style={{ display: 'inline-block' }}>
+          <Select<string>
+            allowClear
+            placeholder="Chọn mẫu đơn hàng"
+            value={selectedPresetId}
+            onChange={(value) => setSelectedPresetId(value)}
+            disabled={isPreferencesLoading}
+            style={{ width: 220 }}
+            options={namedPresets.map((preset) => ({ value: preset.id, label: preset.name }))}
+          />
+        </div>
+        <Button data-testid="sales-orders-apply-preset" onClick={applyNamedPreset} disabled={isPreferencesLoading}>
+          Áp dụng mẫu lọc
+        </Button>
+        <Button danger data-testid="sales-orders-delete-preset" onClick={() => void deleteNamedPreset()} disabled={isPreferencesLoading}>
+          Xóa mẫu lọc
+        </Button>
+        {savedViewSnapshot ? <Tag color="default">Có chế độ xem đã lưu</Tag> : null}
+      </div>
+      <Space wrap>
+        {commandContextTags.length > 0 ? (
+          commandContextTags.map((tag) => <Tag key={tag}>{tag}</Tag>)
+        ) : (
+          <Tag color="default">Đang xem toàn bộ đơn hàng</Tag>
+        )}
+      </Space>
 
       <Table
         rowKey="id"
@@ -1782,6 +2035,27 @@ export default function SalesOrderList() {
           },
         }}
       />
+
+      <Modal
+        title="Lưu mẫu lọc đơn hàng"
+        open={isPresetModalOpen}
+        onCancel={() => {
+          setIsPresetModalOpen(false);
+          setPresetName('');
+        }}
+        onOk={() => void saveNamedPreset()}
+        okText="Lưu mẫu"
+        cancelText="Hủy"
+      >
+        <Input
+          data-testid="sales-orders-preset-name"
+          value={presetName}
+          onChange={(event) => setPresetName(event.target.value)}
+          placeholder="Ví dụ: Chờ duyệt / Cần giữ chỗ / Khách hàng trọng điểm"
+          maxLength={80}
+          autoFocus
+        />
+      </Modal>
 
       <Modal
         title={editingOrder ? `Sửa đơn ${editingOrder.code}` : 'Tạo đơn hàng xuất'}
@@ -2051,7 +2325,7 @@ export default function SalesOrderList() {
       </Modal>
 
       <Modal
-        title={reasonModal?.type === 'reject' ? `Từ chối đơn ${reasonModal.order.code}` : reasonModal ? `Void đơn ${reasonModal.order.code}` : ''}
+        title={reasonModal?.type === 'reject' ? `Từ chối đơn ${reasonModal.order.code}` : reasonModal ? `Hủy chứng từ đơn ${reasonModal.order.code}` : ''}
         open={Boolean(reasonModal)}
         onCancel={() => setReasonModal(null)}
         onOk={onSubmitReasonAction}
@@ -2066,7 +2340,7 @@ export default function SalesOrderList() {
       </Modal>
 
       <Modal
-        title={shipmentCancelModal ? `Hủy shipment ${shipmentCancelModal.shipment.shipment_code}` : 'Hủy shipment'}
+        title={shipmentCancelModal ? `Hủy phiếu xuất ${shipmentCancelModal.shipment.shipment_code}` : 'Hủy phiếu xuất'}
         open={Boolean(shipmentCancelModal)}
         onCancel={() => {
           setShipmentCancelModal(null);
@@ -2079,12 +2353,12 @@ export default function SalesOrderList() {
           rows={4}
           value={shipmentCancelReason}
           onChange={(event) => setShipmentCancelReason(event.target.value)}
-          placeholder="Nhập lý do hủy shipment"
+          placeholder="Nhập lý do hủy phiếu xuất"
         />
       </Modal>
 
       <Modal
-        title={shipmentPackModal ? `Đóng gói shipment ${shipmentPackModal.shipment.shipment_code}` : 'Đóng gói shipment'}
+        title={shipmentPackModal ? `Đóng gói phiếu xuất ${shipmentPackModal.shipment.shipment_code}` : 'Đóng gói phiếu xuất'}
         open={Boolean(shipmentPackModal)}
         onCancel={() => {
           setShipmentPackModal(null);
@@ -2096,7 +2370,7 @@ export default function SalesOrderList() {
         width={900}
       >
         <div style={{ marginBottom: 12, color: '#595959' }}>
-          Nhập số kiện cho từng dòng đã xuất. Hệ thống sẽ lưu package records để tái in đúng tem kiện theo shipment.
+          Nhập số kiện cho từng dòng đã xuất. Hệ thống sẽ lưu hồ sơ kiện để tái in đúng tem kiện theo phiếu xuất.
         </div>
         <Form form={shipmentPackForm} layout="vertical">
           <Form.List name="items">
@@ -2150,7 +2424,7 @@ export default function SalesOrderList() {
                     </Card>
                   );
                 })}
-                {!fields.length ? <div>Shipment này chưa có item POSTED để đóng gói.</div> : null}
+                        {!fields.length ? <div>Phiếu xuất này chưa có dòng đã ghi sổ để đóng gói.</div> : null}
               </div>
             )}
           </Form.List>
@@ -2158,7 +2432,7 @@ export default function SalesOrderList() {
       </Modal>
 
       <Modal
-        title={shipmentScanModal ? `Scan / Verify kiện ${shipmentScanModal.shipment.shipment_code}` : 'Scan / Verify kiện'}
+        title={shipmentScanModal ? `Quét và xác minh kiện ${shipmentScanModal.shipment.shipment_code}` : 'Quét và xác minh kiện'}
         open={Boolean(shipmentScanModal)}
         onCancel={() => {
           setShipmentScanModal(null);
@@ -2191,11 +2465,11 @@ export default function SalesOrderList() {
         ]}
       >
         <div style={{ marginBottom: 12, color: '#595959' }}>
-          Quét `QR/package code` để verify từng kiện trước khi lên xe. Có thể chọn một phần hoặc để trống lựa chọn để xác nhận toàn bộ kiện đã verify.
+          Quét `QR/mã kiện` để xác minh từng kiện trước khi lên xe. Có thể chọn một phần hoặc để trống lựa chọn để xác nhận toàn bộ kiện đã xác minh.
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, marginBottom: 12 }}>
-          <Card size="small"><Statistic title="Tổng kiện active" value={shipmentPackageSummary.packageCount} /></Card>
-          <Card size="small"><Statistic title="Đã verify" value={shipmentPackageSummary.verifiedCount} /></Card>
+          <Card size="small"><Statistic title="Tổng kiện hiệu lực" value={shipmentPackageSummary.packageCount} /></Card>
+          <Card size="small"><Statistic title="Đã xác minh" value={shipmentPackageSummary.verifiedCount} /></Card>
           <Card size="small"><Statistic title="Đã bốc xếp" value={shipmentPackageSummary.loadedCount} /></Card>
           <Card size="small"><Statistic title="Chờ bốc xếp" value={shipmentPackageSummary.pendingLoadCount} /></Card>
         </div>
@@ -2204,10 +2478,10 @@ export default function SalesOrderList() {
             value={shipmentScanCode}
             onChange={(event) => setShipmentScanCode(event.target.value)}
             onPressEnter={() => void onSubmitScanShipmentPackage()}
-            placeholder="Quét QR hoặc nhập package code"
+            placeholder="Quét QR hoặc nhập mã kiện"
           />
           <Button type="primary" loading={scanShipmentPackageMutation.isPending} onClick={() => void onSubmitScanShipmentPackage()}>
-            Scan verify
+            Quét xác minh
           </Button>
         </div>
         <Table
@@ -2223,7 +2497,7 @@ export default function SalesOrderList() {
           }}
           columns={[
             { title: 'Kiện', dataIndex: 'package_code', width: 190 },
-            { title: 'Line', dataIndex: 'line_number', width: 70, render: (value) => value ?? '-' },
+            { title: 'Dòng', dataIndex: 'line_number', width: 70, render: (value) => value ?? '-' },
             { title: 'Sản phẩm', width: 220, render: (_, row) => `${row.product_code || ''} - ${row.product_name || ''}` },
             { title: 'SL', dataIndex: 'quantity', width: 90, render: (value) => value || '0' },
             { title: 'Loại kiện', dataIndex: 'package_type', width: 120, render: (value) => value || '-' },
@@ -2234,7 +2508,7 @@ export default function SalesOrderList() {
               render: (_, row) => (
                 <Space wrap size={4}>
                   {row.status === 'CANCELLED' ? <Tag color="red">Đã hủy</Tag> : <Tag color="blue">Hoạt động</Tag>}
-                  {row.verified_at ? <Tag color="green">Đã verify</Tag> : <Tag color="orange">Chưa verify</Tag>}
+                  {row.verified_at ? <Tag color="green">Đã xác minh</Tag> : <Tag color="orange">Chưa xác minh</Tag>}
                   {row.loaded_at ? <Tag color="cyan">Đã bốc xếp</Tag> : null}
                 </Space>
               ),
@@ -2244,15 +2518,15 @@ export default function SalesOrderList() {
               width: 220,
               render: (_, row) => (
                 <div style={{ fontSize: 12 }}>
-                  <div>Verify: {row.verified_at ? `${row.verified_at}${row.verified_by_name ? ` / ${row.verified_by_name}` : ''}` : '-'}</div>
-                  <div>Load: {row.loaded_at ? `${row.loaded_at}${row.loaded_by_name ? ` / ${row.loaded_by_name}` : ''}` : '-'}</div>
+                  <div>Xác minh: {row.verified_at ? `${row.verified_at}${row.verified_by_name ? ` / ${row.verified_by_name}` : ''}` : '-'}</div>
+                  <div>Bốc xếp: {row.loaded_at ? `${row.loaded_at}${row.loaded_by_name ? ` / ${row.loaded_by_name}` : ''}` : '-'}</div>
                 </div>
               ),
             },
-            { title: 'QR value', dataIndex: 'label_qr_value', width: 260, render: (value) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{value}</span> },
+            { title: 'Giá trị QR', dataIndex: 'label_qr_value', width: 260, render: (value) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{value}</span> },
           ]}
           dataSource={shipmentPackages}
-          locale={{ emptyText: 'Shipment chưa có kiện để scan.' }}
+          locale={{ emptyText: 'Phiếu xuất chưa có kiện để quét.' }}
           scroll={{ x: 1500, y: 420 }}
         />
       </Modal>
@@ -2268,7 +2542,7 @@ export default function SalesOrderList() {
         confirmLoading={confirmShipmentLoadingMutation.isPending}
       >
         <div style={{ marginBottom: 12, color: '#595959' }}>
-          Xác nhận này dùng để khóa bàn giao xe sau khi toàn bộ kiện đã được `loaded`. Có thể nhập link ngoài vào `Proof URL`, hoặc tải file ở nút `Tệp xe` và để trống ô này để hệ thống tự gắn link nội bộ.
+          Xác nhận này dùng để khóa bàn giao xe sau khi toàn bộ kiện đã được `bốc xếp`. Có thể nhập đường dẫn ngoài vào ô `Đường dẫn chứng từ`, hoặc tải file ở nút `Tệp xe` và để trống ô này để hệ thống tự gắn link nội bộ.
         </div>
         <Form form={shipmentLoadingProofForm} layout="vertical">
           <Form.Item name="loading_reference" label="Mã bàn giao">
@@ -2284,7 +2558,7 @@ export default function SalesOrderList() {
           <Form.Item name="handover_receiver_phone" label="SĐT người nhận">
             <Input />
           </Form.Item>
-          <Form.Item name="handover_proof_url" label="Proof URL">
+          <Form.Item name="handover_proof_url" label="Đường dẫn chứng từ">
             <Input placeholder="https://..." />
           </Form.Item>
           <Form.Item name="loading_confirmation_note" label="Ghi chú bàn giao">
@@ -2304,10 +2578,10 @@ export default function SalesOrderList() {
         confirmLoading={confirmShipmentDeliveryMutation.isPending}
       >
         <div style={{ marginBottom: 12, color: '#595959' }}>
-          Ghi nhận `proof of delivery` sau khi khách đã nhận hàng xong. Có thể lưu người nhận cuối, thời điểm giao xong và link ảnh/chứng từ ký nhận; nếu đã tải file ở `Tệp POD` thì có thể để trống `Proof URL`.
+          Ghi nhận `biên bản giao hàng` sau khi khách đã nhận hàng xong. Có thể lưu người nhận cuối, thời điểm giao xong và đường dẫn ảnh/chứng từ ký nhận; nếu đã tải file ở `Tệp biên bản giao hàng` thì có thể để trống `Đường dẫn chứng từ`.
         </div>
         <Form form={shipmentDeliveryProofForm} layout="vertical">
-          <Form.Item name="delivery_reference" label="Mã POD">
+          <Form.Item name="delivery_reference" label="Mã biên bản giao hàng">
             <Input />
           </Form.Item>
           <Form.Item
@@ -2327,7 +2601,7 @@ export default function SalesOrderList() {
           >
             <Input type="datetime-local" />
           </Form.Item>
-          <Form.Item name="delivery_proof_url" label="Proof URL">
+          <Form.Item name="delivery_proof_url" label="Đường dẫn chứng từ">
             <Input placeholder="https://..." />
           </Form.Item>
           <Form.Item name="delivery_confirmation_note" label="Ghi chú giao hàng">
@@ -2339,7 +2613,7 @@ export default function SalesOrderList() {
       <Modal
         title={
           shipmentAttachmentModal
-            ? `${shipmentAttachmentModal.proofType === 'LOAD' ? 'Tệp bàn giao xe' : 'Tệp POD'} ${shipmentAttachmentModal.shipment.shipment_code}`
+            ? `${shipmentAttachmentModal.proofType === 'LOAD' ? 'Tệp bàn giao xe' : 'Tệp biên bản giao hàng'} ${shipmentAttachmentModal.shipment.shipment_code}`
             : 'Tệp chứng từ'
         }
         open={Boolean(shipmentAttachmentModal)}
@@ -2349,7 +2623,7 @@ export default function SalesOrderList() {
         {shipmentAttachmentModal ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ color: '#595959' }}>
-              Tải file nội bộ cho {SHIPMENT_ATTACHMENT_LABEL[shipmentAttachmentModal.proofType]}. Nếu ô `Proof URL` để trống khi xác nhận, hệ thống sẽ tự lấy file mới nhất ở đây.
+              Tải file nội bộ cho {SHIPMENT_ATTACHMENT_LABEL[shipmentAttachmentModal.proofType]}. Nếu ô `Đường dẫn chứng từ` để trống khi xác nhận, hệ thống sẽ tự lấy file mới nhất ở đây.
             </div>
             <Upload
               showUploadList={false}
@@ -2440,7 +2714,7 @@ export default function SalesOrderList() {
             {(fields, { add, remove }) => (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <strong>Reservation cần xuất</strong>
+                  <strong>Phiếu giữ chỗ cần xuất</strong>
                   <Button
                     size="small"
                     onClick={() =>
@@ -2450,7 +2724,7 @@ export default function SalesOrderList() {
                       })
                     }
                   >
-                    Thêm reservation
+                    Thêm phiếu giữ chỗ
                   </Button>
                 </div>
                 {fields.map((field, idx) => (
@@ -2460,14 +2734,14 @@ export default function SalesOrderList() {
                   >
                     <Form.Item
                       name={[field.name, 'reservation_id']}
-                      label={idx === 0 ? 'Reservation' : ' '}
+                      label={idx === 0 ? 'Phiếu giữ chỗ' : ' '}
                       rules={[{ required: true, message: 'Bắt buộc' }]}
                     >
                       <Select
                         showSearch
                         optionFilterProp="label"
                         options={openReservations.map((item) => ({
-                          label: `${item.code} - Dòng ${item.line_number ?? '-'} - ${item.product_code || ''} / active ${item.active_qty}`,
+                          label: `${item.code} - Dòng ${item.line_number ?? '-'} - ${item.product_code || ''} / khả dụng ${item.active_qty}`,
                           value: item.id,
                         }))}
                         onChange={(value) => {
@@ -2528,7 +2802,7 @@ export default function SalesOrderList() {
       </Modal>
 
       <Modal
-        title={reserveLine && detailOrder ? `Reserve cho dòng ${reserveLine.line_number} - ${detailOrder.code}` : 'Reserve từ đơn hàng'}
+        title={reserveLine && detailOrder ? `Giữ chỗ cho dòng ${reserveLine.line_number} - ${detailOrder.code}` : 'Giữ chỗ từ đơn hàng'}
         open={Boolean(reserveLine)}
         onCancel={() => setReserveLine(null)}
         onOk={onSubmitReserve}
@@ -2538,11 +2812,11 @@ export default function SalesOrderList() {
           <Form.Item label="Dòng đơn">
             <div style={{ padding: 8, borderRadius: 8, background: '#fafafa' }}>
               {reserveLine
-                ? `${reserveLine.product_code || reserveLine.internal_product_code || ''} - ${reserveLine.product_name_snapshot || reserveLine.product_name || ''} | Đặt ${reserveLine.qty || 0} | Đã reserve ${reserveLine.reserved_qty_total || 0} | Đã xuất ${reserveLine.shipped_qty_total || 0}`
+                ? `${reserveLine.product_code || reserveLine.internal_product_code || ''} - ${reserveLine.product_name_snapshot || reserveLine.product_name || ''} | Đặt ${reserveLine.qty || 0} | Đã giữ ${reserveLine.reserved_qty_total || 0} | Đã xuất ${reserveLine.shipped_qty_total || 0}`
                 : '-'}
             </div>
           </Form.Item>
-          <Form.Item name="reservation_date" label="Ngày reserve" rules={[{ required: true, message: 'Bắt buộc' }]}>
+          <Form.Item name="reservation_date" label="Ngày giữ chỗ" rules={[{ required: true, message: 'Bắt buộc' }]}>
             <Input type="date" />
           </Form.Item>
           <Form.Item name="stock_key" label="Kho / vị trí còn hàng" rules={[{ required: true, message: 'Bắt buộc' }]}>
@@ -2551,7 +2825,7 @@ export default function SalesOrderList() {
               optionFilterProp="label"
               loading={reserveStockQuery.isLoading}
               options={reserveStockRows.map((row) => ({
-                label: `${row.warehouse_name}${row.location_name ? ` / ${row.location_name}` : ''} | available ${row.available}`,
+                label: `${row.warehouse_name}${row.location_name ? ` / ${row.location_name}` : ''} | khả dụng ${row.available}`,
                 value: `${row.warehouse_id}:${row.location_id ?? 0}`,
               }))}
               onChange={(value) => {
@@ -2564,7 +2838,7 @@ export default function SalesOrderList() {
               }}
             />
           </Form.Item>
-          <Form.Item name="reserved_qty" label="Số lượng reserve" rules={[{ required: true, message: 'Bắt buộc' }]}>
+          <Form.Item name="reserved_qty" label="Số lượng giữ chỗ" rules={[{ required: true, message: 'Bắt buộc' }]}>
             <InputNumber style={{ width: '100%' }} min={0.0001} />
           </Form.Item>
           <Form.Item name="reference" label="Tham chiếu">
@@ -2577,7 +2851,7 @@ export default function SalesOrderList() {
       </Modal>
 
       <Modal
-        title={detailOrder ? `Batch reserve - ${detailOrder.code}` : 'Batch reserve'}
+        title={detailOrder ? `Giữ chỗ hàng loạt - ${detailOrder.code}` : 'Giữ chỗ hàng loạt'}
         open={batchReserveOpen}
         onCancel={() => {
           setBatchReserveOpen(false);
@@ -2587,11 +2861,11 @@ export default function SalesOrderList() {
         width={1100}
       >
         <div style={{ marginBottom: 12, color: '#595959' }}>
-          Gợi ý phân bổ được lấy từ tồn `available` hiện tại theo từng sản phẩm. Bạn có thể sửa lại kho/vị trí và số lượng trước khi tạo reservation.
+          Gợi ý phân bổ được lấy từ tồn `khả dụng` hiện tại theo từng sản phẩm. Bạn có thể sửa lại kho, vị trí và số lượng trước khi tạo phiếu giữ chỗ.
         </div>
         <Form form={batchReserveForm} layout="vertical">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: 12 }}>
-            <Form.Item name="reservation_date" label="Ngày reserve" rules={[{ required: true, message: 'Bắt buộc' }]}>
+            <Form.Item name="reservation_date" label="Ngày giữ chỗ" rules={[{ required: true, message: 'Bắt buộc' }]}>
               <Input type="date" />
             </Form.Item>
             <Form.Item name="reference" label="Tham chiếu">
@@ -2625,9 +2899,9 @@ export default function SalesOrderList() {
                     >
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, marginBottom: 8 }}>
                         <div>Đặt: <strong>{line?.qty || '0'}</strong></div>
-                        <div>Đã reserve: <strong>{line?.reserved_qty_total || '0'}</strong></div>
+                        <div>Đã giữ: <strong>{line?.reserved_qty_total || '0'}</strong></div>
                         <div>Đã xuất: <strong>{line?.shipped_qty_total || '0'}</strong></div>
-                        <div>Cần reserve thêm: <strong>{requestedQty}</strong></div>
+                        <div>Cần giữ thêm: <strong>{requestedQty}</strong></div>
                       </div>
                       <div style={{ marginBottom: 8, color: remainingQty > 0 ? '#d46b08' : '#389e0d' }}>
                         Đã phân bổ: {allocatedQty} | Còn thiếu: {remainingQty}
@@ -2678,14 +2952,14 @@ export default function SalesOrderList() {
                                     showSearch
                                     optionFilterProp="label"
                                     options={productOptions.map((option) => ({
-                                      label: `${option.warehouse_name}${option.location_name ? ` / ${option.location_name}` : ''} | available ${option.available}`,
+                                      label: `${option.warehouse_name}${option.location_name ? ` / ${option.location_name}` : ''} | khả dụng ${option.available}`,
                                       value: option.key,
                                     }))}
                                   />
                                 </Form.Item>
                                 <Form.Item
                                   name={[allocationField.name, 'reserved_qty']}
-                                  label={allocationIndex === 0 ? 'SL reserve' : ' '}
+                                  label={allocationIndex === 0 ? 'SL giữ chỗ' : ' '}
                                   rules={[{ required: true, message: 'Bắt buộc' }]}
                                 >
                                   <InputNumber style={{ width: '100%' }} min={0.0001} />
@@ -2701,7 +2975,7 @@ export default function SalesOrderList() {
                     </Card>
                   );
                 })}
-                {!fields.length ? <div>Không còn dòng nào cần reserve thêm.</div> : null}
+                {!fields.length ? <div>Không còn dòng nào cần giữ thêm.</div> : null}
               </div>
             )}
           </Form.List>
@@ -2790,7 +3064,7 @@ export default function SalesOrderList() {
             onClick={() => detailOrder && packingSlipMutation.mutate(detailOrder.id)}
             loading={packingSlipMutation.isPending}
           >
-            Tải packing slip tổng hợp
+            Tải phiếu giao hàng tổng hợp
           </Button>
           <Button
             onClick={() => {
@@ -2808,7 +3082,7 @@ export default function SalesOrderList() {
           </Button>
         </div>
         <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#fafafa', color: '#595959' }}>
-          `Post` chỉ chốt chứng từ bán hàng. Bước trừ tồn thực tế là `Xuất kho` từ reservation bên dưới.
+          `Ghi sổ` chỉ chốt chứng từ bán hàng. Bước trừ tồn thực tế là `Xuất kho` từ phiếu giữ chỗ bên dưới.
         </div>
 
         <Divider style={{ marginTop: 24 }}>Dòng hàng</Divider>
@@ -2838,7 +3112,7 @@ export default function SalesOrderList() {
               setBatchReserveOpen(true);
             }}
           >
-            Batch reserve gợi ý
+            Giữ chỗ hàng loạt gợi ý
           </Button>
         </div>
         <Table
@@ -2874,15 +3148,15 @@ export default function SalesOrderList() {
             },
             { title: 'SL', dataIndex: 'qty', width: 100 },
             { title: 'Đơn giá', dataIndex: 'unit_price', width: 120, render: (value) => <FormattedPrice value={Number(value || 0)} /> },
-            { title: 'Reserved', dataIndex: 'reserved_qty_total', width: 100, render: (value) => value || '0' },
-            { title: 'Shipped', dataIndex: 'shipped_qty_total', width: 100, render: (value) => value || '0' },
+            { title: 'Đã giữ', dataIndex: 'reserved_qty_total', width: 100, render: (value) => value || '0' },
+            { title: 'Đã xuất', dataIndex: 'shipped_qty_total', width: 100, render: (value) => value || '0' },
             {
               title: 'Delivered',
               width: 100,
               render: (_, row) =>
                 (row.delivery_plans ?? []).reduce((sum, plan) => sum + toNumber(plan.delivered_qty), 0).toString(),
             },
-            { title: 'Còn reserve', dataIndex: 'remaining_reservation_qty', width: 100, render: (value) => value || '0' },
+            { title: 'Còn cần giữ', dataIndex: 'remaining_reservation_qty', width: 100, render: (value) => value || '0' },
             { title: 'Planned', dataIndex: 'planned_qty_total', width: 100, render: (value) => value || '0' },
             { title: 'Unplanned', dataIndex: 'unplanned_qty', width: 100, render: (value) => value || '0' },
             {
@@ -2896,7 +3170,7 @@ export default function SalesOrderList() {
               render: (_, row) => renderSnapshotPopover(row),
             },
             {
-              title: 'Reserve',
+              title: 'Giữ chỗ',
               width: 110,
               render: (_, row) => (
                 <Button
@@ -2913,7 +3187,7 @@ export default function SalesOrderList() {
                     });
                   }}
                 >
-                  Reserve
+                  Giữ chỗ
                 </Button>
               ),
             },
@@ -2955,7 +3229,7 @@ export default function SalesOrderList() {
           scroll={{ x: 1180 }}
         />
 
-        <Divider style={{ marginTop: 24 }}>Đặt trữ (Reservation)</Divider>
+        <Divider style={{ marginTop: 24 }}>Đặt trữ (Giữ chỗ tồn kho)</Divider>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Button
             type="primary"
@@ -2979,7 +3253,7 @@ export default function SalesOrderList() {
               setShipmentModalOpen(true);
             }}
           >
-            Xuất kho từ reservation
+            Xuất kho từ phiếu giữ chỗ
           </Button>
         </div>
         <Table
@@ -2988,12 +3262,12 @@ export default function SalesOrderList() {
           loading={reservationOverviewQuery.isLoading}
           pagination={false}
           columns={[
-            { title: 'Reserve #', dataIndex: 'code', width: 150 },
+            { title: 'Mã giữ chỗ', dataIndex: 'code', width: 150 },
             { title: 'Dòng', dataIndex: 'line_number', width: 60, render: (value) => value || '-' },
             { title: 'Sản phẩm', render: (_, row) => `${row.product_code || ''} - ${row.product_name || ''}` },
             { title: 'Kho/Vị trí', render: (_, row) => [row.warehouse_name, row.location_name].filter(Boolean).join(' / ') || '-' },
             { title: 'Đặt giữ', dataIndex: 'reserved_qty', width: 90 },
-            { title: 'Active', dataIndex: 'active_qty', width: 90 },
+            { title: 'Khả dụng', dataIndex: 'active_qty', width: 90 },
             {
               title: 'Trạng thái',
               dataIndex: 'status',
@@ -3011,30 +3285,30 @@ export default function SalesOrderList() {
             },
           ]}
           dataSource={reservationOverviewQuery.data?.results ?? []}
-          locale={{ emptyText: 'Chưa có reservation cho đơn này.' }}
+          locale={{ emptyText: 'Chưa có phiếu giữ chỗ cho đơn này.' }}
           scroll={{ x: 1000 }}
         />
 
-        <Divider style={{ marginTop: 24 }}>Phiếu xuất kho (Shipment)</Divider>
+        <Divider style={{ marginTop: 24 }}>Phiếu xuất kho</Divider>
         <Table
           rowKey="id"
           size="small"
           loading={shipmentOverviewQuery.isLoading}
           pagination={false}
           columns={[
-            { title: 'Shipment', dataIndex: 'shipment_code', width: 150 },
+            { title: 'Mã phiếu xuất', dataIndex: 'shipment_code', width: 150 },
             { title: 'Ngày xuất', dataIndex: 'shipment_date', width: 110 },
             { title: 'Số dòng', dataIndex: 'line_count', width: 80, render: (value) => value ?? 0 },
-            { title: 'Số item', dataIndex: 'item_count', width: 80, render: (value) => value ?? 0 },
+            { title: 'Số mục', dataIndex: 'item_count', width: 80, render: (value) => value ?? 0 },
             { title: 'Số kiện', dataIndex: 'package_count', width: 90, render: (value) => value ?? 0 },
-            { title: 'Đã verify', dataIndex: 'verified_package_count', width: 90, render: (value) => value ?? 0 },
+            { title: 'Đã xác minh', dataIndex: 'verified_package_count', width: 90, render: (value) => value ?? 0 },
             { title: 'Đã bốc xếp', dataIndex: 'loaded_package_count', width: 100, render: (value) => value ?? 0 },
             { title: 'Tổng SL', dataIndex: 'total_qty', width: 90, render: (value) => value || '0' },
             { title: 'Tổng kg', dataIndex: 'total_gross_weight_kg', width: 90, render: (value) => value || '0' },
-            { title: 'Tracking', dataIndex: 'tracking_number', width: 140, render: (value) => value || '-' },
-            { title: 'Nhà VC', dataIndex: 'carrier_name', width: 140, render: (value) => value || '-' },
+            { title: 'Mã vận đơn', dataIndex: 'tracking_number', width: 140, render: (value) => value || '-' },
+            { title: 'Nhà vận chuyển', dataIndex: 'carrier_name', width: 160, render: (value) => value || '-' },
             { title: 'Xe / tài xế', width: 220, render: (_, row) => [row.vehicle_no, row.driver_name, row.driver_phone].filter(Boolean).join(' / ') || '-' },
-            { title: 'Ref', dataIndex: 'reference', width: 140, render: (value) => value || '-' },
+            { title: 'Tham chiếu', dataIndex: 'reference', width: 140, render: (value) => value || '-' },
             {
               title: 'Trạng thái',
               dataIndex: 'status',
@@ -3046,7 +3320,7 @@ export default function SalesOrderList() {
                   {row.delivery_confirmed_at ? <Tag color="purple">Đã giao xong</Tag> : null}
                   {Number(row.package_count || 0) > 0 ? (
                     <div style={{ color: '#8c8c8c', fontSize: 12 }}>
-                      Verify {row.verified_package_count || 0}/{row.package_count || 0} | Load {row.loaded_package_count || 0}/{row.package_count || 0}
+                      Xác minh {row.verified_package_count || 0}/{row.package_count || 0} | Bốc xếp {row.loaded_package_count || 0}/{row.package_count || 0}
                     </div>
                   ) : null}
                   {row.loading_confirmed_at ? (
@@ -3073,7 +3347,7 @@ export default function SalesOrderList() {
                     onClick={() => detailOrder && shipmentPackingSlipMutation.mutate({ orderId: detailOrder.id, shipmentId: row.shipment_id })}
                     loading={shipmentPackingSlipMutation.isPending}
                   >
-                    Packing slip
+                    Phiếu giao hàng
                   </Button>
                   <Button
                     size="small"
@@ -3081,7 +3355,7 @@ export default function SalesOrderList() {
                     onClick={() => detailOrder && shipmentManifestMutation.mutate({ orderId: detailOrder.id, shipmentId: row.shipment_id })}
                     loading={shipmentManifestMutation.isPending}
                   >
-                    Manifest
+                    Bảng kê xếp hàng
                   </Button>
                   <Button
                     size="small"
@@ -3097,7 +3371,7 @@ export default function SalesOrderList() {
                     onClick={() => detailOrder && shipmentLoadingHandoverPdfMutation.mutate({ orderId: detailOrder.id, shipmentId: row.shipment_id })}
                     loading={shipmentLoadingHandoverPdfMutation.isPending}
                   >
-                    BB giao xe
+                    Biên bản giao xe
                   </Button>
                   <Button
                     size="small"
@@ -3111,7 +3385,7 @@ export default function SalesOrderList() {
                     disabled={!detailOrder}
                     onClick={() => openShipmentAttachmentModal(row, 'DELIVERY')}
                   >
-                    Tệp POD
+                    Tệp giao hàng
                   </Button>
                   <Button
                     size="small"
@@ -3119,7 +3393,7 @@ export default function SalesOrderList() {
                     onClick={() => detailOrder && shipmentDeliveryProofPdfMutation.mutate({ orderId: detailOrder.id, shipmentId: row.shipment_id })}
                     loading={shipmentDeliveryProofPdfMutation.isPending}
                   >
-                    POD
+                    Biên bản giao hàng
                   </Button>
                 </Space>
               ),
@@ -3138,7 +3412,7 @@ export default function SalesOrderList() {
                     }
                     onClick={() => void openShipmentScanModal(row)}
                   >
-                    Scan kiện
+                    Quét kiện
                   </Button>
                   <Button
                     size="small"
@@ -3185,7 +3459,7 @@ export default function SalesOrderList() {
                       setShipmentCancelReason('');
                     }}
                   >
-                    Hủy shipment
+                    Hủy phiếu xuất
                   </Button>
                 </Space>
               ),

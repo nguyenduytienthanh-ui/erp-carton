@@ -26,5 +26,5 @@ export interface QuoteAnalytics {
   period: string;
   metrics: QuoteMetrics;
   conversions: QuoteConversion[];
-  trend?: any;
+  trend?: Record<string, unknown> | Array<Record<string, unknown>> | null;
 }

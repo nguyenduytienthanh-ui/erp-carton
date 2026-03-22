@@ -2,8 +2,11 @@ import axiosInstance from './axios';
 import { API_ENDPOINTS } from '../utils/constants';
 import type {
   AdvanceOverdueOverviewResponse,
+  AdvanceApprovalHistoryItem,
   AdvanceApprovalQueueResponse,
+  AdvanceApprovalSlaPolicy,
   AdvanceApprovalSlaOverviewResponse,
+  AdvanceApprovalSlaReminderHistoryResponse,
   AdvanceReminderPolicy,
   AdvanceReminderPolicyHistoryResponse,
   AdvanceReminderPolicySimulationResponse,
@@ -13,6 +16,8 @@ import type {
   ExecutiveAutoHistoryResponse,
   ExecutiveAutoGovernanceResponse,
   FinanceMonthCloseCheckResponse,
+  FinanceMonthlySummaryResponse,
+  FinanceTrend12mResponse,
   CrossModuleBootstrapResponse,
   CrossModuleBootstrapHistoryResponse,
   CrossModuleReadinessResponse,
@@ -21,6 +26,8 @@ import type {
   AdvanceSettlement,
   AdvanceTransaction,
   BankAccount,
+  BudgetPlan,
+  BudgetVarianceAnalysisResponse,
   CashAccount,
   CashTransaction,
   FinanceLockedMonthsResponse,
@@ -65,6 +72,16 @@ type AdvanceSettlementPayload = Omit<
   AdvanceSettlement,
   'id' | 'created_at' | 'updated_at' | 'advance_code' | 'advance_recipient_name'
 >;
+type BudgetPlanPayload = {
+  department: string;
+  category: string;
+  fiscal_year: number;
+  budgeted_amount: number | string;
+  actual_amount?: number | string;
+  committed_amount?: number | string;
+  note?: string;
+  is_active: boolean;
+};
 
 export const financeApi = {
   getBankAccounts: async (params?: Record<string, unknown>): Promise<PaginatedResponse<BankAccount>> => {
@@ -165,9 +182,26 @@ export const financeApi = {
     const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_QUEUE);
     return response.data as AdvanceApprovalQueueResponse;
   },
+  getAdvanceApprovalHistory: async (id: number): Promise<AdvanceApprovalHistoryItem[]> => {
+    const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_HISTORY.replace('{id}', String(id));
+    const response = await axiosInstance.get(endpoint);
+    return response.data as AdvanceApprovalHistoryItem[];
+  },
   getAdvanceApprovalSlaOverview: async (): Promise<AdvanceApprovalSlaOverviewResponse> => {
     const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_SLA_OVERVIEW);
     return response.data as AdvanceApprovalSlaOverviewResponse;
+  },
+  getAdvanceApprovalSlaReminderHistory: async (params?: { days?: number }): Promise<AdvanceApprovalSlaReminderHistoryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_SLA_REMINDER_HISTORY, { params });
+    return response.data as AdvanceApprovalSlaReminderHistoryResponse;
+  },
+  getAdvanceApprovalSlaPolicy: async (): Promise<AdvanceApprovalSlaPolicy> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_SLA_POLICY);
+    return response.data as AdvanceApprovalSlaPolicy;
+  },
+  saveAdvanceApprovalSlaPolicy: async (payload: Partial<AdvanceApprovalSlaPolicy>): Promise<{ success: boolean; policy: AdvanceApprovalSlaPolicy }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_SLA_POLICY, payload);
+    return response.data as { success: boolean; policy: AdvanceApprovalSlaPolicy };
   },
   remindAdvancePendingApprovals: async (payload?: { dry_run?: boolean }): Promise<{
     success: boolean;
@@ -208,6 +242,23 @@ export const financeApi = {
   }> => {
     const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CASH_FLOW_SUMMARY, { params });
     return response.data;
+  },
+  getFinanceMonthlySummary: async (month: string): Promise<FinanceMonthlySummaryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_MONTHLY_SUMMARY, { params: { month } });
+    return response.data as FinanceMonthlySummaryResponse;
+  },
+  exportFinanceMonthlySummaryExcel: async (month: string): Promise<Blob> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_MONTHLY_SUMMARY, {
+      params: { month, export: 'excel' },
+      responseType: 'blob',
+    });
+    return response.data as Blob;
+  },
+  getFinanceTrend12m: async (endMonth?: string): Promise<FinanceTrend12mResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_TREND_12M, {
+      params: endMonth ? { end_month: endMonth } : undefined,
+    });
+    return response.data as FinanceTrend12mResponse;
   },
   getCrossModuleReadiness: async (): Promise<CrossModuleReadinessResponse> => {
     const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CROSS_MODULE_READINESS);
@@ -359,6 +410,25 @@ export const financeApi = {
   getPayableSummary: async (params?: Record<string, unknown>): Promise<ArApSummaryResponse> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_PAYABLES}summary/`, { params });
     return response.data as ArApSummaryResponse;
+  },
+  getBudgets: async (params?: Record<string, unknown>): Promise<PaginatedResponse<BudgetPlan>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_BUDGETS, { params });
+    return response.data;
+  },
+  createBudget: async (payload: BudgetPlanPayload): Promise<BudgetPlan> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_BUDGETS, payload);
+    return response.data;
+  },
+  updateBudget: async (id: number, payload: Partial<BudgetPlanPayload>): Promise<BudgetPlan> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.FINANCE_BUDGETS}${id}/`, payload);
+    return response.data;
+  },
+  deleteBudget: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.FINANCE_BUDGETS}${id}/`);
+  },
+  getBudgetVarianceAnalysis: async (params?: Record<string, unknown>): Promise<BudgetVarianceAnalysisResponse> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_BUDGETS}variance_analysis/`, { params });
+    return response.data as BudgetVarianceAnalysisResponse;
   },
   getGeneralLedger: async (params: {
     date_from: string;

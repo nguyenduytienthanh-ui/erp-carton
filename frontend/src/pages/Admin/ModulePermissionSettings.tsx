@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Button, Card, Input, Select, message, Space, Switch, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Input, Select, message, Space, Switch, Table, Tag, Typography } from 'antd';
 import { ReloadOutlined, SaveOutlined, SafetyOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '../../api/admin';
@@ -13,7 +13,7 @@ type ModulePermissionConfig = {
   showInactive?: boolean;
 };
 type ModulePermissionFilters = {
-  status: 'all' | 'active' | 'inactive';
+  status: 'all' | 'active' | 'inactive' | 'draft' | 'sensitive';
 };
 type PermissionFieldKey =
   | 'workforce_manage'
@@ -35,12 +35,20 @@ const DEFAULT_PERMISSION_FIELDS: Array<{ field: PermissionFieldKey; label: strin
   { field: 'production_manage', label: 'Sản xuất' },
   { field: 'ops_view', label: 'Điều hành' },
   { field: 'reports_view', label: 'Trung tâm báo cáo' },
-  { field: 'workflow_view', label: 'Workflow xem' },
-  { field: 'workflow_manage', label: 'Workflow quản lý' },
+  { field: 'workflow_view', label: 'Quy trình xem' },
+  { field: 'workflow_manage', label: 'Quy trình quản lý' },
   { field: 'operations_log_view', label: 'Nhật ký vận hành' },
-  { field: 'rbac_audit_view', label: 'Audit phân quyền' },
+  { field: 'rbac_audit_view', label: 'Kiểm tra phân quyền' },
   { field: 'rbac_manage', label: 'Quản trị phân quyền' },
 ];
+
+const SUMMARY_TILE_STYLE = {
+  border: '1px solid #e5e7eb',
+  borderRadius: 18,
+  padding: '14px 16px',
+  background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+  boxShadow: '0 12px 24px rgba(15, 23, 42, 0.04)',
+};
 
 function serializeFilters(filters: ModulePermissionFilters): string {
   return JSON.stringify(filters);
@@ -49,7 +57,7 @@ function serializeFilters(filters: ModulePermissionFilters): string {
 function parseFilters(raw: string): ModulePermissionFilters {
   try {
     const parsed = JSON.parse(raw) as Partial<ModulePermissionFilters>;
-    if (parsed.status === 'active' || parsed.status === 'inactive') {
+    if (parsed.status === 'active' || parsed.status === 'inactive' || parsed.status === 'draft' || parsed.status === 'sensitive') {
       return { status: parsed.status };
     }
   } catch {
@@ -113,7 +121,7 @@ export default function ModulePermissionSettings() {
       void queryClient.invalidateQueries({ queryKey: ['admin-module-permissions'] });
     },
     onError: () => {
-      message.error('Không thể lưu cấu hình quyền module.');
+      message.error('Không thể lưu cấu hình quyền phân hệ.');
     },
   });
 
@@ -126,6 +134,27 @@ export default function ModulePermissionSettings() {
       );
     });
   }, [mergedItems, sourceMap, permissionFields]);
+  const draftRoleCount = useMemo(() => Object.keys(draftByRole).length, [draftByRole]);
+  const activeRoleCount = useMemo(() => sourceItems.filter((item) => item.is_active).length, [sourceItems]);
+  const inactiveRoleCount = useMemo(() => sourceItems.filter((item) => !item.is_active).length, [sourceItems]);
+  const rbacManagerCount = useMemo(
+    () => mergedItems.filter((item) => Boolean(item.rbac_manage)).length,
+    [mergedItems]
+  );
+  const workflowManagerCount = useMemo(
+    () => mergedItems.filter((item) => Boolean(item.workflow_manage)).length,
+    [mergedItems]
+  );
+  const accessCoverage = useMemo(
+    () => permissionFields
+      .map((field) => ({
+        label: field.label,
+        enabled: mergedItems.filter((item) => Boolean(item[field.field])).length,
+      }))
+      .sort((a, b) => b.enabled - a.enabled)
+      .slice(0, 6),
+    [mergedItems, permissionFields]
+  );
 
   const visibleItems = useMemo(
     () =>
@@ -133,6 +162,8 @@ export default function ModulePermissionSettings() {
         if (!showInactive && !item.is_active) return false;
         if (intentFilters.status === 'active' && !item.is_active) return false;
         if (intentFilters.status === 'inactive' && item.is_active) return false;
+        if (intentFilters.status === 'draft' && !draftByRole[item.role_id]) return false;
+        if (intentFilters.status === 'sensitive' && !(item.rbac_manage || item.rbac_audit_view || item.workflow_manage)) return false;
         const keyword = intentSearch.trim().toLowerCase();
         if (!keyword) return true;
         return (
@@ -140,8 +171,74 @@ export default function ModulePermissionSettings() {
           || item.role_code.toLowerCase().includes(keyword)
         );
       }),
-    [mergedItems, showInactive, intentFilters.status, intentSearch]
+    [draftByRole, mergedItems, showInactive, intentFilters.status, intentSearch]
   );
+  const activeFilterTags = useMemo(() => {
+    const tags: string[] = [];
+    if (intentSearch.trim()) tags.push(`Từ khóa: ${intentSearch.trim()}`);
+    if (intentFilters.status === 'active') tags.push('Chỉ hiển thị vai trò đang dùng');
+    if (intentFilters.status === 'inactive') tags.push('Chỉ hiển thị vai trò ngừng dùng');
+    if (intentFilters.status === 'draft') tags.push('Chỉ hiển thị vai trò đang chỉnh chưa lưu');
+    if (intentFilters.status === 'sensitive') tags.push('Chỉ hiển thị vai trò nhạy cảm');
+    if (showInactive) tags.push('Đang bật hiển thị vai trò ngừng dùng');
+    return tags;
+  }, [intentFilters.status, intentSearch, showInactive]);
+  const visibleInactiveCount = useMemo(
+    () => visibleItems.filter((item) => !item.is_active).length,
+    [visibleItems]
+  );
+  const sensitiveRoleItems = useMemo(
+    () => mergedItems.filter((item) => Boolean(item.rbac_manage || item.rbac_audit_view || item.workflow_manage)),
+    [mergedItems]
+  );
+  const sensitiveRoleCount = sensitiveRoleItems.length;
+  const highCoverageRoleCount = useMemo(
+    () => mergedItems.filter((item) => permissionFields.filter((field) => Boolean(item[field.field])).length >= Math.max(4, Math.ceil(permissionFields.length * 0.6))).length,
+    [mergedItems, permissionFields]
+  );
+  const reviewRoleItems = useMemo(() => {
+    const priority = new Map<number, { item: RoleModulePermissionItem; reason: string; severity: 'warning' | 'error' | 'info' }>();
+    mergedItems.forEach((item) => {
+      const enabledCount = permissionFields.filter((field) => Boolean(item[field.field])).length;
+      if (draftByRole[item.role_id]) {
+        priority.set(item.role_id, { item, reason: 'Đang có bản nháp quyền chưa lưu', severity: 'warning' });
+        return;
+      }
+      if (item.rbac_manage) {
+        priority.set(item.role_id, { item, reason: 'Đang có quyền quản trị phân quyền', severity: 'error' });
+        return;
+      }
+      if (item.rbac_audit_view || item.workflow_manage) {
+        priority.set(item.role_id, { item, reason: 'Đang có quyền kiểm soát nhạy cảm', severity: 'info' });
+        return;
+      }
+      if (enabledCount >= Math.max(4, Math.ceil(permissionFields.length * 0.6))) {
+        priority.set(item.role_id, { item, reason: `Bật ${enabledCount} quyền trên nhiều phân hệ`, severity: 'info' });
+      }
+    });
+    return Array.from(priority.values()).slice(0, 6);
+  }, [draftByRole, mergedItems, permissionFields]);
+  const settingsStatusAlert = useMemo(() => {
+    if (draftRoleCount > 0) {
+      return {
+        type: 'warning' as const,
+        message: 'Có thay đổi quyền chưa được lưu.',
+        description: `${draftRoleCount} vai trò đang có bản nháp. Nên rà soát vai trò nhạy cảm trước khi áp dụng hàng loạt.`,
+      };
+    }
+    if (sensitiveRoleCount > 0) {
+      return {
+        type: 'info' as const,
+        message: 'Hệ thống đang có vai trò nhạy cảm cần theo dõi.',
+        description: `${sensitiveRoleCount} vai trò đang giữ quyền RBAC hoặc quyền quản lý quy trình. Nên kiểm tra lịch sử thay đổi định kỳ.`,
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'Bộ quyền phân hệ đang ổn định.',
+      description: 'Không có bản nháp chờ lưu và không có tín hiệu bất thường trong danh sách vai trò đang hiển thị.',
+    };
+  }, [draftRoleCount, sensitiveRoleCount]);
 
   const updateDraft = (roleId: number, key: PermissionFieldKey, value: boolean) => {
     const sourceItem = sourceMap.get(roleId);
@@ -194,7 +291,7 @@ export default function ModulePermissionSettings() {
       title={(
         <Space>
           <SafetyOutlined />
-          <span>Phân quyền module theo vai trò</span>
+          <span>Trung tâm phân quyền phân hệ</span>
         </Space>
       )}
       extra={(
@@ -220,8 +317,110 @@ export default function ModulePermissionSettings() {
       )}
     >
       <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-        Bật/tắt quyền truy cập các module lõi và màn quản trị cho từng vai trò. Thay đổi có hiệu lực ngay sau khi lưu.
+        Điều phối quyền truy cập theo vai trò cho các phân hệ lõi, khu vực quản trị và lớp kiểm soát vận hành. Thay đổi có hiệu lực ngay sau khi lưu.
       </Typography.Paragraph>
+      <div style={{ marginBottom: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Tag color={hasChanges ? 'gold' : 'green'}>
+          {hasChanges ? `Đang có ${draftRoleCount} vai trò chờ lưu` : 'Không có thay đổi chờ lưu'}
+        </Tag>
+        <Tag color={showInactive ? 'blue' : 'default'}>
+          {showInactive ? 'Đang hiển thị cả vai trò ngừng dùng' : 'Đang ẩn vai trò ngừng dùng'}
+        </Tag>
+        <Tag color={sensitiveRoleCount > 0 ? 'volcano' : 'blue'}>
+          {`Vai trò nhạy cảm: ${sensitiveRoleCount}`}
+        </Tag>
+        <Tag>{`Vai trò phủ rộng: ${highCoverageRoleCount}`}</Tag>
+      </div>
+      <div
+        style={{
+          marginBottom: 12,
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+          gap: 10,
+        }}
+      >
+        {[  
+          { label: 'Tổng vai trò', value: sourceItems.length, tone: '#1d4ed8' },
+          { label: 'Vai trò đang dùng', value: activeRoleCount, tone: '#0f766e' },
+          { label: 'Vai trò ngừng dùng', value: inactiveRoleCount, tone: '#d97706' },
+          { label: 'Vai trò quản trị RBAC', value: rbacManagerCount, tone: '#be123c' },
+          { label: 'Vai trò nhạy cảm', value: sensitiveRoleCount, tone: '#7c2d12' },
+          { label: 'Vai trò đang chỉnh chưa lưu', value: draftRoleCount, tone: '#b45309' },
+        ].map((item) => (
+          <div key={item.label} style={SUMMARY_TILE_STYLE}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{item.label}</Typography.Text>
+            <div style={{ fontSize: 28, fontWeight: 700, color: item.tone, lineHeight: 1.15, marginTop: 6 }}>
+              {item.value}
+            </div>
+          </div>
+        ))}
+      </div>
+      <Alert
+        style={{ marginBottom: 12 }}
+        showIcon
+        type={settingsStatusAlert.type}
+        message={settingsStatusAlert.message}
+        description={[
+          settingsStatusAlert.description,
+          visibleInactiveCount > 0 ? `${visibleInactiveCount} vai trò ngừng dùng đang hiện để rà soát.` : null,
+          workflowManagerCount > 0 ? `${workflowManagerCount} vai trò có quyền quản lý quy trình.` : null,
+        ].filter(Boolean).join(' ')}
+      />
+      <div style={{ marginBottom: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {accessCoverage.map((item) => (
+          <Tag key={item.label} color="blue">
+            {item.label}: {item.enabled}/{mergedItems.length || 0} vai trò bật quyền
+          </Tag>
+        ))}
+      </div>
+      {reviewRoleItems.length > 0 && (
+        <div
+          style={{
+            border: '1px solid #f0f0f0',
+            borderRadius: 12,
+            padding: 12,
+            marginBottom: 12,
+            background: 'linear-gradient(180deg, #ffffff 0%, #fafafa 100%)',
+          }}
+        >
+          <Typography.Text strong>Vai trò cần rà soát ưu tiên</Typography.Text>
+          <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {reviewRoleItems.map(({ item, reason, severity }) => {
+              const enabledCount = permissionFields.filter((field) => Boolean(item[field.field])).length;
+              return (
+                <div
+                  key={item.role_id}
+                  style={{
+                    minWidth: 240,
+                    flex: '1 1 240px',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 10,
+                    padding: '10px 12px',
+                    background: '#fff',
+                  }}
+                >
+                  <Space size={[6, 6]} wrap>
+                    <strong>{item.role_name}</strong>
+                    <Tag>{item.role_code}</Tag>
+                    <Tag color={severity === 'error' ? 'red' : severity === 'warning' ? 'gold' : 'blue'}>
+                      {severity === 'error' ? 'Nhạy cảm cao' : severity === 'warning' ? 'Chờ lưu' : 'Cần rà soát'}
+                    </Tag>
+                  </Space>
+                  <div style={{ marginTop: 6 }}>
+                    <Typography.Text type="secondary">{reason}</Typography.Text>
+                  </div>
+                  <div style={{ marginTop: 6 }}>
+                    <Tag color="blue">{`Đang bật ${enabledCount} quyền`}</Tag>
+                    {!item.is_active ? <Tag>Ngừng dùng</Tag> : null}
+                    {item.workflow_manage ? <Tag color="purple">Quản lý quy trình</Tag> : null}
+                    {item.rbac_manage ? <Tag color="volcano">Quản trị RBAC</Tag> : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div
         style={{
           border: '1px solid #f0f0f0',
@@ -249,6 +448,8 @@ export default function ModulePermissionSettings() {
             { value: 'all', label: 'Tất cả trạng thái' },
             { value: 'active', label: 'Đang dùng' },
             { value: 'inactive', label: 'Ngừng dùng' },
+            { value: 'draft', label: 'Chưa lưu' },
+            { value: 'sensitive', label: 'Nhạy cảm' },
           ]}
         />
         <Button
@@ -261,6 +462,14 @@ export default function ModulePermissionSettings() {
           Xóa bộ lọc
         </Button>
       </div>
+      {activeFilterTags.length > 0 && (
+        <div style={{ marginBottom: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {activeFilterTags.map((item) => (
+            <Tag key={item}>{item}</Tag>
+          ))}
+          <Tag color="processing">Hiển thị {visibleItems.length} vai trò</Tag>
+        </div>
+      )}
       <Table<RoleModulePermissionItem>
         rowKey="role_id"
         loading={listQuery.isLoading}
@@ -275,7 +484,14 @@ export default function ModulePermissionSettings() {
               <Space>
                 <strong>{record.role_name}</strong>
                 <Tag>{record.role_code}</Tag>
+                <Tag color="blue">
+                  {permissionFields.filter((field) => Boolean(record[field.field])).length} quyền bật
+                </Tag>
+                {record.rbac_manage ? <Tag color="volcano">Quản trị RBAC</Tag> : null}
+                {record.rbac_audit_view ? <Tag color="gold">Kiểm tra RBAC</Tag> : null}
+                {record.workflow_manage ? <Tag color="purple">Quản lý quy trình</Tag> : null}
                 {!record.is_active ? <Tag color="default">Ngừng dùng</Tag> : null}
+                {draftByRole[record.role_id] ? <Tag color="orange">Chưa lưu</Tag> : null}
               </Space>
             ),
           },

@@ -49,8 +49,8 @@ export interface ProductionOrder {
   progress_percentage?: number;
   
   // Công đoạn
-  routing?: any[];
-  bom?: any[];
+  routing?: Array<Record<string, unknown>>;
+  bom?: Array<Record<string, unknown>>;
   
   // Người dùng
   created_by_name?: string;

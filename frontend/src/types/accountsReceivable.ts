@@ -22,7 +22,7 @@ export interface ReceivablePayment {
 export interface ReceivableDocument {
   id?: number;
   code: string;
-  customer_id: number;
+  customer_id: number | null;
   customer_name?: string;
   customer_code?: string;
   invoice_date: string;

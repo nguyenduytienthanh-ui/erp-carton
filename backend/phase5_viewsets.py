@@ -1,23 +1,95 @@
 # Phase 5 ViewSets - All Optional Features
 # This file contains ViewSets for all 24+ Phase 5 optional features
 
+import re
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Q, Sum, Avg
+from django.db import transaction
+from django.db.models import F, Q, Sum, Avg
 from django.utils import timezone
 from decimal import Decimal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as time_value
 
-from core.models import AuditLog
+from core.models import AuditLog, CustomReportDefinition, CustomReportRun
+from finance.models import BudgetPlan
 from inventory.services import build_stock_balance_map
+from inventory.models import Warehouse, WarehouseLocation
+from phase5_reports import ensure_builtin_custom_reports, execute_custom_report_definition, sync_custom_report_schedule
+from phase5_serializers import (
+    BudgetPlanSerializer,
+    CustomReportDefinitionSerializer,
+    CustomReportDetailSerializer,
+    CustomReportRunSerializer,
+    SalesDiscountRuleSerializer,
+)
 from products.models import Product
-from purchasing.models import PurchaseOrder, PurchaseReceipt, Supplier
+from purchasing.models import MaterialPurchasePrice, PurchaseOrder, PurchaseReceipt, Supplier
+from purchasing.serializers import PurchaseOrderSerializer
+from purchasing.services import get_next_purchase_order_code
 from production.models import ProductionOrder, ProductionIssue, ProductionReceipt
-from sales.models import SalesOrderLine
-from sales.models import SalesOrder
+from sales.models import SalesDiscountRule, SalesOrder, SalesOrderLine
 from workforce.models import AttendanceRecord, BonusPenaltyRecord, PayrollRecord
+
+
+def _parse_date_input(raw_value, field_name, default_value):
+    if raw_value in (None, ''):
+        return default_value
+    try:
+        return datetime.fromisoformat(str(raw_value).strip()[:10]).date()
+    except (TypeError, ValueError):
+        raise ValueError({field_name: f'{field_name} không hợp lệ. Định dạng cần là YYYY-MM-DD.'})
+
+
+def _parse_decimal_input(raw_value, *, field_name, default=Decimal('0'), allow_blank=True):
+    if raw_value in (None, ''):
+        if allow_blank:
+            return default
+        raise ValueError({field_name: f'{field_name} là bắt buộc.'})
+    try:
+        return Decimal(str(raw_value))
+    except Exception as exc:
+        raise ValueError({field_name: f'{field_name} không hợp lệ.'}) from exc
+
+
+def _parse_time_input(raw_value, field_name, default_value):
+    if raw_value in (None, ''):
+        return default_value
+    if isinstance(raw_value, time_value):
+        return raw_value
+    try:
+        return datetime.strptime(str(raw_value).strip()[:5], '%H:%M').time()
+    except (TypeError, ValueError) as exc:
+        raise ValueError({field_name: f'{field_name} khong hop le. Dinh dang can la HH:MM.'}) from exc
+
+
+def _resolve_purchase_price(product, supplier_id, order_date):
+    price_qs = MaterialPurchasePrice.objects.filter(
+        product=product,
+        effective_from__lte=order_date,
+    ).filter(
+        Q(effective_to__isnull=True) | Q(effective_to__gte=order_date)
+    )
+    supplier_price = price_qs.filter(supplier_id=supplier_id).order_by('-effective_from', '-id').first()
+    if supplier_price:
+        return Decimal(str(supplier_price.unit_price or 0))
+    fallback_price = price_qs.filter(supplier__isnull=True).order_by('-effective_from', '-id').first()
+    if fallback_price:
+        return Decimal(str(fallback_price.unit_price or 0))
+    return Decimal(str(product.cost_price or 0))
+
+
+def _parse_bool_param(raw_value):
+    if raw_value in (None, ''):
+        return None
+    value = str(raw_value).strip().lower()
+    if value in {'1', 'true', 'yes', 'y', 'on'}:
+        return True
+    if value in {'0', 'false', 'no', 'n', 'off'}:
+        return False
+    return None
 
 
 class PurchaseOrderForecastViewSet(viewsets.ViewSet):
@@ -86,8 +158,161 @@ class PurchaseOrderForecastViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'])
     def create_po_from_forecast(self, request):
         """Create actual PO from forecast"""
-        # PO creation logic
-        return Response({'message': 'PO created successfully'}, status=status.HTTP_201_CREATED)
+        try:
+            supplier_id = int(request.data.get('supplier') or 0)
+        except (TypeError, ValueError):
+            supplier_id = 0
+        if supplier_id <= 0:
+            return Response({'supplier': 'Vui lòng chọn nhà cung cấp.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            supplier = Supplier.objects.get(pk=supplier_id)
+        except Supplier.DoesNotExist:
+            return Response({'supplier': 'Nhà cung cấp không tồn tại.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            order_date = _parse_date_input(
+                request.data.get('order_date'),
+                'order_date',
+                timezone.localdate(),
+            )
+            lead_time_days = max(1, int(request.data.get('lead_time') or 7))
+            expected_receipt_date = _parse_date_input(
+                request.data.get('expected_receipt_date'),
+                'expected_receipt_date',
+                order_date + timedelta(days=lead_time_days),
+            )
+        except ValueError as exc:
+            return Response(exc.args[0], status=status.HTTP_400_BAD_REQUEST)
+        except (TypeError, ValueError):
+            return Response({'lead_time': 'lead_time không hợp lệ.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        warehouse = None
+        warehouse_id = request.data.get('warehouse')
+        if warehouse_id not in (None, ''):
+            try:
+                warehouse = Warehouse.objects.get(pk=int(warehouse_id))
+            except (TypeError, ValueError, Warehouse.DoesNotExist):
+                return Response({'warehouse': 'Kho mặc định không tồn tại.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        location = None
+        location_id = request.data.get('location')
+        if location_id not in (None, ''):
+            try:
+                location = WarehouseLocation.objects.select_related('warehouse').get(pk=int(location_id))
+            except (TypeError, ValueError, WarehouseLocation.DoesNotExist):
+                return Response({'location': 'Vị trí nhập mặc định không tồn tại.'}, status=status.HTTP_400_BAD_REQUEST)
+            if warehouse and location.warehouse_id != warehouse.id:
+                return Response(
+                    {'location': 'Vị trí nhập mặc định phải thuộc kho đã chọn.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not warehouse:
+                warehouse = location.warehouse
+
+        items = request.data.get('items') or request.data.get('forecast_items') or []
+        if not isinstance(items, list) or not items:
+            return Response({'items': 'Cần ít nhất 1 dòng forecast để tạo PO.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        product_ids = []
+        for item in items:
+            product_id = item.get('product_id') or item.get('product')
+            if product_id is None:
+                continue
+            try:
+                product_ids.append(int(product_id))
+            except (TypeError, ValueError):
+                continue
+
+        product_map = {
+            product.id: product
+            for product in Product.objects.select_related('unit').filter(id__in=product_ids)
+        }
+        lines = []
+        line_errors = []
+        for index, item in enumerate(items, start=1):
+            raw_product_id = item.get('product_id') or item.get('product')
+            try:
+                product_id = int(raw_product_id)
+            except (TypeError, ValueError):
+                line_errors.append(f'Dòng {index}: product_id không hợp lệ.')
+                continue
+            product = product_map.get(product_id)
+            if not product:
+                line_errors.append(f'Dòng {index}: sản phẩm không tồn tại.')
+                continue
+
+            try:
+                qty = _parse_decimal_input(
+                    item.get('qty') if item.get('qty') not in (None, '') else item.get('suggested_qty'),
+                    field_name=f'items[{index}].qty',
+                    allow_blank=False,
+                )
+                unit_price = _parse_decimal_input(
+                    item.get('unit_price'),
+                    field_name=f'items[{index}].unit_price',
+                    default=_resolve_purchase_price(product, supplier.id, order_date),
+                )
+                discount_pct = _parse_decimal_input(item.get('discount_pct'), field_name=f'items[{index}].discount_pct')
+                tax_pct = _parse_decimal_input(item.get('tax_pct'), field_name=f'items[{index}].tax_pct')
+            except ValueError as exc:
+                line_errors.append(next(iter(exc.args[0].values())))
+                continue
+
+            if qty <= 0:
+                line_errors.append(f'Dòng {index}: số lượng mua phải lớn hơn 0.')
+                continue
+            if unit_price < 0:
+                line_errors.append(f'Dòng {index}: đơn giá không được âm.')
+                continue
+
+            lines.append({
+                'line_number': index,
+                'product': product.id,
+                'uom': getattr(getattr(product, 'unit', None), 'code', '') or '',
+                'qty': qty,
+                'unit_price': unit_price,
+                'discount_pct': discount_pct,
+                'tax_pct': tax_pct,
+                'note': (item.get('note') or item.get('urgency') or '').strip(),
+            })
+
+        if line_errors:
+            return Response({'items': line_errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        payload = {
+            'order_date': order_date.isoformat(),
+            'expected_receipt_date': expected_receipt_date.isoformat(),
+            'supplier': supplier.id,
+            'warehouse': warehouse.id if warehouse else None,
+            'location': location.id if location else None,
+            'reference': str(request.data.get('reference') or f'FORECAST-{order_date.isoformat()}').strip(),
+            'currency': str(request.data.get('currency') or 'VND').strip() or 'VND',
+            'payment_terms_days': request.data.get('payment_terms_days') or supplier.payment_terms_days,
+            'notes': str(request.data.get('notes') or request.data.get('note') or '').strip(),
+            'lines': lines,
+        }
+        serializer = PurchaseOrderSerializer(data=payload, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+
+        team = None
+        try:
+            team = request.user.teams.first()
+        except Exception:
+            team = None
+
+        with transaction.atomic():
+            order = serializer.save(
+                code=get_next_purchase_order_code(order_date),
+                created_by=request.user,
+                updated_by=request.user,
+                owner=request.user,
+                team=team,
+            )
+
+        response_data = PurchaseOrderSerializer(order, context={'request': request}).data
+        response_data['message'] = 'Đã tạo đơn mua từ forecast.'
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 class SupplierPerformanceViewSet(viewsets.ViewSet):
@@ -166,7 +391,16 @@ class InventoryForecastViewSet(viewsets.ViewSet):
 
     def list(self, request):
         """List inventory forecast"""
-        date_from = timezone.localdate() - timedelta(days=90)
+        try:
+            demand_months = max(1, int(request.query_params.get('months', 3)))
+        except (TypeError, ValueError):
+            demand_months = 3
+        try:
+            lead_time_days = max(1, int(request.query_params.get('lead_time', 7)))
+        except (TypeError, ValueError):
+            lead_time_days = 7
+
+        date_from = timezone.localdate() - timedelta(days=30 * demand_months)
         demand_rows = list(
             SalesOrderLine.objects.filter(
                 sales_order__status__in=['APPROVED', 'POSTED'],
@@ -175,23 +409,34 @@ class InventoryForecastViewSet(viewsets.ViewSet):
             .values('product_id')
             .annotate(total_demand=Sum('qty'))
         )
-        product_ids = [row['product_id'] for row in demand_rows if row['product_id']]
+        demand_map = {
+            row['product_id']: Decimal(str(row.get('total_demand') or 0))
+            for row in demand_rows
+            if row['product_id']
+        }
+        product_ids = set(demand_map.keys())
+        product_ids.update(
+            Product.objects.filter(min_stock__gt=0, status='ACTIVE').values_list('id', flat=True)
+        )
+        if not product_ids:
+            return Response([])
+
+        stock_map = build_stock_balance_map(product_ids=list(product_ids))
+        product_ids.update(key[0] for key in stock_map.keys() if key[0])
         products = {
             item.id: item
             for item in Product.objects.filter(id__in=product_ids).only('id', 'code', 'name', 'sale_price', 'min_stock')
         }
-        stock_map = build_stock_balance_map(product_ids=product_ids)
         current_by_product = {}
         for (product_id, _warehouse_id, _location_id), balance in stock_map.items():
             current_by_product[product_id] = current_by_product.get(product_id, Decimal('0')) + Decimal(str(balance.get('on_hand') or 0))
 
         value_rows = []
-        for row in demand_rows:
-            product = products.get(row['product_id'])
+        for product_id, total_demand in demand_map.items():
+            product = products.get(product_id)
             if not product:
                 continue
-            demand = Decimal(str(row.get('total_demand') or 0))
-            value_rows.append((product.id, demand * Decimal(str(product.sale_price or 0))))
+            value_rows.append((product.id, total_demand * Decimal(str(product.sale_price or 0))))
         total_value = sum((value for _, value in value_rows), Decimal('0'))
         running = Decimal('0')
         abc_map = {}
@@ -206,23 +451,54 @@ class InventoryForecastViewSet(viewsets.ViewSet):
                 abc_map[product_id] = 'C'
 
         forecast = []
-        for row in demand_rows:
-            product = products.get(row['product_id'])
+        for product_id, product in sorted(products.items(), key=lambda item: item[1].code or ''):
             if not product:
                 continue
-            total_demand = Decimal(str(row.get('total_demand') or 0))
-            monthly_demand = total_demand / Decimal('3')
-            reorder_point = max(Decimal(str(product.min_stock or 0)), monthly_demand)
-            eoq = max(monthly_demand, reorder_point * Decimal('1.5'))
+            total_demand = demand_map.get(product_id, Decimal('0'))
+            current_stock = current_by_product.get(product_id, Decimal('0'))
+            min_stock = Decimal(str(product.min_stock or 0))
+            monthly_demand = (total_demand / Decimal(str(demand_months))) if demand_months > 0 else Decimal('0')
+            daily_demand = monthly_demand / Decimal('30') if monthly_demand > 0 else Decimal('0')
+            lead_time_demand = (daily_demand * Decimal(str(lead_time_days))).quantize(Decimal('0.01')) if daily_demand > 0 else Decimal('0')
+            safety_stock = max(min_stock, (lead_time_demand * Decimal('0.5')).quantize(Decimal('0.01')))
+            reorder_point = max(min_stock, (lead_time_demand + safety_stock).quantize(Decimal('0.01')))
+            eoq = max(monthly_demand, reorder_point * Decimal('1.5')).quantize(Decimal('0.01'))
+            coverage_days = (current_stock / daily_demand).quantize(Decimal('0.01')) if daily_demand > 0 else None
+            if current_stock <= safety_stock:
+                status_value = 'ALERT'
+                risk_value = 'HIGH'
+            elif current_stock <= reorder_point:
+                status_value = 'WARNING'
+                risk_value = 'MEDIUM'
+            else:
+                status_value = 'OK'
+                risk_value = 'LOW'
+
+            if current_stock <= 0 and monthly_demand <= 0 and min_stock <= 0:
+                continue
             forecast.append({
                 'product_id': product.id,
                 'product_code': product.code,
                 'product_name': product.name,
-                'current_stock': float(current_by_product.get(product.id, Decimal('0'))),
+                'current_stock': float(current_stock),
                 'abc_class': abc_map.get(product.id, 'C'),
-                'eoq': float(eoq.quantize(Decimal('0.01'))),
-                'reorder_point': float(reorder_point.quantize(Decimal('0.01'))),
+                'avg_monthly_usage': float(monthly_demand.quantize(Decimal('0.01'))),
+                'lead_time_days': lead_time_days,
+                'lead_time': lead_time_days,
+                'eoq': float(eoq),
+                'reorder_point': float(reorder_point),
+                'safety_stock': float(safety_stock),
+                'status': status_value,
+                'stockout_risk': risk_value,
+                'coverage_days': float(coverage_days) if coverage_days is not None else None,
             })
+        forecast.sort(
+            key=lambda item: (
+                {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}.get(item['stockout_risk'], 9),
+                {'A': 0, 'B': 1, 'C': 2}.get(item['abc_class'], 9),
+                item['product_code'],
+            )
+        )
         return Response(forecast)
 
     @action(detail=False, methods=['get'])
@@ -250,27 +526,193 @@ class SerialNumberTrackingViewSet(viewsets.ViewSet):
         return Response({'serial_number': 'SN-2026-00001'}, status=status.HTTP_201_CREATED)
 
 
-class BudgetManagementViewSet(viewsets.ViewSet):
+class SalesDiscountViewSet(viewsets.ModelViewSet):
+    """CRUD for sales discount rules."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = SalesDiscountRuleSerializer
+    queryset = SalesDiscountRule.objects.select_related('created_by', 'updated_by').all()
+    ordering_fields = ['code', 'name', 'start_date', 'end_date', 'usage_count', 'total_discount_value', 'created_at']
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        q = str(self.request.query_params.get('q') or '').strip()
+        if q:
+            queryset = queryset.filter(
+                Q(code__icontains=q)
+                | Q(name__icontains=q)
+                | Q(note__icontains=q)
+            )
+
+        status_value = str(self.request.query_params.get('status') or '').strip().upper()
+        if status_value in {SalesDiscountRule.STATUS_ACTIVE, SalesDiscountRule.STATUS_INACTIVE}:
+            queryset = queryset.filter(status=status_value)
+
+        discount_type = str(self.request.query_params.get('type') or '').strip().upper()
+        if discount_type in {SalesDiscountRule.TYPE_PERCENTAGE, SalesDiscountRule.TYPE_FIXED}:
+            queryset = queryset.filter(type=discount_type)
+
+        applicable_to = str(self.request.query_params.get('applicable_to') or '').strip().upper()
+        valid_targets = {
+            SalesDiscountRule.APPLIES_ALL_PRODUCTS,
+            SalesDiscountRule.APPLIES_SPECIFIC_PRODUCTS,
+            SalesDiscountRule.APPLIES_SPECIFIC_CUSTOMERS,
+            SalesDiscountRule.APPLIES_VOLUME_BASED,
+        }
+        if applicable_to in valid_targets:
+            queryset = queryset.filter(applicable_to=applicable_to)
+
+        currently_active = _parse_bool_param(self.request.query_params.get('currently_active'))
+        if currently_active is not None:
+            today = timezone.localdate()
+            active_window = Q(status=SalesDiscountRule.STATUS_ACTIVE, start_date__lte=today) & (
+                Q(end_date__isnull=True) | Q(end_date__gte=today)
+            )
+            queryset = queryset.filter(active_window) if currently_active else queryset.exclude(active_window)
+
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        queryset = self.get_queryset()
+        today = timezone.localdate()
+        active_window = Q(status=SalesDiscountRule.STATUS_ACTIVE, start_date__lte=today) & (
+            Q(end_date__isnull=True) | Q(end_date__gte=today)
+        )
+        aggregate = queryset.aggregate(
+            total_usage=Sum('usage_count'),
+            total_discount_value=Sum('total_discount_value'),
+        )
+        return Response({
+            'total_count': queryset.count(),
+            'active_count': queryset.filter(status=SalesDiscountRule.STATUS_ACTIVE).count(),
+            'inactive_count': queryset.filter(status=SalesDiscountRule.STATUS_INACTIVE).count(),
+            'currently_active_count': queryset.filter(active_window).count(),
+            'scheduled_count': queryset.filter(
+                status=SalesDiscountRule.STATUS_ACTIVE,
+                start_date__gt=today,
+            ).count(),
+            'expired_count': queryset.filter(end_date__lt=today).count(),
+            'total_usage': int(aggregate.get('total_usage') or 0),
+            'total_discount_value': aggregate.get('total_discount_value') or Decimal('0'),
+        })
+
+    @action(detail=True, methods=['post'])
+    def activate(self, request, pk=None):
+        discount = self.get_object()
+        discount.status = SalesDiscountRule.STATUS_ACTIVE
+        discount.updated_by = request.user
+        discount.save(update_fields=['status', 'updated_by', 'updated_at'])
+        return Response(self.get_serializer(discount).data)
+
+    @action(detail=True, methods=['post'])
+    def deactivate(self, request, pk=None):
+        discount = self.get_object()
+        discount.status = SalesDiscountRule.STATUS_INACTIVE
+        discount.updated_by = request.user
+        discount.save(update_fields=['status', 'updated_by', 'updated_at'])
+        return Response(self.get_serializer(discount).data)
+
+
+class BudgetManagementViewSet(viewsets.ModelViewSet):
     """ViewSet for budget management"""
     permission_classes = [IsAuthenticated]
+    serializer_class = BudgetPlanSerializer
+    queryset = BudgetPlan.objects.select_related('created_by', 'updated_by').all()
+    ordering_fields = ['fiscal_year', 'department', 'category', 'budgeted_amount', 'actual_amount', 'committed_amount', 'created_at']
 
-    def list(self, request):
-        """List budgets"""
-        budgets = [
-            {
-                'department_id': 1,
-                'category': 'Marketing',
-                'budgeted_amount': 500000000,
-                'actual_amount': 380000000,
-                'variance_percentage': -24
-            }
-        ]
-        return Response(budgets)
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        q = str(self.request.query_params.get('q') or '').strip()
+        if q:
+            filters = (
+                Q(department__icontains=q)
+                | Q(category__icontains=q)
+                | Q(note__icontains=q)
+            )
+            if q.isdigit():
+                filters |= Q(fiscal_year=int(q))
+            queryset = queryset.filter(filters)
+
+        fiscal_year = str(self.request.query_params.get('fiscal_year') or '').strip()
+        if fiscal_year.isdigit():
+            queryset = queryset.filter(fiscal_year=int(fiscal_year))
+
+        department = str(self.request.query_params.get('department') or '').strip()
+        if department:
+            queryset = queryset.filter(department__icontains=department)
+
+        is_active = _parse_bool_param(self.request.query_params.get('is_active'))
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active)
+
+        status_value = str(self.request.query_params.get('status') or '').strip().upper()
+        over_budget_filter = Q(actual_amount__gt=F('budgeted_amount') - F('committed_amount'))
+        if status_value == 'OVER_BUDGET':
+            queryset = queryset.filter(over_budget_filter)
+        elif status_value == 'ON_TRACK':
+            queryset = queryset.exclude(over_budget_filter)
+
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
 
     @action(detail=False, methods=['get'])
     def variance_analysis(self, request):
         """Budget variance analysis"""
-        return Response({'over_budget': 2, 'on_track': 5, 'under_budget': 3})
+        queryset = self.get_queryset()
+        aggregate = queryset.aggregate(
+            total_budgeted=Sum('budgeted_amount'),
+            total_actual=Sum('actual_amount'),
+            total_committed=Sum('committed_amount'),
+        )
+        total_budgeted = aggregate.get('total_budgeted') or Decimal('0')
+        total_actual = aggregate.get('total_actual') or Decimal('0')
+        total_committed = aggregate.get('total_committed') or Decimal('0')
+        total_available = total_budgeted - total_actual - total_committed
+        over_budget_filter = Q(actual_amount__gt=F('budgeted_amount') - F('committed_amount'))
+        over_budget_count = queryset.filter(over_budget_filter).count()
+        total_count = queryset.count()
+        utilization_percentage = (
+            (Decimal(str(total_actual + total_committed)) / Decimal(str(total_budgeted)) * Decimal('100')).quantize(Decimal('0.01'))
+            if total_budgeted > 0 else Decimal('0')
+        )
+        department_rows = list(
+            queryset.values('department')
+            .annotate(
+                budgeted_amount=Sum('budgeted_amount'),
+                actual_amount=Sum('actual_amount'),
+                committed_amount=Sum('committed_amount'),
+            )
+            .order_by('department')[:12]
+        )
+        for row in department_rows:
+            row['available_amount'] = (
+                Decimal(str(row.get('budgeted_amount') or 0))
+                - Decimal(str(row.get('actual_amount') or 0))
+                - Decimal(str(row.get('committed_amount') or 0))
+            )
+        return Response({
+            'total_count': total_count,
+            'over_budget_count': over_budget_count,
+            'on_track_count': max(total_count - over_budget_count, 0),
+            'active_count': queryset.filter(is_active=True).count(),
+            'total_budgeted': total_budgeted,
+            'total_actual': total_actual,
+            'total_committed': total_committed,
+            'total_available': total_available,
+            'utilization_percentage': utilization_percentage,
+            'departments': department_rows,
+        })
 
 
 class CostAllocationViewSet(viewsets.ViewSet):
@@ -408,196 +850,211 @@ class EquipmentViewSet(viewsets.ViewSet):
         return Response({'maintenance_date': datetime.now()}, status=status.HTTP_200_OK)
 
 
-class CustomReportViewSet(viewsets.ViewSet):
+class CustomReportViewSet(viewsets.ModelViewSet):
     """ViewSet for custom reports"""
     permission_classes = [IsAuthenticated]
+    serializer_class = CustomReportDefinitionSerializer
+    queryset = CustomReportDefinition.objects.select_related('created_by', 'updated_by', 'last_generated_by').all()
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+    ordering_fields = ['code', 'name', 'report_type', 'status', 'last_generated_at', 'created_at']
 
-    def list(self, request):
-        """List custom reports"""
-        reports = [
-            {'id': 1, 'code': 'SALES_SUMMARY', 'name': 'Tổng hợp bán hàng', 'report_type': 'SALES', 'status': 'FINALIZED'},
-            {'id': 2, 'code': 'PURCHASE_SUMMARY', 'name': 'Tổng hợp mua hàng', 'report_type': 'PURCHASE', 'status': 'FINALIZED'},
-            {'id': 3, 'code': 'INVENTORY_HEALTH', 'name': 'Sức khỏe tồn kho', 'report_type': 'INVENTORY', 'status': 'GENERATED'},
-            {'id': 4, 'code': 'AUDIT_TRAIL', 'name': 'Nhật ký hoạt động', 'report_type': 'FINANCIAL', 'status': 'GENERATED'},
-            {'id': 5, 'code': 'PRODUCTION_COSTING', 'name': 'Giá vốn thực tế sau sản xuất', 'report_type': 'PRODUCTION', 'status': 'GENERATED'},
-            {'id': 6, 'code': 'PROFIT_REPORT', 'name': 'Báo cáo lợi nhuận gộp', 'report_type': 'FINANCIAL', 'status': 'GENERATED'},
-            {'id': 7, 'code': 'EMPLOYEE_PERFORMANCE', 'name': 'Đánh giá nhân viên theo định mức', 'report_type': 'WORKFORCE', 'status': 'GENERATED'},
-        ]
-        return Response(reports)
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return CustomReportDetailSerializer
+        if self.action == 'history':
+            return CustomReportRunSerializer
+        return CustomReportDefinitionSerializer
+
+    def get_queryset(self):
+        ensure_builtin_custom_reports()
+        queryset = super().get_queryset()
+        q = str(self.request.query_params.get('q') or '').strip()
+        if q:
+            queryset = queryset.filter(
+                Q(code__icontains=q)
+                | Q(name__icontains=q)
+                | Q(description__icontains=q)
+            )
+        report_type = str(self.request.query_params.get('report_type') or '').strip().upper()
+        if report_type:
+            queryset = queryset.filter(report_type=report_type)
+        status_value = str(self.request.query_params.get('status') or '').strip().upper()
+        if status_value:
+            queryset = queryset.filter(status=status_value)
+        schedule_enabled = _parse_bool_param(self.request.query_params.get('schedule_enabled'))
+        if schedule_enabled is not None:
+            queryset = queryset.filter(schedule_enabled=schedule_enabled)
+        is_system = _parse_bool_param(self.request.query_params.get('is_system'))
+        if is_system is not None:
+            queryset = queryset.filter(is_system=is_system)
+        return queryset
+
+    def perform_create(self, serializer):
+        report = serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        if report.schedule_enabled or report.schedule_name:
+            sync_custom_report_schedule(report)
+
+    def perform_update(self, serializer):
+        report = serializer.save(updated_by=self.request.user)
+        if report.schedule_enabled or report.schedule_name or report.schedule_frequency == CustomReportDefinition.SCHEDULE_NONE:
+            sync_custom_report_schedule(report)
+
+    def destroy(self, request, *args, **kwargs):
+        report = self.get_object()
+        if report.is_system:
+            return Response({'detail': 'Không thể xóa báo cáo hệ thống.'}, status=status.HTTP_400_BAD_REQUEST)
+        if report.schedule_name:
+            report.schedule_enabled = False
+            report.schedule_frequency = CustomReportDefinition.SCHEDULE_NONE
+            report.save(update_fields=['schedule_enabled', 'schedule_frequency', 'updated_at'])
+            sync_custom_report_schedule(report)
+        return super().destroy(request, *args, **kwargs)
+
+    def _normalize_report_code(self, raw_value):
+        normalized = re.sub(r'[^A-Z0-9]+', '_', str(raw_value or '').strip().upper()).strip('_')
+        return normalized or 'CUSTOM_REPORT'
+
+    def _resolve_report_from_payload(self, payload, *, create_if_missing=False):
+        ensure_builtin_custom_reports()
+        report_id = payload.get('report_id') or payload.get('id')
+        if report_id not in (None, ''):
+            try:
+                return CustomReportDefinition.objects.get(pk=int(report_id))
+            except (TypeError, ValueError, CustomReportDefinition.DoesNotExist):
+                raise ValueError({'report_id': 'Bao cao khong ton tai.'})
+
+        report_code = self._normalize_report_code(
+            payload.get('report_code') or payload.get('code') or payload.get('report_name') or payload.get('name')
+        )
+        report = CustomReportDefinition.objects.filter(code=report_code).first()
+        if report or not create_if_missing:
+            if report:
+                return report
+            raise ValueError({'report_code': 'Không tìm thấy báo cáo để xử lý.'})
+
+        report_name = str(payload.get('report_name') or payload.get('name') or report_code.replace('_', ' ').title()).strip()
+        report_type = str(payload.get('report_type') or CustomReportDefinition.TYPE_FINANCIAL).strip().upper()
+        return CustomReportDefinition.objects.create(
+            code=report_code,
+            name=report_name or report_code,
+            report_type=report_type,
+            description=str(payload.get('description') or '').strip(),
+            created_by=self.request.user,
+            updated_by=self.request.user,
+        )
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        queryset = self.get_queryset()
+        return Response({
+            'total_count': queryset.count(),
+            'draft_count': queryset.filter(status=CustomReportDefinition.STATUS_DRAFT).count(),
+            'generated_count': queryset.filter(status=CustomReportDefinition.STATUS_GENERATED).count(),
+            'finalized_count': queryset.filter(status=CustomReportDefinition.STATUS_FINALIZED).count(),
+            'archived_count': queryset.filter(status=CustomReportDefinition.STATUS_ARCHIVED).count(),
+            'scheduled_count': queryset.filter(schedule_enabled=True).count(),
+            'system_count': queryset.filter(is_system=True).count(),
+            'run_count': int(queryset.aggregate(total=Sum('run_count')).get('total') or 0),
+        })
+
+    @action(detail=False, methods=['get'])
+    def history(self, request):
+        ensure_builtin_custom_reports()
+        queryset = CustomReportRun.objects.select_related('report', 'generated_by').all()
+        report_id = request.query_params.get('report_id')
+        if report_id not in (None, ''):
+            queryset = queryset.filter(report_id=report_id)
+        report_code = str(request.query_params.get('report_code') or '').strip().upper()
+        if report_code:
+            queryset = queryset.filter(report__code=report_code)
+        page = self.paginate_queryset(queryset.order_by('-generated_at', '-id'))
+        if page is None:
+            serializer = CustomReportRunSerializer(queryset.order_by('-generated_at', '-id'), many=True)
+            return Response(serializer.data)
+        serializer = CustomReportRunSerializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
 
     @action(detail=False, methods=['post'])
     def generate_report(self, request):
-        """Generate custom report"""
-        report_code = str(request.data.get('report_code') or '').strip().upper()
-        period_start_raw = request.data.get('period_start')
-        period_end_raw = request.data.get('period_end')
-        period_start = timezone.localdate() - timedelta(days=30)
-        period_end = timezone.localdate()
         try:
-            if period_start_raw:
-                period_start = datetime.fromisoformat(str(period_start_raw)).date()
-            if period_end_raw:
-                period_end = datetime.fromisoformat(str(period_end_raw)).date()
-        except Exception:
-            return Response({'error': 'Kỳ báo cáo không hợp lệ.'}, status=status.HTTP_400_BAD_REQUEST)
+            report = self._resolve_report_from_payload(request.data, create_if_missing=True)
+            report_name = str(request.data.get('report_name') or request.data.get('name') or report.name or report.code).strip()
+            report_type = str(request.data.get('report_type') or report.report_type).strip().upper() or report.report_type
+            description = str(request.data.get('description') or report.description or '').strip()
+            period_start = _parse_date_input(request.data.get('period_start'), 'period_start', report.period_start or (timezone.localdate() - timedelta(days=30)))
+            period_end = _parse_date_input(request.data.get('period_end'), 'period_end', report.period_end or timezone.localdate())
+        except ValueError as exc:
+            return Response(exc.args[0], status=status.HTTP_400_BAD_REQUEST)
 
-        if report_code == 'AUDIT_TRAIL':
-            return Response({
-                'report_code': report_code,
-                'count': AuditLog.objects.count(),
-                'latest_items': list(
-                    AuditLog.objects.order_by('-created_at').values('entity_type', 'action', 'entity_code', 'created_at')[:20]
-                ),
-            }, status=status.HTTP_200_OK)
-        if report_code == 'PRODUCTION_COSTING':
-            orders = (
-                ProductionOrder.objects.filter(order_date__gte=period_start, order_date__lte=period_end)
-                .select_related('product')
-                .order_by('-order_date', '-id')
+        report.name = report_name or report.name or report.code
+        report.report_type = report_type
+        if description:
+            report.description = description
+        report.updated_by = request.user
+        if not report.created_by_id:
+            report.created_by = request.user
+        report.save()
+
+        try:
+            result = execute_custom_report_definition(
+                report,
+                actor=request.user,
+                period_start=period_start,
+                period_end=period_end,
+                request_payload={
+                    'report_code': report.code,
+                    'report_type': report.report_type,
+                    'period_start': period_start.isoformat(),
+                    'period_end': period_end.isoformat(),
+                },
             )
-            rows = []
-            total_issue_cost = Decimal('0')
-            total_output_qty = Decimal('0')
-            for order in orders:
-                issue_cost = Decimal(str(
-                    ProductionIssue.objects.filter(production_order=order, status='POSTED').aggregate(total=Sum('total_amount')).get('total') or 0
-                ))
-                output_qty = Decimal(str(
-                    ProductionReceipt.objects.filter(production_order=order, status='POSTED').aggregate(total=Sum('total_qty')).get('total') or 0
-                ))
-                actual_unit_cost = (issue_cost / output_qty).quantize(Decimal('0.01')) if output_qty > 0 else Decimal('0')
-                estimated_unit_cost = Decimal(str(order.unit_cost_estimate or 0))
-                rows.append({
-                    'order_code': order.code,
-                    'product_code': getattr(order.product, 'code', ''),
-                    'product_name': getattr(order.product, 'name', ''),
-                    'planned_qty': float(order.planned_qty or 0),
-                    'produced_qty': float(output_qty),
-                    'estimated_unit_cost': float(estimated_unit_cost),
-                    'actual_material_cost': float(issue_cost),
-                    'actual_unit_cost': float(actual_unit_cost),
-                    'variance_per_unit': float((actual_unit_cost - estimated_unit_cost).quantize(Decimal('0.01'))),
-                })
-                total_issue_cost += issue_cost
-                total_output_qty += output_qty
-            return Response({
-                'report_code': report_code,
-                'period_start': period_start.isoformat(),
-                'period_end': period_end.isoformat(),
-                'summary': {
-                    'orders': len(rows),
-                    'total_actual_material_cost': float(total_issue_cost),
-                    'total_output_qty': float(total_output_qty),
-                    'avg_actual_unit_cost': float((total_issue_cost / total_output_qty).quantize(Decimal('0.01'))) if total_output_qty > 0 else 0,
-                },
-                'rows': rows,
-            }, status=status.HTTP_200_OK)
-        if report_code == 'PROFIT_REPORT':
-            orders = (
-                SalesOrder.objects.filter(status='POSTED', order_date__gte=period_start, order_date__lte=period_end)
-                .prefetch_related('lines')
-                .order_by('-order_date', '-id')
-            )
-            rows = []
-            total_revenue = Decimal('0')
-            total_cost = Decimal('0')
-            total_profit = Decimal('0')
-            for order in orders:
-                revenue = Decimal(str(order.total or 0))
-                cost = Decimal('0')
-                for line in order.lines.all():
-                    snapshot = line.product_snapshot or {}
-                    unit_cost = Decimal(str(snapshot.get('cost_price') or 0))
-                    qty = Decimal(str(line.qty or 0))
-                    cost += unit_cost * qty
-                gross_profit = revenue - cost
-                margin_pct = (gross_profit / revenue * Decimal('100')).quantize(Decimal('0.01')) if revenue > 0 else Decimal('0')
-                rows.append({
-                    'order_code': order.code,
-                    'order_date': order.order_date.isoformat(),
-                    'customer_name': getattr(order.customer, 'name', '') if getattr(order, 'customer_id', None) else '',
-                    'revenue': float(revenue),
-                    'cost_of_goods_sold': float(cost),
-                    'gross_profit': float(gross_profit),
-                    'gross_margin_pct': float(margin_pct),
-                })
-                total_revenue += revenue
-                total_cost += cost
-                total_profit += gross_profit
-            return Response({
-                'report_code': report_code,
-                'period_start': period_start.isoformat(),
-                'period_end': period_end.isoformat(),
-                'summary': {
-                    'orders': len(rows),
-                    'total_revenue': float(total_revenue),
-                    'total_cost_of_goods_sold': float(total_cost),
-                    'total_gross_profit': float(total_profit),
-                    'gross_margin_pct': float((total_profit / total_revenue * Decimal('100')).quantize(Decimal('0.01'))) if total_revenue > 0 else 0,
-                },
-                'rows': rows,
-            }, status=status.HTTP_200_OK)
-        if report_code == 'EMPLOYEE_PERFORMANCE':
-            month_value = period_end.strftime('%Y-%m')
-            attendances = AttendanceRecord.objects.filter(month=month_value, is_active=True).select_related('employee').prefetch_related('overtime_items')
-            payroll_map = {
-                (row.employee_id, row.month): row
-                for row in PayrollRecord.objects.filter(month=month_value).select_related('employee')
-            }
-            bonus_rows = BonusPenaltyRecord.objects.filter(month=month_value, is_active=True)
-            bonus_map = {}
-            penalty_map = {}
-            for row in bonus_rows:
-                key = row.employee_id
-                if row.record_type == BonusPenaltyRecord.TYPE_BONUS:
-                    bonus_map[key] = bonus_map.get(key, Decimal('0')) + Decimal(str(row.amount or 0))
-                else:
-                    penalty_map[key] = penalty_map.get(key, Decimal('0')) + Decimal(str(row.amount or 0))
-            rows = []
-            for attendance in attendances:
-                standard_days = Decimal(str(attendance.standard_days or 0))
-                actual_days = Decimal(str(attendance.actual_days or 0))
-                attendance_rate = (actual_days / standard_days * Decimal('100')).quantize(Decimal('0.01')) if standard_days > 0 else Decimal('0')
-                overtime_hours = Decimal(str(attendance.total_overtime_hours or 0))
-                payroll = payroll_map.get((attendance.employee_id, month_value))
-                total_bonus = Decimal(str(getattr(payroll, 'total_bonus', 0) or bonus_map.get(attendance.employee_id, Decimal('0'))))
-                total_penalty = Decimal(str(getattr(payroll, 'total_penalty', 0) or penalty_map.get(attendance.employee_id, Decimal('0'))))
-                performance_score = attendance_rate
-                if overtime_hours > 20:
-                    performance_score += Decimal('5')
-                if total_penalty > 0:
-                    performance_score -= Decimal('5')
-                rows.append({
-                    'employee_code': attendance.employee.code,
-                    'employee_name': attendance.employee.name,
-                    'department': attendance.employee.department,
-                    'position': attendance.employee.position,
-                    'month': month_value,
-                    'standard_days': float(standard_days),
-                    'actual_days': float(actual_days),
-                    'attendance_rate_pct': float(attendance_rate),
-                    'overtime_hours': float(overtime_hours),
-                    'bonus_amount': float(total_bonus),
-                    'penalty_amount': float(total_penalty),
-                    'performance_score': float(max(Decimal('0'), performance_score.quantize(Decimal('0.01')))),
-                })
-            rows.sort(key=lambda item: item['performance_score'], reverse=True)
-            return Response({
-                'report_code': report_code,
-                'month': month_value,
-                'summary': {
-                    'employees': len(rows),
-                    'avg_performance_score': round(sum(item['performance_score'] for item in rows) / len(rows), 2) if rows else 0,
-                    'avg_attendance_rate_pct': round(sum(item['attendance_rate_pct'] for item in rows) / len(rows), 2) if rows else 0,
-                },
-                'rows': rows,
-            }, status=status.HTTP_200_OK)
-        return Response({'report_code': report_code, 'generated': True}, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(result, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['post'])
     def schedule_report(self, request):
-        """Schedule report generation"""
-        return Response({'scheduled': True}, status=status.HTTP_200_OK)
+        try:
+            report = self._resolve_report_from_payload(request.data, create_if_missing=False)
+            schedule_enabled = _parse_bool_param(request.data.get('schedule_enabled'))
+            if schedule_enabled is None:
+                schedule_enabled = _parse_bool_param(request.data.get('enabled'))
+            if schedule_enabled is None:
+                schedule_enabled = True
+            schedule_frequency = str(request.data.get('schedule_frequency') or request.data.get('frequency') or report.schedule_frequency or CustomReportDefinition.SCHEDULE_NONE).strip().upper()
+            schedule_time = _parse_time_input(request.data.get('schedule_time'), 'schedule_time', report.schedule_time or time_value(hour=8, minute=0))
+        except ValueError as exc:
+            return Response(exc.args[0], status=status.HTTP_400_BAD_REQUEST)
+
+        recipients = request.data.get('schedule_recipients') or request.data.get('email_recipients') or []
+        if isinstance(recipients, str):
+            recipients = [item.strip() for item in recipients.split(',') if item.strip()]
+        elif not isinstance(recipients, list):
+            recipients = []
+
+        payload = {
+            'schedule_enabled': schedule_enabled,
+            'schedule_frequency': schedule_frequency if schedule_enabled else CustomReportDefinition.SCHEDULE_NONE,
+            'schedule_time': schedule_time,
+            'schedule_day_of_week': request.data.get('schedule_day_of_week'),
+            'schedule_day_of_month': request.data.get('schedule_day_of_month'),
+            'schedule_recipients': recipients,
+        }
+        serializer = CustomReportDefinitionSerializer(report, data=payload, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(updated_by=request.user)
+        schedule_info = sync_custom_report_schedule(report)
+        report.refresh_from_db()
+        return Response({
+            'success': True,
+            'scheduled': bool(report.schedule_enabled),
+            'schedule_id': schedule_info.get('schedule_id'),
+            'next_run': schedule_info.get('next_run'),
+            'report': CustomReportDefinitionSerializer(report).data,
+        })
 
 
 class DataExportImportViewSet(viewsets.ViewSet):

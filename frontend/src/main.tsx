@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as Sentry from '@sentry/react';
 import App from './App';
 import './index.css';
+import './styles/workspaceRefresh.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {

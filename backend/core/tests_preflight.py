@@ -11,6 +11,9 @@ class PreflightCommandTest(TestCase):
         output = stdout.getvalue()
         self.assertIn('Preflight status:', output)
         self.assertIn('database:', output)
+        self.assertIn('jwt_sessions:', output)
+        self.assertIn('email:', output)
+        self.assertIn('audit_controls:', output)
 
     def test_preflight_command_supports_json_output(self):
         stdout = StringIO()
@@ -18,3 +21,5 @@ class PreflightCommandTest(TestCase):
         output = stdout.getvalue()
         self.assertIn('"overall_status"', output)
         self.assertIn('"database"', output)
+        self.assertIn('"jwt_sessions"', output)
+        self.assertIn('"audit_controls"', output)

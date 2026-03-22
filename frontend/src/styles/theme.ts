@@ -1,42 +1,42 @@
 export const theme = {
   colors: {
     // Primary colors (Xanh dương chuyên nghiệp)
-    primary: '#1890ff',
-    primaryHover: '#40a9ff',
-    primaryActive: '#096dd9',
+    primary: '#2563eb',
+    primaryHover: '#3b82f6',
+    primaryActive: '#1d4ed8',
 
     // Success (Xanh lá)
-    success: '#52c41a',
-    successLight: '#95de64',
+    success: '#12b76a',
+    successLight: '#dcfae6',
 
     // Warning (Vàng cam)
-    warning: '#faad14',
-    warningLight: '#ffc53d',
+    warning: '#f59e0b',
+    warningLight: '#fef3c7',
 
     // Error (Đỏ)
-    error: '#ff4d4f',
-    errorLight: '#ff7875',
+    error: '#ef4444',
+    errorLight: '#fee2e2',
 
     // Info (Xanh nhạt)
-    info: '#13c2c2',
-    infoLight: '#36cfc9',
+    info: '#0f766e',
+    infoLight: '#ccfbf1',
 
     // Neutral colors
-    text: '#262626',
-    textSecondary: '#8c8c8c',
-    textDisabled: '#bfbfbf',
+    text: '#0f172a',
+    textSecondary: '#475569',
+    textDisabled: '#94a3b8',
 
     background: '#ffffff',
-    backgroundGray: '#fafafa',
-    backgroundLight: '#f5f5f5',
+    backgroundGray: '#f8fafc',
+    backgroundLight: '#eef4ff',
 
-    border: '#d9d9d9',
-    borderLight: '#f0f0f0',
+    border: '#dbe4f0',
+    borderLight: '#e9eef5',
 
     // Sidebar
-    sidebarBg: '#001529',
-    sidebarText: '#ffffff',
-    sidebarHover: '#1890ff',
+    sidebarBg: '#0b1b34',
+    sidebarText: '#f8fafc',
+    sidebarHover: '#38bdf8',
   },
 
   spacing: {
@@ -49,21 +49,21 @@ export const theme = {
   },
 
   borderRadius: {
-    sm: '4px',
-    md: '8px',
-    lg: '12px',
-    xl: '16px',
+    sm: '6px',
+    md: '10px',
+    lg: '18px',
+    xl: '24px',
   },
 
   shadows: {
-    sm: '0 2px 8px rgba(0, 0, 0, 0.06)',
-    md: '0 4px 12px rgba(0, 0, 0, 0.08)',
-    lg: '0 8px 16px rgba(0, 0, 0, 0.12)',
+    sm: '0 10px 24px rgba(15, 23, 42, 0.08)',
+    md: '0 18px 36px rgba(15, 23, 42, 0.1)',
+    lg: '0 32px 72px rgba(15, 23, 42, 0.16)',
   },
 
   typography: {
     fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+      '"Manrope", "Segoe UI", "Helvetica Neue", Arial, sans-serif',
 
     fontSize: {
       xs: '12px',

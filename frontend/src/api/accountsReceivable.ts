@@ -1,5 +1,16 @@
 import axiosInstance from './axios';
 import type { PaginatedResponse } from '../types/finance';
+import type {
+  ReceivableDocument as ReceivableDocumentView,
+  ReceivablePayment,
+} from '../types/accountsReceivable';
+import type {
+  ReceivableDocument as ReceivableDocumentRecord,
+  ReceivableSettlement,
+} from '../types/finance';
+
+type ReceivablePaymentPayload = Record<string, unknown>;
+type ActionResponse = Record<string, unknown>;
 
 const mapReceivableStatus = (status: string, daysOverdue?: number): string => {
   if (status === 'CANCELLED') return 'CANCELLED';
@@ -10,7 +21,7 @@ const mapReceivableStatus = (status: string, daysOverdue?: number): string => {
   return status;
 };
 
-const transformSettlement = (item: any) => ({
+const transformSettlement = (item: ReceivableSettlement): ReceivablePayment => ({
   id: item.id,
   settlement_date: item.settlement_date,
   amount: Number(item.amount || 0),
@@ -20,7 +31,7 @@ const transformSettlement = (item: any) => ({
   created_by_name: '',
 });
 
-const transformReceivable = (item: any) => ({
+const transformReceivable = (item: ReceivableDocumentRecord): ReceivableDocumentView => ({
   id: item.id,
   code: item.code,
   customer_id: item.customer ?? null,
@@ -34,7 +45,7 @@ const transformReceivable = (item: any) => ({
   amount: Number(item.total_amount || 0),
   paid_amount: Number(item.settled_amount || 0),
   outstanding_amount: Number(item.remaining_amount || 0),
-  status: mapReceivableStatus(item.status, item.days_overdue),
+  status: mapReceivableStatus(item.status, item.days_overdue) as ReceivableDocumentView['status'],
   days_overdue: item.days_overdue || 0,
   payments: Array.isArray(item.settlements) ? item.settlements.map(transformSettlement) : [],
   note: item.note || '',
@@ -43,48 +54,42 @@ const transformReceivable = (item: any) => ({
 });
 
 export const accountsReceivableApi = {
-  // Lấy danh sách công nợ phải thu
-  getReceivables: async (params?: Record<string, unknown>): Promise<PaginatedResponse<any>> => {
+  getReceivables: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ReceivableDocumentView>> => {
     const normalizedParams = {
       ...params,
       search: params?.search || params?.q,
       customer: params?.customer_id || params?.customer,
       overdue_only: params?.aging_bucket ? 'true' : undefined,
     };
-    const response = await axiosInstance.get('/finance/receivables/', { params: normalizedParams });
+    const response = await axiosInstance.get<PaginatedResponse<ReceivableDocumentRecord>>('/finance/receivables/', { params: normalizedParams });
     return {
       ...response.data,
       results: (response.data?.results || []).map(transformReceivable),
     };
   },
 
-  // Lấy chi tiết một công nợ
-  getReceivable: async (id: number): Promise<any> => {
-    const response = await axiosInstance.get(`/finance/receivables/${id}/`);
+  getReceivable: async (id: number): Promise<ReceivableDocumentView> => {
+    const response = await axiosInstance.get<ReceivableDocumentRecord>(`/finance/receivables/${id}/`);
     return transformReceivable(response.data);
   },
 
-  // Read-only backend: "xóa" sẽ map sang hủy chứng từ
-  deleteReceivable: async (id: number): Promise<any> => {
-    const response = await axiosInstance.post(`/finance/receivables/${id}/cancel/`, { reason: 'Hủy từ giao diện' });
+  deleteReceivable: async (id: number): Promise<ActionResponse> => {
+    const response = await axiosInstance.post<ActionResponse>(`/finance/receivables/${id}/cancel/`, { reason: 'Há»§y tá»« giao diá»‡n' });
     return response.data;
   },
 
-  // Ghi nhận thanh toán
-  receivePayment: async (id: number, data: any): Promise<any> => {
-    const response = await axiosInstance.post(`/finance/receivables/${id}/collect/`, data);
+  receivePayment: async (id: number, data: ReceivablePaymentPayload): Promise<ReceivableDocumentView> => {
+    const response = await axiosInstance.post<ReceivableDocumentRecord>(`/finance/receivables/${id}/collect/`, data);
     return transformReceivable(response.data);
   },
 
-  // Hủy công nợ
-  cancelReceivable: async (id: number, reason: string): Promise<any> => {
-    const response = await axiosInstance.post(`/finance/receivables/${id}/cancel/`, { reason });
+  cancelReceivable: async (id: number, reason: string): Promise<ActionResponse> => {
+    const response = await axiosInstance.post<ActionResponse>(`/finance/receivables/${id}/cancel/`, { reason });
     return response.data;
   },
 
-  // Lấy danh sách thanh toán cho công nợ
-  getPayments: async (id: number): Promise<any> => {
-    const response = await axiosInstance.get(`/finance/receivables/${id}/settlements/`);
+  getPayments: async (id: number): Promise<ReceivablePayment[]> => {
+    const response = await axiosInstance.get<ReceivableSettlement[]>(`/finance/receivables/${id}/settlements/`);
     return (response.data || []).map(transformSettlement);
   },
 };

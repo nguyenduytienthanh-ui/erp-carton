@@ -1,10 +1,13 @@
+import { useEffect } from 'react';
 import { Button, Form, Input, InputNumber, Modal, Select, Table, message } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { WarehouseTransfer, WarehouseTransferLine } from '../../types/inventory';
-import { inventoryApi } from '../../api/inventory';
+
+import type { Product } from '../../types/product';
+import type { WarehouseTransfer } from '../../types/inventory';
+import { inventoryApi, warehouseApi } from '../../api/inventory';
 import { productsApi } from '../../api/products';
-import { warehouseApi } from '../../api/inventory';
 import { getToastMessage } from '../../shared/apiError';
 
 interface WarehouseTransferFormModalProps {
@@ -14,32 +17,97 @@ interface WarehouseTransferFormModalProps {
   onSuccess: () => void;
 }
 
-type FormData = {
+type TransferLineFormValue = {
+  line_number: number;
+  product?: number;
+  qty: number;
+  received_qty?: number;
+  note?: string;
+};
+
+type WarehouseTransferFormValues = {
   transfer_date: string;
   from_warehouse: number;
   to_warehouse: number;
   reference: string;
   note: string;
-  lines: Omit<WarehouseTransferLine, 'id'>[];
+  lines: TransferLineFormValue[];
 };
 
-export default function WarehouseTransferFormModal({ open, data, onClose, onSuccess }: WarehouseTransferFormModalProps) {
+type WarehouseTransferPayload = {
+  transfer_date: string;
+  from_warehouse: number;
+  to_warehouse: number;
+  reference: string;
+  note: string;
+  lines: Array<{
+    line_number: number;
+    product?: number;
+    qty: string;
+    received_qty?: string;
+    note?: string;
+  }>;
+};
+
+function createEmptyLine(index: number): TransferLineFormValue {
+  return {
+    line_number: index + 1,
+    product: undefined,
+    qty: 1,
+    received_qty: 0,
+    note: '',
+  };
+}
+
+function buildInitialValues(data?: WarehouseTransfer | null): WarehouseTransferFormValues {
+  return data
+    ? {
+        transfer_date: data.transfer_date,
+        from_warehouse: data.from_warehouse,
+        to_warehouse: data.to_warehouse,
+        reference: data.reference,
+        note: data.note,
+        lines: (data.lines ?? []).map((line, index) => ({
+          line_number: line.line_number ?? index + 1,
+          product: line.product,
+          qty: Number(line.qty ?? 0),
+          received_qty: Number(line.received_qty ?? 0),
+          note: line.note || '',
+        })),
+      }
+    : {
+        transfer_date: '',
+        from_warehouse: 0,
+        to_warehouse: 0,
+        reference: '',
+        note: '',
+        lines: [],
+      };
+}
+
+export default function WarehouseTransferFormModal({
+  open,
+  data,
+  onClose,
+  onSuccess,
+}: WarehouseTransferFormModalProps) {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
-  const [form] = Form.useForm<FormData>();
+  const [form] = Form.useForm<WarehouseTransferFormValues>();
+  const lines = Form.useWatch('lines', form) ?? [];
 
   const warehousesQuery = useQuery({
     queryKey: ['warehouses-active'],
-    queryFn: () => warehouseApi.getWarehouses({ is_active: 'true', page_size: 1000 }),
+    queryFn: () => warehouseApi.getWarehouses({ is_active: 'true', page_size: 10000, ordering: '-created_at' }),
   });
 
   const productsQuery = useQuery({
     queryKey: ['products-active'],
-    queryFn: () => productsApi.getProducts({ is_active: 'true', page_size: 10000 }),
+    queryFn: () => productsApi.getProducts({ is_active: 'true', page_size: 10000, ordering: '-id' }),
   });
 
   const createMutation = useMutation({
-    mutationFn: (payload: Record<string, unknown>) => inventoryApi.createWarehouseTransfer(payload),
+    mutationFn: (payload: WarehouseTransferPayload) => inventoryApi.createWarehouseTransfer(payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['inventory-warehouse-transfers'] });
       messageApi.success('Đã tạo phiếu chuyển');
@@ -51,7 +119,7 @@ export default function WarehouseTransferFormModal({ open, data, onClose, onSucc
   });
 
   const updateMutation = useMutation({
-    mutationFn: (payload: Record<string, unknown>) => inventoryApi.updateWarehouseTransfer(data!.id, payload),
+    mutationFn: (payload: WarehouseTransferPayload) => inventoryApi.updateWarehouseTransfer(data!.id, payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['inventory-warehouse-transfers'] });
       messageApi.success('Đã cập nhật phiếu chuyển');
@@ -62,17 +130,48 @@ export default function WarehouseTransferFormModal({ open, data, onClose, onSucc
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
+  const setLines = (nextLines: TransferLineFormValue[]) => {
+    form.setFieldValue(
+      'lines',
+      nextLines.map((line, index) => ({
+        ...line,
+        line_number: index + 1,
+      })),
+    );
+  };
+
+  useEffect(() => {
+    if (!open) {
+      form.resetFields();
+      return;
+    }
+    form.setFieldsValue(buildInitialValues(data));
+  }, [data, form, open]);
+
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      const payload = {
+      const payload: WarehouseTransferPayload = {
         transfer_date: values.transfer_date,
         from_warehouse: values.from_warehouse,
         to_warehouse: values.to_warehouse,
         reference: values.reference,
         note: values.note,
-        lines: values.lines || [],
+        lines: (values.lines || [])
+          .filter((line) => line.product && Number(line.qty) > 0)
+          .map((line, index) => ({
+            line_number: index + 1,
+            product: line.product,
+            qty: String(line.qty),
+            received_qty: String(line.received_qty ?? 0),
+            note: line.note || '',
+          })),
       };
+
+      if (payload.lines.length === 0) {
+        messageApi.error('Vui lòng thêm ít nhất một dòng chuyển kho hợp lệ');
+        return;
+      }
 
       if (data?.id) {
         updateMutation.mutate(payload);
@@ -80,7 +179,7 @@ export default function WarehouseTransferFormModal({ open, data, onClose, onSucc
         createMutation.mutate(payload);
       }
     } catch {
-      // validation error
+      messageApi.error('Vui lòng kiểm tra lại thông tin phiếu chuyển');
     }
   };
 
@@ -92,29 +191,18 @@ export default function WarehouseTransferFormModal({ open, data, onClose, onSucc
         open={open}
         onCancel={onClose}
         width={1000}
-        okText="Lưu"
+        okText={data ? 'Lưu thay đổi' : 'Tạo phiếu'}
         cancelText="Hủy"
         confirmLoading={createMutation.isPending || updateMutation.isPending}
-        onOk={handleSubmit}
+        onOk={() => void handleSubmit()}
       >
         <Form
           form={form}
           layout="vertical"
-          initialValues={
-            data
-              ? {
-                  transfer_date: data.transfer_date,
-                  from_warehouse: data.from_warehouse,
-                  to_warehouse: data.to_warehouse,
-                  reference: data.reference,
-                  note: data.note,
-                  lines: data.lines || [],
-                }
-              : { lines: [] }
-          }
+          initialValues={buildInitialValues(data)}
         >
-          <Form.Item label="Ngày chuyển" name="transfer_date" rules={[{ required: true }]}>
-            <Input type="date" />
+          <Form.Item label="Ngày chuyển" name="transfer_date" rules={[{ required: true, message: 'Vui lòng chọn ngày chuyển' }]}>
+            <Input data-testid="warehouse-transfer-date" type="date" />
           </Form.Item>
 
           <Form.Item
@@ -123,30 +211,44 @@ export default function WarehouseTransferFormModal({ open, data, onClose, onSucc
             rules={[{ required: true, message: 'Vui lòng chọn kho nguồn' }]}
           >
             <Select
+              data-testid="warehouse-transfer-from-warehouse"
+              showSearch
+              optionFilterProp="label"
               placeholder="Chọn kho nguồn"
-              options={warehousesQuery.data?.results?.map((w) => ({ value: w.id, label: w.name })) ?? []}
+              options={warehousesQuery.data?.results?.map((warehouse) => ({ value: warehouse.id, label: warehouse.name })) ?? []}
               loading={warehousesQuery.isLoading}
             />
           </Form.Item>
 
-          <Form.Item label="Đến kho" name="to_warehouse" rules={[{ required: true, message: 'Vui lòng chọn kho đích' }]}>
+          <Form.Item
+            label="Đến kho"
+            name="to_warehouse"
+            rules={[{ required: true, message: 'Vui lòng chọn kho đích' }]}
+          >
             <Select
+              data-testid="warehouse-transfer-to-warehouse"
+              showSearch
+              optionFilterProp="label"
               placeholder="Chọn kho đích"
-              options={warehousesQuery.data?.results?.map((w) => ({ value: w.id, label: w.name })) ?? []}
+              options={warehousesQuery.data?.results?.map((warehouse) => ({ value: warehouse.id, label: warehouse.name })) ?? []}
               loading={warehousesQuery.isLoading}
             />
           </Form.Item>
 
           <Form.Item label="Tham chiếu" name="reference">
-            <Input placeholder="Số đơn hàng hoặc tham chiếu khác" />
+            <Input data-testid="warehouse-transfer-reference" placeholder="Số đơn hàng hoặc tham chiếu khác" />
           </Form.Item>
 
           <Form.Item label="Ghi chú" name="note">
-            <Input.TextArea rows={2} placeholder="Ghi chú thêm" />
+            <Input.TextArea data-testid="warehouse-transfer-note" rows={2} placeholder="Ghi chú thêm" />
           </Form.Item>
 
           <Form.Item label="Dòng chuyển" name="lines">
-            <NestedLinesTable products={productsQuery.data?.results ?? []} />
+            <NestedLinesTable
+              lines={lines}
+              onChange={setLines}
+              products={productsQuery.data?.results ?? []}
+            />
           </Form.Item>
         </Form>
       </Modal>
@@ -154,55 +256,66 @@ export default function WarehouseTransferFormModal({ open, data, onClose, onSucc
   );
 }
 
-function NestedLinesTable({ products }: { products: any[] }) {
-  const [lines, setLines] = Form.useWatch(['lines'], Form.useFormInstance()) || [];
-
+function NestedLinesTable({
+  lines,
+  onChange,
+  products,
+}: {
+  lines: TransferLineFormValue[];
+  onChange: (lines: TransferLineFormValue[]) => void;
+  products: Product[];
+}) {
   const addLine = () => {
-    setLines([
-      ...lines,
-      {
-        line_number: (lines?.length ?? 0) + 1,
-        product: undefined,
-        qty: 1,
-        received_qty: 0,
-        note: '',
-      },
-    ]);
+    onChange([...(lines ?? []), createEmptyLine(lines.length)]);
   };
 
   const removeLine = (index: number) => {
-    setLines(lines.filter((_: any, i: number) => i !== index));
+    onChange(lines.filter((_, itemIndex) => itemIndex !== index));
   };
 
-  const updateLine = (index: number, field: string, value: any) => {
-    const newLines = [...lines];
-    newLines[index] = { ...newLines[index], [field]: value };
-    setLines(newLines);
+  const updateLine = <K extends keyof TransferLineFormValue>(
+    index: number,
+    field: K,
+    value: TransferLineFormValue[K],
+  ) => {
+    const nextLines = lines.map((line, itemIndex) =>
+      itemIndex === index
+        ? {
+            ...line,
+            [field]: value,
+          }
+        : line,
+    );
+    onChange(nextLines);
   };
 
-  const columns = [
+  const columns: ColumnsType<TransferLineFormValue> = [
     {
       title: 'Sản phẩm',
       dataIndex: 'product',
-      width: 200,
-      render: (_: any, __: any, index: number) => (
+      width: 260,
+      render: (_, __, index) => (
         <Select
+          data-testid={`warehouse-transfer-line-product-${index}`}
           value={lines[index]?.product}
-          onChange={(val) => updateLine(index, 'product', val)}
+          onChange={(value) => updateLine(index, 'product', value)}
           placeholder="Chọn SP"
-          options={products.map((p) => ({ value: p.id, label: `${p.code} - ${p.name}` }))}
+          options={products.map((product) => ({ value: product.id, label: `${product.code} - ${product.name}` }))}
           style={{ width: '100%' }}
+          showSearch
+          optionFilterProp="label"
         />
       ),
     },
     {
       title: 'Số lượng chuyển',
       dataIndex: 'qty',
-      width: 120,
-      render: (_: any, __: any, index: number) => (
+      width: 150,
+      render: (_, __, index) => (
         <InputNumber
+          data-testid={`warehouse-transfer-line-qty-${index}`}
           value={lines[index]?.qty}
-          onChange={(val) => updateLine(index, 'qty', val)}
+          onChange={(value) => updateLine(index, 'qty', Number(value ?? 0))}
           min={0}
           style={{ width: '100%' }}
         />
@@ -211,11 +324,12 @@ function NestedLinesTable({ products }: { products: any[] }) {
     {
       title: 'Ghi chú',
       dataIndex: 'note',
-      width: 150,
-      render: (_: any, __: any, index: number) => (
+      width: 180,
+      render: (_, __, index) => (
         <Input
+          data-testid={`warehouse-transfer-line-note-${index}`}
           value={lines[index]?.note}
-          onChange={(e) => updateLine(index, 'note', e.target.value)}
+          onChange={(event) => updateLine(index, 'note', event.target.value)}
           placeholder="Ghi chú"
         />
       ),
@@ -223,7 +337,7 @@ function NestedLinesTable({ products }: { products: any[] }) {
     {
       title: 'Thao tác',
       width: 80,
-      render: (_: any, __: any, index: number) => (
+      render: (_, __, index) => (
         <Button danger size="small" icon={<DeleteOutlined />} onClick={() => removeLine(index)} />
       ),
     },
@@ -232,13 +346,14 @@ function NestedLinesTable({ products }: { products: any[] }) {
   return (
     <div>
       <Table
-        dataSource={lines || []}
+        dataSource={lines}
         columns={columns}
-        rowKey={(record, index) => record.id ?? `${record.line_number}-${index ?? 0}`}
+        rowKey={(record, index) => `${record.line_number}-${index ?? 0}`}
         pagination={false}
         size="small"
+        locale={{ emptyText: 'Chưa có dòng chuyển kho nào.' }}
       />
-      <Button icon={<PlusOutlined />} onClick={addLine} style={{ marginTop: 8 }}>
+      <Button data-testid="warehouse-transfer-add-line" icon={<PlusOutlined />} onClick={addLine} style={{ marginTop: 8 }}>
         Thêm dòng
       </Button>
     </div>

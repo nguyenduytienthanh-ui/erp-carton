@@ -6,7 +6,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from finance.models import CashAccount, CashTransaction
-from core.models import Notification, User
+from core.models import ApprovalHistory, Notification, User
 from workforce.models import AttendanceRecord, Employee, PayrollRecord, SalaryAdvanceRecord
 
 
@@ -76,6 +76,19 @@ class SalaryAdvanceApprovalWorkflowTest(TestCase):
         row.refresh_from_db()
         self.assertEqual(row.approval_status, SalaryAdvanceRecord.APPROVAL_APPROVED)
 
+        history_rows = ApprovalHistory.objects.filter(entity_type='SalaryAdvanceRecord', entity_id=row.id).order_by('created_at')
+        self.assertEqual(history_rows.count(), 3)
+        self.assertEqual(list(history_rows.values_list('action', flat=True)), ['SUBMIT', 'APPROVE', 'APPROVE'])
+        self.assertEqual(list(history_rows.values_list('level', flat=True)), [1, 1, 2])
+
+        history_resp = self.client.get(f'/api/workforce/salary-advances/{row.id}/approval_history/')
+        self.assertEqual(history_resp.status_code, 200)
+        payload = history_resp.json()
+        self.assertEqual(len(payload), 3)
+        self.assertEqual(payload[0]['action'], 'APPROVE_L2')
+        self.assertEqual(payload[0]['level'], 2)
+        self.assertEqual(payload[0]['action_label'], 'Duyệt cấp 2')
+
     def test_reject_workflow(self):
         row = self._create_salary_advance(Decimal('3000000'))
         self.client.post(f'/api/workforce/salary-advances/{row.id}/submit_approval/', {}, format='json')
@@ -88,6 +101,15 @@ class SalaryAdvanceApprovalWorkflowTest(TestCase):
         row.refresh_from_db()
         self.assertEqual(row.approval_status, SalaryAdvanceRecord.APPROVAL_REJECTED)
         self.assertEqual(row.rejection_reason, 'Ho so chua day du')
+
+        history_rows = ApprovalHistory.objects.filter(entity_type='SalaryAdvanceRecord', entity_id=row.id).order_by('created_at')
+        self.assertEqual(list(history_rows.values_list('action', flat=True)), ['SUBMIT', 'REJECT'])
+
+        history_resp = self.client.get(f'/api/workforce/salary-advances/{row.id}/approval_history/')
+        self.assertEqual(history_resp.status_code, 200)
+        payload = history_resp.json()
+        self.assertEqual(payload[0]['action'], 'REJECT')
+        self.assertEqual(payload[0]['comments'], 'Ho so chua day du')
 
     def test_calculate_month_only_deducts_approved_salary_advances(self):
         approved_row = self._create_salary_advance(Decimal('1000000'), month='2026-05')

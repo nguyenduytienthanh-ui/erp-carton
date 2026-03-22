@@ -1,15 +1,15 @@
-export function downloadCSV(data: Record<string, any>[], filename: string) {
+export function downloadCSV<T extends object>(data: T[], filename: string) {
   if (!data || data.length === 0) {
     return;
   }
 
-  const headers = Object.keys(data[0]);
+  const headers = Object.keys(data[0] as Record<string, unknown>);
   const csvContent = [
     headers.map((h) => `"${h}"`).join(','),
     ...data.map((row) =>
       headers
         .map((h) => {
-          const value = row[h];
+          const value = (row as Record<string, unknown>)[h];
           if (value === null || value === undefined) return '""';
           const strValue = String(value).replace(/"/g, '""');
           return `"${strValue}"`;

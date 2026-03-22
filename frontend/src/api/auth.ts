@@ -10,8 +10,8 @@ export const authApi = {
   },
 
   // Đăng xuất
-  logout: async (): Promise<void> => {
-    await axiosInstance.post(API_ENDPOINTS.LOGOUT);
+  logout: async (refreshToken?: string | null): Promise<void> => {
+    await axiosInstance.post(API_ENDPOINTS.LOGOUT, refreshToken ? { refresh: refreshToken } : {});
   },
 
   // Refresh token

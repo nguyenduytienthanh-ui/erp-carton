@@ -419,6 +419,94 @@ export function canManageModulePermissionSettings(): boolean {
   return hasAnyRole(authz.roleNames, ['admin', 'manager', 'quan-ly', 'quanly']);
 }
 
+export function canManageRoleTeamGovernance(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'CORE', 'MANAGE_RBAC')) return true;
+  return hasAnyRole(authz.roleNames, ['admin', 'manager', 'quan-ly', 'quanly']);
+}
+
+export function canManageOnboardingStudio(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'CORE', 'MANAGE_RBAC')) return true;
+  return hasAnyRole(authz.roleNames, ['admin', 'manager', 'quan-ly', 'quanly']);
+}
+
+export function canManageUserProvisioning(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'CORE', 'MANAGE_RBAC')) return true;
+  return hasAnyRole(authz.roleNames, ['admin', 'manager', 'quan-ly', 'quanly']);
+}
+
+export function canManageUserLifecycle(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'CORE', 'MANAGE_RBAC')) return true;
+  return hasAnyRole(authz.roleNames, ['admin', 'manager', 'quan-ly', 'quanly']);
+}
+
+export function canManageUserAccessReviews(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'CORE', 'MANAGE_RBAC')) return true;
+  return hasAnyRole(authz.roleNames, ['admin', 'manager', 'quan-ly', 'quanly']);
+}
+
+export function canManageUserAccessExceptions(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'CORE', 'MANAGE_RBAC')) return true;
+  return hasAnyRole(authz.roleNames, ['admin', 'manager', 'quan-ly', 'quanly']);
+}
+
+export function canManageUserDirectory(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'CORE', 'MANAGE_RBAC')) return true;
+  return hasAnyRole(authz.roleNames, ['admin', 'manager', 'quan-ly', 'quanly']);
+}
+
+export function canViewAccessGovernanceCenter(): boolean {
+  return (
+    canManageUserAccessExceptions()
+    || canManageUserAccessReviews()
+    || canManageUserProvisioning()
+    || canManageUserLifecycle()
+    || canManageRoleTeamGovernance()
+    || canManageUserDirectory()
+    || canManageModulePermissionSettings()
+    || canViewModulePermissionHistory()
+  );
+}
+
+export function canViewAdminObservabilityCenter(): boolean {
+  return (
+    canViewOperationsLog()
+    || canViewWorkflowData()
+    || canViewAccessGovernanceCenter()
+    || canManageFinanceData()
+    || canManageWorkforceData()
+    || canManagePurchasingData()
+    || canManageProductionData()
+  );
+}
+
+export function canViewApprovalControlTower(): boolean {
+  return (
+    canManageFinanceData()
+    || canManageWorkforceData()
+    || canManagePurchasingData()
+    || canManageProductionData()
+    || canViewAdminObservabilityCenter()
+  );
+}
+
+export function canViewAdminAuditCenter(): boolean {
+  return canViewAdminObservabilityCenter();
+}
+
 export function canManageProductData(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;

@@ -136,6 +136,23 @@ export interface InventoryStockSummary {
   total_available_qty: string;
 }
 
+export interface InventoryForecastRow {
+  product_id: number;
+  product_code: string;
+  product_name: string;
+  current_stock: number;
+  abc_class: 'A' | 'B' | 'C';
+  avg_monthly_usage: number;
+  lead_time_days: number;
+  lead_time?: number;
+  eoq: number;
+  reorder_point: number;
+  safety_stock: number;
+  status: 'OK' | 'WARNING' | 'ALERT';
+  stockout_risk: 'LOW' | 'MEDIUM' | 'HIGH';
+  coverage_days?: number | null;
+}
+
 export interface InventorySalesOrderLineOption {
   id: number;
   line_number: number;

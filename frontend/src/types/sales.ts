@@ -454,6 +454,49 @@ export interface Quote {
   lines?: QuoteLine[];
 }
 
+export type SalesDiscountType = 'PERCENTAGE' | 'FIXED';
+export type SalesDiscountApplicability =
+  | 'ALL_PRODUCTS'
+  | 'SPECIFIC_PRODUCTS'
+  | 'SPECIFIC_CUSTOMERS'
+  | 'VOLUME_BASED';
+export type SalesDiscountStatus = 'ACTIVE' | 'INACTIVE';
+
+export interface SalesDiscountRule {
+  id: number;
+  code: string;
+  name: string;
+  type: SalesDiscountType;
+  value: string;
+  applicable_to: SalesDiscountApplicability;
+  min_order_value: string;
+  min_quantity?: string | null;
+  max_discount_amount?: string | null;
+  start_date: string;
+  end_date?: string | null;
+  status: SalesDiscountStatus;
+  usage_count: number;
+  total_discount_value: string;
+  note: string;
+  created_by?: number | null;
+  created_by_name?: string | null;
+  updated_by?: number | null;
+  created_at: string;
+  updated_at: string;
+  is_currently_active: boolean;
+}
+
+export interface SalesDiscountSummary {
+  total_count: number;
+  active_count: number;
+  inactive_count: number;
+  currently_active_count: number;
+  scheduled_count: number;
+  expired_count: number;
+  total_usage: number;
+  total_discount_value: string;
+}
+
 export interface PaginatedResponse<T> {
   count: number;
   next: string | null;

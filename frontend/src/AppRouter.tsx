@@ -10,15 +10,26 @@ import { ProductsListFilterProvider } from './contexts/ProductsListFilterContext
 
 import { ErrorBoundary } from './components/ErrorBoundary';
 import {
+  canManageUserAccessExceptions,
   canAccessSalesOrders,
+  canManageUserAccessReviews,
   canManageModulePermissionSettings,
+  canManageOnboardingStudio,
+  canManageRoleTeamGovernance,
+  canManageUserDirectory,
+  canManageUserLifecycle,
+  canManageUserProvisioning,
   canManageFinanceData,
   canManageInventoryData,
   canManageStocktake,
   canManagePurchasingData,
   canManageProductionData,
   canManageWorkforceData,
+  canViewApprovalControlTower,
+  canViewAdminAuditCenter,
+  canViewAdminObservabilityCenter,
   canViewModulePermissionHistory,
+  canViewAccessGovernanceCenter,
   canViewOperationsLog,
   canViewOpsHub,
   canViewReportsCenter,
@@ -28,6 +39,7 @@ import {
 
 const Login = lazy(() => import('./pages/Login'));
 const AuthenticatedShell = lazy(() => import('./components/Layout/AuthenticatedShell'));
+const AccountCenter = lazy(() => import('./pages/Account/AccountCenter'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const ProductList = lazy(() => import('./pages/Products/ProductList'));
 const SalesOrderList = lazy(() => import('./pages/Sales/SalesOrderList'));
@@ -50,6 +62,7 @@ const PurchaseOrderForecast = lazy(() => import('./pages/Purchasing/PurchaseOrde
 const SupplierPerformanceAnalytics = lazy(() => import('./pages/Purchasing/SupplierPerformanceAnalytics'));
 const ProductionOrderList = lazy(() => import('./pages/Production/ProductionOrderList'));
 const MaterialIssueList = lazy(() => import('./pages/Production/MaterialIssueList'));
+const ProductionReceiptList = lazy(() => import('./pages/Production/ProductionReceiptList'));
 const ExecutiveCockpit = lazy(() => import('./pages/Management/ExecutiveCockpit'));
 const ReportsCenter = lazy(() => import('./pages/Management/ReportsCenter'));
 const ProductionCostingReport = lazy(() => import('./pages/Management/ProductionCostingReport'));
@@ -91,6 +104,17 @@ const InventoryTransactionList = lazy(() => import('./pages/Inventory/InventoryT
 const InventoryReservationList = lazy(() => import('./pages/Inventory/InventoryReservationList'));
 const ModulePermissionSettings = lazy(() => import('./pages/Admin/ModulePermissionSettings'));
 const ModulePermissionHistory = lazy(() => import('./pages/Admin/ModulePermissionHistory'));
+const AdminObservabilityCenter = lazy(() => import('./pages/Admin/AdminObservabilityCenter'));
+const AdminAuditCenter = lazy(() => import('./pages/Admin/AdminAuditCenter'));
+const ApprovalControlTower = lazy(() => import('./pages/Admin/ApprovalControlTower'));
+const AccessGovernanceCenter = lazy(() => import('./pages/Admin/AccessGovernanceCenter'));
+const AccessExceptionCenter = lazy(() => import('./pages/Admin/AccessExceptionCenter'));
+const AccessReviewCenter = lazy(() => import('./pages/Admin/AccessReviewCenter'));
+const OnboardingStudio = lazy(() => import('./pages/Admin/OnboardingStudio'));
+const RoleTeamGovernance = lazy(() => import('./pages/Admin/RoleTeamGovernance'));
+const UserOffboardingDesk = lazy(() => import('./pages/Admin/UserOffboardingDesk'));
+const UserProvisioningDesk = lazy(() => import('./pages/Admin/UserProvisioningDesk'));
+const UserControlCenter = lazy(() => import('./pages/Admin/UserControlCenter'));
 
 const routeFallback = (
   <div style={{ padding: 24, textAlign: 'center' }}>
@@ -113,14 +137,25 @@ export default function AppRouter() {
   const canViewWorkflow = canViewWorkflowData();
   const canManageWorkflow = canManageWorkflowData();
   const canViewOpsLog = canViewOperationsLog();
+  const canManageAccessExceptions = canManageUserAccessExceptions();
+  const canManageAccessReviews = canManageUserAccessReviews();
   const canManageModulePermissions = canManageModulePermissionSettings();
+  const canManageOnboarding = canManageOnboardingStudio();
+  const canManageRoleTeams = canManageRoleTeamGovernance();
+  const canManageLifecycle = canManageUserLifecycle();
+  const canManageProvisioning = canManageUserProvisioning();
+  const canManageUsers = canManageUserDirectory();
   const canViewModulePermissionAudit = canViewModulePermissionHistory();
+  const canViewAdminAudit = canViewAdminAuditCenter();
+  const canViewAdminObservability = canViewAdminObservabilityCenter();
+  const canViewAccessGovernance = canViewAccessGovernanceCenter();
   const canManageFinance = canManageFinanceData();
   const canManageInventory = canManageInventoryData();
   const canManageStocktakeRoute = canManageStocktake();
   const canManagePurchasing = canManagePurchasingData();
   const canManageProduction = canManageProductionData();
   const canManageWorkforce = canManageWorkforceData();
+  const canViewApprovalTower = canViewApprovalControlTower();
   const [antdLocale, setAntdLocale] = useState<Locale | undefined>(undefined);
 
   useEffect(() => {
@@ -185,6 +220,7 @@ export default function AppRouter() {
               }
             >
               <Route index element={withAsyncBoundary(<Dashboard />)} />
+              <Route path="account" element={withAsyncBoundary(<AccountCenter />)} />
               <Route
                 path="products"
                 element={withAsyncBoundary(
@@ -212,6 +248,7 @@ export default function AppRouter() {
               <Route path="supplier-analytics" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<SupplierPerformanceAnalytics />)}</FeatureRoute>} />
               <Route path="production-orders" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionOrderList />)}</FeatureRoute>} />
               <Route path="material-issues" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<MaterialIssueList />)}</FeatureRoute>} />
+              <Route path="production-receipts" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionReceiptList />)}</FeatureRoute>} />
               <Route path="warehouses" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseList />)}</FeatureRoute>} />
               <Route path="warehouse-locations" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseLocationList />)}</FeatureRoute>} />
               <Route path="inventory-stock" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryStockOverview />)}</FeatureRoute>} />
@@ -252,6 +289,94 @@ export default function AppRouter() {
               <Route path="general-ledger" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<GeneralLedgerList />)}</FeatureRoute>} />
               <Route path="trial-balance" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<TrialBalance />)}</FeatureRoute>} />
               <Route path="bank-reconciliation" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<BankReconciliationList />)}</FeatureRoute>} />
+              <Route
+                path="admin/approval-control-tower"
+                element={(
+                  <FeatureRoute allow={canViewApprovalTower} fallbackTo="/">
+                    {withAsyncBoundary(<ApprovalControlTower />)}
+                  </FeatureRoute>
+                )}
+              />
+              <Route
+                path="admin/audit-center"
+                element={(
+                  <FeatureRoute allow={canViewAdminAudit} fallbackTo="/">
+                    {withAsyncBoundary(<AdminAuditCenter />)}
+                  </FeatureRoute>
+                )}
+              />
+              <Route
+                path="admin/observability"
+                element={(
+                  <FeatureRoute allow={canViewAdminObservability} fallbackTo="/">
+                    {withAsyncBoundary(<AdminObservabilityCenter />)}
+                  </FeatureRoute>
+                )}
+              />
+              <Route
+                path="admin/access-governance"
+                element={(
+                  <FeatureRoute allow={canViewAccessGovernance} fallbackTo="/">
+                    {withAsyncBoundary(<AccessGovernanceCenter />)}
+                  </FeatureRoute>
+                )}
+              />
+              <Route
+                path="admin/access-exceptions"
+                element={(
+                  <FeatureRoute allow={canManageAccessExceptions} fallbackTo="/">
+                    {withAsyncBoundary(<AccessExceptionCenter />)}
+                  </FeatureRoute>
+                )}
+              />
+              <Route
+                path="admin/access-reviews"
+                element={(
+                  <FeatureRoute allow={canManageAccessReviews} fallbackTo="/">
+                    {withAsyncBoundary(<AccessReviewCenter />)}
+                  </FeatureRoute>
+                )}
+              />
+              <Route
+                path="admin/user-provisioning"
+                element={(
+                  <FeatureRoute allow={canManageProvisioning} fallbackTo="/">
+                    {withAsyncBoundary(<UserProvisioningDesk />)}
+                  </FeatureRoute>
+                )}
+              />
+              <Route
+                path="admin/user-lifecycle"
+                element={(
+                  <FeatureRoute allow={canManageLifecycle} fallbackTo="/">
+                    {withAsyncBoundary(<UserOffboardingDesk />)}
+                  </FeatureRoute>
+                )}
+              />
+              <Route
+                path="admin/onboarding-studio"
+                element={(
+                  <FeatureRoute allow={canManageOnboarding} fallbackTo="/">
+                    {withAsyncBoundary(<OnboardingStudio />)}
+                  </FeatureRoute>
+                )}
+              />
+              <Route
+                path="admin/roles-teams"
+                element={(
+                  <FeatureRoute allow={canManageRoleTeams} fallbackTo="/">
+                    {withAsyncBoundary(<RoleTeamGovernance />)}
+                  </FeatureRoute>
+                )}
+              />
+              <Route
+                path="admin/users"
+                element={(
+                  <FeatureRoute allow={canManageUsers} fallbackTo="/">
+                    {withAsyncBoundary(<UserControlCenter />)}
+                  </FeatureRoute>
+                )}
+              />
               <Route
                 path="admin/module-permissions"
                 element={(

@@ -119,7 +119,91 @@ type P0BundlePrecheckResult = {
   note: string;
 };
 
+type ExecutiveCockpitViewSnapshot = {
+  reportWindow: ReportWindow;
+  shiftFilter: ShiftFilter;
+  escalationPreset: EscalationPreset;
+  playbookScope: PlaybookApplyScope;
+  liveSync: boolean;
+  taskFetchLimit: number;
+  autoGovernanceDays: number;
+  autoGovernanceGroupBy: 'day' | 'week';
+  bootstrapHistoryDays: number;
+  bootstrapHistoryUsername: string;
+  bootstrapHistoryDryRun: 'true' | 'false' | '';
+};
+
+type ExecutiveCockpitNamedPreset = {
+  id: string;
+  name: string;
+  snapshot: ExecutiveCockpitViewSnapshot;
+  updatedAt: string;
+};
+
+const EXECUTIVE_REPORT_WINDOWS = ['TODAY', '7D', '30D'] as const;
+const EXECUTIVE_SHIFT_FILTERS = ['ALL', 'MORNING', 'AFTERNOON', 'NIGHT'] as const;
+const EXECUTIVE_ESCALATION_PRESETS = ['LIGHT', 'STANDARD', 'STRICT'] as const;
+const EXECUTIVE_PLAYBOOK_SCOPES = ['ALL', 'L2_PLUS', 'L3_ONLY'] as const;
+
+function isExecutiveReportWindow(value: unknown): value is ReportWindow {
+  return typeof value === 'string' && (EXECUTIVE_REPORT_WINDOWS as readonly string[]).includes(value);
+}
+
+function isExecutiveShiftFilter(value: unknown): value is ShiftFilter {
+  return typeof value === 'string' && (EXECUTIVE_SHIFT_FILTERS as readonly string[]).includes(value);
+}
+
+function isExecutiveEscalationPreset(value: unknown): value is EscalationPreset {
+  return typeof value === 'string' && (EXECUTIVE_ESCALATION_PRESETS as readonly string[]).includes(value);
+}
+
+function isExecutivePlaybookScope(value: unknown): value is PlaybookApplyScope {
+  return typeof value === 'string' && (EXECUTIVE_PLAYBOOK_SCOPES as readonly string[]).includes(value);
+}
+
+function parseExecutiveCockpitViewSnapshot(value: unknown): ExecutiveCockpitViewSnapshot | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const snapshot = value as Partial<ExecutiveCockpitViewSnapshot>;
+  if (
+    !isExecutiveReportWindow(snapshot.reportWindow)
+    || !isExecutiveShiftFilter(snapshot.shiftFilter)
+    || !isExecutiveEscalationPreset(snapshot.escalationPreset)
+    || !isExecutivePlaybookScope(snapshot.playbookScope)
+    || typeof snapshot.liveSync !== 'boolean'
+    || !Number.isFinite(snapshot.taskFetchLimit)
+    || !Number.isFinite(snapshot.autoGovernanceDays)
+    || (snapshot.autoGovernanceGroupBy !== 'day' && snapshot.autoGovernanceGroupBy !== 'week')
+    || !Number.isFinite(snapshot.bootstrapHistoryDays)
+    || typeof snapshot.bootstrapHistoryUsername !== 'string'
+    || (snapshot.bootstrapHistoryDryRun !== 'true' && snapshot.bootstrapHistoryDryRun !== 'false' && snapshot.bootstrapHistoryDryRun !== '')
+  ) {
+    return null;
+  }
+  return {
+    reportWindow: snapshot.reportWindow,
+    shiftFilter: snapshot.shiftFilter,
+    escalationPreset: snapshot.escalationPreset,
+    playbookScope: snapshot.playbookScope,
+    liveSync: snapshot.liveSync,
+    taskFetchLimit: Number(snapshot.taskFetchLimit),
+    autoGovernanceDays: Number(snapshot.autoGovernanceDays),
+    autoGovernanceGroupBy: snapshot.autoGovernanceGroupBy,
+    bootstrapHistoryDays: Number(snapshot.bootstrapHistoryDays),
+    bootstrapHistoryUsername: snapshot.bootstrapHistoryUsername,
+    bootstrapHistoryDryRun: snapshot.bootstrapHistoryDryRun,
+  };
+}
+
 const P0_PRECHECK_TTL_MINUTES = 10;
+const SUMMARY_TILE_STYLE = {
+  border: '1px solid #f0f0f0',
+  borderRadius: 16,
+  padding: '14px 16px',
+  background: 'linear-gradient(180deg, #ffffff 0%, #fafafa 100%)',
+  height: '100%',
+};
 
 const REPORT_WINDOW_OPTIONS: Array<{ value: ReportWindow; label: string }> = [
   { value: 'TODAY', label: 'Hôm nay' },
@@ -161,17 +245,36 @@ const BREACH_REASON_LABELS: Record<BreachReasonCode, string> = {
 };
 
 const EXEC_ACTION_LABELS: Record<ExecutiveActionType, string> = {
-  PLAYBOOK_APPLY: 'Áp dụng playbook',
-  COPY_CHECKLIST: 'Copy checklist',
+  PLAYBOOK_APPLY: 'Áp dụng kịch bản',
+  COPY_CHECKLIST: 'Sao chép danh sách',
   BULK_REMIND: 'Nhắc quá hạn hàng loạt',
   SINGLE_REMIND: 'Nhắc quá hạn 1 task',
   EXPORT_REPORT: 'Xuất báo cáo CSV',
-  COPY_HANDOVER: 'Copy bàn giao ca',
+  COPY_HANDOVER: 'Sao chép bàn giao ca',
   QUICK_ASSIGN: 'Giao việc nhanh',
   REBALANCE_APPLY: 'Điều phối cân bằng tải',
-  P0_BUNDLE_EXECUTE: 'P0 bundle execute',
-  P0_BUNDLE_PRECHECK: 'P0 bundle pre-check',
-  P0_FALLBACK_AUTO_ONLY: 'P0 fallback auto-only',
+  P0_BUNDLE_EXECUTE: 'Chạy gói phản ứng P0',
+  P0_BUNDLE_PRECHECK: 'Kiểm tra trước gói phản ứng P0',
+  P0_FALLBACK_AUTO_ONLY: 'P0 dự phòng chỉ chạy tự động hóa',
+};
+
+const RISK_LEVEL_LABELS: Record<string, string> = {
+  LOW: 'Ổn định',
+  MEDIUM: 'Cần theo dõi',
+  HIGH: 'Cần ưu tiên',
+};
+
+const READINESS_LEVEL_LABELS: Record<string, string> = {
+  READY: 'Sẵn sàng',
+  PARTIAL: 'Cần bổ sung',
+  BLOCKED: 'Đang vướng',
+};
+
+const P0_BUNDLE_STEP_LABELS: Record<'IDLE' | 'AUTO' | 'FINANCE' | 'WORKFORCE', string> = {
+  IDLE: 'Chờ xử lý',
+  AUTO: 'Tự động hóa',
+  FINANCE: 'Nhắc SLA tài chính',
+  WORKFORCE: 'Nhắc SLA nhân sự',
 };
 
 const SHIFT_BUCKET_LABELS: Record<ShiftPriorityBucket, string> = {
@@ -185,7 +288,7 @@ BreachReasonCode,
 { title: string; owner: string; targetSlaHours: number; steps: string[] }
 > = {
   WAIT_MATERIAL: {
-    title: 'Playbook thiếu vật tư',
+    title: 'Kịch bản thiếu vật tư',
     owner: 'Kế hoạch vật tư + Mua hàng',
     targetSlaHours: 4,
     steps: [
@@ -195,7 +298,7 @@ BreachReasonCode,
     ],
   },
   WAIT_DIE: {
-    title: 'Playbook chờ khuôn/bế',
+    title: 'Kịch bản chờ khuôn/bế',
     owner: 'Bộ phận khuôn + Điều độ',
     targetSlaHours: 4,
     steps: [
@@ -205,7 +308,7 @@ BreachReasonCode,
     ],
   },
   MACHINE_DOWN: {
-    title: 'Playbook máy dừng',
+    title: 'Kịch bản máy dừng',
     owner: 'Bảo trì + Quản đốc xưởng',
     targetSlaHours: 2,
     steps: [
@@ -215,7 +318,7 @@ BreachReasonCode,
     ],
   },
   WAIT_APPROVAL: {
-    title: 'Playbook chờ duyệt',
+    title: 'Kịch bản chờ duyệt',
     owner: 'Kinh doanh + Quản lý duyệt',
     targetSlaHours: 2,
     steps: [
@@ -225,27 +328,27 @@ BreachReasonCode,
     ],
   },
   STAFF_SHORTAGE: {
-    title: 'Playbook thiếu nhân lực',
+    title: 'Kịch bản thiếu nhân lực',
     owner: 'Tổ trưởng + HR vận hành',
     targetSlaHours: 8,
     steps: [
       'Phân bổ lại tải công việc từ người quá tải.',
       'Tăng cường nhân sự thay ca/tăng cường tạm thời.',
-      'Rà soát lại danh sách task ưu tiên bắt buộc trong ca.',
+      'Rà soát lại danh sách nhiệm vụ ưu tiên bắt buộc trong ca.',
     ],
   },
   WAIT_PREVIOUS_STEP: {
-    title: 'Playbook nghẽn công đoạn trước',
+    title: 'Kịch bản nghẽn công đoạn trước',
     owner: 'Điều độ liên công đoạn',
     targetSlaHours: 4,
     steps: [
       'Xác định công đoạn gốc đang nghẽn.',
-      'Đẩy escalation vào task gốc thay vì task ngọn.',
+      'Đẩy leo thang vào nhiệm vụ gốc thay vì nhiệm vụ ngọn.',
       'Cập nhật lại thứ tự ưu tiên liên công đoạn.',
     ],
   },
   CUSTOMER_CHANGE: {
-    title: 'Playbook đổi yêu cầu khách',
+    title: 'Kịch bản đổi yêu cầu khách',
     owner: 'Kinh doanh + Kế hoạch',
     targetSlaHours: 6,
     steps: [
@@ -255,12 +358,12 @@ BreachReasonCode,
     ],
   },
   OTHER: {
-    title: 'Playbook điều hành chung',
+    title: 'Kịch bản điều hành chung',
     owner: 'Điều hành trung tâm',
     targetSlaHours: 8,
     steps: [
       'Gán người chịu trách nhiệm chính cho từng case.',
-      'Chuẩn hóa nguyên nhân trên task để theo dõi kỳ sau.',
+      'Chuẩn hóa nguyên nhân trên nhiệm vụ để theo dõi kỳ sau.',
       'Cập nhật checklist xử lý và bài học kinh nghiệm.',
     ],
   },
@@ -321,6 +424,11 @@ function calcRiskScore(tasks: TaskItem[]): number {
 
 export default function ExecutiveCockpit() {
   const { config: cockpitConfig, saveConfig: saveCockpitConfig } = useUserPreferences(PAGES.EXECUTIVE_COCKPIT);
+  const {
+    config: cockpitViewsConfig,
+    saveConfig: saveCockpitViewsConfig,
+    isLoading: isCockpitViewPreferencesLoading,
+  } = useUserPreferences(PAGES.EXECUTIVE_COCKPIT_VIEWS);
   const [liveSync, setLiveSync] = useState(true);
   const [reportWindow, setReportWindow] = useState<ReportWindow>('TODAY');
   const [autoGovernanceDays, setAutoGovernanceDays] = useState<number>(30);
@@ -342,6 +450,7 @@ export default function ExecutiveCockpit() {
   const [shiftFilter, setShiftFilter] = useState<ShiftFilter>('ALL');
   const [escalationPreset, setEscalationPreset] = useState<EscalationPreset>('STANDARD');
   const [playbookScope, setPlaybookScope] = useState<PlaybookApplyScope>('L2_PLUS');
+  const [taskFetchLimit, setTaskFetchLimit] = useState<number>(120);
   const [actionLogs, setActionLogs] = useState<ExecutiveActionLogItem[]>([]);
   const [quickAssignTaskId, setQuickAssignTaskId] = useState<number | null>(null);
   const [quickAssignUserId, setQuickAssignUserId] = useState<number | null>(null);
@@ -351,11 +460,46 @@ export default function ExecutiveCockpit() {
   const [quickAssignBulkDuePlan, setQuickAssignBulkDuePlan] = useState<QuickAssignDuePlan>('KEEP');
   const [rebalanceModalOpen, setRebalanceModalOpen] = useState(false);
   const [selectedRebalanceTaskIds, setSelectedRebalanceTaskIds] = useState<number[]>([]);
+  const [selectedViewPresetId, setSelectedViewPresetId] = useState<string>();
+  const [isViewPresetModalOpen, setIsViewPresetModalOpen] = useState(false);
+  const [viewPresetName, setViewPresetName] = useState('');
   const governanceActionCooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queryClient = useQueryClient();
   const cockpitConfigObj = useMemo(
     () => ((cockpitConfig as Record<string, unknown>) || {}),
     [cockpitConfig]
+  );
+  const cockpitViewConfigObj = useMemo(
+    () => ((cockpitViewsConfig as Record<string, unknown>) || {}),
+    [cockpitViewsConfig]
+  );
+  const namedPresets = useMemo<ExecutiveCockpitNamedPreset[]>(() => {
+    const raw = cockpitViewConfigObj.saved_views;
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    return raw
+      .map((item) => {
+        if (!item || typeof item !== 'object') {
+          return null;
+        }
+        const preset = item as Partial<ExecutiveCockpitNamedPreset>;
+        const snapshot = parseExecutiveCockpitViewSnapshot(preset.snapshot);
+        if (typeof preset.id !== 'string' || typeof preset.name !== 'string' || !snapshot) {
+          return null;
+        }
+        return {
+          id: preset.id,
+          name: preset.name,
+          snapshot,
+          updatedAt: typeof preset.updatedAt === 'string' ? preset.updatedAt : new Date().toISOString(),
+        };
+      })
+      .filter((item): item is ExecutiveCockpitNamedPreset => Boolean(item));
+  }, [cockpitViewConfigObj]);
+  const selectedViewPreset = useMemo(
+    () => namedPresets.find((item) => item.id === selectedViewPresetId) ?? null,
+    [namedPresets, selectedViewPresetId],
   );
   useEffect(() => {
     if (prefsHydrated) return;
@@ -382,6 +526,20 @@ export default function ExecutiveCockpit() {
 
   useEffect(() => {
     if (!prefsHydrated) return;
+    const savedDays = Number(cockpitConfigObj.autoGovernanceDays);
+    const savedGroupBy = String(cockpitConfigObj.autoGovernanceGroupBy || '').toLowerCase();
+    const savedBootstrapDays = Number(cockpitConfigObj.bootstrapHistoryDays);
+    const savedBootstrapUsername = String(cockpitConfigObj.bootstrapHistoryUsername || '');
+    const savedBootstrapDryRun = String(cockpitConfigObj.bootstrapHistoryDryRun || '');
+    if (
+      savedDays === autoGovernanceDays
+      && savedGroupBy === autoGovernanceGroupBy
+      && savedBootstrapDays === bootstrapHistoryDays
+      && savedBootstrapUsername === bootstrapHistoryUsername
+      && savedBootstrapDryRun === bootstrapHistoryDryRun
+    ) {
+      return;
+    }
     void saveCockpitConfig({
       ...cockpitConfigObj,
       autoGovernanceDays,
@@ -396,7 +554,6 @@ export default function ExecutiveCockpit() {
     bootstrapHistoryDays,
     bootstrapHistoryUsername,
     bootstrapHistoryDryRun,
-    cockpitConfigObj,
     prefsHydrated,
     saveCockpitConfig,
   ]);
@@ -413,13 +570,15 @@ export default function ExecutiveCockpit() {
   });
 
   const openTasksQuery = useQuery({
-    queryKey: ['executive-cockpit-open-tasks'],
+    queryKey: ['executive-cockpit-open-tasks', taskFetchLimit],
     queryFn: () =>
       tasksApi.list({
         is_open: true,
         ordering_mode: 'quick_queue',
+        page_size: taskFetchLimit,
       }),
     staleTime: 10_000,
+    placeholderData: (previousData) => previousData,
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
   });
@@ -433,6 +592,7 @@ export default function ExecutiveCockpit() {
         limit: 30,
       }),
     staleTime: 15_000,
+    placeholderData: (previousData) => previousData,
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
   });
@@ -441,6 +601,7 @@ export default function ExecutiveCockpit() {
     queryKey: ['executive-cockpit-unread-count'],
     queryFn: () => notificationsApi.unreadCount(),
     staleTime: 10_000,
+    placeholderData: (previousData) => previousData,
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
   });
@@ -454,6 +615,7 @@ export default function ExecutiveCockpit() {
     queryKey: ['executive-cockpit-finance-workforce-kpi'],
     queryFn: () => financeApi.getExecutiveKpi(),
     staleTime: 30_000,
+    placeholderData: (previousData) => previousData,
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
   });
@@ -461,6 +623,7 @@ export default function ExecutiveCockpit() {
     queryKey: ['executive-cockpit-cross-module-readiness'],
     queryFn: () => financeApi.getCrossModuleReadiness(),
     staleTime: 30_000,
+    placeholderData: (previousData) => previousData,
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
   });
@@ -473,6 +636,7 @@ export default function ExecutiveCockpit() {
       dry_run: bootstrapHistoryDryRun || undefined,
     }),
     staleTime: 30_000,
+    placeholderData: (previousData) => previousData,
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
   });
@@ -480,6 +644,7 @@ export default function ExecutiveCockpit() {
     queryKey: ['executive-cockpit-auto-history'],
     queryFn: () => financeApi.getExecutiveAutoHistory({ limit: 20 }),
     staleTime: 20_000,
+    placeholderData: (previousData) => previousData,
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
   });
@@ -491,29 +656,30 @@ export default function ExecutiveCockpit() {
         group_by: autoGovernanceGroupBy,
       }),
     staleTime: 20_000,
+    placeholderData: (previousData) => previousData,
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
   });
   const bootstrapReadinessPreviewMutation = useMutation({
     mutationFn: () => financeApi.runCrossModuleBootstrap({ dry_run: true }),
     onSuccess: (res) => {
-      message.success(`Pre-check bootstrap xong. Dự kiến tạo ${res.created_total} mục.`);
+      message.success(`Đã kiểm tra trước khi bổ sung. Dự kiến tạo ${res.created_total} mục.`);
       void crossModuleReadinessQuery.refetch();
       void crossModuleBootstrapHistoryQuery.refetch();
     },
-    onError: () => message.error('Không thể chạy pre-check bootstrap dữ liệu.'),
+    onError: () => message.error('Không thể kiểm tra trước khi bổ sung dữ liệu.'),
   });
   const bootstrapReadinessRunMutation = useMutation({
     mutationFn: () => financeApi.runCrossModuleBootstrap({ dry_run: false }),
     onSuccess: (res) => {
-      message.success(`Bootstrap dữ liệu hoàn tất. Tạo ${res.created_total} mục, bỏ qua ${res.skipped_total} mục.`);
+      message.success(`Đã bổ sung dữ liệu vận hành. Tạo ${res.created_total} mục, bỏ qua ${res.skipped_total} mục.`);
       void crossModuleReadinessQuery.refetch();
       void crossModuleBootstrapHistoryQuery.refetch();
       void executiveKpiQuery.refetch();
       void executiveAutoHistoryQuery.refetch();
       void executiveAutoGovernanceQuery.refetch();
     },
-    onError: () => message.error('Không thể bootstrap dữ liệu vận hành.'),
+    onError: () => message.error('Không thể bổ sung dữ liệu vận hành.'),
   });
   const governanceTrendData = useMemo(() => {
     const rows = (executiveAutoGovernanceQuery.data?.by_period ?? []).slice(-10);
@@ -565,14 +731,14 @@ export default function ExecutiveCockpit() {
       return null;
     }
     const reasons: string[] = [];
-    if (sentDownTwoPeriods) reasons.push('sent_total giảm liên tiếp 2 kỳ');
-    if (successDownTwoPeriods) reasons.push('success_rate giảm liên tiếp 2 kỳ');
-    if (skipUpTwoPeriods) reasons.push('skipped_rate tăng liên tiếp 2 kỳ');
+    if (sentDownTwoPeriods) reasons.push('tổng lượt gửi giảm liên tiếp 2 kỳ');
+    if (successDownTwoPeriods) reasons.push('tỷ lệ thành công giảm liên tiếp 2 kỳ');
+    if (skipUpTwoPeriods) reasons.push('tỷ lệ bỏ qua tăng liên tiếp 2 kỳ');
     const severity = (successDownTwoPeriods && skipUpTwoPeriods) || reasons.length >= 2 ? 'high' : 'medium';
     const actionCodes =
       severity === 'high'
-        ? ['P0: Force chạy auto-execute', 'P0: Chạy SLA reminder Finance + Workforce', 'P1: Review policy cooldown/early-warning']
-        : ['P1: Chạy auto-execute theo policy', 'P1: Rà soát top skip reasons', 'P2: Tối ưu cadence/cooldown'];
+        ? ['P0: Ép chạy tự động hóa', 'P0: Chạy nhắc SLA Tài chính + Nhân sự', 'P1: Rà soát khoảng nghỉ và cảnh báo sớm']
+        : ['P1: Chạy tự động hóa theo chính sách', 'P1: Rà soát nhóm lý do bỏ qua', 'P2: Tối ưu nhịp chạy và khoảng nghỉ'];
     return {
       severity,
       reasons,
@@ -644,22 +810,22 @@ export default function ExecutiveCockpit() {
   const triggerFinanceSlaReminderMutation = useMutation({
     mutationFn: () => financeApi.remindAdvancePendingApprovals({ dry_run: false }),
     onSuccess: (res) => {
-      message.success(`Đã gửi nhắc SLA Finance: ${res.sent_count} người nhận`);
+      message.success(`Đã gửi nhắc SLA tài chính: ${res.sent_count} người nhận`);
       void executiveKpiQuery.refetch();
       void executiveAutoHistoryQuery.refetch();
       void executiveAutoGovernanceQuery.refetch();
     },
-    onError: () => message.error('Không thể gửi nhắc SLA Finance'),
+    onError: () => message.error('Không thể gửi nhắc SLA tài chính'),
   });
   const triggerWorkforceSlaReminderMutation = useMutation({
     mutationFn: () => workforceApi.remindSalaryAdvancePendingApprovals({ dry_run: false }),
     onSuccess: (res) => {
-      message.success(`Đã gửi nhắc SLA Workforce: ${res.sent_count} người nhận`);
+      message.success(`Đã gửi nhắc SLA nhân sự: ${res.sent_count} người nhận`);
       void executiveKpiQuery.refetch();
       void executiveAutoHistoryQuery.refetch();
       void executiveAutoGovernanceQuery.refetch();
     },
-    onError: () => message.error('Không thể gửi nhắc SLA Workforce'),
+    onError: () => message.error('Không thể gửi nhắc SLA nhân sự'),
   });
   const saveAutoPolicyMutation = useMutation({
     mutationFn: (payload: {
@@ -671,29 +837,29 @@ export default function ExecutiveCockpit() {
       last_run_at?: string;
     }) => financeApi.saveExecutiveAutoPolicy(payload),
     onSuccess: () => {
-      message.success('Đã cập nhật policy auto-execute');
+      message.success('Đã cập nhật chính sách tự động hóa điều hành');
       void executiveKpiQuery.refetch();
       void executiveAutoHistoryQuery.refetch();
     },
-    onError: () => message.error('Không thể cập nhật policy auto-execute'),
+    onError: () => message.error('Không thể cập nhật chính sách tự động hóa điều hành'),
   });
   const runAutoExecuteMutation = useMutation({
     mutationFn: (force: boolean) => financeApi.runExecutiveAutoExecute({ force }),
     onSuccess: (res) => {
       if (res.success) {
         message.success(
-          `Auto-execute xong: Fin ${res.finance_result?.sent_count ?? 0}, WF ${res.workforce_result?.sent_count ?? 0}`
+          `Đã chạy tự động hóa: Tài chính ${res.finance_result?.sent_count ?? 0}, Nhân sự ${res.workforce_result?.sent_count ?? 0}`
         );
       } else if (res.skipped) {
-        message.info(`Auto-execute bỏ qua: ${res.reason || 'SKIPPED'}`);
+        message.info(`Tự động hóa bị bỏ qua: ${res.reason || 'SKIPPED'}`);
       } else {
-        message.warning('Auto-execute không thành công');
+        message.warning('Tự động hóa chưa hoàn tất thành công');
       }
       void executiveKpiQuery.refetch();
       void executiveAutoHistoryQuery.refetch();
       void executiveAutoGovernanceQuery.refetch();
     },
-    onError: () => message.error('Không thể chạy auto-execute'),
+    onError: () => message.error('Không thể chạy tự động hóa điều hành'),
   });
   const isGovernanceActionBusy =
     isGovernanceActionCooldown
@@ -706,7 +872,7 @@ export default function ExecutiveCockpit() {
     cooldownMs = 900,
   ) => {
     if (isGovernanceActionBusy) {
-      message.info('Thao tác governance đang chạy hoặc vừa chạy, vui lòng đợi một chút.');
+      message.info('Tác vụ điều hành đang chạy hoặc vừa chạy, vui lòng đợi một chút.');
       return;
     }
     runner();
@@ -721,7 +887,7 @@ export default function ExecutiveCockpit() {
   };
   const runGovernanceP0Bundle = async (forceAuto: boolean) => {
     if (isGovernanceActionBusy) {
-      message.info('Governance action đang bận, vui lòng đợi trước khi chạy P0 bundle.');
+      message.info('Tác vụ điều hành đang bận, vui lòng đợi trước khi chạy gói phản ứng P0.');
       return;
     }
     setIsP0BundleRunning(true);
@@ -734,25 +900,25 @@ export default function ExecutiveCockpit() {
       const financeRes = await triggerFinanceSlaReminderMutation.mutateAsync();
       setP0BundleStep('WORKFORCE');
       const workforceRes = await triggerWorkforceSlaReminderMutation.mutateAsync();
-      const summary = `Auto(${autoRes.success ? 'OK' : autoRes.skipped ? `SKIP:${autoRes.reason || '-'}` : 'FAIL'}) | Fin sent ${financeRes.sent_count} | WF sent ${workforceRes.sent_count}`;
+      const summary = `Tự động hóa(${autoRes.success ? 'OK' : autoRes.skipped ? `BỎ QUA:${autoRes.reason || '-'}` : 'THẤT BẠI'}) | Tài chính gửi ${financeRes.sent_count} | Nhân sự gửi ${workforceRes.sent_count}`;
       const precheckText = precheckSnapshot
-        ? ` | Pre-check Fin ${precheckSnapshot.financeDryRunSent}, WF ${precheckSnapshot.workforceDryRunSent}, Total ${precheckSnapshot.totalDryRunSent}`
+        ? ` | Kiểm tra trước: Tài chính ${precheckSnapshot.financeDryRunSent}, Nhân sự ${precheckSnapshot.workforceDryRunSent}, Tổng ${precheckSnapshot.totalDryRunSent}`
         : '';
       setP0BundleLastSummary(summary);
-      message.success(`P0 bundle hoàn tất. ${summary}`);
+      message.success(`Gói phản ứng P0 đã hoàn tất. ${summary}`);
       appendActionLog({
         actionType: 'P0_BUNDLE_EXECUTE',
-        detail: `P0 bundle: ${summary}${precheckText}`,
+        detail: `Gói phản ứng P0: ${summary}${precheckText}`,
         relatedCount: 3,
       });
       void executiveKpiQuery.refetch();
       void executiveAutoHistoryQuery.refetch();
       void executiveAutoGovernanceQuery.refetch();
     } catch {
-      message.error('P0 bundle thất bại, vui lòng kiểm tra log và thử lại.');
+      message.error('Gói phản ứng P0 thất bại, vui lòng kiểm tra nhật ký và thử lại.');
       appendActionLog({
         actionType: 'P0_BUNDLE_EXECUTE',
-        detail: `P0 bundle thất bại tại bước ${p0BundleStep}`,
+        detail: `Gói phản ứng P0 thất bại tại bước ${P0_BUNDLE_STEP_LABELS[p0BundleStep]}`,
         relatedCount: 0,
       });
     } finally {
@@ -770,18 +936,18 @@ export default function ExecutiveCockpit() {
   };
   const runGovernanceFallbackAutoOnly = async () => {
     if (isGovernanceActionBusy) {
-      message.info('Governance action đang bận, vui lòng đợi trước khi chạy fallback.');
+      message.info('Tác vụ điều hành đang bận, vui lòng đợi trước khi chạy phương án dự phòng.');
       return;
     }
     const precheckSnapshot = p0PrecheckResult;
     try {
       const autoRes = await runAutoExecuteMutation.mutateAsync(true);
-      const summary = `Fallback auto-only: Auto(${autoRes.success ? 'OK' : autoRes.skipped ? `SKIP:${autoRes.reason || '-'}` : 'FAIL'})`;
+      const summary = `Dự phòng chỉ tự động hóa: Tự động hóa(${autoRes.success ? 'OK' : autoRes.skipped ? `BỎ QUA:${autoRes.reason || '-'}` : 'THẤT BẠI'})`;
       const precheckText = precheckSnapshot
-        ? ` | Pre-check Fin ${precheckSnapshot.financeDryRunSent}, WF ${precheckSnapshot.workforceDryRunSent}, Total ${precheckSnapshot.totalDryRunSent}`
+        ? ` | Kiểm tra trước: Tài chính ${precheckSnapshot.financeDryRunSent}, Nhân sự ${precheckSnapshot.workforceDryRunSent}, Tổng ${precheckSnapshot.totalDryRunSent}`
         : '';
       setP0BundleLastSummary(summary);
-      message.success(`Đã chạy fallback auto-only. ${summary}`);
+      message.success(`Đã chạy phương án dự phòng chỉ tự động hóa. ${summary}`);
       appendActionLog({
         actionType: 'P0_FALLBACK_AUTO_ONLY',
         detail: `${summary}${precheckText}`,
@@ -793,10 +959,10 @@ export default function ExecutiveCockpit() {
       setIsP0PrecheckOpen(false);
       setAllowZeroImpactP0Execute(false);
     } catch {
-      message.error('Fallback auto-only thất bại, vui lòng kiểm tra và thử lại.');
+      message.error('Phương án dự phòng chỉ tự động hóa thất bại, vui lòng kiểm tra và thử lại.');
       appendActionLog({
         actionType: 'P0_FALLBACK_AUTO_ONLY',
-        detail: 'Fallback auto-only thất bại.',
+        detail: 'Phương án dự phòng chỉ tự động hóa thất bại.',
         relatedCount: 0,
       });
     } finally {
@@ -812,7 +978,7 @@ export default function ExecutiveCockpit() {
   };
   const openGovernanceP0Precheck = async () => {
     if (isGovernanceActionBusy) {
-      message.info('Governance action đang bận, vui lòng đợi trước khi pre-check.');
+      message.info('Tác vụ điều hành đang bận, vui lòng đợi trước khi kiểm tra trước.');
       return;
     }
     setIsP0PrecheckOpen(true);
@@ -833,15 +999,15 @@ export default function ExecutiveCockpit() {
         financeDryRunSent,
         workforceDryRunSent,
         totalDryRunSent,
-        note: 'Dry-run chỉ ước lượng nhắc SLA. Bước Force Auto Execute sẽ chạy thật sau khi bạn xác nhận.',
+        note: 'Mô phỏng chỉ ước lượng số lượt nhắc SLA. Bước ép chạy tự động hóa sẽ chạy thật sau khi bạn xác nhận.',
       });
       appendActionLog({
         actionType: 'P0_BUNDLE_PRECHECK',
-        detail: `Pre-check dry-run: Fin ${financeDryRunSent}, WF ${workforceDryRunSent}, Total ${totalDryRunSent} (${dayjs(generatedAt).format('DD/MM HH:mm:ss')}).`,
+        detail: `Kiểm tra trước bằng mô phỏng: Tài chính ${financeDryRunSent}, Nhân sự ${workforceDryRunSent}, Tổng ${totalDryRunSent} (${dayjs(generatedAt).format('DD/MM HH:mm:ss')}).`,
         relatedCount: totalDryRunSent,
       });
     } catch {
-      message.error('Không thể chạy pre-check P0 bundle.');
+      message.error('Không thể kiểm tra trước cho gói phản ứng P0.');
     } finally {
       setIsP0PrecheckLoading(false);
     }
@@ -1261,7 +1427,7 @@ export default function ExecutiveCockpit() {
 
   const runBulkRemind = (taskIds: number[], sourceLabel: string) => {
     if (!taskIds.length) {
-      message.info(`Không có task phù hợp cho thao tác: ${sourceLabel}.`);
+      message.info(`Không có nhiệm vụ phù hợp cho thao tác: ${sourceLabel}.`);
       return;
     }
     appendActionLog({
@@ -1305,7 +1471,7 @@ export default function ExecutiveCockpit() {
         await tasksApi.reassign(
           params.taskId,
           params.assignedTo,
-          `Điều hành giao nhanh từ cockpit (${SHIFT_BUCKET_LABELS[startShiftPriority.items.find((x) => x.id === params.taskId)?.bucket || 'WATCH']})`
+          `Điều hành giao nhanh từ trung tâm điều phối (${SHIFT_BUCKET_LABELS[startShiftPriority.items.find((x) => x.id === params.taskId)?.bucket || 'WATCH']})`
         );
       }
       if (dueChanged) {
@@ -1322,7 +1488,7 @@ export default function ExecutiveCockpit() {
       const assigneeName = activeUsersQuery.data?.find((u) => u.id === res.assignee);
       appendActionLog({
         actionType: 'QUICK_ASSIGN',
-        detail: `Giao nhanh task ${res.task.entity_code || `#${res.task.entity_id}`} cho ${assigneeName ? getUserDisplayName(assigneeName) : 'Chưa giao'}; hạn ${res.dueDate || '-'}.`,
+        detail: `Giao nhanh nhiệm vụ ${res.task.entity_code || `#${res.task.entity_id}`} cho ${assigneeName ? getUserDisplayName(assigneeName) : 'Chưa giao'}; hạn ${res.dueDate || '-'}.`,
         relatedCount: 1,
       });
       message.success('Đã cập nhật giao việc nhanh.');
@@ -1330,7 +1496,7 @@ export default function ExecutiveCockpit() {
       refreshTaskRelatedQueries();
     },
     onError: () => {
-      message.error('Không thể giao việc nhanh cho task này.');
+      message.error('Không thể giao việc nhanh cho nhiệm vụ này.');
     },
   });
 
@@ -1374,7 +1540,7 @@ export default function ExecutiveCockpit() {
       const assigneeName = activeUsersQuery.data?.find((u) => u.id === quickAssignBulkUserId);
       appendActionLog({
         actionType: 'QUICK_ASSIGN',
-        detail: `Giao nhanh hàng loạt ${res.targetLabel}: cập nhật ${res.changedCount}/${res.requestedCount} task cho ${assigneeName ? getUserDisplayName(assigneeName) : 'Chưa giao'}; hạn ${quickAssignBulkDuePlan}.`,
+        detail: `Giao nhanh hàng loạt ${res.targetLabel}: cập nhật ${res.changedCount}/${res.requestedCount} nhiệm vụ cho ${assigneeName ? getUserDisplayName(assigneeName) : 'Chưa giao'}; hạn ${quickAssignBulkDuePlan}.`,
         relatedCount: res.changedCount,
       });
       message.success(`Đã cập nhật ${res.changedCount}/${res.requestedCount} task.`);
@@ -1396,7 +1562,7 @@ export default function ExecutiveCockpit() {
         await tasksApi.reassign(
           item.taskId,
           item.toUserId,
-          `Điều phối cân bằng tải từ cockpit (${item.fromOwner} -> ${item.toOwner})`
+          `Điều phối cân bằng tải từ trung tâm điều phối (${item.fromOwner} -> ${item.toOwner})`
         );
         changedCount += 1;
       }
@@ -1404,12 +1570,12 @@ export default function ExecutiveCockpit() {
     },
     onSuccess: (res) => {
       if (res.changedCount === 0) {
-        message.info('Không có task cần điều phối thêm.');
+        message.info('Không có nhiệm vụ cần điều phối thêm.');
         return;
       }
       appendActionLog({
         actionType: 'REBALANCE_APPLY',
-        detail: `Điều phối cân bằng tải: cập nhật ${res.changedCount}/${res.requestedCount} task theo đề xuất tự động.`,
+        detail: `Điều phối cân bằng tải: cập nhật ${res.changedCount}/${res.requestedCount} nhiệm vụ theo đề xuất tự động.`,
         relatedCount: res.changedCount,
       });
       message.success(`Đã điều phối ${res.changedCount}/${res.requestedCount} task.`);
@@ -1437,38 +1603,38 @@ export default function ExecutiveCockpit() {
   const applyPlaybookQuick = (item: (typeof activePlaybooks)[number]) => {
     const selectedTaskIds = pickTaskIdsByPlaybookScope(item);
     if (!selectedTaskIds.length) {
-      message.info(`Không có task phù hợp cho playbook: ${item.reasonLabel}.`);
+      message.info(`Không có nhiệm vụ phù hợp cho kịch bản phản ứng: ${item.reasonLabel}.`);
       return;
     }
     appendActionLog({
       actionType: 'PLAYBOOK_APPLY',
-      detail: `${item.title} (${item.reasonLabel}) - scope ${playbookScope}, áp dụng ${Math.min(selectedTaskIds.length, 25)} task.`,
+      detail: `${item.title} (${item.reasonLabel}) - phạm vi ${playbookScope}, áp dụng ${Math.min(selectedTaskIds.length, 25)} nhiệm vụ.`,
       relatedCount: selectedTaskIds.length,
     });
-    runBulkRemind(selectedTaskIds.slice(0, 25), `Playbook ${item.reasonLabel}`);
+    runBulkRemind(selectedTaskIds.slice(0, 25), `Kịch bản ${item.reasonLabel}`);
   };
 
   const copyPlaybookChecklist = async (item: (typeof activePlaybooks)[number]) => {
     const selectedTaskIds = pickTaskIdsByPlaybookScope(item);
     const content = [
       `${item.title} - ${item.reasonLabel}`,
-      `Owner: ${item.owner}`,
-      `Scope áp dụng: ${PLAYBOOK_SCOPE_OPTIONS.find((x) => x.value === playbookScope)?.label || playbookScope}`,
-      `Task phù hợp: ${selectedTaskIds.length}`,
+      `Người phụ trách: ${item.owner}`,
+      `Phạm vi áp dụng: ${PLAYBOOK_SCOPE_OPTIONS.find((x) => x.value === playbookScope)?.label || playbookScope}`,
+      `Nhiệm vụ phù hợp: ${selectedTaskIds.length}`,
       `SLA mục tiêu: ${item.targetSlaHours} giờ`,
-      'Checklist:',
+      'Danh sách kiểm tra:',
       ...item.steps.map((step, idx) => `${idx + 1}. ${step}`),
     ].join('\n');
     try {
       await navigator.clipboard.writeText(content);
-      message.success('Đã copy checklist playbook.');
+      message.success('Đã sao chép danh sách kiểm tra kịch bản.');
       appendActionLog({
         actionType: 'COPY_CHECKLIST',
-        detail: `Copy checklist: ${item.title} (${item.reasonLabel}), scope ${playbookScope}.`,
+        detail: `Sao chép danh sách kiểm tra: ${item.title} (${item.reasonLabel}), phạm vi ${playbookScope}.`,
         relatedCount: selectedTaskIds.length,
       });
     } catch {
-      message.error('Không thể copy checklist playbook.');
+      message.error('Không thể sao chép danh sách kiểm tra kịch bản.');
     }
   };
 
@@ -1538,9 +1704,9 @@ export default function ExecutiveCockpit() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      message.success('Đã xuất báo cáo SLA governance (Excel).');
+      message.success('Đã xuất báo cáo điều hành SLA (Excel).');
     } catch {
-      message.error('Không thể xuất báo cáo SLA governance.');
+      message.error('Không thể xuất báo cáo điều hành SLA.');
     } finally {
       setIsExportingAutoGovernance(false);
     }
@@ -1562,9 +1728,9 @@ export default function ExecutiveCockpit() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      message.success('Đã xuất lịch sử bootstrap (Excel).');
+      message.success('Đã xuất lịch sử bổ sung dữ liệu (Excel).');
     } catch {
-      message.error('Không thể xuất lịch sử bootstrap.');
+      message.error('Không thể xuất lịch sử bổ sung dữ liệu.');
     } finally {
       setIsExportingBootstrapHistory(false);
     }
@@ -1574,28 +1740,28 @@ export default function ExecutiveCockpit() {
     const reportWindowLabel = REPORT_WINDOW_OPTIONS.find((x) => x.value === reportWindow)?.label || reportWindow;
     const shiftLabel = SHIFT_OPTIONS.find((x) => x.value === shiftFilter)?.label || shiftFilter;
     const content = [
-      `TOM TAT BAN GIAO CA - ${dayjs().format('DD/MM/YYYY HH:mm')}`,
-      `Khung bao cao: ${reportWindowLabel} | ${shiftLabel}`,
-      `Task mo: ${taskSummary.totalOpen} | Qua han: ${taskSummary.overdue} | Blocking: ${taskSummary.blocking} | Can ho tro: ${taskSummary.needHelp}`,
-      `SLA: Xanh ${slaHealth.onTrack} | Vang ${slaHealth.warning} | Do ${slaHealth.breached}`,
-      `Nhom nguyen nhan breach chinh: ${handoverHighlights.topReasons.join(', ') || 'Khong co'}`,
-      'Top case can ban giao uu tien:',
-      ...(handoverHighlights.topEscalations.length > 0 ? handoverHighlights.topEscalations : ['- Khong co case qua han uu tien']),
-      'Hanh dong de xuat:',
-      '- Xu ly L3 truoc, sau do L2 theo playbook.',
-      '- Cap nhat owner + ETA moi ngay trong task.',
-      '- Xac nhan dong bo giua dieu do, van hanh va ban hang.',
+      `TÓM TẮT BÀN GIAO CA - ${dayjs().format('DD/MM/YYYY HH:mm')}`,
+      `Khung báo cáo: ${reportWindowLabel} | ${shiftLabel}`,
+      `Nhiệm vụ mở: ${taskSummary.totalOpen} | Quá hạn: ${taskSummary.overdue} | Đang chặn: ${taskSummary.blocking} | Cần hỗ trợ: ${taskSummary.needHelp}`,
+      `SLA: Xanh ${slaHealth.onTrack} | Vàng ${slaHealth.warning} | Đỏ ${slaHealth.breached}`,
+      `Nhóm nguyên nhân vi phạm SLA chính: ${handoverHighlights.topReasons.join(', ') || 'Không có'}`,
+      'Các trường hợp cần bàn giao ưu tiên:',
+      ...(handoverHighlights.topEscalations.length > 0 ? handoverHighlights.topEscalations : ['- Không có trường hợp quá hạn ưu tiên']),
+      'Hành động đề xuất:',
+      '- Xử lý L3 trước, sau đó đến L2 theo kịch bản phản ứng.',
+      '- Cập nhật người phụ trách và thời gian dự kiến hoàn thành mỗi ngày trong nhiệm vụ.',
+      '- Xác nhận đồng bộ giữa điều độ, vận hành và bán hàng.',
     ].join('\n');
     try {
       await navigator.clipboard.writeText(content);
-      message.success('Da copy tom tat ban giao ca.');
+      message.success('Đã sao chép tóm tắt bàn giao ca.');
       appendActionLog({
         actionType: 'COPY_HANDOVER',
-        detail: `Copy tom tat ban giao (${reportWindow}/${shiftFilter}).`,
+        detail: `Sao chép tóm tắt bàn giao (${reportWindow}/${shiftFilter}).`,
         relatedCount: handoverHighlights.topEscalations.length,
       });
     } catch {
-      message.error('Khong the copy tom tat ban giao ca.');
+      message.error('Không thể sao chép tóm tắt bàn giao ca.');
     }
   };
 
@@ -1603,7 +1769,7 @@ export default function ExecutiveCockpit() {
     { title: 'Người xử lý', dataIndex: 'owner', key: 'owner' },
     { title: 'Mở', dataIndex: 'total_open', key: 'total_open', width: 70 },
     { title: 'Quá hạn', dataIndex: 'overdue', key: 'overdue', width: 90, render: (v: number) => (v > 0 ? <Tag color="red">{v}</Tag> : <Tag color="green">0</Tag>) },
-    { title: 'Blocking', dataIndex: 'blocking', key: 'blocking', width: 90 },
+    { title: 'Đang chặn', dataIndex: 'blocking', key: 'blocking', width: 90 },
     { title: 'Khẩn', dataIndex: 'urgent', key: 'urgent', width: 80 },
   ];
 
@@ -1612,7 +1778,7 @@ export default function ExecutiveCockpit() {
     { title: 'Điểm rủi ro', dataIndex: 'risk_score', key: 'risk_score', width: 110, render: (v: number) => <Tag color={v >= 20 ? 'red' : v >= 10 ? 'gold' : 'blue'}>{v}</Tag> },
     { title: 'Mở', dataIndex: 'open_tasks', key: 'open_tasks', width: 70 },
     { title: 'Quá hạn', dataIndex: 'overdue_tasks', key: 'overdue_tasks', width: 90 },
-    { title: 'Blocking', dataIndex: 'blocking_tasks', key: 'blocking_tasks', width: 90 },
+    { title: 'Đang chặn', dataIndex: 'blocking_tasks', key: 'blocking_tasks', width: 90 },
     { title: 'Cần hỗ trợ', dataIndex: 'help_tasks', key: 'help_tasks', width: 110 },
     { title: 'Khẩn', dataIndex: 'urgent_tasks', key: 'urgent_tasks', width: 80 },
     { title: 'Người phụ trách', dataIndex: 'owner_hint', key: 'owner_hint' },
@@ -1633,47 +1799,363 @@ export default function ExecutiveCockpit() {
     return [];
   }, [quickAssignBulkTarget, startShiftPriority.redIds, startShiftPriority.amberIds]);
   const quickAssignBulkTargetLabel = quickAssignBulkTarget === 'RED' ? 'nhóm đỏ' : 'nhóm vàng';
+  const reportWindowLabel = REPORT_WINDOW_OPTIONS.find((item) => item.value === reportWindow)?.label || reportWindow;
+  const shiftFilterLabel = SHIFT_OPTIONS.find((item) => item.value === shiftFilter)?.label || shiftFilter;
+  const readinessLabel = READINESS_LEVEL_LABELS[crossModuleReadinessQuery.data?.readiness_level || ''] || 'Chưa chấm điểm';
+  const riskLevelLabel = RISK_LEVEL_LABELS[executiveKpiQuery.data?.risk_level || ''] || 'Ổn định';
+  const executiveCommandSummary = useMemo(() => {
+    const highRiskEntities = topRiskEntities.filter((item) => item.risk_score >= 20).length;
+    return {
+      redQueue: startShiftPriority.redIds.length,
+      amberQueue: startShiftPriority.amberIds.length,
+      failedOps: failedOps.length,
+      unreadNotifications: unreadNotificationsQuery.data?.count ?? 0,
+      readinessScore: crossModuleReadinessQuery.data?.readiness_score ?? 0,
+      highRiskEntities,
+      playbooks: activePlaybooks.length,
+    };
+  }, [
+    activePlaybooks.length,
+    crossModuleReadinessQuery.data?.readiness_score,
+    failedOps.length,
+    startShiftPriority.amberIds.length,
+    startShiftPriority.redIds.length,
+    topRiskEntities,
+    unreadNotificationsQuery.data?.count,
+  ]);
+  const executiveStatusAlert = useMemo(() => {
+    if (governanceRiskSignal?.severity === 'high') {
+      return {
+        type: 'error' as const,
+        message: 'Cần kích hoạt phản ứng P0 cho lớp điều hành.',
+        description: `Rủi ro tự động hóa đang tăng trong cửa sổ ${governanceRiskSignal.window}. Hãy kiểm tra trước và chạy gói phản ứng ngay trong ca.`,
+      };
+    }
+    if (taskSummary.overdue > 0 || executiveCommandSummary.redQueue > 0) {
+      return {
+        type: 'warning' as const,
+        message: `Có ${taskSummary.overdue} việc quá hạn và ${executiveCommandSummary.redQueue} đầu việc ưu tiên đỏ cần xử lý.`,
+        description: 'Ưu tiên giao lại người phụ trách, kích hoạt nhắc SLA và khóa danh sách công việc phải bàn giao trong ca hiện tại.',
+      };
+    }
+    if ((crossModuleReadinessQuery.data?.readiness_level || '') !== 'READY') {
+      return {
+        type: 'info' as const,
+        message: 'Dữ liệu liên phòng ban chưa đồng đều.',
+        description: 'Nên kiểm tra trước khi bổ sung dữ liệu để tránh thiếu bản ghi cho các báo cáo và kịch bản tự động.',
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'Trung tâm điều hành đang ổn định.',
+      description: 'Dòng công việc, SLA và dữ liệu liên phòng ban đang ở trạng thái sẵn sàng để điều phối trong thời gian thực.',
+    };
+  }, [
+    crossModuleReadinessQuery.data?.readiness_level,
+    executiveCommandSummary.redQueue,
+    governanceRiskSignal,
+    taskSummary.overdue,
+  ]);
+
+  const activeContextTags = useMemo(() => {
+    const tags = [
+      `Khung báo cáo: ${reportWindowLabel}`,
+      `Ca đang xem: ${shiftFilterLabel}`,
+      `SLA: ${ESCALATION_PRESET_CONFIG[escalationPreset].label}`,
+      `Phạm vi playbook: ${PLAYBOOK_SCOPE_OPTIONS.find((item) => item.value === playbookScope)?.label || playbookScope}`,
+      `Theo dõi trực tiếp: ${liveSync ? 'Bật' : 'Tắt'}`,
+      `Giới hạn task tải: ${taskFetchLimit}`,
+      `Chu kỳ governance: ${autoGovernanceDays} ngày / ${autoGovernanceGroupBy === 'day' ? 'Ngày' : 'Tuần'}`,
+      `Lịch sử bootstrap: ${bootstrapHistoryDays} ngày`,
+    ];
+    if (bootstrapHistoryUsername.trim()) {
+      tags.push(`Tài khoản bootstrap: ${bootstrapHistoryUsername.trim()}`);
+    }
+    if (bootstrapHistoryDryRun) {
+      tags.push(`Chế độ bootstrap: ${bootstrapHistoryDryRun === 'true' ? 'Dry-run' : 'Thực thi'}`);
+    }
+    return tags;
+  }, [
+    autoGovernanceDays,
+    autoGovernanceGroupBy,
+    bootstrapHistoryDays,
+    bootstrapHistoryDryRun,
+    bootstrapHistoryUsername,
+    escalationPreset,
+    liveSync,
+    playbookScope,
+    reportWindowLabel,
+    shiftFilterLabel,
+    taskFetchLimit,
+  ]);
+
+  const buildCurrentSnapshot = (): ExecutiveCockpitViewSnapshot => ({
+    reportWindow,
+    shiftFilter,
+    escalationPreset,
+    playbookScope,
+    liveSync,
+    taskFetchLimit,
+    autoGovernanceDays,
+    autoGovernanceGroupBy,
+    bootstrapHistoryDays,
+    bootstrapHistoryUsername,
+    bootstrapHistoryDryRun,
+  });
+
+  const applySnapshot = (snapshot: ExecutiveCockpitViewSnapshot) => {
+    setReportWindow(snapshot.reportWindow);
+    setShiftFilter(snapshot.shiftFilter);
+    setEscalationPreset(snapshot.escalationPreset);
+    setPlaybookScope(snapshot.playbookScope);
+    setLiveSync(snapshot.liveSync);
+    setTaskFetchLimit(Math.max(50, Math.min(300, Math.round(snapshot.taskFetchLimit))));
+    setAutoGovernanceDays(snapshot.autoGovernanceDays);
+    setAutoGovernanceGroupBy(snapshot.autoGovernanceGroupBy);
+    setBootstrapHistoryDays(snapshot.bootstrapHistoryDays);
+    setBootstrapHistoryUsername(snapshot.bootstrapHistoryUsername);
+    setBootstrapHistoryDryRun(snapshot.bootstrapHistoryDryRun);
+  };
+
+  const saveCurrentView = async () => {
+    await saveCockpitViewsConfig({
+      ...cockpitViewConfigObj,
+      saved_view_snapshot: buildCurrentSnapshot(),
+      saved_view_saved_at: new Date().toISOString(),
+    });
+    message.success('Đã lưu chế độ xem điều hành hiện tại.');
+  };
+
+  const applySavedView = () => {
+    const snapshot = parseExecutiveCockpitViewSnapshot(cockpitViewConfigObj.saved_view_snapshot);
+    if (!snapshot) {
+      message.info('Chưa có chế độ xem điều hành đã lưu.');
+      return;
+    }
+    applySnapshot(snapshot);
+    message.success('Đã áp dụng chế độ xem điều hành đã lưu.');
+  };
+
+  const saveNamedPreset = async () => {
+    const name = viewPresetName.trim();
+    if (!name) {
+      message.warning('Vui lòng nhập tên mẫu lọc.');
+      return;
+    }
+    const presetId = selectedViewPreset?.id ?? `${Date.now()}`;
+    const nextPresets = [
+      ...namedPresets.filter((item) => item.id !== presetId),
+      {
+        id: presetId,
+        name,
+        snapshot: buildCurrentSnapshot(),
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+    await saveCockpitViewsConfig({
+      ...cockpitViewConfigObj,
+      saved_views: nextPresets,
+    });
+    setSelectedViewPresetId(presetId);
+    setViewPresetName('');
+    setIsViewPresetModalOpen(false);
+    message.success(`Đã lưu mẫu lọc "${name}".`);
+  };
+
+  const applyNamedPreset = () => {
+    const preset = namedPresets.find((item) => item.id === selectedViewPresetId);
+    if (!preset) {
+      message.info('Hãy chọn mẫu lọc cần áp dụng.');
+      return;
+    }
+    applySnapshot(preset.snapshot);
+    message.success(`Đã áp dụng mẫu lọc "${preset.name}".`);
+  };
+
+  const deleteNamedPreset = async () => {
+    const preset = namedPresets.find((item) => item.id === selectedViewPresetId);
+    if (!preset) {
+      message.info('Hãy chọn mẫu lọc cần xóa.');
+      return;
+    }
+    const nextPresets = namedPresets.filter((item) => item.id !== preset.id);
+    await saveCockpitViewsConfig({
+      ...cockpitViewConfigObj,
+      saved_views: nextPresets,
+    });
+    setSelectedViewPresetId((current) => (current === preset.id ? undefined : current));
+    message.success(`Đã xóa mẫu lọc "${preset.name}".`);
+  };
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
       <Card size="small">
-        <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
-          <div>
-            <Title level={4} style={{ margin: 0 }}>Điều hành tổng hợp</Title>
-            <Text type="secondary">Giám sát tắc nghẽn, SLA và rủi ro giao việc theo thời gian thực.</Text>
-          </div>
-          <Space size={8}>
-            <Text type="secondary">Đồng bộ realtime</Text>
-            <Switch checked={liveSync} onChange={setLiveSync} size="small" />
+        <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
+            <div>
+              <Title level={4} style={{ margin: 0 }}>Trung tâm điều hành tổng hợp</Title>
+              <Text type="secondary">
+                Giám sát tắc nghẽn, SLA, nhịp tự động hóa và mức sẵn sàng liên phòng ban theo thời gian thực.
+              </Text>
+            </div>
+            <Space size={8}>
+              <Text type="secondary">Theo dõi trực tiếp</Text>
+              <Switch checked={liveSync} onChange={setLiveSync} size="small" />
+            </Space>
           </Space>
+
+          <Alert
+            showIcon
+            type={executiveStatusAlert.type}
+            message={executiveStatusAlert.message}
+            description={executiveStatusAlert.description}
+          />
+
+          <Space wrap>
+            <Tag color="blue">{`Khung báo cáo: ${reportWindowLabel}`}</Tag>
+            <Tag>{`Ca đang xem: ${shiftFilterLabel}`}</Tag>
+            <Tag color={crossModuleReadinessQuery.data?.readiness_level === 'READY' ? 'green' : crossModuleReadinessQuery.data?.readiness_level === 'PARTIAL' ? 'gold' : 'red'}>
+              {`Sẵn sàng liên phòng ban: ${readinessLabel}`}
+            </Tag>
+            <Tag color={executiveKpiQuery.data?.risk_level === 'HIGH' ? 'red' : executiveKpiQuery.data?.risk_level === 'MEDIUM' ? 'gold' : 'green'}>
+              {`Mức rủi ro: ${riskLevelLabel}`}
+            </Tag>
+            <Tag color={liveSync ? 'cyan' : 'default'}>
+              {liveSync ? 'Theo dõi trực tiếp đang bật' : 'Theo dõi trực tiếp đang tắt'}
+            </Tag>
+          </Space>
+
+          <div
+            data-testid="executive-cockpit-command-strip"
+            style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}
+          >
+            <Button data-testid="executive-cockpit-save-view" onClick={() => void saveCurrentView()} disabled={isCockpitViewPreferencesLoading}>
+              Lưu chế độ xem
+            </Button>
+            <Button data-testid="executive-cockpit-restore-view" onClick={applySavedView} disabled={isCockpitViewPreferencesLoading}>
+              Áp dụng chế độ đã lưu
+            </Button>
+            <Button
+              data-testid="executive-cockpit-open-preset-modal"
+              disabled={isCockpitViewPreferencesLoading}
+              onClick={() => {
+                setViewPresetName(selectedViewPreset?.name ?? '');
+                setIsViewPresetModalOpen(true);
+              }}
+            >
+              Lưu mẫu mới
+            </Button>
+            <div data-testid="executive-cockpit-preset-select" style={{ display: 'inline-block' }}>
+              <Select<string>
+                allowClear
+                placeholder="Chọn mẫu lọc điều hành"
+                value={selectedViewPresetId}
+                onChange={(value) => setSelectedViewPresetId(value)}
+                disabled={isCockpitViewPreferencesLoading}
+                style={{ width: 220 }}
+                options={namedPresets.map((preset) => ({ value: preset.id, label: preset.name }))}
+              />
+            </div>
+            <Button data-testid="executive-cockpit-apply-preset" onClick={applyNamedPreset} disabled={isCockpitViewPreferencesLoading}>
+              Áp dụng mẫu lọc
+            </Button>
+            <Button danger data-testid="executive-cockpit-delete-preset" onClick={() => void deleteNamedPreset()} disabled={isCockpitViewPreferencesLoading}>
+              Xóa mẫu lọc
+            </Button>
+          </div>
+
+          <Space wrap size={8}>
+            {activeContextTags.map((tag) => (
+              <Tag key={tag} color="processing" style={{ marginInlineEnd: 0 }}>
+                {tag}
+              </Tag>
+            ))}
+          </Space>
+
+          <Row gutter={[12, 12]}>
+            <Col xs={12} md={8} lg={4}>
+              <div style={SUMMARY_TILE_STYLE}>
+                <Statistic title="Việc đang mở" value={taskSummary.totalOpen} />
+                <Text type="secondary">Toàn bộ đầu việc đang cần điều phối trong ca.</Text>
+              </div>
+            </Col>
+            <Col xs={12} md={8} lg={4}>
+              <div style={SUMMARY_TILE_STYLE}>
+                <Statistic title="Quá hạn đỏ" value={taskSummary.overdue} valueStyle={{ color: taskSummary.overdue > 0 ? '#cf1322' : undefined }} />
+                <Text type="secondary">Các đầu việc đã vượt mốc cam kết cần xử lý ngay.</Text>
+              </div>
+            </Col>
+            <Col xs={12} md={8} lg={4}>
+              <div style={SUMMARY_TILE_STYLE}>
+                <Statistic title="Chờ phối hợp" value={taskSummary.dependencyBlocked} valueStyle={{ color: taskSummary.dependencyBlocked > 0 ? '#d48806' : undefined }} />
+                <Text type="secondary">Đầu việc bị chặn bởi công đoạn trước hoặc phụ thuộc liên phòng ban.</Text>
+              </div>
+            </Col>
+            <Col xs={12} md={8} lg={4}>
+              <div style={SUMMARY_TILE_STYLE}>
+                <Statistic title="Ưu tiên đỏ" value={executiveCommandSummary.redQueue} valueStyle={{ color: executiveCommandSummary.redQueue > 0 ? '#cf1322' : undefined }} />
+                <Text type="secondary">{`Vàng cần theo dõi: ${executiveCommandSummary.amberQueue} đầu việc.`}</Text>
+              </div>
+            </Col>
+            <Col xs={12} md={8} lg={4}>
+              <div style={SUMMARY_TILE_STYLE}>
+                <Statistic title="Thông báo chưa đọc" value={executiveCommandSummary.unreadNotifications} />
+                <Text type="secondary">{`Lỗi vận hành đang mở: ${executiveCommandSummary.failedOps}.`}</Text>
+              </div>
+            </Col>
+            <Col xs={12} md={8} lg={4}>
+              <div style={SUMMARY_TILE_STYLE}>
+                <Statistic title="Sẵn sàng liên phòng ban" value={executiveCommandSummary.readinessScore} suffix="/100" />
+                <Text type="secondary">{`Điểm rủi ro cao: ${executiveCommandSummary.highRiskEntities} đối tượng | Kịch bản điều hành: ${executiveCommandSummary.playbooks}.`}</Text>
+              </div>
+            </Col>
+          </Row>
         </Space>
       </Card>
 
       <Card size="small">
         <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
           <Space wrap>
-            <Text strong>Báo cáo ca/ngày</Text>
-            <Segmented<ReportWindow>
-              value={reportWindow}
-              onChange={setReportWindow}
-              options={REPORT_WINDOW_OPTIONS}
-            />
-            <Select<ShiftFilter>
-              value={shiftFilter}
-              onChange={setShiftFilter}
-              options={SHIFT_OPTIONS}
-              style={{ width: 160 }}
-            />
+            <Text strong>Báo cáo điều hành theo ca</Text>
+            <div data-testid="executive-cockpit-report-window">
+              <Segmented<ReportWindow>
+                value={reportWindow}
+                onChange={setReportWindow}
+                options={REPORT_WINDOW_OPTIONS}
+              />
+            </div>
+            <div data-testid="executive-cockpit-shift-filter">
+              <Select<ShiftFilter>
+                value={shiftFilter}
+                onChange={setShiftFilter}
+                options={SHIFT_OPTIONS}
+                style={{ width: 160 }}
+              />
+            </div>
+            <Space size={6}>
+              <Text type="secondary">Task tải</Text>
+              <InputNumber
+                min={50}
+                max={300}
+                value={taskFetchLimit}
+                onChange={(value) => {
+                  const next = Number(value ?? 120);
+                  if (!Number.isFinite(next)) return;
+                  setTaskFetchLimit(Math.max(50, Math.min(300, Math.round(next))));
+                }}
+                style={{ width: 96 }}
+              />
+            </Space>
           </Space>
-          <Button onClick={exportExecutiveCsv}>Xuất CSV điều hành</Button>
+          <Button onClick={exportExecutiveCsv}>Xuất báo cáo CSV</Button>
         </Space>
         <Row gutter={[12, 12]} style={{ marginTop: 10 }}>
-          <Col xs={12} md={8} lg={4}><Statistic title="Task cập nhật" value={reportSummary.touched} /></Col>
+          <Col xs={12} md={8} lg={4}><Statistic title="Nhiệm vụ cập nhật" value={reportSummary.touched} /></Col>
           <Col xs={12} md={8} lg={4}><Statistic title="Quá hạn" value={reportSummary.overdue} /></Col>
-          <Col xs={12} md={8} lg={4}><Statistic title="Blocking" value={reportSummary.blocking} /></Col>
+          <Col xs={12} md={8} lg={4}><Statistic title="Đang chặn" value={reportSummary.blocking} /></Col>
           <Col xs={12} md={8} lg={4}><Statistic title="Khẩn" value={reportSummary.urgent} /></Col>
-          <Col xs={12} md={8} lg={4}><Statistic title="Sự cố failed" value={reportSummary.failedOps} /></Col>
-          <Col xs={12} md={8} lg={4}><Statistic title="Tỷ lệ DONE (%)" value={reportSummary.doneRate} /></Col>
+          <Col xs={12} md={8} lg={4}><Statistic title="Sự cố lỗi" value={reportSummary.failedOps} /></Col>
+          <Col xs={12} md={8} lg={4}><Statistic title="Tỷ lệ hoàn thành (%)" value={reportSummary.doneRate} /></Col>
         </Row>
         {reportTopActions.length > 0 && (
           <div style={{ marginTop: 12 }}>
@@ -1690,7 +2172,7 @@ export default function ExecutiveCockpit() {
       <Card size="small">
         <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
           <Space wrap>
-            <Text strong>SLA & Escalation policy</Text>
+            <Text strong>Chính sách SLA và leo thang</Text>
             <Segmented<EscalationPreset>
               value={escalationPreset}
               onChange={setEscalationPreset}
@@ -1702,7 +2184,7 @@ export default function ExecutiveCockpit() {
             />
           </Space>
           <Text type="secondary">
-            Cảnh báo trước {slaHealth.warnHours}h, breach từ {slaHealth.breachHours}h quá hạn.
+            Cảnh báo trước {slaHealth.warnHours}h, vi phạm từ {slaHealth.breachHours}h quá hạn.
           </Text>
         </Space>
         <Row gutter={[12, 12]} style={{ marginTop: 10 }}>
@@ -1713,29 +2195,29 @@ export default function ExecutiveCockpit() {
       </Card>
       <Card size="small">
         <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Text strong>KPI liên phòng ban Finance ↔ Workforce</Text>
+          <Text strong>KPI liên phòng ban Tài chính ↔ Nhân sự</Text>
           <Tag color={executiveKpiQuery.data?.risk_level === 'HIGH' ? 'red' : executiveKpiQuery.data?.risk_level === 'MEDIUM' ? 'gold' : 'green'}>
-            {`Risk ${executiveKpiQuery.data?.risk_level || 'LOW'} - ${executiveKpiQuery.data?.risk_score ?? 0}`}
+            {`Mức rủi ro ${riskLevelLabel} - ${executiveKpiQuery.data?.risk_score ?? 0} điểm`}
           </Tag>
         </Space>
         <Row gutter={[12, 12]} style={{ marginTop: 10 }}>
           <Col xs={12} md={8} lg={4}>
-            <Statistic title="Fin overdue L1/L2" value={`${executiveKpiQuery.data?.finance_sla?.overdue_l1_count ?? 0}/${executiveKpiQuery.data?.finance_sla?.overdue_l2_count ?? 0}`} />
+            <Statistic title="Tài chính quá hạn L1/L2" value={`${executiveKpiQuery.data?.finance_sla?.overdue_l1_count ?? 0}/${executiveKpiQuery.data?.finance_sla?.overdue_l2_count ?? 0}`} />
           </Col>
           <Col xs={12} md={8} lg={4}>
-            <Statistic title="WF overdue L1/L2" value={`${executiveKpiQuery.data?.workforce_sla?.overdue_l1_count ?? 0}/${executiveKpiQuery.data?.workforce_sla?.overdue_l2_count ?? 0}`} />
+            <Statistic title="Nhân sự quá hạn L1/L2" value={`${executiveKpiQuery.data?.workforce_sla?.overdue_l1_count ?? 0}/${executiveKpiQuery.data?.workforce_sla?.overdue_l2_count ?? 0}`} />
           </Col>
           <Col xs={12} md={8} lg={4}>
-            <Statistic title="Advance >=90d" value={executiveKpiQuery.data?.finance_overdue_90?.count ?? 0} />
+            <Statistic title="Tạm ứng >= 90 ngày" value={executiveKpiQuery.data?.finance_overdue_90?.count ?? 0} />
           </Col>
           <Col xs={12} md={8} lg={4}>
-            <Statistic title="Fin lead time (h)" value={Number(executiveKpiQuery.data?.finance_sla?.avg_lead_hours ?? 0).toFixed(2)} />
+            <Statistic title="Lead time tài chính (giờ)" value={Number(executiveKpiQuery.data?.finance_sla?.avg_lead_hours ?? 0).toFixed(2)} />
           </Col>
           <Col xs={12} md={8} lg={4}>
-            <Statistic title="WF lead time (h)" value={Number(executiveKpiQuery.data?.workforce_sla?.avg_lead_hours ?? 0).toFixed(2)} />
+            <Statistic title="Lead time nhân sự (giờ)" value={Number(executiveKpiQuery.data?.workforce_sla?.avg_lead_hours ?? 0).toFixed(2)} />
           </Col>
           <Col xs={12} md={8} lg={4}>
-            <Statistic title="As of" value={executiveKpiQuery.data?.as_of || '-'} />
+            <Statistic title="Chốt số liệu" value={executiveKpiQuery.data?.as_of || '-'} />
           </Col>
         </Row>
         {crossModuleReadinessQuery.data ? (
@@ -1749,22 +2231,22 @@ export default function ExecutiveCockpit() {
                     : 'error'
               }
               showIcon
-              message={`Readiness ${crossModuleReadinessQuery.data.readiness_level} - ${crossModuleReadinessQuery.data.readiness_score}/100`}
+              message={`Mức sẵn sàng ${readinessLabel} - ${crossModuleReadinessQuery.data.readiness_score}/100`}
               description={(
                 <Space direction="vertical" size={4}>
                   <Space wrap>
-                    <Tag>{`Roles: ${crossModuleReadinessQuery.data.summary.roles_total}`}</Tag>
-                    <Tag>{`Fin advances: ${crossModuleReadinessQuery.data.summary.finance_advances_total}`}</Tag>
-                    <Tag>{`WF advances: ${crossModuleReadinessQuery.data.summary.workforce_salary_advances_total}`}</Tag>
-                    <Tag>{`Payroll: ${crossModuleReadinessQuery.data.summary.payroll_records_total}`}</Tag>
-                    <Tag>{`Ops logs: ${crossModuleReadinessQuery.data.summary.operations_log_total + crossModuleReadinessQuery.data.summary.pipeline_events_total}`}</Tag>
+                    <Tag>{`Vai trò: ${crossModuleReadinessQuery.data.summary.roles_total}`}</Tag>
+                    <Tag>{`Tạm ứng tài chính: ${crossModuleReadinessQuery.data.summary.finance_advances_total}`}</Tag>
+                    <Tag>{`Tạm ứng nhân sự: ${crossModuleReadinessQuery.data.summary.workforce_salary_advances_total}`}</Tag>
+                    <Tag>{`Bảng lương: ${crossModuleReadinessQuery.data.summary.payroll_records_total}`}</Tag>
+                    <Tag>{`Nhật ký vận hành: ${crossModuleReadinessQuery.data.summary.operations_log_total + crossModuleReadinessQuery.data.summary.pipeline_events_total}`}</Tag>
                   </Space>
                   {(crossModuleReadinessQuery.data.warnings ?? []).length > 0 ? (
                     <Text type="secondary">
                       {`Cần bổ sung: ${(crossModuleReadinessQuery.data.warnings ?? []).map((w) => w.label).join(' | ')}`}
                     </Text>
                   ) : (
-                    <Text type="secondary">Dữ liệu vận hành liên phòng ban đã sẵn sàng.</Text>
+                    <Text type="secondary">Dữ liệu vận hành liên phòng ban đã sẵn sàng để tự động hóa và báo cáo.</Text>
                   )}
                   <Space wrap>
                     <Button
@@ -1772,7 +2254,7 @@ export default function ExecutiveCockpit() {
                       loading={bootstrapReadinessPreviewMutation.isPending}
                       onClick={() => bootstrapReadinessPreviewMutation.mutate()}
                     >
-                      Pre-check bootstrap
+                      Kiểm tra trước khi bổ sung
                     </Button>
                     <Button
                       size="small"
@@ -1780,7 +2262,7 @@ export default function ExecutiveCockpit() {
                       loading={bootstrapReadinessRunMutation.isPending}
                       onClick={() => bootstrapReadinessRunMutation.mutate()}
                     >
-                      Bootstrap now
+                      Bổ sung dữ liệu ngay
                     </Button>
                     <Button
                       size="small"
@@ -1789,13 +2271,13 @@ export default function ExecutiveCockpit() {
                         void exportBootstrapHistoryExcel();
                       }}
                     >
-                      Export bootstrap history
+                      Xuất lịch sử bổ sung
                     </Button>
                   </Space>
                   <Space wrap>
-                    <Tag>Lịch sử bootstrap</Tag>
+                    <Tag>Lịch sử bổ sung dữ liệu</Tag>
                     <Space>
-                      <Text type="secondary">Days</Text>
+                      <Text type="secondary">Số ngày</Text>
                       <InputNumber
                         min={1}
                         max={365}
@@ -1813,9 +2295,9 @@ export default function ExecutiveCockpit() {
                       style={{ minWidth: 170 }}
                       value={bootstrapHistoryDryRun}
                       options={[
-                        { label: 'All run types', value: '' },
-                        { label: 'Dry run only', value: 'true' },
-                        { label: 'Execute only', value: 'false' },
+                        { label: 'Mọi lần chạy', value: '' },
+                        { label: 'Chỉ mô phỏng', value: 'true' },
+                        { label: 'Chỉ chạy thật', value: 'false' },
                       ]}
                       onChange={(value: 'true' | 'false' | '') => setBootstrapHistoryDryRun(value)}
                     />
@@ -1824,7 +2306,7 @@ export default function ExecutiveCockpit() {
                       showSearch
                       allowClear
                       style={{ minWidth: 190 }}
-                      placeholder="Filter username"
+                      placeholder="Lọc theo tài khoản"
                       value={bootstrapHistoryUsername || undefined}
                       options={(activeUsersQuery.data ?? []).map((u) => ({
                         label: getUserDisplayName(u),
@@ -1840,19 +2322,19 @@ export default function ExecutiveCockpit() {
                       renderItem={(row) => (
                         <List.Item>
                           <Space wrap>
-                            <Tag color={row.dry_run ? 'gold' : 'blue'}>{row.dry_run ? 'DRY RUN' : 'EXECUTE'}</Tag>
+                            <Tag color={row.dry_run ? 'gold' : 'blue'}>{row.dry_run ? 'MÔ PHỎNG' : 'CHẠY THẬT'}</Tag>
                             <Text type="secondary">{dayjs(row.created_at).format('DD/MM HH:mm')}</Text>
-                            <Tag>{`By: ${row.username || '-'}`}</Tag>
-                            <Tag color="green">{`Created: ${row.created_total}`}</Tag>
-                            <Tag>{`Skipped: ${row.skipped_total}`}</Tag>
-                            <Tag>{`Score: ${Number(row.readiness_before?.readiness_score ?? 0)} -> ${Number(row.readiness_after?.readiness_score ?? 0)}`}</Tag>
+                            <Tag>{`Bởi: ${row.username || '-'}`}</Tag>
+                            <Tag color="green">{`Tạo mới: ${row.created_total}`}</Tag>
+                            <Tag>{`Bỏ qua: ${row.skipped_total}`}</Tag>
+                            <Tag>{`Điểm: ${Number(row.readiness_before?.readiness_score ?? 0)} -> ${Number(row.readiness_after?.readiness_score ?? 0)}`}</Tag>
                             <Tag color={Number(row.readiness_delta || 0) > 0 ? 'green' : Number(row.readiness_delta || 0) < 0 ? 'red' : 'default'}>
-                              {`Delta: ${Number(row.readiness_delta || 0) > 0 ? '+' : ''}${Number(row.readiness_delta || 0)}`}
+                              {`Chênh lệch: ${Number(row.readiness_delta || 0) > 0 ? '+' : ''}${Number(row.readiness_delta || 0)}`}
                             </Tag>
                             <Tag color={row.improved ? 'success' : 'default'}>
-                              {row.improved ? 'Improved' : 'No gain'}
+                              {row.improved ? 'Có cải thiện' : 'Không tăng'}
                             </Tag>
-                            <Tag>{`Level: ${(row.level_before || '-')} -> ${(row.level_after || '-')}`}</Tag>
+                            <Tag>{`Mức: ${(row.level_before || '-')} -> ${(row.level_after || '-')}`}</Tag>
                           </Space>
                         </List.Item>
                       )}
@@ -1872,7 +2354,7 @@ export default function ExecutiveCockpit() {
         )}
         {(executiveKpiQuery.data?.risk_contributors ?? []).length > 0 && (
           <div style={{ marginTop: 10 }}>
-            <Text type="secondary">Risk contributors</Text>
+            <Text type="secondary">Nhóm yếu tố rủi ro</Text>
             <Space wrap style={{ marginTop: 6 }}>
               {(executiveKpiQuery.data?.risk_contributors ?? []).map((row) => (
                 <Tag key={row.key} color={row.impact_score >= 10 ? 'red' : row.impact_score >= 5 ? 'gold' : 'blue'}>
@@ -1884,17 +2366,17 @@ export default function ExecutiveCockpit() {
         )}
         {executiveKpiQuery.data?.risk_trend && (
           <div style={{ marginTop: 10 }}>
-            <Text type="secondary">Risk trend</Text>
+            <Text type="secondary">Xu hướng rủi ro</Text>
             <Space wrap style={{ marginTop: 6 }}>
               <Tag color={(executiveKpiQuery.data?.risk_trend?.mom_delta_pending ?? 0) > 0 ? 'red' : 'green'}>
-                {`MoM pending: ${executiveKpiQuery.data?.risk_trend?.mom_delta_pending ?? 0}`}
+                {`So với tháng trước: ${executiveKpiQuery.data?.risk_trend?.mom_delta_pending ?? 0}`}
               </Tag>
               <Tag color={(executiveKpiQuery.data?.risk_trend?.wow_delta_pending ?? 0) > 0 ? 'red' : 'green'}>
-                {`WoW pending: ${executiveKpiQuery.data?.risk_trend?.wow_delta_pending ?? 0}`}
+                {`So với tuần trước: ${executiveKpiQuery.data?.risk_trend?.wow_delta_pending ?? 0}`}
               </Tag>
-              <Tag>{`Current: ${executiveKpiQuery.data?.risk_trend?.current_pending_total ?? 0}`}</Tag>
-              <Tag>{`Prev month: ${executiveKpiQuery.data?.risk_trend?.previous_month_pending_total ?? 0}`}</Tag>
-              <Tag>{`Prev week: ${executiveKpiQuery.data?.risk_trend?.previous_week_pending_total ?? 0}`}</Tag>
+              <Tag>{`Hiện tại: ${executiveKpiQuery.data?.risk_trend?.current_pending_total ?? 0}`}</Tag>
+              <Tag>{`Tháng trước: ${executiveKpiQuery.data?.risk_trend?.previous_month_pending_total ?? 0}`}</Tag>
+              <Tag>{`Tuần trước: ${executiveKpiQuery.data?.risk_trend?.previous_week_pending_total ?? 0}`}</Tag>
             </Space>
           </div>
         )}
@@ -1902,8 +2384,8 @@ export default function ExecutiveCockpit() {
           <div style={{ marginTop: 10 }}>
             <Tag color={executiveKpiQuery.data?.early_warning?.is_triggered ? 'red' : 'green'}>
               {executiveKpiQuery.data?.early_warning?.is_triggered
-                ? `Early warning: còn ${executiveKpiQuery.data?.early_warning?.score_to_next_level ?? 0} điểm tới ${executiveKpiQuery.data?.early_warning?.target_level ?? 'HIGH'}`
-                : 'Early warning: ổn định'}
+                ? `Cảnh báo sớm: còn ${executiveKpiQuery.data?.early_warning?.score_to_next_level ?? 0} điểm tới ${RISK_LEVEL_LABELS[executiveKpiQuery.data?.early_warning?.target_level ?? 'HIGH'] || executiveKpiQuery.data?.early_warning?.target_level || 'Cần ưu tiên'}`
+                : 'Cảnh báo sớm: ổn định'}
             </Tag>
             <div>
               <Text type="secondary">{executiveKpiQuery.data?.early_warning?.hint || ''}</Text>
@@ -1912,7 +2394,7 @@ export default function ExecutiveCockpit() {
         )}
         {(executiveKpiQuery.data?.priority_queue ?? []).length > 0 && (
           <div style={{ marginTop: 10 }}>
-            <Text type="secondary">Auto-priority queue</Text>
+            <Text type="secondary">Hàng đợi ưu tiên tự động</Text>
             <List
               size="small"
               dataSource={executiveKpiQuery.data?.priority_queue ?? []}
@@ -1921,11 +2403,11 @@ export default function ExecutiveCockpit() {
                   <Space direction="vertical" size={1} style={{ width: '100%' }}>
                     <Space wrap>
                       <Tag color={item.impact_score >= 10 ? 'red' : item.impact_score >= 5 ? 'gold' : 'blue'}>
-                        {`Impact ${item.impact_score}`}
+                        {`Tác động ${item.impact_score}`}
                       </Tag>
                       <Text strong>{item.title}</Text>
                     </Space>
-                    <Text type="secondary">{`Owner: ${item.owner} | Action: ${item.quick_action}`}</Text>
+                    <Text type="secondary">{`Người phụ trách: ${item.owner} | Hành động gợi ý: ${item.quick_action}`}</Text>
                   </Space>
                 </List.Item>
               )}
@@ -1984,7 +2466,7 @@ export default function ExecutiveCockpit() {
         {executiveKpiQuery.data?.auto_policy && (
           <div style={{ marginTop: 10, borderTop: '1px solid #f0f0f0', paddingTop: 10 }}>
             <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-              <Text strong>Auto-execute policy</Text>
+              <Text strong>Chính sách tự động hóa điều hành</Text>
               <Space wrap>
                 <Button
                   size="small"
@@ -1992,7 +2474,7 @@ export default function ExecutiveCockpit() {
                   loading={runAutoExecuteMutation.isPending}
                   onClick={() => runGovernanceActionWithGuard(() => runAutoExecuteMutation.mutate(false))}
                 >
-                  Chạy theo policy
+                  Chạy theo chính sách
                 </Button>
                 <Button
                   size="small"
@@ -2001,36 +2483,36 @@ export default function ExecutiveCockpit() {
                   loading={runAutoExecuteMutation.isPending}
                   onClick={() => runGovernanceActionWithGuard(() => runAutoExecuteMutation.mutate(true))}
                 >
-                  Force chạy ngay
+                  Ép chạy ngay
                 </Button>
               </Space>
             </Space>
             <Space wrap style={{ marginTop: 8 }}>
-              <Tag>Enabled</Tag>
+              <Tag>Bật tự động</Tag>
               <Switch
                 checked={!!executiveKpiQuery.data?.auto_policy?.enabled}
                 loading={saveAutoPolicyMutation.isPending}
                 onChange={(checked) => updateAutoPolicyField('enabled', checked)}
               />
-              <Tag>Only early warning</Tag>
+              <Tag>Chỉ khi có cảnh báo sớm</Tag>
               <Switch
                 checked={!!executiveKpiQuery.data?.auto_policy?.only_when_early_warning}
                 loading={saveAutoPolicyMutation.isPending}
                 onChange={(checked) => updateAutoPolicyField('only_when_early_warning', checked)}
               />
-              <Tag>Finance SLA</Tag>
+              <Tag>Nhắc SLA tài chính</Tag>
               <Switch
                 checked={!!executiveKpiQuery.data?.auto_policy?.auto_run_finance_sla}
                 loading={saveAutoPolicyMutation.isPending}
                 onChange={(checked) => updateAutoPolicyField('auto_run_finance_sla', checked)}
               />
-              <Tag>Workforce SLA</Tag>
+              <Tag>Nhắc SLA nhân sự</Tag>
               <Switch
                 checked={!!executiveKpiQuery.data?.auto_policy?.auto_run_workforce_sla}
                 loading={saveAutoPolicyMutation.isPending}
                 onChange={(checked) => updateAutoPolicyField('auto_run_workforce_sla', checked)}
               />
-              <Tag>Cooldown (phút)</Tag>
+              <Tag>Khoảng nghỉ (phút)</Tag>
               <InputNumber
                 min={5}
                 max={1440}
@@ -2041,27 +2523,27 @@ export default function ExecutiveCockpit() {
                   updateAutoPolicyField('cooldown_minutes', next);
                 }}
               />
-              <Tag>{`Last run: ${executiveKpiQuery.data?.auto_policy?.last_run_at || '-'}`}</Tag>
+              <Tag>{`Lần chạy gần nhất: ${executiveKpiQuery.data?.auto_policy?.last_run_at || '-'}`}</Tag>
             </Space>
             <div style={{ marginTop: 10 }}>
-              <Text type="secondary">Lịch sử auto-execute gần đây</Text>
+              <Text type="secondary">Lịch sử tự động hóa gần đây</Text>
               <List
                 size="small"
                 dataSource={executiveAutoHistoryQuery.data?.items ?? []}
-                locale={{ emptyText: 'Chưa có lịch sử auto-execute.' }}
+                locale={{ emptyText: 'Chưa có lịch sử tự động hóa.' }}
                 renderItem={(item) => (
                   <List.Item>
                     <Space direction="vertical" size={1} style={{ width: '100%' }}>
                       <Space wrap>
                         <Tag color={item.success ? 'green' : item.skipped ? 'gold' : 'red'}>
-                          {item.success ? 'SUCCESS' : item.skipped ? 'SKIPPED' : 'FAILED'}
+                          {item.success ? 'THÀNH CÔNG' : item.skipped ? 'BỎ QUA' : 'THẤT BẠI'}
                         </Tag>
-                        <Tag>{item.source || 'api'}</Tag>
-                        {item.force_run ? <Tag color="volcano">FORCE</Tag> : null}
+                        <Tag>{item.source || 'API'}</Tag>
+                        {item.force_run ? <Tag color="volcano">ÉP CHẠY</Tag> : null}
                         <Text type="secondary">{dayjs(item.created_at).format('DD/MM HH:mm:ss')}</Text>
                       </Space>
                       <Text type="secondary">
-                        {`Fin sent: ${item.finance_sent_count} | WF sent: ${item.workforce_sent_count} | reason: ${item.reason || '-'}`}
+                        {`Tài chính gửi: ${item.finance_sent_count} | Nhân sự gửi: ${item.workforce_sent_count} | Lý do: ${item.reason || '-'}`}
                       </Text>
                     </Space>
                   </List.Item>
@@ -2070,9 +2552,9 @@ export default function ExecutiveCockpit() {
             </div>
             <div style={{ marginTop: 10 }}>
               <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-                <Text type="secondary">SLA governance report (auto-execute)</Text>
+                <Text type="secondary">Báo cáo điều hành SLA của lớp tự động hóa</Text>
                 <Space wrap>
-                  {isGovernanceActionCooldown ? <Tag color="processing">Action cooldown...</Tag> : null}
+                  {isGovernanceActionCooldown ? <Tag color="processing">Đang chờ hạ nhiệt tác vụ...</Tag> : null}
                   <Select<'day' | 'week'>
                     value={autoGovernanceGroupBy}
                     style={{ width: 110 }}
@@ -2097,7 +2579,7 @@ export default function ExecutiveCockpit() {
                     loading={isExportingAutoGovernance}
                     onClick={() => void exportAutoGovernanceExcel()}
                   >
-                    Export Excel
+                    Xuất Excel
                   </Button>
                 </Space>
               </Space>
@@ -2108,22 +2590,22 @@ export default function ExecutiveCockpit() {
               ) : (
                 <Space direction="vertical" size={6} style={{ width: '100%', marginTop: 8 }}>
                   <Space wrap>
-                    <Tag>{`Runs: ${executiveAutoGovernanceQuery.data?.summary?.total_runs ?? 0}`}</Tag>
-                    <Tag color="green">{`Success: ${executiveAutoGovernanceQuery.data?.summary?.success_rate ?? 0}%`}</Tag>
-                    <Tag color="gold">{`Skipped: ${executiveAutoGovernanceQuery.data?.summary?.skipped_rate ?? 0}%`}</Tag>
-                    <Tag color="red">{`Failed: ${executiveAutoGovernanceQuery.data?.summary?.failed_rate ?? 0}%`}</Tag>
-                    <Tag color="blue">{`Avg sent/run: ${executiveAutoGovernanceQuery.data?.summary?.avg_sent_per_run ?? 0}`}</Tag>
+                    <Tag>{`Lượt chạy: ${executiveAutoGovernanceQuery.data?.summary?.total_runs ?? 0}`}</Tag>
+                    <Tag color="green">{`Thành công: ${executiveAutoGovernanceQuery.data?.summary?.success_rate ?? 0}%`}</Tag>
+                    <Tag color="gold">{`Bỏ qua: ${executiveAutoGovernanceQuery.data?.summary?.skipped_rate ?? 0}%`}</Tag>
+                    <Tag color="red">{`Lỗi: ${executiveAutoGovernanceQuery.data?.summary?.failed_rate ?? 0}%`}</Tag>
+                    <Tag color="blue">{`Gửi trung bình/lượt: ${executiveAutoGovernanceQuery.data?.summary?.avg_sent_per_run ?? 0}`}</Tag>
                   </Space>
                   {governanceDeltaSummary ? (
                     <Space wrap>
                       <Text type="secondary">
-                        {`Delta ${governanceDeltaSummary.previousKey} -> ${governanceDeltaSummary.currentKey}:`}
+                        {`Biến động ${governanceDeltaSummary.previousKey} -> ${governanceDeltaSummary.currentKey}:`}
                       </Text>
                       <Tag color={governanceDeltaSummary.sentDelta >= 0 ? 'green' : 'red'}>
-                        {`Sent ${governanceDeltaSummary.sentDelta >= 0 ? '+' : ''}${governanceDeltaSummary.sentDelta}`}
+                        {`Số lượt gửi ${governanceDeltaSummary.sentDelta >= 0 ? '+' : ''}${governanceDeltaSummary.sentDelta}`}
                       </Tag>
                       <Tag color={governanceDeltaSummary.successRateDelta >= 0 ? 'green' : 'red'}>
-                        {`Success rate ${governanceDeltaSummary.successRateDelta >= 0 ? '+' : ''}${governanceDeltaSummary.successRateDelta}%`}
+                        {`Tỷ lệ thành công ${governanceDeltaSummary.successRateDelta >= 0 ? '+' : ''}${governanceDeltaSummary.successRateDelta}%`}
                       </Tag>
                     </Space>
                   ) : null}
@@ -2131,7 +2613,7 @@ export default function ExecutiveCockpit() {
                     <Alert
                       type={governanceRiskSignal.severity === 'high' ? 'error' : 'warning'}
                       showIcon
-                      message={`Early risk signal (${governanceRiskSignal.window})`}
+                      message={`Tín hiệu rủi ro sớm (${governanceRiskSignal.window})`}
                       description={
                         <Space direction="vertical" size={2}>
                           <Text type="secondary">{`Dấu hiệu: ${governanceRiskSignal.reasons.join(' | ')}`}</Text>
@@ -2146,7 +2628,7 @@ export default function ExecutiveCockpit() {
                                 void openGovernanceP0Precheck();
                               }}
                             >
-                              P0 Bundle pre-check
+                              Kiểm tra trước gói phản ứng P0
                             </Button>
                             <Button
                               size="small"
@@ -2160,7 +2642,7 @@ export default function ExecutiveCockpit() {
                                 )
                               }
                             >
-                              {governanceRiskSignal.severity === 'high' ? 'P0: Force auto-execute' : 'P1: Run auto-execute'}
+                              {governanceRiskSignal.severity === 'high' ? 'P0: Ép chạy tự động hóa' : 'P1: Chạy tự động hóa'}
                             </Button>
                             <Button
                               size="small"
@@ -2168,7 +2650,7 @@ export default function ExecutiveCockpit() {
                               loading={triggerFinanceSlaReminderMutation.isPending}
                               onClick={() => runGovernanceActionWithGuard(() => triggerFinanceSlaReminderMutation.mutate())}
                             >
-                              Run Finance SLA
+                              Chạy SLA tài chính
                             </Button>
                             <Button
                               size="small"
@@ -2176,12 +2658,12 @@ export default function ExecutiveCockpit() {
                               loading={triggerWorkforceSlaReminderMutation.isPending}
                               onClick={() => runGovernanceActionWithGuard(() => triggerWorkforceSlaReminderMutation.mutate())}
                             >
-                              Run Workforce SLA
+                              Chạy SLA nhân sự
                             </Button>
                           </Space>
                           {isP0BundleRunning || p0BundleLastSummary ? (
                             <Space wrap>
-                              {isP0BundleRunning ? <Tag color="processing">{`P0 bundle step: ${p0BundleStep}`}</Tag> : null}
+                              {isP0BundleRunning ? <Tag color="processing">{`Bước P0: ${P0_BUNDLE_STEP_LABELS[p0BundleStep]}`}</Tag> : null}
                               {p0BundleLastSummary ? <Text type="secondary">{p0BundleLastSummary}</Text> : null}
                             </Space>
                           ) : null}
@@ -2191,9 +2673,9 @@ export default function ExecutiveCockpit() {
                   ) : null}
                   <List
                     size="small"
-                    header={<Text type="secondary">Top lý do skip</Text>}
+                    header={<Text type="secondary">Nhóm lý do bỏ qua nổi bật</Text>}
                     dataSource={executiveAutoGovernanceQuery.data?.skip_reasons ?? []}
-                    locale={{ emptyText: 'Không có skip reason trong kỳ.' }}
+                    locale={{ emptyText: 'Không có lý do bỏ qua trong kỳ.' }}
                     renderItem={(item) => (
                       <List.Item>
                         <Text>{`${item.reason}: ${item.count}`}</Text>
@@ -2202,14 +2684,14 @@ export default function ExecutiveCockpit() {
                   />
                   <List
                     size="small"
-                    header={<Text type="secondary">Hiệu quả sent_count theo action</Text>}
+                    header={<Text type="secondary">Hiệu quả gửi theo hành động</Text>}
                     dataSource={executiveAutoGovernanceQuery.data?.action_effectiveness ?? []}
                     renderItem={(item) => (
                       <List.Item>
                         <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
                           <Text>{item.action}</Text>
                           <Text type="secondary">
-                            {`runs ${item.total_runs} | success ${item.success_rate}% | sent ${item.sent_total} | avg ${item.avg_sent_per_run}`}
+                            {`lượt ${item.total_runs} | thành công ${item.success_rate}% | gửi ${item.sent_total} | trung bình ${item.avg_sent_per_run}`}
                           </Text>
                         </Space>
                       </List.Item>
@@ -2217,9 +2699,9 @@ export default function ExecutiveCockpit() {
                   />
                   <List
                     size="small"
-                    header={<Text type="secondary">{`Trend ${autoGovernanceGroupBy === 'day' ? 'theo ngày' : 'theo tuần'} (run + sent)`}</Text>}
+                    header={<Text type="secondary">{`Xu hướng ${autoGovernanceGroupBy === 'day' ? 'theo ngày' : 'theo tuần'} (lượt chạy + lượt gửi)`}</Text>}
                     dataSource={governanceTrendData.rows.slice().reverse()}
-                    locale={{ emptyText: 'Chưa có dữ liệu trend trong kỳ.' }}
+                    locale={{ emptyText: 'Chưa có dữ liệu xu hướng trong kỳ.' }}
                     renderItem={(item) => {
                       const runPercent = Math.round((Number(item.total_runs || 0) / governanceTrendData.maxRuns) * 100);
                       const sentPercent = Math.round((Number(item.sent_total || 0) / governanceTrendData.maxSent) * 100);
@@ -2229,11 +2711,11 @@ export default function ExecutiveCockpit() {
                             <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
                               <Text>{item.period_key}</Text>
                               <Text type="secondary">
-                                {`run ${item.total_runs} | success ${item.success_rate}% | skipped ${item.skipped_rate}% | sent ${item.sent_total}`}
+                                {`lượt ${item.total_runs} | thành công ${item.success_rate}% | bỏ qua ${item.skipped_rate}% | gửi ${item.sent_total}`}
                               </Text>
                             </Space>
                             <Space style={{ width: '100%' }} direction="vertical" size={0}>
-                              <Text type="secondary">Run volume</Text>
+                              <Text type="secondary">Sản lượng lượt chạy</Text>
                               <Progress
                                 percent={runPercent}
                                 showInfo={false}
@@ -2241,7 +2723,7 @@ export default function ExecutiveCockpit() {
                                 trailColor="#f0f0f0"
                                 size="small"
                               />
-                              <Text type="secondary">Sent volume</Text>
+                              <Text type="secondary">Sản lượng lượt gửi</Text>
                               <Progress
                                 percent={sentPercent}
                                 showInfo={false}
@@ -2267,28 +2749,30 @@ export default function ExecutiveCockpit() {
       ) : (
         <>
           <Row gutter={[12, 12]}>
-            <Col xs={12} md={8} lg={4}><Card size="small"><Statistic title="Task mở" value={taskSummary.totalOpen} /></Card></Col>
+            <Col xs={12} md={8} lg={4}><Card size="small"><Statistic title="Nhiệm vụ mở" value={taskSummary.totalOpen} /></Card></Col>
             <Col xs={12} md={8} lg={4}><Card size="small"><Statistic title="Quá hạn" value={taskSummary.overdue} valueStyle={{ color: taskSummary.overdue > 0 ? '#cf1322' : undefined }} /></Card></Col>
             <Col xs={12} md={8} lg={4}><Card size="small"><Statistic title="Đến hạn hôm nay" value={taskSummary.dueToday} /></Card></Col>
-            <Col xs={12} md={8} lg={4}><Card size="small"><Statistic title="Blocking" value={taskSummary.blocking} valueStyle={{ color: taskSummary.blocking > 0 ? '#cf1322' : undefined }} /></Card></Col>
+            <Col xs={12} md={8} lg={4}><Card size="small"><Statistic title="Đang chặn" value={taskSummary.blocking} valueStyle={{ color: taskSummary.blocking > 0 ? '#cf1322' : undefined }} /></Card></Col>
             <Col xs={12} md={8} lg={4}><Card size="small"><Statistic title="Cần hỗ trợ" value={taskSummary.needHelp} valueStyle={{ color: taskSummary.needHelp > 0 ? '#d48806' : undefined }} /></Card></Col>
             <Col xs={12} md={8} lg={4}><Card size="small"><Statistic title="Thông báo chưa đọc" value={unreadNotificationsQuery.data?.count ?? 0} /></Card></Col>
           </Row>
 
           <Row gutter={[12, 12]}>
             <Col xs={24}>
-              <Card size="small" title="Playbook phản ứng nhanh theo nguyên nhân">
+              <Card size="small" title="Kịch bản phản ứng nhanh theo nguyên nhân">
                 <Space wrap style={{ marginBottom: 10 }}>
                   <Text type="secondary">Phạm vi áp dụng nhanh:</Text>
-                  <Select<PlaybookApplyScope>
-                    value={playbookScope}
-                    onChange={setPlaybookScope}
-                    options={PLAYBOOK_SCOPE_OPTIONS}
-                    style={{ width: 220 }}
-                  />
+                  <div data-testid="executive-cockpit-playbook-scope-filter">
+                    <Select<PlaybookApplyScope>
+                      value={playbookScope}
+                      onChange={setPlaybookScope}
+                      options={PLAYBOOK_SCOPE_OPTIONS}
+                      style={{ width: 220 }}
+                    />
+                  </div>
                 </Space>
                 {activePlaybooks.length === 0 ? (
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có playbook cần kích hoạt." />
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có kịch bản cần kích hoạt." />
                 ) : (
                   <List
                     size="small"
@@ -2310,7 +2794,7 @@ export default function ExecutiveCockpit() {
                             size="small"
                             onClick={() => void copyPlaybookChecklist(item)}
                           >
-                            Copy checklist
+                            Sao chép danh sách
                           </Button>,
                         ]}
                       >
@@ -2318,11 +2802,11 @@ export default function ExecutiveCockpit() {
                           <Space wrap>
                             <Tag color="blue">{item.title}</Tag>
                             <Tag>{item.reasonLabel}</Tag>
-                            <Tag color="gold">Case: {item.caseCount}</Tag>
+                            <Tag color="gold">Trường hợp: {item.caseCount}</Tag>
                             <Tag color="geekblue">
                               L1/L2/L3: {item.level1TaskIds.length}/{item.level2TaskIds.length}/{item.level3TaskIds.length}
                             </Tag>
-                            <Tag color="purple">Owner: {item.owner}</Tag>
+                            <Tag color="purple">Người phụ trách: {item.owner}</Tag>
                             <Tag color="volcano">SLA mục tiêu: {item.targetSlaHours}h</Tag>
                           </Space>
                           <Text type="secondary">
@@ -2368,18 +2852,18 @@ export default function ExecutiveCockpit() {
             <Col xs={24}>
               <Card
                 size="small"
-                title="Tóm tắt bàn giao ca (copy nhanh)"
-                extra={<Button size="small" onClick={() => void copyHandoverBrief()}>Copy bàn giao</Button>}
+                title="Tóm tắt bàn giao ca"
+                extra={<Button size="small" onClick={() => void copyHandoverBrief()}>Sao chép bàn giao</Button>}
               >
                 <Space direction="vertical" size={6} style={{ width: '100%' }}>
                   <Text>
-                    Tổng quan: Task mở {taskSummary.totalOpen}, quá hạn {taskSummary.overdue}, blocking {taskSummary.blocking}, cần hỗ trợ {taskSummary.needHelp}.
+                    Tổng quan: Nhiệm vụ mở {taskSummary.totalOpen}, quá hạn {taskSummary.overdue}, đang chặn {taskSummary.blocking}, cần hỗ trợ {taskSummary.needHelp}.
                   </Text>
                   <Text type="secondary">
                     SLA: Xanh {slaHealth.onTrack} • Vàng {slaHealth.warning} • Đỏ {slaHealth.breached}
                   </Text>
                   <Text type="secondary">
-                    Nguyên nhân breach chính: {handoverHighlights.topReasons.join(', ') || 'Không có'}
+                    Nguyên nhân vi phạm chính: {handoverHighlights.topReasons.join(', ') || 'Không có'}
                   </Text>
                   <List
                     size="small"
@@ -2451,7 +2935,7 @@ export default function ExecutiveCockpit() {
                   )}
                 </Space>
                 {startShiftPriority.items.length === 0 ? (
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có task nổi bật cho đầu ca." />
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có nhiệm vụ nổi bật cho đầu ca." />
                 ) : (
                   <Table<ShiftPriorityItem>
                     rowKey="id"
@@ -2528,12 +3012,12 @@ export default function ExecutiveCockpit() {
 
           <Row gutter={[12, 12]}>
             <Col xs={24} lg={11}>
-              <Card size="small" title="SLA breach reason board">
+              <Card size="small" title="Bảng nguyên nhân vi phạm SLA">
                 {breachReasonBoard.totalBreached === 0 ? (
                   <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có nhóm vi phạm SLA nổi bật." />
                 ) : (
                   <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                    <Text type="secondary">Tổng case breach trọng yếu: {breachReasonBoard.totalBreached}</Text>
+                    <Text type="secondary">Tổng trường hợp vi phạm trọng yếu: {breachReasonBoard.totalBreached}</Text>
                     <Space wrap>
                       {breachReasonBoard.summary.map((item) => (
                         <Tag
@@ -2563,9 +3047,9 @@ export default function ExecutiveCockpit() {
               </Card>
             </Col>
             <Col xs={24} lg={13}>
-              <Card size="small" title="Case breach nghiêm trọng (ưu tiên xử lý)">
+              <Card size="small" title="Trường hợp vi phạm nghiêm trọng (ưu tiên xử lý)">
                 {breachReasonBoard.topCases.length === 0 ? (
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có case breach nghiêm trọng." />
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có trường hợp vi phạm nghiêm trọng." />
                 ) : (
                   <Table<(TaskItem & { overdue_days: number; escalation_level: EscalationLevel })>
                     rowKey="id"
@@ -2657,7 +3141,7 @@ export default function ExecutiveCockpit() {
                             <Tag color="red">{item.name}</Tag>
                             <Tag>Điểm tải: {item.capacityScore}</Tag>
                             <Tag color="volcano">Quá hạn: {item.overdue}</Tag>
-                            <Tag color="gold">Blocking: {item.blocking}</Tag>
+                            <Tag color="gold">Đang chặn: {item.blocking}</Tag>
                           </Space>
                           <Text type="secondary">
                             Mở {item.open} • Khẩn {item.urgent} • Cần hỗ trợ {item.help} - khuyến nghị không giao thêm đầu ca.
@@ -2687,7 +3171,7 @@ export default function ExecutiveCockpit() {
                             <Tag>Quá hạn: {item.overdue}</Tag>
                           </Space>
                           <Text type="secondary">
-                            Khuyến nghị ưu tiên nhận task nhóm vàng hoặc task L1/L2 để cân bằng tải.
+                            Khuyến nghị ưu tiên nhận nhiệm vụ nhóm vàng hoặc nhiệm vụ L1/L2 để cân bằng tải.
                           </Text>
                         </Space>
                       </List.Item>
@@ -2706,7 +3190,7 @@ export default function ExecutiveCockpit() {
                     Chờ công đoạn trước: {taskSummary.dependencyBlocked}
                   </Tag>
                   <Tag color={taskSummary.urgent > 0 ? 'red' : 'blue'}>
-                    Task khẩn: {taskSummary.urgent}
+                    Nhiệm vụ khẩn: {taskSummary.urgent}
                   </Tag>
                   <Tag color={taskSummary.staleMoreThan2Days > 0 ? 'volcano' : 'green'}>
                     Không cập nhật {'>='} 2 ngày: {taskSummary.staleMoreThan2Days}
@@ -2743,9 +3227,9 @@ export default function ExecutiveCockpit() {
 
           <Row gutter={[12, 12]}>
             <Col xs={24}>
-              <Card size="small" title="Danh sách cần escalation (quá hạn ưu tiên)">
+              <Card size="small" title="Danh sách cần leo thang (quá hạn ưu tiên)">
                 {escalationCandidates.length === 0 ? (
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có task cần escalation." />
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có nhiệm vụ cần leo thang." />
                 ) : (
                   <Table<(TaskItem & { overdue_days: number })>
                     rowKey="id"
@@ -2766,7 +3250,7 @@ export default function ExecutiveCockpit() {
                           <Space direction="vertical" size={1}>
                             <Text strong>{r.title}</Text>
                             <Space size={6} wrap>
-                              {r.is_blocking && <Tag color="red">Blocking</Tag>}
+                              {r.is_blocking && <Tag color="red">Chặn</Tag>}
                               {r.needs_help && <Tag color="gold">Cần hỗ trợ</Tag>}
                               <Tag color={r.priority === 'URGENT' ? 'red' : r.priority === 'HIGH' ? 'orange' : 'blue'}>
                                 {r.priority_display}
@@ -2819,7 +3303,7 @@ export default function ExecutiveCockpit() {
                     size="small"
                     disabled={escalationBuckets.level1Ids.length === 0 || bulkRemindMutation.isPending}
                     loading={bulkRemindMutation.isPending}
-                    onClick={() => runBulkRemind(escalationBuckets.level1Ids, 'Escalation mức L1')}
+                    onClick={() => runBulkRemind(escalationBuckets.level1Ids, 'Leo thang mức L1')}
                   >
                     Nhắc mức L1 ({escalationBuckets.level1Ids.length})
                   </Button>
@@ -2827,7 +3311,7 @@ export default function ExecutiveCockpit() {
                     size="small"
                     disabled={escalationBuckets.level2Ids.length === 0 || bulkRemindMutation.isPending}
                     loading={bulkRemindMutation.isPending}
-                    onClick={() => runBulkRemind(escalationBuckets.level2Ids, 'Escalation mức L2')}
+                    onClick={() => runBulkRemind(escalationBuckets.level2Ids, 'Leo thang mức L2')}
                   >
                     Nhắc mức L2 ({escalationBuckets.level2Ids.length})
                   </Button>
@@ -2836,7 +3320,7 @@ export default function ExecutiveCockpit() {
                     size="small"
                     disabled={escalationBuckets.level3Ids.length === 0 || bulkRemindMutation.isPending}
                     loading={bulkRemindMutation.isPending}
-                    onClick={() => runBulkRemind(escalationBuckets.level3Ids, 'Escalation mức L3')}
+                    onClick={() => runBulkRemind(escalationBuckets.level3Ids, 'Leo thang mức L3')}
                   >
                     Nhắc mức L3 ({escalationBuckets.level3Ids.length})
                   </Button>
@@ -2847,7 +3331,32 @@ export default function ExecutiveCockpit() {
         </>
       )}
       <Modal
-        title="P0 bundle pre-check"
+        title="Lưu mẫu lọc"
+        open={isViewPresetModalOpen}
+        onCancel={() => {
+          setIsViewPresetModalOpen(false);
+          setViewPresetName('');
+        }}
+        onOk={() => void saveNamedPreset()}
+        okText="Lưu mẫu"
+      >
+        <input
+          autoFocus
+          value={viewPresetName}
+          onChange={(event) => setViewPresetName(event.target.value)}
+          placeholder="Ví dụ: Điều hành ca sáng 7 ngày"
+          data-testid="executive-cockpit-preset-name"
+          style={{
+            width: '100%',
+            borderRadius: 8,
+            border: '1px solid #d9d9d9',
+            padding: '8px 12px',
+            outline: 'none',
+          }}
+        />
+      </Modal>
+      <Modal
+        title="Kiểm tra trước gói phản ứng P0"
         open={isP0PrecheckOpen}
         onCancel={() => {
           if (isP0BundleRunning) return;
@@ -2857,15 +3366,15 @@ export default function ExecutiveCockpit() {
         confirmLoading={isP0BundleRunning}
         onOk={() => {
           if (isP0PrecheckExpired) {
-            message.warning('Pre-check đã hết hạn, vui lòng chạy lại pre-check trước khi xác nhận.');
+            message.warning('Kết quả kiểm tra trước đã hết hạn, vui lòng chạy lại trước khi xác nhận.');
             return;
           }
           if (!p0PrecheckResult) {
-            message.info('Vui lòng chạy pre-check trước khi xác nhận.');
+            message.info('Vui lòng chạy kiểm tra trước khi xác nhận.');
             return;
           }
           if (isP0PrecheckZeroImpact && !allowZeroImpactP0Execute) {
-            message.warning('Dry-run sent = 0. Bật xác nhận "vẫn chạy P0 bundle" nếu bạn muốn tiếp tục.');
+            message.warning('Lượt gửi mô phỏng bằng 0. Hãy bật xác nhận tiếp tục nếu bạn vẫn muốn chạy gói phản ứng P0.');
             return;
           }
           void runGovernanceP0Bundle(true);
@@ -2878,7 +3387,7 @@ export default function ExecutiveCockpit() {
             || isP0PrecheckExpired
             || (isP0PrecheckZeroImpact && !allowZeroImpactP0Execute),
         }}
-        okText="Xác nhận chạy P0 bundle"
+        okText="Xác nhận chạy gói phản ứng P0"
       >
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
           {isP0PrecheckLoading ? (
@@ -2888,39 +3397,39 @@ export default function ExecutiveCockpit() {
           ) : (
             <>
               <Text type="secondary">
-                Ước lượng theo dry-run cho SLA reminders trước khi chạy thật.
+                Mô phỏng số lượt nhắc SLA trước khi chạy thật để tránh phát sinh hành động rỗng.
               </Text>
               <Space wrap>
-                <Tag color="blue">{`Fin dry-run sent: ${p0PrecheckResult?.financeDryRunSent ?? 0}`}</Tag>
-                <Tag color="purple">{`WF dry-run sent: ${p0PrecheckResult?.workforceDryRunSent ?? 0}`}</Tag>
-                <Tag color="gold">{`Total dry-run sent: ${p0PrecheckResult?.totalDryRunSent ?? 0}`}</Tag>
+                <Tag color="blue">{`Mô phỏng tài chính: ${p0PrecheckResult?.financeDryRunSent ?? 0}`}</Tag>
+                <Tag color="purple">{`Mô phỏng nhân sự: ${p0PrecheckResult?.workforceDryRunSent ?? 0}`}</Tag>
+                <Tag color="gold">{`Tổng lượt mô phỏng: ${p0PrecheckResult?.totalDryRunSent ?? 0}`}</Tag>
               </Space>
               {p0PrecheckResult?.generatedAt ? (
-                <Text type="secondary">{`Pre-check time: ${dayjs(p0PrecheckResult.generatedAt).format('DD/MM/YYYY HH:mm:ss')}`}</Text>
+                <Text type="secondary">{`Thời điểm kiểm tra: ${dayjs(p0PrecheckResult.generatedAt).format('DD/MM/YYYY HH:mm:ss')}`}</Text>
               ) : null}
               {p0PrecheckAgeMinutes != null ? (
-                <Text type="secondary">{`Age: ${p0PrecheckAgeMinutes} phút (TTL ${P0_PRECHECK_TTL_MINUTES} phút)`}</Text>
+                <Text type="secondary">{`Độ mới dữ liệu: ${p0PrecheckAgeMinutes} phút (hết hạn sau ${P0_PRECHECK_TTL_MINUTES} phút)`}</Text>
               ) : null}
               <Alert
                 type="warning"
                 showIcon
                 message="Lưu ý trước khi chạy"
-                description={p0PrecheckResult?.note || 'Force Auto Execute sẽ chạy thật khi xác nhận.'}
+                description={p0PrecheckResult?.note || 'Bước ép chạy tự động hóa sẽ chạy thật khi bạn xác nhận.'}
               />
               {isP0PrecheckExpired ? (
                 <Alert
                   type="error"
                   showIcon
-                  message="Pre-check đã hết hạn"
-                  description="Dữ liệu pre-check đã cũ. Vui lòng chạy lại pre-check để đảm bảo số liệu gần thời điểm execute."
+                  message="Kết quả kiểm tra trước đã hết hạn"
+                  description="Dữ liệu kiểm tra trước đã cũ. Vui lòng chạy lại để đảm bảo số liệu sát thời điểm thực thi."
                 />
               ) : null}
               {isP0PrecheckZeroImpact ? (
                 <Alert
                   type="warning"
                   showIcon
-                  message="Minimum impact guard: dry-run sent = 0"
-                  description="Không có người nhận trong dry-run SLA. Mặc định hệ thống chặn execute full bundle để tránh chạy reminder rỗng."
+                  message="Chốt an toàn: lượt gửi mô phỏng bằng 0"
+                  description="Không có người nhận trong lượt mô phỏng SLA. Mặc định hệ thống sẽ chặn chạy trọn gói để tránh gửi nhắc rỗng."
                 />
               ) : null}
               {isP0PrecheckZeroImpact ? (
@@ -2933,12 +3442,12 @@ export default function ExecutiveCockpit() {
                     void runGovernanceFallbackAutoOnly();
                   }}
                 >
-                  Fallback: Force Auto only
+                  Chạy phương án dự phòng chỉ tự động hóa
                 </Button>
               ) : null}
               {isP0PrecheckZeroImpact ? (
                 <Space wrap>
-                  <Text type="secondary">Vẫn chạy P0 bundle dù dry-run sent = 0</Text>
+                  <Text type="secondary">Vẫn chạy gói phản ứng P0 dù lượt gửi mô phỏng bằng 0</Text>
                   <Switch
                     checked={allowZeroImpactP0Execute}
                     disabled={isP0PrecheckLoading || isP0BundleRunning}
@@ -2954,7 +3463,7 @@ export default function ExecutiveCockpit() {
                   void openGovernanceP0Precheck();
                 }}
               >
-                Chạy lại pre-check
+                Chạy lại kiểm tra trước
               </Button>
               {p0BundleLastSummary ? <Text type="secondary">{`Lần chạy gần nhất: ${p0BundleLastSummary}`}</Text> : null}
             </>
@@ -3035,7 +3544,7 @@ export default function ExecutiveCockpit() {
       >
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
           <Text type="secondary">
-            Số task trong nhóm: {quickAssignBulkTaskIds.length}
+            Số nhiệm vụ trong nhóm: {quickAssignBulkTaskIds.length}
           </Text>
           {ownerCapacityBoard.topAvailable[0] && (
             <Button
@@ -3091,7 +3600,7 @@ export default function ExecutiveCockpit() {
         confirmLoading={rebalanceMutation.isPending}
         onOk={() => {
           if (selectedRebalanceSuggestions.length === 0) {
-            message.info('Vui lòng chọn ít nhất 1 task để điều phối.');
+            message.info('Vui lòng chọn ít nhất 1 nhiệm vụ để điều phối.');
             return;
           }
           rebalanceMutation.mutate(selectedRebalanceSuggestions);

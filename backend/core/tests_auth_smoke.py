@@ -38,9 +38,27 @@ class AuthJwtSmokeTest(TestCase):
         self.assertEqual(refresh_response.status_code, 200)
         self.assertTrue(refresh_response.json().get('access'))
 
-        logout_response = self.client.post('/api/auth/logout/', {}, format='json')
+        logout_response = self.client.post('/api/auth/logout/', {'refresh': login['refresh']}, format='json')
         self.assertEqual(logout_response.status_code, 200)
         self.assertTrue(logout_response.json().get('success'))
+
+        refresh_after_logout = self.client.post('/api/auth/refresh/', {'refresh': login['refresh']}, format='json')
+        self.assertEqual(refresh_after_logout.status_code, 401, refresh_after_logout.content)
+
+        me_after_logout = self.client.get('/api/users/me/')
+        self.assertEqual(me_after_logout.status_code, 401, me_after_logout.content)
+
+    def test_locked_user_cannot_login(self):
+        self.sales_user.is_locked = True
+        self.sales_user.save(update_fields=['is_locked'])
+
+        response = self.client.post(
+            '/api/auth/login/',
+            {'username': self.sales_user.username, 'password': self.password},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 401, response.content)
+        self.assertIn('khoa', str(response.json().get('detail', '')).lower())
 
     def test_me_requires_authentication(self):
         response = self.client.get('/api/users/me/')

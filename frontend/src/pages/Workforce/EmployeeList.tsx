@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, message } from 'antd';
+import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PlusOutlined } from '@ant-design/icons';
@@ -14,6 +14,17 @@ import { getToastMessage } from '../../shared/apiError';
 
 type EmployeeFilters = {
   status: '' | EmployeeStatus;
+};
+
+type EmployeeViewSnapshot = {
+  search: string;
+  status: '' | EmployeeStatus;
+};
+
+type EmployeeNamedPreset = {
+  id: string;
+  name: string;
+  filters: EmployeeViewSnapshot;
 };
 
 const DEFAULT_FILTERS: EmployeeFilters = {
@@ -39,6 +50,18 @@ function parseFilters(raw: string): EmployeeFilters {
   } catch {
     return { ...DEFAULT_FILTERS };
   }
+}
+
+function parseViewSnapshot(value: unknown): EmployeeViewSnapshot | null {
+  if (!value || typeof value !== 'object') return null;
+  const obj = value as Record<string, unknown>;
+  return {
+    search: typeof obj.search === 'string' ? obj.search : '',
+    status:
+      obj.status === 'ACTIVE' || obj.status === 'ON_LEAVE' || obj.status === 'RESIGNED'
+        ? obj.status
+        : '',
+  };
 }
 
 const emptyPayload: EmployeePayload = {
@@ -79,6 +102,9 @@ export default function EmployeeList() {
   const [messageApi, contextHolder] = message.useMessage();
   const [searchInput, setSearchInput] = useState('');
   const [filters, setFilters] = useState<EmployeeFilters>(DEFAULT_FILTERS);
+  const [selectedPresetId, setSelectedPresetId] = useState<string>();
+  const [isPresetModalOpen, setIsPresetModalOpen] = useState(false);
+  const [presetName, setPresetName] = useState('');
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Employee | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -86,10 +112,14 @@ export default function EmployeeList() {
   const [historyModal, setHistoryModal] = useState<{ open: boolean; employee: Employee | null }>({ open: false, employee: null });
   const [historyEditing, setHistoryEditing] = useState<EmployeeProfileHistory | null>(null);
   const [historyForm] = Form.useForm<EmployeeHistoryForm>();
-  const { config, saveConfig } = useUserPreferences(PAGES.WORKFORCE_EMPLOYEES);
+  const {
+    config,
+    saveConfig,
+    isLoading: isPreferencesLoading,
+  } = useUserPreferences(PAGES.WORKFORCE_EMPLOYEES);
   const canManage = canManageWorkforceData();
-
-  const pageSize = Number((config as Record<string, unknown>)?.pageSize ?? 20);
+  const configRecord = config as Record<string, unknown>;
+  const pageSize = Number(configRecord.pageSize ?? 20);
 
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
@@ -185,6 +215,142 @@ export default function EmployeeList() {
 
   const rows = listQuery.data?.results ?? [];
   const total = listQuery.data?.count ?? 0;
+  const activeFilterTags = useMemo(() => {
+    const tags: string[] = [];
+    if (intentSearch.trim()) {
+      tags.push(`Tìm kiếm: ${intentSearch.trim()}`);
+    }
+    if (filters.status) {
+      tags.push(`Trạng thái: ${STATUS_OPTIONS.find((item) => item.value === filters.status)?.label ?? filters.status}`);
+    }
+    return tags;
+  }, [filters.status, intentSearch]);
+  const namedPresets = useMemo<EmployeeNamedPreset[]>(() => {
+    const raw = configRecord.saved_views;
+    if (!Array.isArray(raw)) return [];
+    return raw.flatMap((value) => {
+      if (!value || typeof value !== 'object') return [];
+      const obj = value as Record<string, unknown>;
+      if (typeof obj.id !== 'string' || typeof obj.name !== 'string') return [];
+      const filtersValue = parseViewSnapshot(obj.filters);
+      if (!filtersValue) return [];
+      return [{ id: obj.id, name: obj.name, filters: filtersValue }];
+    });
+  }, [configRecord.saved_views]);
+  const selectedPreset = useMemo(
+    () => namedPresets.find((preset) => preset.id === selectedPresetId) ?? null,
+    [namedPresets, selectedPresetId]
+  );
+  const savedViewSnapshot = useMemo(() => {
+    const directSnapshot = parseViewSnapshot(configRecord.saved_view_snapshot);
+    if (directSnapshot) return directSnapshot;
+    return parseViewSnapshot({
+      search: configRecord.search,
+      status: configRecord.status,
+    });
+  }, [configRecord.saved_view_snapshot, configRecord.search, configRecord.status]);
+  const commandContextTags = useMemo(() => {
+    if (!selectedPreset) return activeFilterTags;
+    return [...activeFilterTags, `Mẫu đang dùng: ${selectedPreset.name}`];
+  }, [activeFilterTags, selectedPreset]);
+
+  const buildCurrentSnapshot = (): EmployeeViewSnapshot => ({
+    search: searchInput,
+    status: filters.status,
+  });
+
+  const applySnapshot = (snapshot: EmployeeViewSnapshot) => {
+    setSearchInput(snapshot.search);
+    setFilters({ status: snapshot.status });
+    setPage(1);
+  };
+
+  const saveCurrentView = async () => {
+    const currentSnapshot = buildCurrentSnapshot();
+    try {
+      await saveConfig({
+        ...config,
+        pageSize,
+        ...currentSnapshot,
+        saved_view_snapshot: currentSnapshot,
+        saved_views: namedPresets,
+      });
+      messageApi.success('Đã lưu chế độ xem nhân sự.');
+    } catch {
+      messageApi.error('Không thể lưu chế độ xem nhân sự.');
+    }
+  };
+
+  const applySavedView = () => {
+    if (!savedViewSnapshot) {
+      messageApi.warning('Chưa có chế độ xem đã lưu.');
+      return;
+    }
+    applySnapshot(savedViewSnapshot);
+    messageApi.success('Đã áp dụng chế độ xem đã lưu.');
+  };
+
+  const saveNamedPreset = async () => {
+    const name = presetName.trim();
+    if (!name) {
+      messageApi.error('Vui lòng nhập tên mẫu lọc.');
+      return;
+    }
+    const currentSnapshot = buildCurrentSnapshot();
+    const existing = namedPresets.find((preset) => preset.name.toLowerCase() === name.toLowerCase());
+    const nextPreset: EmployeeNamedPreset = existing
+      ? { ...existing, name, filters: currentSnapshot }
+      : { id: `${Date.now()}`, name, filters: currentSnapshot };
+    const nextPresets = existing
+      ? namedPresets.map((preset) => (preset.id === existing.id ? nextPreset : preset))
+      : [...namedPresets, nextPreset];
+    try {
+      await saveConfig({
+        ...config,
+        pageSize,
+        ...currentSnapshot,
+        saved_view_snapshot: currentSnapshot,
+        saved_views: nextPresets,
+      });
+      setSelectedPresetId(nextPreset.id);
+      setPresetName('');
+      setIsPresetModalOpen(false);
+      messageApi.success(existing ? 'Đã cập nhật mẫu lọc.' : 'Đã lưu mẫu lọc mới.');
+    } catch {
+      messageApi.error('Không thể lưu mẫu lọc.');
+    }
+  };
+
+  const applyNamedPreset = () => {
+    if (!selectedPreset) {
+      messageApi.warning('Vui lòng chọn mẫu lọc.');
+      return;
+    }
+    applySnapshot(selectedPreset.filters);
+    messageApi.success(`Đã áp dụng mẫu lọc "${selectedPreset.name}".`);
+  };
+
+  const deleteNamedPreset = async () => {
+    if (!selectedPreset) {
+      messageApi.warning('Vui lòng chọn mẫu lọc để xóa.');
+      return;
+    }
+    const currentSnapshot = buildCurrentSnapshot();
+    const nextPresets = namedPresets.filter((preset) => preset.id !== selectedPreset.id);
+    try {
+      await saveConfig({
+        ...config,
+        pageSize,
+        ...currentSnapshot,
+        saved_view_snapshot: currentSnapshot,
+        saved_views: nextPresets,
+      });
+      setSelectedPresetId(undefined);
+      messageApi.success(`Đã xóa mẫu lọc "${selectedPreset.name}".`);
+    } catch {
+      messageApi.error('Không thể xóa mẫu lọc.');
+    }
+  };
 
   const openCreate = () => {
     setEditing(null);
@@ -328,42 +494,100 @@ export default function EmployeeList() {
           <h2 style={{ margin: 0 }}>Nhân viên</h2>
           <div style={{ color: '#8c8c8c' }}>Danh mục nhân sự nền tảng</div>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} disabled={!canManage}>
-          Thêm nhân viên
-        </Button>
+        <Space wrap>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} disabled={!canManage}>
+            Thêm nhân viên
+          </Button>
+          {selectedPreset ? (
+            <Tag color="purple" style={{ marginInlineEnd: 0 }}>
+              Mẫu đang dùng: {selectedPreset.name}
+            </Tag>
+          ) : null}
+        </Space>
       </div>
 
       <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <Input
-          value={searchInput}
-          onChange={(e) => {
-            setSearchInput(e.target.value);
-            setPage(1);
-          }}
-          placeholder="Tìm kiếm tất cả cột..."
-          style={{ width: 320 }}
-          suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined}
-        />
-        <Select
-          value={filters.status || undefined}
-          onChange={(value) => {
-            setFilters((prev) => ({ ...prev, status: (value ?? '') as EmployeeStatus | '' }));
-            setPage(1);
-          }}
-          placeholder="Trạng thái"
-          style={{ width: 180 }}
-          options={STATUS_OPTIONS}
-        />
+        <div data-testid="employees-search" style={{ display: 'inline-block' }}>
+          <Input
+            value={searchInput}
+            onChange={(e) => {
+              setSearchInput(e.target.value);
+              setPage(1);
+            }}
+            placeholder="Tìm kiếm tất cả cột..."
+            style={{ width: 320 }}
+            suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined}
+          />
+        </div>
+        <div data-testid="employees-status-filter" style={{ display: 'inline-block' }}>
+          <Select
+            value={filters.status || undefined}
+            onChange={(value) => {
+              setFilters((prev) => ({ ...prev, status: (value ?? '') as EmployeeStatus | '' }));
+              setPage(1);
+            }}
+            placeholder="Trạng thái"
+            style={{ width: 180 }}
+            options={STATUS_OPTIONS}
+          />
+        </div>
         <Button
           onClick={() => {
             setSearchInput('');
             setFilters(DEFAULT_FILTERS);
             setPage(1);
+            setSelectedPresetId(undefined);
           }}
         >
           Xóa bộ lọc
         </Button>
       </div>
+      <div
+        data-testid="employees-command-strip"
+        style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}
+      >
+        <Button data-testid="employees-save-view" onClick={() => void saveCurrentView()} disabled={isPreferencesLoading}>
+          Lưu chế độ xem
+        </Button>
+        <Button data-testid="employees-restore-view" onClick={applySavedView} disabled={isPreferencesLoading}>
+          Áp dụng chế độ đã lưu
+        </Button>
+        <Button
+          data-testid="employees-open-preset-modal"
+          onClick={() => {
+            setPresetName(selectedPreset?.name ?? '');
+            setIsPresetModalOpen(true);
+          }}
+          disabled={isPreferencesLoading}
+        >
+          Lưu mẫu mới
+        </Button>
+        <div data-testid="employees-preset-select" style={{ display: 'inline-block' }}>
+          <Select<string>
+            allowClear
+            placeholder="Chọn mẫu nhân sự"
+            value={selectedPresetId}
+            onChange={(value) => setSelectedPresetId(value)}
+            disabled={isPreferencesLoading}
+            style={{ width: 220 }}
+            options={namedPresets.map((preset) => ({ value: preset.id, label: preset.name }))}
+          />
+        </div>
+        <Button data-testid="employees-apply-preset" onClick={applyNamedPreset} disabled={isPreferencesLoading}>
+          Áp dụng mẫu lọc
+        </Button>
+        <Button danger data-testid="employees-delete-preset" onClick={() => void deleteNamedPreset()} disabled={isPreferencesLoading}>
+          Xóa mẫu lọc
+        </Button>
+        {savedViewSnapshot ? <Tag color="default">Có chế độ xem đã lưu</Tag> : null}
+      </div>
+      <Space wrap>
+        {commandContextTags.length > 0 ? (
+          commandContextTags.map((tag) => <Tag key={tag}>{tag}</Tag>)
+        ) : (
+          <Tag color="default">Đang xem toàn bộ nhân sự</Tag>
+        )}
+      </Space>
 
       <Table
         rowKey="id"
@@ -388,6 +612,27 @@ export default function EmployeeList() {
           },
         }}
       />
+
+      <Modal
+        title="Lưu mẫu lọc nhân sự"
+        open={isPresetModalOpen}
+        onCancel={() => {
+          setIsPresetModalOpen(false);
+          setPresetName('');
+        }}
+        onOk={() => void saveNamedPreset()}
+        okText="Lưu mẫu"
+        cancelText="Hủy"
+      >
+        <Input
+          data-testid="employees-preset-name"
+          value={presetName}
+          onChange={(event) => setPresetName(event.target.value)}
+          placeholder="Ví dụ: Nhân sự đang làm / Theo dõi nghỉ việc"
+          maxLength={80}
+          autoFocus
+        />
+      </Modal>
 
       <Modal
         title={editing ? `Sửa nhân viên ${editing.code}` : 'Thêm nhân viên'}

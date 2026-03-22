@@ -80,6 +80,141 @@ class Command(BaseCommand):
                 return {'status': 'warning', 'message': f'Production mode with insecure flags: {", ".join(insecure)}'}
         return {'status': 'ok', 'message': 'Security flags look acceptable'}
 
+    def _check_domains_and_cors(self):
+        app_env = getattr(settings, 'APP_ENV', 'development')
+        allowed_hosts = [host for host in getattr(settings, 'ALLOWED_HOSTS', []) if str(host).strip()]
+        cors_origins = [origin for origin in getattr(settings, 'CORS_ALLOWED_ORIGINS', []) if str(origin).strip()]
+        csrf_origins = [origin for origin in getattr(settings, 'CSRF_TRUSTED_ORIGINS', []) if str(origin).strip()]
+        local_tokens = ('localhost', '127.0.0.1', '0.0.0.0')
+
+        issues = []
+        status = 'ok'
+        if app_env == 'production' and not allowed_hosts:
+            status = 'error'
+            issues.append('ALLOWED_HOSTS is empty')
+        if app_env == 'production' and not cors_origins:
+            status = 'warning'
+            issues.append('CORS_ALLOWED_ORIGINS is empty')
+        if app_env == 'production' and getattr(settings, 'CORS_ALLOW_CREDENTIALS', False) and not csrf_origins:
+            status = 'warning'
+            issues.append('CSRF_TRUSTED_ORIGINS is empty while credentials are enabled')
+        if app_env == 'production' and any(any(token in item for token in local_tokens) for item in allowed_hosts + cors_origins + csrf_origins):
+            status = 'warning'
+            issues.append('Localhost/loopback values are still present in host/CORS settings')
+
+        if not issues:
+            return {
+                'status': 'ok',
+                'message': (
+                    f'Hosts/CORS look acceptable '
+                    f'(hosts={len(allowed_hosts)}, cors={len(cors_origins)}, csrf={len(csrf_origins)})'
+                ),
+            }
+        return {'status': status, 'message': '; '.join(issues)}
+
+    def _check_email(self):
+        backend = str(getattr(settings, 'EMAIL_BACKEND', '') or '')
+        default_from = str(getattr(settings, 'DEFAULT_FROM_EMAIL', '') or '').strip()
+        frontend_url = str(getattr(settings, 'FRONTEND_URL', '') or '').strip()
+        app_env = getattr(settings, 'APP_ENV', 'development')
+        issues = []
+        status = 'ok'
+
+        if not default_from:
+            issues.append('DEFAULT_FROM_EMAIL is empty')
+            status = 'warning'
+        if not frontend_url:
+            issues.append('FRONTEND_URL is empty')
+            status = 'warning'
+
+        if backend == 'django.core.mail.backends.filebased.EmailBackend':
+            email_dir = Path(getattr(settings, 'EMAIL_FILE_PATH', Path(settings.BASE_DIR) / 'sent_emails'))
+            if app_env == 'production':
+                status = 'warning'
+                issues.append('Production is still using filebased email backend')
+            if not email_dir.exists():
+                status = 'warning'
+                issues.append(f'Email output directory does not exist yet: {email_dir}')
+            elif not os.access(email_dir, os.W_OK):
+                status = 'error'
+                issues.append(f'Email output directory is not writable: {email_dir}')
+        elif 'smtp' in backend.lower():
+            if not getattr(settings, 'EMAIL_HOST', ''):
+                status = 'warning'
+                issues.append('EMAIL_HOST is empty for SMTP backend')
+            if int(getattr(settings, 'EMAIL_PORT', 0) or 0) <= 0:
+                status = 'warning'
+                issues.append('EMAIL_PORT is not configured for SMTP backend')
+        elif not backend:
+            status = 'warning'
+            issues.append('EMAIL_BACKEND is empty')
+
+        if not issues:
+            return {'status': 'ok', 'message': f'Email backend is configured: {backend}'}
+        return {'status': status, 'message': '; '.join(issues)}
+
+    def _check_jwt_and_sessions(self):
+        auth_classes = list(settings.REST_FRAMEWORK.get('DEFAULT_AUTHENTICATION_CLASSES', []))
+        issues = []
+        status = 'ok'
+
+        if 'core.authentication.SessionAwareJWTAuthentication' not in auth_classes:
+            status = 'error'
+            issues.append('SessionAwareJWTAuthentication is missing from REST_FRAMEWORK defaults')
+        if 'rest_framework_simplejwt.token_blacklist' not in settings.INSTALLED_APPS:
+            status = 'warning'
+            issues.append('SimpleJWT token blacklist app is not installed')
+
+        jwt_settings = getattr(settings, 'SIMPLE_JWT', {})
+        access_lifetime = jwt_settings.get('ACCESS_TOKEN_LIFETIME')
+        refresh_lifetime = jwt_settings.get('REFRESH_TOKEN_LIFETIME')
+        if access_lifetime is None or int(access_lifetime.total_seconds()) <= 0:
+            status = 'error'
+            issues.append('ACCESS_TOKEN_LIFETIME is invalid')
+        if refresh_lifetime is None or int(refresh_lifetime.total_seconds()) <= 0:
+            status = 'error'
+            issues.append('REFRESH_TOKEN_LIFETIME is invalid')
+        if not issues:
+            return {
+                'status': 'ok',
+                'message': (
+                    'JWT/session settings look acceptable '
+                    f'(access={access_lifetime}, refresh={refresh_lifetime})'
+                ),
+            }
+        return {'status': status, 'message': '; '.join(issues)}
+
+    def _check_backup_and_logging(self):
+        backup_root = Path(getattr(settings, 'BACKUP_ROOT', Path(settings.BASE_DIR) / 'backups'))
+        retention_days = int(getattr(settings, 'BACKUP_RETENTION_DAYS', 0) or 0)
+        log_to_file = bool(getattr(settings, 'LOG_TO_FILE', False))
+        log_backup_count = int(getattr(settings, 'LOG_FILE_BACKUP_COUNT', 0) or 0)
+
+        issues = []
+        status = 'ok'
+        if not backup_root.parent.exists():
+            status = 'warning'
+            issues.append(f'Backup parent directory does not exist yet: {backup_root.parent}')
+        elif not os.access(backup_root.parent, os.W_OK):
+            status = 'error'
+            issues.append(f'Backup parent directory is not writable: {backup_root.parent}')
+        if retention_days <= 0:
+            status = 'warning'
+            issues.append('BACKUP_RETENTION_DAYS should be greater than 0')
+        if log_to_file and log_backup_count <= 0:
+            status = 'warning'
+            issues.append('LOG_FILE_BACKUP_COUNT should be greater than 0 when LOG_TO_FILE is enabled')
+
+        if not issues:
+            return {
+                'status': 'ok',
+                'message': (
+                    f'Backup/logging settings look acceptable '
+                    f'(backup_root={backup_root}, retention_days={retention_days}, log_to_file={log_to_file})'
+                ),
+            }
+        return {'status': status, 'message': '; '.join(issues)}
+
     def _check_frontend_env_template(self):
         env_example = Path(settings.BASE_DIR).parent / 'frontend' / '.env.example'
         if not env_example.exists():
@@ -91,6 +226,20 @@ class Command(BaseCommand):
         sentry_dsn = getattr(settings, 'SENTRY_DSN', '')
         log_to_file = getattr(settings, 'LOG_TO_FILE', False)
         log_dir = Path(getattr(settings, 'LOG_DIR', settings.BASE_DIR / 'logs'))
+        alert_email_recipients = list(getattr(settings, 'ALERT_EMAIL_RECIPIENTS', []) or [])
+        slack_webhook = str(getattr(settings, 'ALERT_SLACK_WEBHOOK_URL', '') or '').strip()
+        telegram_token = str(getattr(settings, 'ALERT_TELEGRAM_BOT_TOKEN', '') or '').strip()
+        telegram_chat_id = str(getattr(settings, 'ALERT_TELEGRAM_CHAT_ID', '') or '').strip()
+        required_channel_count = max(0, int(getattr(settings, 'ALERT_REQUIRED_CHANNEL_COUNT', 0) or 0))
+        required_channels = [
+            str(item).strip().lower()
+            for item in (getattr(settings, 'ALERT_REQUIRED_CHANNELS', []) or [])
+            if str(item).strip().lower() in {'email', 'slack', 'telegram', 'sentry'}
+        ]
+        default_from_email = str(getattr(settings, 'DEFAULT_FROM_EMAIL', '') or '').strip()
+        server_email = str(getattr(settings, 'SERVER_EMAIL', '') or '').strip()
+        incident_runbook = str(getattr(settings, 'INCIDENT_RUNBOOK_URL', '') or '').strip()
+        incident_contacts = list(getattr(settings, 'INCIDENT_CONTACT_EMAILS', []) or [])
         messages = []
         status = 'ok'
         if app_env == 'production' and not sentry_dsn:
@@ -103,9 +252,74 @@ class Command(BaseCommand):
             elif not os.access(log_dir, os.W_OK):
                 status = 'error'
                 messages.append(f'LOG_DIR is not writable: {log_dir}')
+        configured_alert_channels = 0
+        configured_alert_channels += 1 if sentry_dsn else 0
+        configured_alert_channels += 1 if alert_email_recipients else 0
+        configured_alert_channels += 1 if slack_webhook else 0
+        configured_alert_channels += 1 if (telegram_token and telegram_chat_id) else 0
+        if app_env == 'production' and configured_alert_channels == 0:
+            status = 'warning'
+            messages.append('No production alert channel is configured (email/slack/telegram/sentry)')
+        if required_channel_count > 0 and configured_alert_channels < required_channel_count:
+            status = 'warning'
+            messages.append(
+                f'Configured alert channels ({configured_alert_channels}) are below ALERT_REQUIRED_CHANNEL_COUNT ({required_channel_count})'
+            )
+        if app_env == 'production' and not alert_email_recipients:
+            status = 'warning'
+            messages.append('ALERT_EMAIL_RECIPIENTS is empty')
+        if 'email' in required_channels and not alert_email_recipients:
+            status = 'warning'
+            messages.append('Email is listed in ALERT_REQUIRED_CHANNELS but ALERT_EMAIL_RECIPIENTS is empty')
+        if 'slack' in required_channels and not slack_webhook:
+            status = 'warning'
+            messages.append('Slack is listed in ALERT_REQUIRED_CHANNELS but ALERT_SLACK_WEBHOOK_URL is empty')
+        if 'telegram' in required_channels and not (telegram_token and telegram_chat_id):
+            status = 'warning'
+            messages.append('Telegram is listed in ALERT_REQUIRED_CHANNELS but token/chat id is incomplete')
+        if 'sentry' in required_channels and not sentry_dsn:
+            status = 'warning'
+            messages.append('Sentry is listed in ALERT_REQUIRED_CHANNELS but SENTRY_DSN is empty')
+        if alert_email_recipients and not default_from_email:
+            status = 'warning'
+            messages.append('DEFAULT_FROM_EMAIL is empty while email alerts are configured')
+        if alert_email_recipients and not server_email:
+            status = 'warning'
+            messages.append('SERVER_EMAIL is empty while email alerts are configured')
+        if app_env == 'production' and not incident_runbook:
+            status = 'warning'
+            messages.append('INCIDENT_RUNBOOK_URL is empty')
+        if app_env == 'production' and not incident_contacts:
+            status = 'warning'
+            messages.append('INCIDENT_CONTACT_EMAILS is empty')
         if not messages:
             messages.append('Monitoring hooks look acceptable')
         return {'status': status, 'message': '; '.join(messages)}
+
+    def _check_audit_controls(self):
+        retention_days = int(getattr(settings, 'AUDIT_LOG_RETENTION_DAYS', 0) or 0)
+        export_max_rows = int(getattr(settings, 'AUDIT_EXPORT_MAX_ROWS', 0) or 0)
+        incident_runbook = str(getattr(settings, 'INCIDENT_RUNBOOK_URL', '') or '').strip()
+        status = 'ok'
+        issues = []
+        if retention_days <= 0:
+            status = 'warning'
+            issues.append('AUDIT_LOG_RETENTION_DAYS should be greater than 0')
+        if export_max_rows <= 0:
+            status = 'warning'
+            issues.append('AUDIT_EXPORT_MAX_ROWS should be greater than 0')
+        if getattr(settings, 'APP_ENV', 'development') == 'production' and not incident_runbook:
+            status = 'warning'
+            issues.append('INCIDENT_RUNBOOK_URL is empty')
+        if not issues:
+            return {
+                'status': 'ok',
+                'message': (
+                    f'Audit controls look acceptable '
+                    f'(retention_days={retention_days}, export_max_rows={export_max_rows})'
+                ),
+            }
+        return {'status': status, 'message': '; '.join(issues)}
 
     def handle(self, *args, **options):
         checks = {
@@ -115,8 +329,13 @@ class Command(BaseCommand):
             'backup_tools': self._check_backup_tools(),
             'q_cluster': self._check_q_cluster(),
             'security_flags': self._check_security_flags(),
+            'domains_cors': self._check_domains_and_cors(),
+            'email': self._check_email(),
+            'jwt_sessions': self._check_jwt_and_sessions(),
+            'backup_logging': self._check_backup_and_logging(),
             'frontend_env': self._check_frontend_env_template(),
             'monitoring': self._check_monitoring(),
+            'audit_controls': self._check_audit_controls(),
         }
 
         worst = max(self._status_rank(item['status']) for item in checks.values())

@@ -1123,6 +1123,23 @@ const ProductList = () => {
   const waves = wavesData?.results ?? [];
   const boxTypes = boxTypesData?.results ?? [];
   const rawProducts = productsData?.results ?? [];
+  const productCommandSummary = useMemo(() => {
+    const activeCount = rawProducts.filter((item) => item.status === 'ACTIVE').length;
+    const discontinuedCount = rawProducts.filter((item) => item.status === 'DISCONTINUED').length;
+    const pendingPriceCount = rawProducts.filter((item) => item.has_pending_price_change || item.has_scheduled_price_change).length;
+    const marginRiskCount = rawProducts.filter((item) => {
+      const sale = Number(item.sale_price ?? 0);
+      const cost = Number(item.cost_price ?? 0);
+      return Number.isFinite(sale) && Number.isFinite(cost) && cost > 0 && sale < cost;
+    }).length;
+    return {
+      total: productsData?.count ?? rawProducts.length,
+      activeCount,
+      discontinuedCount,
+      pendingPriceCount,
+      marginRiskCount,
+    };
+  }, [productsData?.count, rawProducts]);
 
   const products = useMemo(() => {
     const filtered = showChildren ? rawProducts : rawProducts.filter((p) => p.parent == null);
@@ -1443,7 +1460,7 @@ const ProductList = () => {
                 <span>
                   Giao nhiệm vụ
                   {(record.blocking_tasks_count ?? 0) > 0 && (
-                    <Tooltip title="Có blocking task đang chặn sản xuất">
+                    <Tooltip title="Có nhiệm vụ chặn đang ảnh hưởng sản xuất">
                       <LockOutlined style={{ color: '#ff4d4f', marginLeft: 6 }} />
                     </Tooltip>
                   )}
@@ -1993,9 +2010,12 @@ const ProductList = () => {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
-                📦 Quản lý sản phẩm
-              </h2>
+              <div>
+                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Quản lý sản phẩm</h2>
+                <div style={{ color: '#8c8c8c', fontSize: 13 }}>
+                  Điều phối danh mục sản phẩm, biến động giá và tín hiệu biên lợi nhuận trong cùng một màn vận hành.
+                </div>
+              </div>
             </div>
 
             <div className="list-page-toolbar" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', flex: '1 1 420px', justifyContent: isMobile ? 'flex-start' : 'flex-end', position: isMobile ? 'sticky' : 'static', top: isMobile ? 64 : 'auto', zIndex: isMobile ? 3 : 'auto', background: isMobile ? '#fff' : 'transparent', paddingBottom: isMobile ? 4 : 0 }}>
@@ -2109,6 +2129,20 @@ const ProductList = () => {
               </Button>
             )}
             </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+            <Tag color="blue">{`Tổng sản phẩm: ${productCommandSummary.total}`}</Tag>
+            <Tag color="green">{`Đang hoạt động: ${productCommandSummary.activeCount}`}</Tag>
+            <Tag color={productCommandSummary.discontinuedCount > 0 ? 'default' : 'green'}>
+              {`Ngừng kinh doanh: ${productCommandSummary.discontinuedCount}`}
+            </Tag>
+            <Tag color={productCommandSummary.pendingPriceCount > 0 ? 'gold' : 'default'}>
+              {`Chờ duyệt/chờ hiệu lực giá: ${productCommandSummary.pendingPriceCount}`}
+            </Tag>
+            <Tag color={productCommandSummary.marginRiskCount > 0 ? 'volcano' : 'green'}>
+              {`Cảnh báo biên: ${productCommandSummary.marginRiskCount}`}
+            </Tag>
           </div>
 
           {/* Row 2: Bộ lọc đang bật — nhãn trên phải, ô dưới (gọn) */}

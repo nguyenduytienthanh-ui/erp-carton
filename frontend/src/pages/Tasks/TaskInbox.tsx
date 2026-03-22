@@ -1,16 +1,16 @@
 import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button, Card, Empty, Input, Modal, Segmented, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
+import { Alert, Badge, Button, Card, Empty, Input, Modal, Segmented, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { EyeOutlined, InboxOutlined, StarFilled, StarOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { TASK_PRIORITY_LABELS, tasksApi, type TaskItem, type TaskPriority, type TaskStatus } from '../../api/tasks';
+import { TASK_PRIORITY_LABELS, TASK_STATUS_LABELS, tasksApi, type TaskItem, type TaskPriority, type TaskStatus } from '../../api/tasks';
 import { getUserDisplayName, usersApi } from '../../api/users';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { SafeText as Text } from '../../components/SafeText';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { useRowSelection } from '../../hooks/useRowSelection';
-import { getEntityTypeLabel } from '../../utils/constants';
+import { getEntityTypeLabel, PAGES } from '../../utils/constants';
 import { storage } from '../../utils/storage';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
@@ -46,6 +46,55 @@ type BulkHistoryItem = {
 type BulkHistoryResultFilter = 'ALL' | 'SUCCESS' | 'HAS_ERROR';
 const TaskWorkspaceModalLazy = lazy(() => import('../../components/TaskWorkspaceModal/TaskWorkspaceModal'));
 
+const SUMMARY_TILE_STYLE = {
+  border: '1px solid #e5e7eb',
+  borderRadius: 18,
+  padding: '14px 16px',
+  background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+  boxShadow: '0 12px 24px rgba(15, 23, 42, 0.04)',
+};
+
+const INBOX_TAB_LABELS: Record<InboxTab, string> = {
+  ASSIGNED: 'Giao cho tôi',
+  CREATED: 'Tạo bởi tôi',
+  WATCHING: 'Tôi theo dõi',
+  TEAM: 'Nhóm của tôi',
+  OVERDUE: 'Quá hạn',
+};
+
+const SORT_MODE_LABELS: Record<SortMode, string> = {
+  SMART: 'Sắp xếp thông minh',
+  DUE_ASC: 'Hạn gần nhất trước',
+  DUE_DESC: 'Hạn xa nhất trước',
+  UPDATED_DESC: 'Cập nhật mới nhất',
+};
+
+function parseInboxSnapshot(value: unknown): InboxFilterSnapshot | null {
+  if (!value || typeof value !== 'object') return null;
+  const obj = value as Record<string, unknown>;
+  const tab = obj.tab;
+  const statusFilter = obj.status_filter;
+  const priorityFilter = obj.priority_filter;
+  const sortMode = obj.sort_mode;
+  if (
+    (tab !== 'ASSIGNED' && tab !== 'CREATED' && tab !== 'WATCHING' && tab !== 'TEAM' && tab !== 'OVERDUE')
+    || (statusFilter !== 'ALL' && statusFilter !== 'TODO' && statusFilter !== 'IN_PROGRESS')
+    || (priorityFilter !== 'ALL' && priorityFilter !== 'LOW' && priorityFilter !== 'MEDIUM' && priorityFilter !== 'HIGH' && priorityFilter !== 'URGENT')
+    || (sortMode !== 'SMART' && sortMode !== 'DUE_ASC' && sortMode !== 'DUE_DESC' && sortMode !== 'UPDATED_DESC')
+  ) {
+    return null;
+  }
+  return {
+    tab,
+    search: typeof obj.search === 'string' ? obj.search : '',
+    status_filter: statusFilter,
+    priority_filter: priorityFilter,
+    sort_mode: sortMode,
+    auto_refresh: obj.auto_refresh !== false,
+    live_sync: obj.live_sync !== false,
+  };
+}
+
 function canManageBulkByRole(): boolean {
   const user = storage.getUser() as unknown;
   if (!user || typeof user !== 'object') return false;
@@ -70,7 +119,7 @@ export default function TaskInbox() {
   const [sortMode, setSortMode] = useState<SortMode>('SMART');
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [liveSync, setLiveSync] = useState(true);
-  const [selectedPresetId, setSelectedPresetId] = useState('NONE');
+  const [selectedPresetId, setSelectedPresetId] = useState<string>();
   const [isPresetModalOpen, setIsPresetModalOpen] = useState(false);
   const [presetName, setPresetName] = useState('');
   const [selected, setSelected] = useState<TaskItem | null>(null);
@@ -83,7 +132,11 @@ export default function TaskInbox() {
   const [bulkReassignSearch, setBulkReassignSearch] = useState('');
   const canBulkManage = useMemo(() => canManageBulkByRole(), []);
   const { selectedIds, rowSelection, clearSelection } = useRowSelection<TaskItem>();
-  const { config: savedConfig, saveConfig } = useUserPreferences('task-inbox');
+  const {
+    config: savedConfig,
+    saveConfig,
+    isLoading: isPreferencesLoading,
+  } = useUserPreferences(PAGES.TASK_INBOX);
   const queryClient = useQueryClient();
   const liveSinceRef = useRef<string | null>(null);
   const {
@@ -230,37 +283,29 @@ export default function TaskInbox() {
         const obj = item as Record<string, unknown>;
         const id = typeof obj.id === 'string' ? obj.id : '';
         const name = typeof obj.name === 'string' ? obj.name : '';
-        const filtersRaw = obj.filters;
-        if (!id || !name || !filtersRaw || typeof filtersRaw !== 'object') return null;
-        const f = filtersRaw as Record<string, unknown>;
-        const tabValue = f.tab;
-        const statusValue = f.status_filter;
-        const priorityValue = f.priority_filter;
-        const sortValue = f.sort_mode;
-        if (
-          (tabValue !== 'ASSIGNED' && tabValue !== 'CREATED' && tabValue !== 'WATCHING' && tabValue !== 'TEAM' && tabValue !== 'OVERDUE')
-          || (statusValue !== 'ALL' && statusValue !== 'TODO' && statusValue !== 'IN_PROGRESS')
-          || (priorityValue !== 'ALL' && priorityValue !== 'LOW' && priorityValue !== 'MEDIUM' && priorityValue !== 'HIGH' && priorityValue !== 'URGENT')
-          || (sortValue !== 'SMART' && sortValue !== 'DUE_ASC' && sortValue !== 'DUE_DESC' && sortValue !== 'UPDATED_DESC')
-        ) {
-          return null;
-        }
+        const filters = parseInboxSnapshot(obj.filters);
+        if (!id || !name || !filters) return null;
         return {
           id,
           name,
-          filters: {
-            tab: tabValue,
-            search: typeof f.search === 'string' ? f.search : '',
-            status_filter: statusValue,
-            priority_filter: priorityValue,
-            sort_mode: sortValue,
-            auto_refresh: f.auto_refresh === true,
-            live_sync: f.live_sync !== false,
-          },
+          filters,
         } as InboxNamedPreset;
       })
       .filter((v): v is InboxNamedPreset => v !== null);
   }, [savedConfig?.inbox_saved_views]);
+  const savedViewSnapshot = useMemo(() => {
+    const directSnapshot = parseInboxSnapshot((savedConfig as Record<string, unknown>)?.saved_view_snapshot);
+    if (directSnapshot) return directSnapshot;
+    return parseInboxSnapshot({
+      tab: savedConfig?.inbox_tab,
+      search: savedConfig?.inbox_search,
+      status_filter: savedConfig?.inbox_status_filter,
+      priority_filter: savedConfig?.inbox_priority_filter,
+      sort_mode: savedConfig?.inbox_sort_mode,
+      auto_refresh: savedConfig?.inbox_auto_refresh,
+      live_sync: savedConfig?.inbox_live_sync,
+    });
+  }, [savedConfig]);
   const bulkHistoryQuery = useQuery({
     queryKey: ['task-bulk-history', bulkHistoryActionFilter, bulkHistoryResultFilter],
     queryFn: () => tasksApi.bulkHistory({
@@ -287,6 +332,56 @@ export default function TaskInbox() {
   const visibleBulkHistory = useMemo(() => {
     return bulkHistory;
   }, [bulkHistory]);
+  const selectedPreset = useMemo(
+    () => namedPresets.find((item) => item.id === selectedPresetId) ?? null,
+    [namedPresets, selectedPresetId]
+  );
+  const inboxMetrics = useMemo(() => {
+    const startOfToday = dayjs().startOf('day');
+    return filteredData.reduce((acc, item) => {
+      const isOpen = item.status === 'TODO' || item.status === 'IN_PROGRESS';
+      const dueDate = item.due_date ? dayjs(item.due_date) : null;
+      acc.total += 1;
+      if (!item.assigned_to) acc.unassigned += 1;
+      if (item.priority === 'HIGH' || item.priority === 'URGENT') acc.hot += 1;
+      if (item.needs_help && isOpen) acc.needHelp += 1;
+      if (item.is_blocking && isOpen) acc.blocking += 1;
+      if (dueDate && dueDate.isSame(startOfToday, 'day') && isOpen) acc.dueToday += 1;
+      if (dueDate && dueDate.isBefore(startOfToday, 'day') && isOpen) acc.overdue += 1;
+      return acc;
+    }, {
+      total: 0,
+      overdue: 0,
+      dueToday: 0,
+      needHelp: 0,
+      blocking: 0,
+      hot: 0,
+      unassigned: 0,
+    });
+  }, [filteredData]);
+  const bulkHistoryMetrics = useMemo(() => {
+    return visibleBulkHistory.reduce((acc, item) => {
+      acc.total += 1;
+      if (item.failed_count > 0) acc.withErrors += 1;
+      if ((item.reminder_sent_count ?? 0) > 0) acc.reminderRuns += 1;
+      acc.processed += item.processed_count;
+      return acc;
+    }, {
+      total: 0,
+      withErrors: 0,
+      reminderRuns: 0,
+      processed: 0,
+    });
+  }, [visibleBulkHistory]);
+  const activeFilterTags = useMemo(() => {
+    const tags: string[] = [];
+    if (q.trim()) tags.push(`Từ khóa: ${q.trim()}`);
+    if (statusFilter !== 'ALL') tags.push(`Trạng thái: ${TASK_STATUS_LABELS[statusFilter]}`);
+    if (priorityFilter !== 'ALL') tags.push(`Ưu tiên: ${TASK_PRIORITY_LABELS[priorityFilter]}`);
+    if (sortMode !== 'SMART') tags.push(`Sắp xếp: ${SORT_MODE_LABELS[sortMode]}`);
+    if (selectedPreset) tags.push(`Mẫu đang chọn: ${selectedPreset.name}`);
+    return tags;
+  }, [priorityFilter, q, selectedPreset, sortMode, statusFilter]);
 
   const refreshInbox = () => {
     void queryClient.invalidateQueries({ queryKey: ['task-inbox-list'] });
@@ -571,7 +666,7 @@ export default function TaskInbox() {
   };
   const exportBulkHistoryCsv = () => {
     if (!visibleBulkHistory.length) {
-      message.warning('Không có lịch sử bulk để xuất.');
+      message.warning('Không có lịch sử thao tác hàng loạt để xuất.');
       return;
     }
     const headers = [
@@ -598,24 +693,27 @@ export default function TaskInbox() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `lich_su_bulk_${dayjs().format('YYYYMMDD_HHmmss')}.csv`;
+    a.download = `lich_su_thao_tac_hang_loat_${dayjs().format('YYYYMMDD_HHmmss')}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    message.success('Đã xuất CSV lịch sử bulk.');
+    message.success('Đã xuất CSV lịch sử thao tác hàng loạt.');
   };
 
   const saveCurrentView = async () => {
     try {
+      const currentSnapshot = buildCurrentSnapshot();
       await saveConfig({
         ...savedConfig,
+        inbox_search: q,
         inbox_tab: tab,
         inbox_status_filter: statusFilter,
         inbox_priority_filter: priorityFilter,
         inbox_sort_mode: sortMode,
         inbox_auto_refresh: autoRefresh,
         inbox_live_sync: liveSync,
+        saved_view_snapshot: currentSnapshot,
         inbox_saved_views: namedPresets,
       });
       message.success('Đã lưu chế độ xem cá nhân.');
@@ -625,30 +723,11 @@ export default function TaskInbox() {
   };
 
   const applySavedView = () => {
-    const savedTab = savedConfig?.inbox_tab;
-    const savedStatus = savedConfig?.inbox_status_filter;
-    const savedPriority = savedConfig?.inbox_priority_filter;
-    const savedSort = savedConfig?.inbox_sort_mode;
-    const savedAutoRefresh = savedConfig?.inbox_auto_refresh;
-    const savedLiveSync = savedConfig?.inbox_live_sync;
-    if (savedTab === 'ASSIGNED' || savedTab === 'CREATED' || savedTab === 'WATCHING' || savedTab === 'TEAM' || savedTab === 'OVERDUE') {
-      setTab(savedTab);
+    if (!savedViewSnapshot) {
+      message.warning('Chưa có chế độ xem đã lưu.');
+      return;
     }
-    if (savedStatus === 'ALL' || savedStatus === 'TODO' || savedStatus === 'IN_PROGRESS') {
-      setStatusFilter(savedStatus);
-    }
-    if (savedPriority === 'ALL' || savedPriority === 'LOW' || savedPriority === 'MEDIUM' || savedPriority === 'HIGH' || savedPriority === 'URGENT') {
-      setPriorityFilter(savedPriority);
-    }
-    if (savedSort === 'SMART' || savedSort === 'DUE_ASC' || savedSort === 'DUE_DESC' || savedSort === 'UPDATED_DESC') {
-      setSortMode(savedSort);
-    }
-    if (typeof savedAutoRefresh === 'boolean') {
-      setAutoRefresh(savedAutoRefresh);
-    }
-    if (typeof savedLiveSync === 'boolean') {
-      setLiveSync(savedLiveSync);
-    }
+    applySnapshot(savedViewSnapshot);
     message.success('Đã áp dụng chế độ xem đã lưu.');
   };
   const buildCurrentSnapshot = (): InboxFilterSnapshot => ({
@@ -686,12 +765,14 @@ export default function TaskInbox() {
     try {
       await saveConfig({
         ...savedConfig,
+        inbox_search: q,
         inbox_tab: tab,
         inbox_status_filter: statusFilter,
         inbox_priority_filter: priorityFilter,
         inbox_sort_mode: sortMode,
         inbox_auto_refresh: autoRefresh,
         inbox_live_sync: liveSync,
+        saved_view_snapshot: currentSnapshot,
         inbox_saved_views: nextPresets,
       });
       setSelectedPresetId(nextPreset.id);
@@ -718,18 +799,21 @@ export default function TaskInbox() {
       return;
     }
     const nextPresets = namedPresets.filter((p) => p.id !== preset.id);
+    const currentSnapshot = buildCurrentSnapshot();
     try {
       await saveConfig({
         ...savedConfig,
+        inbox_search: q,
         inbox_tab: tab,
         inbox_status_filter: statusFilter,
         inbox_priority_filter: priorityFilter,
         inbox_sort_mode: sortMode,
         inbox_auto_refresh: autoRefresh,
         inbox_live_sync: liveSync,
+        saved_view_snapshot: currentSnapshot,
         inbox_saved_views: nextPresets,
       });
-      setSelectedPresetId('NONE');
+      setSelectedPresetId(undefined);
       message.success(`Đã xóa mẫu lọc "${preset.name}".`);
     } catch {
       message.error('Không thể xóa mẫu lọc.');
@@ -815,6 +899,7 @@ export default function TaskInbox() {
   ];
 
   const summary = summaryQuery.data;
+  const lastBulkHistoryAt = visibleBulkHistory[0]?.created_at ?? null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -823,14 +908,24 @@ export default function TaskInbox() {
           <Space wrap>
             <InboxOutlined />
             <Text strong style={{ fontSize: 16 }}>Nhiệm vụ của tôi</Text>
+            <Tag color="processing" style={{ marginInlineEnd: 0 }}>
+              Chế độ: {INBOX_TAB_LABELS[tab]}
+            </Tag>
+            {selectedPreset ? (
+              <Tag color="purple" style={{ marginInlineEnd: 0 }}>
+                Mẫu đang dùng: {selectedPreset.name}
+              </Tag>
+            ) : null}
           </Space>
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Tìm theo mã, tiêu đề, mô tả..."
-            style={{ width: 300 }}
-            suffix={q ? <QuickClearIcon onClear={() => setQ('')} title="Xóa tìm kiếm" /> : undefined}
-          />
+          <div data-testid="task-inbox-search" style={{ display: 'inline-block' }}>
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Tìm theo mã, tiêu đề, mô tả..."
+              style={{ width: 300 }}
+              suffix={q ? <QuickClearIcon onClear={() => setQ('')} title="Xóa tìm kiếm" /> : undefined}
+            />
+          </div>
         </div>
         <div style={{ marginTop: 12 }}>
           <Segmented<InboxTab>
@@ -840,45 +935,91 @@ export default function TaskInbox() {
               { value: 'ASSIGNED', label: <Badge count={summary?.assigned_to_me ?? 0} size="small">Giao cho tôi</Badge> },
               { value: 'CREATED', label: <Badge count={summary?.created_by_me ?? 0} size="small">Tạo bởi tôi</Badge> },
               { value: 'WATCHING', label: <Badge count={summary?.watching ?? 0} size="small">Tôi theo dõi</Badge> },
-              { value: 'TEAM', label: <Badge count={summary?.team_members ?? 0} size="small">Nhân viên của tôi</Badge> },
+              { value: 'TEAM', label: <Badge count={summary?.team_members ?? 0} size="small">Nhóm của tôi</Badge> },
               { value: 'OVERDUE', label: <Badge count={summary?.overdue ?? 0} size="small">Quá hạn</Badge> },
             ]}
           />
         </div>
-        <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Select<'ALL' | TaskStatus>
-            value={statusFilter}
-            onChange={setStatusFilter}
-            style={{ width: 170 }}
-            options={[
-              { value: 'ALL', label: 'Mọi trạng thái mở' },
-              { value: 'TODO', label: 'Chờ thực hiện' },
-              { value: 'IN_PROGRESS', label: 'Đang thực hiện' },
-            ]}
+        <div
+          style={{
+            marginTop: 14,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+            gap: 10,
+          }}
+        >
+          {[
+            { label: 'Đang hiển thị', value: inboxMetrics.total, tone: '#1d4ed8' },
+            { label: 'Quá hạn', value: inboxMetrics.overdue, tone: '#dc2626' },
+            { label: 'Đến hạn hôm nay', value: inboxMetrics.dueToday, tone: '#d97706' },
+            { label: 'Cần hỗ trợ', value: inboxMetrics.needHelp, tone: '#b45309' },
+            { label: 'Đang chặn luồng', value: inboxMetrics.blocking, tone: '#be123c' },
+            { label: 'Ưu tiên cao/khẩn', value: inboxMetrics.hot, tone: '#7c3aed' },
+          ].map((item) => (
+            <div key={item.label} style={SUMMARY_TILE_STYLE}>
+              <Text type="secondary" style={{ fontSize: 12 }}>{item.label}</Text>
+              <div style={{ fontSize: 28, fontWeight: 700, color: item.tone, lineHeight: 1.15, marginTop: 6 }}>
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
+        {(inboxMetrics.overdue > 0 || inboxMetrics.needHelp > 0 || inboxMetrics.blocking > 0) && (
+          <Alert
+            style={{ marginTop: 14 }}
+            type={inboxMetrics.overdue > 0 || inboxMetrics.blocking > 0 ? 'warning' : 'info'}
+            showIcon
+            message="Bảng điều phối đang có nhiệm vụ cần ưu tiên xử lý"
+            description={[
+              inboxMetrics.overdue > 0 ? `${inboxMetrics.overdue} nhiệm vụ quá hạn` : null,
+              inboxMetrics.needHelp > 0 ? `${inboxMetrics.needHelp} nhiệm vụ đang cần hỗ trợ` : null,
+              inboxMetrics.blocking > 0 ? `${inboxMetrics.blocking} nhiệm vụ đang chặn luồng` : null,
+            ].filter(Boolean).join(' · ')}
           />
-          <Select<'ALL' | TaskPriority>
-            value={priorityFilter}
-            onChange={setPriorityFilter}
-            style={{ width: 150 }}
-            options={[
-              { value: 'ALL', label: 'Mọi ưu tiên' },
-              { value: 'LOW', label: TASK_PRIORITY_LABELS.LOW },
-              { value: 'MEDIUM', label: TASK_PRIORITY_LABELS.MEDIUM },
-              { value: 'HIGH', label: TASK_PRIORITY_LABELS.HIGH },
-              { value: 'URGENT', label: TASK_PRIORITY_LABELS.URGENT },
-            ]}
-          />
-          <Select<SortMode>
-            value={sortMode}
-            onChange={setSortMode}
-            style={{ width: 190 }}
-            options={[
-              { value: 'SMART', label: 'Sắp xếp thông minh' },
-              { value: 'DUE_ASC', label: 'Hạn gần nhất trước' },
-              { value: 'DUE_DESC', label: 'Hạn xa nhất trước' },
-              { value: 'UPDATED_DESC', label: 'Cập nhật mới nhất' },
-            ]}
-          />
+        )}
+        <div
+          data-testid="task-inbox-command-strip"
+          style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}
+        >
+          <div data-testid="task-inbox-status-filter" style={{ display: 'inline-block' }}>
+            <Select<'ALL' | TaskStatus>
+              value={statusFilter}
+              onChange={setStatusFilter}
+              style={{ width: 170 }}
+              options={[
+                { value: 'ALL', label: 'Mọi trạng thái mở' },
+                { value: 'TODO', label: 'Chờ thực hiện' },
+                { value: 'IN_PROGRESS', label: 'Đang thực hiện' },
+              ]}
+            />
+          </div>
+          <div data-testid="task-inbox-priority-filter" style={{ display: 'inline-block' }}>
+            <Select<'ALL' | TaskPriority>
+              value={priorityFilter}
+              onChange={setPriorityFilter}
+              style={{ width: 150 }}
+              options={[
+                { value: 'ALL', label: 'Mọi ưu tiên' },
+                { value: 'LOW', label: TASK_PRIORITY_LABELS.LOW },
+                { value: 'MEDIUM', label: TASK_PRIORITY_LABELS.MEDIUM },
+                { value: 'HIGH', label: TASK_PRIORITY_LABELS.HIGH },
+                { value: 'URGENT', label: TASK_PRIORITY_LABELS.URGENT },
+              ]}
+            />
+          </div>
+          <div data-testid="task-inbox-sort-filter" style={{ display: 'inline-block' }}>
+            <Select<SortMode>
+              value={sortMode}
+              onChange={setSortMode}
+              style={{ width: 190 }}
+              options={[
+                { value: 'SMART', label: 'Sắp xếp thông minh' },
+                { value: 'DUE_ASC', label: 'Hạn gần nhất trước' },
+                { value: 'DUE_DESC', label: 'Hạn xa nhất trước' },
+                { value: 'UPDATED_DESC', label: 'Cập nhật mới nhất' },
+              ]}
+            />
+          </div>
           <Button
             onClick={() => {
               setStatusFilter('ALL');
@@ -888,26 +1029,42 @@ export default function TaskInbox() {
           >
             Đặt lại lọc
           </Button>
-          <Button onClick={() => void saveCurrentView()}>
+          <Button onClick={refreshInbox}>
+            Làm mới ngay
+          </Button>
+          <Button data-testid="task-inbox-save-view" onClick={() => void saveCurrentView()} disabled={isPreferencesLoading}>
             Lưu chế độ xem
           </Button>
-          <Button onClick={applySavedView}>
-            Dùng chế độ đã lưu
+          <Button data-testid="task-inbox-restore-view" onClick={applySavedView} disabled={isPreferencesLoading}>
+            Áp dụng chế độ đã lưu
           </Button>
-          <Button onClick={() => setIsPresetModalOpen(true)}>
-            Lưu mẫu lọc mới
+          <Button
+            data-testid="task-inbox-open-preset-modal"
+            onClick={() => {
+              setPresetName(selectedPreset?.name ?? '');
+              setIsPresetModalOpen(true);
+            }}
+            disabled={isPreferencesLoading}
+          >
+            Lưu mẫu mới
           </Button>
-          <Select<string>
-            value={selectedPresetId}
-            onChange={setSelectedPresetId}
-            style={{ width: 200 }}
-            options={[
-              { value: 'NONE', label: 'Chọn mẫu lọc cá nhân' },
-              ...namedPresets.map((p) => ({ value: p.id, label: p.name })),
-            ]}
-          />
-          <Button onClick={applyNamedPreset}>Áp dụng mẫu lọc</Button>
-          <Button danger onClick={() => void deleteNamedPreset()}>Xóa mẫu lọc</Button>
+          <div data-testid="task-inbox-preset-select" style={{ display: 'inline-block' }}>
+            <Select<string>
+              allowClear
+              value={selectedPresetId}
+              onChange={(value) => setSelectedPresetId(value)}
+              disabled={isPreferencesLoading}
+              style={{ width: 200 }}
+              options={namedPresets.map((p) => ({ value: p.id, label: p.name }))}
+              placeholder="Chọn mẫu lọc cá nhân"
+            />
+          </div>
+          <Button data-testid="task-inbox-apply-preset" onClick={applyNamedPreset} disabled={isPreferencesLoading}>
+            Áp dụng mẫu lọc
+          </Button>
+          <Button danger data-testid="task-inbox-delete-preset" onClick={() => void deleteNamedPreset()} disabled={isPreferencesLoading}>
+            Xóa mẫu lọc
+          </Button>
           <Button onClick={exportFilteredCsv}>
             Xuất CSV
           </Button>
@@ -922,26 +1079,39 @@ export default function TaskInbox() {
               message.success('Đã xóa lịch sử thao tác hàng loạt.');
             }}
           >
-            Xóa lịch sử bulk
+            Xóa lịch sử hàng loạt
           </Button>
           <Space size={6}>
             <Text type="secondary">Tự làm mới</Text>
             <Switch checked={autoRefresh} onChange={setAutoRefresh} size="small" />
           </Space>
           <Space size={6}>
-            <Text type="secondary">Đồng bộ realtime</Text>
+            <Text type="secondary">Theo dõi trực tiếp</Text>
             <Switch checked={liveSync} onChange={setLiveSync} size="small" />
           </Space>
           <Tag color="processing" style={{ marginInlineEnd: 0 }}>Hiển thị {filteredData.length} nhiệm vụ</Tag>
+          {savedViewSnapshot ? <Tag style={{ marginInlineEnd: 0 }}>Có chế độ xem đã lưu</Tag> : null}
+          {inboxMetrics.unassigned > 0 && (
+            <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+              Chưa giao: {inboxMetrics.unassigned}
+            </Tag>
+          )}
           {liveSync && (
             <Tag color={taskLiveUpdatesQuery.data?.has_changes ? 'gold' : 'cyan'}>
-              Realtime: {taskLiveUpdatesQuery.isFetching ? 'đang kiểm tra' : 'đang chạy'}
+              Trực tiếp: {taskLiveUpdatesQuery.isFetching ? 'đang kiểm tra' : 'đang hoạt động'}
             </Tag>
           )}
           <Tag>
             Cập nhật: {tasksQuery.dataUpdatedAt ? dayjs(tasksQuery.dataUpdatedAt).format('HH:mm:ss') : '--:--:--'}
           </Tag>
         </div>
+        {activeFilterTags.length > 0 && (
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {activeFilterTags.map((item) => (
+              <Tag key={item}>{item}</Tag>
+            ))}
+          </div>
+        )}
         {selectedEffectiveIds.length > 0 && (
           <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Tag color="purple">Đã chọn {selectedEffectiveIds.length} nhiệm vụ</Tag>
@@ -978,7 +1148,41 @@ export default function TaskInbox() {
           </div>
         )}
       </Card>
-      <Card size="small" title="Lịch sử thao tác hàng loạt">
+      <Card size="small" title="Nhật ký thao tác hàng loạt">
+        <div
+          style={{
+            marginBottom: 12,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+            gap: 10,
+          }}
+        >
+          {[
+            { label: 'Bản ghi hiển thị', value: bulkHistoryMetrics.total, tone: '#1d4ed8' },
+            { label: 'Lượt có lỗi', value: bulkHistoryMetrics.withErrors, tone: '#dc2626' },
+            { label: 'Lượt gửi nhắc', value: bulkHistoryMetrics.reminderRuns, tone: '#d97706' },
+            { label: 'Tác vụ đã xử lý', value: bulkHistoryMetrics.processed, tone: '#0f766e' },
+          ].map((item) => (
+            <div key={item.label} style={SUMMARY_TILE_STYLE}>
+              <Text type="secondary" style={{ fontSize: 12 }}>{item.label}</Text>
+              <div style={{ fontSize: 28, fontWeight: 700, color: item.tone, lineHeight: 1.15, marginTop: 6 }}>
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
+        {(bulkHistoryMetrics.withErrors > 0 || lastBulkHistoryAt) && (
+          <Alert
+            style={{ marginBottom: 12 }}
+            type={bulkHistoryMetrics.withErrors > 0 ? 'warning' : 'info'}
+            showIcon
+            message={bulkHistoryMetrics.withErrors > 0 ? 'Có lượt xử lý hàng loạt phát sinh lỗi' : 'Nhật ký thao tác hàng loạt đã sẵn sàng để đối soát'}
+            description={[
+              bulkHistoryMetrics.withErrors > 0 ? `${bulkHistoryMetrics.withErrors} bản ghi có lỗi xử lý` : null,
+              lastBulkHistoryAt ? `Lần gần nhất: ${dayjs(lastBulkHistoryAt).format('DD/MM/YYYY HH:mm:ss')}` : null,
+            ].filter(Boolean).join(' · ')}
+          />
+        )}
         <div style={{ marginBottom: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Select<'ALL' | BulkHistoryAction>
             value={bulkHistoryActionFilter}
@@ -998,8 +1202,8 @@ export default function TaskInbox() {
             style={{ width: 180 }}
             options={[
               { value: 'ALL', label: 'Mọi kết quả' },
-              { value: 'SUCCESS', label: 'Không lỗi' },
-              { value: 'HAS_ERROR', label: 'Có lỗi' },
+              { value: 'SUCCESS', label: 'Không có lỗi' },
+              { value: 'HAS_ERROR', label: 'Có lỗi xử lý' },
             ]}
           />
           <Button onClick={exportBulkHistoryCsv}>Xuất CSV lịch sử</Button>
@@ -1008,7 +1212,7 @@ export default function TaskInbox() {
         {bulkHistoryQuery.isLoading ? (
           <div style={{ textAlign: 'center', padding: 18 }}><Spin /></div>
         ) : !visibleBulkHistory.length ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có lịch sử thao tác." />
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có lịch sử thao tác hàng loạt." />
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {visibleBulkHistory.slice(0, 20).map((item) => (
@@ -1037,7 +1241,7 @@ export default function TaskInbox() {
         {tasksQuery.isLoading ? (
           <div style={{ textAlign: 'center', padding: 30 }}><Spin /></div>
         ) : filteredData.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có nhiệm vụ phù hợp." />
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có nhiệm vụ phù hợp với bộ lọc hiện tại." />
         ) : (
           <Table<TaskItem>
             rowKey="id"
@@ -1104,6 +1308,7 @@ export default function TaskInbox() {
         cancelText="Hủy"
       >
         <Input
+          data-testid="task-inbox-preset-name"
           value={presetName}
           onChange={(e) => setPresetName(e.target.value)}
           placeholder="Ví dụ: Ca sáng / Quá hạn cao / Theo dõi QC"

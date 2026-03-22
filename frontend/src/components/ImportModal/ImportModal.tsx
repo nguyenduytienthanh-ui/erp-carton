@@ -66,7 +66,7 @@ const ImportModal = ({
       }
 
       setFile(file);
-      return false; // Prevent auto upload
+      return false; // Không tự tải lên ngay
     },
     onRemove: () => {
       setFile(null);
@@ -101,14 +101,14 @@ const ImportModal = ({
       setResult(result);
 
       if (result.error_count === 0) {
-        message.success(`Import thành công ${result.success_count} ${entityName}!`);
+        message.success(`Nhập thành công ${result.success_count} ${entityName}!`);
         setTimeout(() => {
           onSuccess();
           handleClose();
         }, 1500);
       } else {
         message.warning({
-          content: `Import hoàn tất: ${result.success_count} thành công, ${result.error_count} lỗi. Xem chi tiết bên dưới.`,
+          content: `Nhập hoàn tất: ${result.success_count} thành công, ${result.error_count} lỗi. Xem chi tiết bên dưới.`,
           duration: 5,
         });
         onSuccess();
@@ -116,7 +116,7 @@ const ImportModal = ({
     } catch (error: unknown) {
       const typedError = error as ApiErrorShape;
       const data = typedError.response?.data;
-      let errMsg = 'Import thất bại!';
+      let errMsg = 'Nhập dữ liệu thất bại!';
       if (data) {
         if (typeof data.error === 'string') errMsg = data.error;
         else if (typeof data.detail === 'string') errMsg = data.detail;
@@ -134,13 +134,13 @@ const ImportModal = ({
 
   return (
     <Modal
-      title={`Import ${entityName} từ Excel`}
+      title={`Nhập ${entityName} từ Excel`}
       open={visible}
       onCancel={handleClose}
       width={700}
       footer={[
         <Button key="template" icon={<DownloadOutlined />} onClick={onDownloadTemplate}>
-          Tải Template
+          Tải mẫu
         </Button>,
         <Button key="cancel" onClick={handleClose}>
           Đóng
@@ -152,7 +152,7 @@ const ImportModal = ({
           onClick={handleImport}
           disabled={!file}
         >
-          Import
+          Nhập dữ liệu
         </Button>,
       ]}
     >
@@ -160,10 +160,10 @@ const ImportModal = ({
         message="Hướng dẫn"
         description={
           <div>
-            <p>1. <strong>Tải xuống</strong> file mẫu (nút &quot;Tải Template&quot;) rồi điền dữ liệu vào Excel.</p>
+            <p>1. <strong>Tải xuống</strong> file mẫu (nút &quot;Tải mẫu&quot;) rồi điền dữ liệu vào Excel.</p>
             <p>2. <strong>Bắt buộc</strong>: Tên hàng, Mã đơn vị (phải tồn tại trong hệ thống). Mã hàng trùng: báo lỗi hoặc cập nhật (nếu chọn bên dưới).</p>
             <p>3. <strong>Tải lên</strong>: kéo thả file vào vùng bên dưới hoặc bấm để chọn file.</p>
-            <p>4. Sau khi chọn file, bấm nút <strong>&quot;Import&quot;</strong> để nhập dữ liệu.</p>
+            <p>4. Sau khi chọn file, bấm nút <strong>&quot;Nhập dữ liệu&quot;</strong> để đưa dữ liệu vào hệ thống.</p>
           </div>
         }
         type="info"
@@ -184,14 +184,14 @@ const ImportModal = ({
         <p className="ant-upload-drag-icon">
           <InboxOutlined />
         </p>
-        <p className="ant-upload-text">Click hoặc kéo file vào đây để upload</p>
+        <p className="ant-upload-text">Bấm hoặc kéo file vào đây để tải lên</p>
         <p className="ant-upload-hint">Hỗ trợ file .xlsx, .xls (tối đa 10MB)</p>
       </Upload.Dragger>
 
       {result && (
         <div style={{ marginTop: theme.spacing.lg }}>
           <Alert
-            message="Kết quả import"
+            message="Kết quả nhập dữ liệu"
             description={
               <div>
                 <p>✅ Thành công: {result.success_count}</p>

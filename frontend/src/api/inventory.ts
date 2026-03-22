@@ -2,6 +2,7 @@ import axiosInstance from './axios';
 import { API_ENDPOINTS } from '../utils/constants';
 import type {
   InventoryReservation,
+  InventoryForecastRow,
   InventorySalesOrderDetail,
   InventorySalesOrderOption,
   InventoryStockRow,
@@ -9,9 +10,12 @@ import type {
   InventoryTransaction,
   OutboundShipment,
   PaginatedResponse,
+  StockAlert,
   Stocktake,
   StocktakeFormLine,
   Warehouse,
+  WarehouseTransfer,
+  WarehouseTransferLine,
   WarehouseLocation,
 } from '../types/inventory';
 
@@ -51,6 +55,12 @@ type InventoryReservationPayload = Omit<
   | 'warehouse_name'
   | 'location_name'
 >;
+type WarehouseTransferPayload = Pick<
+  WarehouseTransfer,
+  'transfer_date' | 'from_warehouse' | 'to_warehouse' | 'reference' | 'note'
+> & {
+  lines: Array<Partial<WarehouseTransferLine>>;
+};
 
 export const inventoryApi = {
   getWarehouses: async (params?: Record<string, unknown>): Promise<PaginatedResponse<Warehouse>> => {
@@ -123,6 +133,10 @@ export const inventoryApi = {
     const response = await axiosInstance.get(`${API_ENDPOINTS.INVENTORY_STOCK}summary/`);
     return response.data;
   },
+  getInventoryForecast: async (params?: { months?: number; lead_time?: number }): Promise<InventoryForecastRow[]> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.INVENTORY_FORECAST, { params });
+    return Array.isArray(response.data) ? response.data : response.data?.results ?? [];
+  },
   getNxtReport: async (params: { date_from: string; date_to: string; warehouse?: number }): Promise<{
     date_from: string;
     date_to: string;
@@ -186,7 +200,7 @@ export const inventoryApi = {
   },
 
   // Stock Alerts
-  getStockAlerts: async (params?: Record<string, unknown>): Promise<PaginatedResponse<any>> => {
+  getStockAlerts: async (params?: Record<string, unknown>): Promise<PaginatedResponse<StockAlert>> => {
     const response = await axiosInstance.get('api/inventory/stock-alerts/', { params });
     return response.data;
   },
@@ -200,19 +214,19 @@ export const inventoryApi = {
   },
 
   // Warehouse Transfers
-  getWarehouseTransfers: async (params?: Record<string, unknown>): Promise<PaginatedResponse<any>> => {
+  getWarehouseTransfers: async (params?: Record<string, unknown>): Promise<PaginatedResponse<WarehouseTransfer>> => {
     const response = await axiosInstance.get('api/inventory/warehouse-transfers/', { params });
     return response.data;
   },
-  getWarehouseTransfer: async (id: number): Promise<any> => {
+  getWarehouseTransfer: async (id: number): Promise<WarehouseTransfer> => {
     const response = await axiosInstance.get(`api/inventory/warehouse-transfers/${id}/`);
     return response.data;
   },
-  createWarehouseTransfer: async (payload: Record<string, unknown>): Promise<any> => {
+  createWarehouseTransfer: async (payload: WarehouseTransferPayload): Promise<WarehouseTransfer> => {
     const response = await axiosInstance.post('api/inventory/warehouse-transfers/', payload);
     return response.data;
   },
-  updateWarehouseTransfer: async (id: number, payload: Record<string, unknown>): Promise<any> => {
+  updateWarehouseTransfer: async (id: number, payload: WarehouseTransferPayload): Promise<WarehouseTransfer> => {
     const response = await axiosInstance.patch(`api/inventory/warehouse-transfers/${id}/`, payload);
     return response.data;
   },

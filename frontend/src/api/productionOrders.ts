@@ -1,64 +1,62 @@
 import axiosInstance from './axios';
 import type { PaginatedResponse } from '../types/production';
+import type {
+  ProductionIssue,
+  ProductionOrder,
+} from '../types/productionOrders';
+
+type ProductionOrderPayload = Partial<ProductionOrder> & Record<string, unknown>;
+type ProductionIssuePayload = Partial<ProductionIssue> & Record<string, unknown>;
+type ActionResponse = Record<string, unknown>;
 
 export const productionOrdersApi = {
-  // Lấy danh sách lệnh sản xuất
-  getOrders: async (params?: Record<string, unknown>): Promise<PaginatedResponse<any>> => {
-    const response = await axiosInstance.get('api/production/orders/', { params });
+  getOrders: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ProductionOrder>> => {
+    const response = await axiosInstance.get<PaginatedResponse<ProductionOrder>>('api/production/orders/', { params });
     return response.data;
   },
 
-  // Lấy chi tiết lệnh sản xuất
-  getOrder: async (id: number): Promise<any> => {
-    const response = await axiosInstance.get(`api/production/orders/${id}/`);
+  getOrder: async (id: number): Promise<ProductionOrder> => {
+    const response = await axiosInstance.get<ProductionOrder>(`api/production/orders/${id}/`);
     return response.data;
   },
 
-  // Tạo lệnh sản xuất mới
-  createOrder: async (data: any): Promise<any> => {
-    const response = await axiosInstance.post('api/production/orders/', data);
+  createOrder: async (data: ProductionOrderPayload): Promise<ProductionOrder> => {
+    const response = await axiosInstance.post<ProductionOrder>('api/production/orders/', data);
     return response.data;
   },
 
-  // Cập nhật lệnh sản xuất
-  updateOrder: async (id: number, data: any): Promise<any> => {
-    const response = await axiosInstance.put(`api/production/orders/${id}/`, data);
+  updateOrder: async (id: number, data: ProductionOrderPayload): Promise<ProductionOrder> => {
+    const response = await axiosInstance.put<ProductionOrder>(`api/production/orders/${id}/`, data);
     return response.data;
   },
 
-  // Xóa lệnh sản xuất
-  deleteOrder: async (id: number): Promise<any> => {
-    const response = await axiosInstance.delete(`api/production/orders/${id}/`);
+  deleteOrder: async (id: number): Promise<ActionResponse> => {
+    const response = await axiosInstance.delete<ActionResponse>(`api/production/orders/${id}/`);
     return response.data;
   },
 
-  // Bắt đầu sản xuất
-  startProduction: async (id: number): Promise<any> => {
-    const response = await axiosInstance.post(`api/production/orders/${id}/start_production/`);
+  startProduction: async (id: number): Promise<ActionResponse> => {
+    const response = await axiosInstance.post<ActionResponse>(`api/production/orders/${id}/start_production/`);
     return response.data;
   },
 
-  // Hoàn thành sản xuất
-  completeProduction: async (id: number, data: any): Promise<any> => {
-    const response = await axiosInstance.post(`api/production/orders/${id}/complete_production/`, data);
+  completeProduction: async (id: number, data: Record<string, unknown>): Promise<ActionResponse> => {
+    const response = await axiosInstance.post<ActionResponse>(`api/production/orders/${id}/complete_production/`, data);
     return response.data;
   },
 
-  // Hủy lệnh sản xuất
-  cancelOrder: async (id: number, reason: string): Promise<any> => {
-    const response = await axiosInstance.post(`api/production/orders/${id}/cancel/`, { reason });
+  cancelOrder: async (id: number, reason: string): Promise<ActionResponse> => {
+    const response = await axiosInstance.post<ActionResponse>(`api/production/orders/${id}/cancel/`, { reason });
     return response.data;
   },
 
-  // Phát hành nguyên vật liệu
-  issueMaterials: async (_id: number, data: any): Promise<any> => {
-    const response = await axiosInstance.post(`api/production/issues/`, data);
+  issueMaterials: async (_id: number, data: ProductionIssuePayload): Promise<ProductionIssue> => {
+    const response = await axiosInstance.post<ProductionIssue>('api/production/issues/', data);
     return response.data;
   },
 
-  // Lấy danh sách phát hành nguyên vật liệu
-  getIssues: async (params?: Record<string, unknown>): Promise<PaginatedResponse<any>> => {
-    const response = await axiosInstance.get('api/production/issues/', { params });
+  getIssues: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ProductionIssue>> => {
+    const response = await axiosInstance.get<PaginatedResponse<ProductionIssue>>('api/production/issues/', { params });
     return response.data;
   },
 };

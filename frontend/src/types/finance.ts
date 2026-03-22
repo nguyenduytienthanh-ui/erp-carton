@@ -215,6 +215,48 @@ export interface PayableDocument {
   settlements: PayableSettlement[];
 }
 
+export type BudgetPlanStatus = 'ON_TRACK' | 'OVER_BUDGET';
+
+export interface BudgetPlan {
+  id: number;
+  department: string;
+  category: string;
+  fiscal_year: number;
+  budgeted_amount: string;
+  actual_amount: string;
+  committed_amount: string;
+  available: string;
+  status: BudgetPlanStatus;
+  variance_percentage: number;
+  note: string;
+  is_active: boolean;
+  created_by?: number | null;
+  updated_by?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BudgetVarianceDepartmentRow {
+  department: string;
+  budgeted_amount: string;
+  actual_amount: string;
+  committed_amount: string;
+  available_amount: string;
+}
+
+export interface BudgetVarianceAnalysisResponse {
+  total_count: number;
+  over_budget_count: number;
+  on_track_count: number;
+  active_count: number;
+  total_budgeted: string;
+  total_actual: string;
+  total_committed: string;
+  total_available: string;
+  utilization_percentage: string | number;
+  departments: BudgetVarianceDepartmentRow[];
+}
+
 export interface ArApSummaryResponse {
   count: number;
   open_count: number;
@@ -296,6 +338,37 @@ export interface FinanceMonthCloseCheckResponse {
   is_ready: boolean;
   blockers: FinanceMonthCloseCheckItem[];
   warnings: FinanceMonthCloseCheckItem[];
+}
+
+export interface FinanceMonthlySummaryResponse {
+  month: string;
+  total_income: string;
+  total_expense: string;
+  total_transfer: string;
+  cash_delta: string;
+  total_advance: string;
+  total_settlement_spent: string;
+  total_settlement_refund: string;
+  advance_net_delta: string;
+  transactions_count: number;
+  advances_count: number;
+  settlements_count: number;
+}
+
+export interface FinanceTrend12mItem {
+  month: string;
+  total_income: string;
+  total_expense: string;
+  cash_delta: string;
+  total_advance: string;
+  total_settlement_spent: string;
+  total_settlement_refund: string;
+  advance_net_delta: string;
+}
+
+export interface FinanceTrend12mResponse {
+  end_month: string;
+  items: FinanceTrend12mItem[];
 }
 
 export interface AdvanceOverdueBucket {
@@ -435,10 +508,22 @@ export interface AdvanceApprovalQueueResponse {
   items: AdvanceApprovalQueueItem[];
 }
 
+export interface AdvanceApprovalHistoryItem {
+  action: string;
+  action_label?: string;
+  level?: number;
+  user?: string | null;
+  comments?: string | null;
+  created_at: string;
+}
+
 export interface AdvanceApprovalSlaPolicy {
   sla_hours_l1: number;
   sla_hours_l2: number;
   remind_every_hours: number;
+  escalation_hours_l1: number;
+  escalation_hours_l2: number;
+  escalation_cooldown_hours: number;
   window_days: number;
 }
 
@@ -459,6 +544,28 @@ export interface AdvanceApprovalSlaOverviewResponse {
     total_amount: string;
     max_wait_hours: number;
   }>;
+}
+
+export interface AdvanceApprovalSlaReminderHistoryItem {
+  level_key: number;
+  level_label: string;
+  latest_created_at: string;
+  sent_count: number;
+  unread_count: number;
+  read_count: number;
+  read_rate: number;
+  sample_recipients: string[];
+}
+
+export interface AdvanceApprovalSlaReminderHistoryResponse {
+  days: number;
+  summary: {
+    total_sent: number;
+    total_read: number;
+    total_unread: number;
+    overall_read_rate: number;
+  };
+  items: AdvanceApprovalSlaReminderHistoryItem[];
 }
 
 export interface ExecutiveKpiResponse {

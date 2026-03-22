@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Button, Form, Input, InputNumber, Modal, Space, Switch, Table, message } from 'antd';
+import { Alert, Button, Card, Form, Input, InputNumber, Modal, Rate, Space, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -12,10 +12,19 @@ import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { canManagePurchasingData } from '../../utils/authz';
 import { getToastMessage } from '../../shared/apiError';
 
+const { Text, Title } = Typography;
 
 type SupplierFilters = { activeOnly: boolean };
 type SupplierFormValues = Omit<Supplier, 'id' | 'created_at' | 'updated_at'>;
 
+const SUMMARY_TILE_STYLE = {
+  border: '1px solid #e5e7eb',
+  borderRadius: 18,
+  padding: '14px 16px',
+  background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+  boxShadow: '0 12px 24px rgba(15, 23, 42, 0.04)',
+  height: '100%',
+};
 
 const emptyForm: SupplierFormValues = {
   code: '',
@@ -34,11 +43,9 @@ const emptyForm: SupplierFormValues = {
   is_active: true,
 };
 
-
 function serializeFilters(filters: SupplierFilters): string {
   return JSON.stringify(filters);
 }
-
 
 function parseFilters(raw: string): SupplierFilters {
   try {
@@ -49,6 +56,10 @@ function parseFilters(raw: string): SupplierFilters {
   }
 }
 
+function toNumber(value: unknown): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 export default function SupplierList() {
   const [messageApi, contextHolder] = message.useMessage();
@@ -77,7 +88,7 @@ export default function SupplierList() {
     if (intentSearch.trim()) next.q = intentSearch.trim();
     if (intentFilters.activeOnly) next.is_active = 'true';
     return next;
-  }, [intentSearch, intentFilters, page, pageSize]);
+  }, [intentFilters, intentSearch, page, pageSize]);
 
   const listQuery = useQuery({
     queryKey: ['purchasing-suppliers', params],
@@ -114,17 +125,72 @@ export default function SupplierList() {
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
+  const rows = listQuery.data?.results ?? [];
+
+  const summary = useMemo(() => {
+    const activeCount = rows.filter((row) => row.is_active).length;
+    const preferredCount = rows.filter((row) => row.is_preferred).length;
+    const avgRating = rows.length ? rows.reduce((acc, row) => acc + toNumber(row.rating), 0) / rows.length : 0;
+    const missingContactCount = rows.filter((row) => !row.contact_person && !row.phone && !row.email).length;
+    return { activeCount, preferredCount, avgRating, missingContactCount };
+  }, [rows]);
+
+  const statusAlert = useMemo(() => {
+    if (summary.missingContactCount > 0) {
+      return {
+        type: 'warning' as const,
+        message: `Có ${summary.missingContactCount} nhà cung cấp thiếu thông tin liên hệ rõ ràng.`,
+        description: 'Nên bổ sung người liên hệ, điện thoại hoặc email trước khi dùng các đối tác này cho luồng mua hàng khẩn.',
+      };
+    }
+    if (summary.preferredCount > 0) {
+      return {
+        type: 'info' as const,
+        message: `Hiện có ${summary.preferredCount} nhà cung cấp được đánh dấu ưu tiên.`,
+        description: 'Bạn có thể dùng màn này để rà lại hạn thanh toán và chất lượng đối tác trước khi phân bổ forecast mua hàng.',
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'Danh mục nhà cung cấp đang gọn và sẵn sàng vận hành.',
+      description: 'Không có cảnh báo nổi bật trên bộ lọc hiện tại.',
+    };
+  }, [summary.missingContactCount, summary.preferredCount]);
+
+  const activeFilterTags = useMemo(() => {
+    const tags: string[] = [];
+    if (intentSearch.trim()) tags.push(`Từ khóa: ${intentSearch.trim()}`);
+    tags.push(intentFilters.activeOnly ? 'Chỉ hiển thị nhà cung cấp đang dùng' : 'Hiển thị cả nhà cung cấp ngưng dùng');
+    return tags;
+  }, [intentFilters.activeOnly, intentSearch]);
+
   const columns: ColumnsType<Supplier> = [
     { title: 'Mã NCC', dataIndex: 'code', width: 120 },
-    { title: 'Tên NCC', dataIndex: 'name', width: 220 },
+    {
+      title: 'Tên NCC',
+      dataIndex: 'name',
+      width: 220,
+      render: (value, row) => (
+        <Space direction="vertical" size={2}>
+          <span>{value}</span>
+          <Space wrap size={4}>
+            {row.is_preferred ? <Tag color="success">Ưu tiên</Tag> : null}
+            {!row.is_active ? <Tag color="default">Ngưng dùng</Tag> : null}
+          </Space>
+        </Space>
+      ),
+    },
     { title: 'Công ty', dataIndex: 'company_name', width: 220, render: (value) => value || '-' },
     { title: 'Người liên hệ', dataIndex: 'contact_person', width: 160, render: (value) => value || '-' },
     { title: 'Điện thoại', dataIndex: 'phone', width: 140, render: (value) => value || '-' },
     { title: 'Email', dataIndex: 'email', width: 200, render: (value) => value || '-' },
     { title: 'Hạn TT', dataIndex: 'payment_terms_days', width: 100, render: (value) => `${value} ngày` },
-    { title: 'Ưu tiên', dataIndex: 'is_preferred', width: 90, render: (value) => (value ? 'Có' : 'Không') },
-    { title: 'Đánh giá', dataIndex: 'rating', width: 90 },
-    { title: 'Kích hoạt', dataIndex: 'is_active', width: 90, render: (value) => (value ? 'Có' : 'Không') },
+    {
+      title: 'Đánh giá',
+      dataIndex: 'rating',
+      width: 150,
+      render: (value) => <Rate disabled allowHalf value={toNumber(value)} />,
+    },
     {
       title: 'Thao tác',
       key: 'actions',
@@ -177,8 +243,8 @@ export default function SupplierList() {
       contact_person: values.contact_person?.trim() || '',
       contact_phone: values.contact_phone?.trim() || '',
       note: values.note?.trim() || '',
-      payment_terms_days: Number(values.payment_terms_days ?? 30),
-      rating: Number(values.rating ?? 3),
+      payment_terms_days: toNumber(values.payment_terms_days ?? 30),
+      rating: toNumber(values.rating ?? 3),
     };
     if (editing) {
       await updateMutation.mutateAsync({ id: editing.id, payload });
@@ -189,64 +255,101 @@ export default function SupplierList() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {contextHolder}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h2 style={{ margin: 0 }}>Nhà cung cấp</h2>
-          <div style={{ color: '#8c8c8c' }}>Danh mục đối tác mua hàng và cung ứng</div>
-        </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          disabled={!canManage}
-          onClick={() => {
-            setEditing(null);
-            form.setFieldsValue(emptyForm);
-            setOpenModal(true);
-          }}
-        >
-          Thêm NCC
-        </Button>
-      </div>
 
-      <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <Input
-          value={searchInput}
-          onChange={(e) => {
-            setSearchInput(e.target.value);
-            setPage(1);
-          }}
-          placeholder="Tìm kiếm tất cả cột..."
-          style={{ width: 320 }}
-          suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined}
-        />
-        <Space>
-          <span style={{ color: '#595959' }}>Chỉ hiển thị đang dùng</span>
-          <Switch
-            checked={filters.activeOnly}
-            onChange={(checked) => {
-              setFilters({ activeOnly: checked });
-              setPage(1);
-            }}
-          />
+      <Card>
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <Space wrap>
+                <Tag color="blue">Mua hàng</Tag>
+                <Tag color="gold">Nhà cung cấp</Tag>
+                <Tag color={canManage ? 'processing' : 'default'}>{canManage ? 'Danh mục vận hành' : 'Theo quyền hiện tại'}</Tag>
+              </Space>
+              <Title level={3} style={{ margin: '8px 0 4px' }}>Trung tâm nhà cung cấp</Title>
+              <Text type="secondary">Quản lý đối tác mua hàng, hạn thanh toán, mức ưu tiên và độ sẵn sàng vận hành của danh mục cung ứng.</Text>
+            </div>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              disabled={!canManage}
+              onClick={() => {
+                setEditing(null);
+                form.setFieldsValue(emptyForm);
+                setOpenModal(true);
+              }}
+            >
+              Thêm NCC
+            </Button>
+          </div>
+
+          <Alert showIcon type={statusAlert.type} message={statusAlert.message} description={statusAlert.description} />
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Đối tác trên trang" value={rows.length} suffix="NCC" />
+            </div>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Đang hoạt động" value={summary.activeCount} suffix="NCC" />
+            </div>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="NCC ưu tiên" value={summary.preferredCount} suffix="NCC" />
+            </div>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Điểm đánh giá TB" value={summary.avgRating} precision={1} suffix="/5" />
+            </div>
+          </div>
         </Space>
-        <Button
-          onClick={() => {
-            setSearchInput('');
-            setFilters({ activeOnly: true });
-            setPage(1);
-          }}
-        >
-          Xóa bộ lọc
-        </Button>
-      </div>
+      </Card>
+
+      <Card>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Input
+              value={searchInput}
+              onChange={(e) => {
+                setSearchInput(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Tìm kiếm tất cả cột..."
+              style={{ width: 320 }}
+              suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined}
+            />
+            <Space>
+              <span style={{ color: '#595959' }}>Chỉ hiển thị đang dùng</span>
+              <Switch
+                checked={filters.activeOnly}
+                onChange={(checked) => {
+                  setFilters({ activeOnly: checked });
+                  setPage(1);
+                }}
+              />
+            </Space>
+            <Button
+              onClick={() => {
+                setSearchInput('');
+                setFilters({ activeOnly: true });
+                setPage(1);
+              }}
+            >
+              Xóa bộ lọc
+            </Button>
+          </div>
+
+          <Space wrap>
+            {activeFilterTags.map((tag) => (
+              <Tag key={tag}>{tag}</Tag>
+            ))}
+          </Space>
+        </Space>
+      </Card>
 
       <Table
         rowKey="id"
         loading={listQuery.isLoading}
         columns={columns}
-        dataSource={listQuery.data?.results ?? []}
+        dataSource={rows}
         scroll={{ x: 1500 }}
         pagination={{
           current: page,
@@ -260,27 +363,6 @@ export default function SupplierList() {
               await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
             }
           },
-        }}
-        locale={{
-          emptyText: (listQuery.data?.results?.length ?? 0) === 0 && !listQuery.isLoading ? (
-            <div style={{ padding: 40, color: '#8c8c8c' }}>
-              {(intentSearch || (filters.activeOnly === false)) ? (
-                <div>
-                  <div style={{ marginBottom: 12 }}>Không tìm thấy nhà cung cấp phù hợp.</div>
-                  <Button
-                    type="link"
-                    onClick={() => {
-                      setSearchInput('');
-                      setFilters({ activeOnly: true });
-                      setPage(1);
-                    }}
-                  >
-                    Xóa bộ lọc
-                  </Button>
-                </div>
-              ) : 'Chưa có nhà cung cấp.'}
-            </div>
-          ) : undefined,
         }}
       />
 

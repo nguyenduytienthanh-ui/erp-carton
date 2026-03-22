@@ -22,6 +22,21 @@ from sales.services import (
 )
 
 
+def _create_outbound_shipment_audit_log(*, user, shipment, action, changed_fields, new_values, old_values=None):
+    from core.models import AuditLog
+
+    AuditLog.objects.create(
+        user=user,
+        action=action,
+        entity_type='OutboundShipment',
+        entity_id=shipment.id,
+        entity_code=shipment.code or '',
+        old_values=old_values,
+        new_values=new_values,
+        changed_fields=changed_fields,
+    )
+
+
 class SalesOrderDeliveryPlanSerializer(serializers.ModelSerializer):
     remaining_shipment_qty = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
     remaining_qty = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
@@ -480,7 +495,6 @@ class OutboundShipmentSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         from django.db import transaction
         from django.utils import timezone
-        from core.models import AuditLog
         
         lines_data = validated_data.pop('lines', [])
         request = self.context.get('request')
@@ -506,22 +520,25 @@ class OutboundShipmentSerializer(serializers.ModelSerializer):
             
             # Audit log
             if request:
-                AuditLog.objects.create(
+                _create_outbound_shipment_audit_log(
                     user=request.user,
                     action='CREATE',
-                    model_name='OutboundShipment',
-                    object_id=shipment.id,
-                    changes={'code': shipment.code, 'status': shipment.status}
+                    shipment=shipment,
+                    changed_fields=['code', 'status'],
+                    new_values={'code': shipment.code, 'status': shipment.status},
                 )
         
         return shipment
     
     def update(self, instance, validated_data):
         from django.db import transaction
-        from core.models import AuditLog
         
         lines_data = validated_data.pop('lines', None)
         request = self.context.get('request')
+        changed_fields = list(validated_data.keys())
+        if lines_data is not None:
+            changed_fields.append('lines')
+        old_status = instance.status
         
         with transaction.atomic():
             for k, v in validated_data.items():
@@ -537,12 +554,13 @@ class OutboundShipmentSerializer(serializers.ModelSerializer):
             
             # Audit log
             if request:
-                AuditLog.objects.create(
+                _create_outbound_shipment_audit_log(
                     user=request.user,
                     action='UPDATE',
-                    model_name='OutboundShipment',
-                    object_id=instance.id,
-                    changes=validated_data
+                    shipment=instance,
+                    changed_fields=changed_fields or ['status'],
+                    old_values={'status': old_status},
+                    new_values={'status': instance.status, 'reference': instance.reference},
                 )
         
         return instance

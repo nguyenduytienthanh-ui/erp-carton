@@ -2,9 +2,10 @@
  * TaskPanel — Panel giao nhiệm vụ hiện đại.
  * Tính năng: tạo, chỉnh sửa, giao lại, báo cần hỗ trợ, ghi chú tiến độ, bỏ blocking.
  */
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useDeferredValue } from 'react';
 import type React from 'react';
 import {
+  Alert,
   Avatar,
   Badge,
   Button,
@@ -65,6 +66,14 @@ import { storage } from '../../utils/storage';
 import CommentBox from '../CommentBox/CommentBox';
 import { SafeText as Text } from '../SafeText';
 const TASK_ACTIVITY_READ_KEY = 'task_activity_read_map_v1';
+
+const SUMMARY_TILE_STYLE = {
+  border: '1px solid #e5e7eb',
+  borderRadius: 18,
+  padding: '14px 16px',
+  background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+  boxShadow: '0 12px 24px rgba(15, 23, 42, 0.04)',
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -133,6 +142,31 @@ const PRIORITY_OPTIONS = [
 ];
 
 /** Hook: lấy danh sách người dùng để @mention trong Mentions component */
+const TASK_PRIORITY_WEIGHT: Record<TaskPriority, number> = {
+  LOW: 1,
+  MEDIUM: 2,
+  HIGH: 3,
+  URGENT: 4,
+};
+
+function getOverdueDays(task: TaskItem) {
+  return task.due_date && dayjs(task.due_date).isBefore(dayjs(), 'day')
+    ? dayjs().startOf('day').diff(dayjs(task.due_date), 'day')
+    : 0;
+}
+
+function getTaskRiskScore(task: TaskItem) {
+  const overdueDays = getOverdueDays(task);
+  const dependencyBlocked = task.depends_on_info && task.depends_on_info.status !== 'DONE' ? 1 : 0;
+  return (
+    (task.is_blocking ? 400 : 0) +
+    (task.needs_help ? 280 : 0) +
+    overdueDays * 18 +
+    (TASK_PRIORITY_WEIGHT[task.priority as TaskPriority] ?? 1) * 25 +
+    dependencyBlocked * 60
+  );
+}
+
 function useMentionOptions() {
   const [opts, setOpts] = useState<{ value: string; label: string }[]>([]);
   const [loading, setLoading] = useState(false);
@@ -155,14 +189,14 @@ function renderAssigneeDirectoryFilters(directory: AssigneeDirectoryState) {
         size="small"
         value={directory.search}
         onChange={(event) => directory.setSearch(event.target.value)}
-        placeholder="Tìm người theo tên, username, email..."
+        placeholder="Tìm người theo tên, tài khoản hoặc email..."
       />
       <Select
         size="small"
         allowClear
         virtual={false}
         value={directory.teamId}
-        placeholder="Lọc theo team"
+        placeholder="Lọc theo nhóm"
         onChange={(value) => directory.setTeamId(value ?? undefined)}
         options={directory.teams.map((team) => ({ value: team.id, label: `${team.code} - ${team.name}` }))}
       />
@@ -224,7 +258,7 @@ function renderFormFields(
         <Form.Item name="is_pinned" label="Ghim ưu tiên" valuePropName="checked" initialValue={false} style={{ marginBottom: 10 }}>
           <Switch size="small" />
         </Form.Item>
-        <Form.Item name="tags" label="Nhãn (tags)" style={{ marginBottom: 10 }}>
+        <Form.Item name="tags" label="Nhãn" style={{ marginBottom: 10 }}>
           <Select
             mode="tags"
             tokenSeparators={[',', ' ']}
@@ -280,9 +314,9 @@ function renderFormFields(
         <Form.Item
           name="is_blocking"
           label={
-            <Tooltip title="Bật = sản phẩm bị khoá cho đến khi nhiệm vụ DONE">
+            <Tooltip title="Bật = sản phẩm bị khóa cho đến khi nhiệm vụ hoàn thành">
               <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <LockOutlined /> Blocking
+                <LockOutlined /> Chặn
               </span>
             </Tooltip>
           }
@@ -348,6 +382,16 @@ function TaskDetailDrawer({ task, open, onClose }: TaskDetailDrawerProps) {
   };
 
   const currentUser = getCurrentUser();
+  const latestCommentAt = comments[0]?.created_at ?? null;
+  const latestAttachmentAt = attachments[0]?.uploaded_at ?? null;
+  const latestActivityAt = [task.last_update_at, latestCommentAt, latestAttachmentAt]
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => dayjs(b).valueOf() - dayjs(a).valueOf())[0] ?? null;
+  const isOverdue = Boolean(
+    task.due_date
+    && (task.status === 'TODO' || task.status === 'IN_PROGRESS')
+    && dayjs(task.due_date).isBefore(dayjs(), 'day')
+  );
 
   return (
     <Drawer
@@ -366,6 +410,30 @@ function TaskDetailDrawer({ task, open, onClose }: TaskDetailDrawerProps) {
       zIndex={1060}
       styles={{ body: { padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 0 } }}
     >
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          marginBottom: 14,
+          padding: '12px 14px',
+          borderRadius: 12,
+          background: '#f8fafc',
+          border: '1px solid #e2e8f0',
+        }}
+      >
+        <Tag color={TASK_PRIORITY_COLORS[task.priority as TaskPriority]}>{TASK_PRIORITY_LABELS[task.priority as TaskPriority]}</Tag>
+        <Tag>{TASK_STATUS_LABELS[task.status]}</Tag>
+        {task.due_date ? (
+          <Tag color={isOverdue ? 'error' : 'default'}>
+            Hạn: {dayjs(task.due_date).format('DD/MM/YYYY')}
+          </Tag>
+        ) : null}
+        <Tag color="blue">Bình luận: {comments.length}</Tag>
+        <Tag color="cyan">Tệp: {attachments.length}</Tag>
+        {latestActivityAt ? <Tag>Cập nhật gần nhất: {dayjs(latestActivityAt).format('DD/MM HH:mm')}</Tag> : null}
+      </div>
+
       {/* ── File đính kèm ──────────────────────────────────────────────── */}
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -382,7 +450,7 @@ function TaskDetailDrawer({ task, open, onClose }: TaskDetailDrawerProps) {
             accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.txt"
           >
             <Button size="small" icon={<PaperClipOutlined />} loading={uploading}>
-              Đính kèm
+              Tải tệp
             </Button>
           </Upload>
         </div>
@@ -541,6 +609,7 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
   const isDone = task.status === 'DONE';
   const isCancelled = task.status === 'CANCELLED';
   const isOverdue = isOpen && task.due_date && dayjs(task.due_date).isBefore(dayjs(), 'day');
+  const isDueToday = isOpen && task.due_date && dayjs(task.due_date).isSame(dayjs(), 'day');
 
   // So sánh ID cẩn thận: ép về số để tránh type mismatch từ localStorage
   const userId = user?.id ? Number(user.id) : null;
@@ -555,21 +624,22 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
   const hasUnreadActivity = task.activity_updated_at
     ? (lastReadAt ? dayjs(task.activity_updated_at).isAfter(dayjs(lastReadAt)) : hasAnyActivity)
     : false;
+  const lastTouchedAt = task.activity_updated_at || task.last_update_at || task.updated_at || task.created_at;
 
   const do_ = async (action: string, fn: () => Promise<TaskItem>) => {
     setLoading(action);
     try {
       await fn();
       void message.success(
-        action === 'start' ? 'Bắt đầu nhiệm vụ!' :
-        action === 'complete' ? 'Đã hoàn thành!' :
+        action === 'start' ? 'Đã bắt đầu nhiệm vụ.' :
+        action === 'complete' ? 'Đã hoàn thành nhiệm vụ.' :
         action === 'cancel' ? 'Đã hủy.' :
-        action === 'help' ? '🆘 Đã báo cần hỗ trợ!' :
-        action === 'resolve' ? '✅ Đã giải quyết hỗ trợ!' :
-        action === 'reassign' ? '🔄 Đã chuyển nhiệm vụ!' :
-        action === 'note' ? '📝 Đã lưu ghi chú!' :
-        action === 'remind' ? '⏰ Đã gửi nhắc quá hạn!' :
-        action === 'unblock' ? 'Đã bỏ blocking!' : 'Thành công!'
+        action === 'help' ? 'Đã gửi yêu cầu hỗ trợ.' :
+        action === 'resolve' ? 'Đã xác nhận hỗ trợ xong.' :
+        action === 'reassign' ? 'Đã chuyển nhiệm vụ.' :
+        action === 'note' ? 'Đã lưu ghi chú.' :
+        action === 'remind' ? 'Đã gửi nhắc quá hạn.' :
+        action === 'unblock' ? 'Đã gỡ trạng thái chặn.' : 'Thành công.'
       );
       onRefresh();
     } catch (err: unknown) {
@@ -641,11 +711,14 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
             )}
             {task.is_blocking && isOpen && (
               <Tooltip title="Nhiệm vụ này đang chặn sản xuất">
-                <Tag icon={<LockOutlined />} color="error" style={{ margin: 0, cursor: 'default' }}>Blocking</Tag>
+                <Tag icon={<LockOutlined />} color="error" style={{ margin: 0, cursor: 'default' }}>Chặn</Tag>
               </Tooltip>
             )}
             {isOverdue && !task.needs_help && (
               <Tag icon={<WarningOutlined />} color="warning" style={{ margin: 0, cursor: 'default' }}>Quá hạn</Tag>
+            )}
+            {isDueToday && !isOverdue && (
+              <Tag color="gold" style={{ margin: 0, cursor: 'default' }}>Đến hạn hôm nay</Tag>
             )}
             <Tag color={TASK_PRIORITY_COLORS[task.priority as TaskPriority]} style={{ margin: 0 }}>
               {TASK_PRIORITY_LABELS[task.priority as TaskPriority]}
@@ -681,7 +754,7 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
               <Text style={{ color: '#1d3461', fontSize: 12 }}>{task.last_update_note}</Text>
               {task.last_updated_by_info && (
                 <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
-                  — {task.last_updated_by_info.full_name}
+                  · {task.last_updated_by_info.full_name}
                   {task.last_update_at ? ` · ${dayjs(task.last_update_at).format('DD/MM HH:mm')}` : ''}
                 </Text>
               )}
@@ -724,6 +797,16 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
         )}
         {task.completed_at && (
           <Text type="secondary" style={{ fontSize: 11 }}>✓ {dayjs(task.completed_at).format('DD/MM HH:mm')}</Text>
+        )}
+        {activityCount > 0 && (
+          <Tag color={hasUnreadActivity ? 'processing' : 'default'} style={{ marginInlineEnd: 0 }}>
+            Trao đổi: {activityCount}
+          </Tag>
+        )}
+        {lastTouchedAt && (
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            Cập nhật: {dayjs(lastTouchedAt).format('DD/MM HH:mm')}
+          </Text>
         )}
       </div>
 
@@ -835,10 +918,10 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
           {/* Bỏ blocking — dùng Popconfirm để tránh z-index conflict */}
           {canUnblock && (
             <Popconfirm
-              title="Bỏ blocking nhiệm vụ này?"
+              title="Bỏ trạng thái chặn của nhiệm vụ này?"
               description="Sản phẩm sẽ có thể sản xuất bình thường."
               okText="Xác nhận bỏ chặn"
-              cancelText="Huỷ"
+              cancelText="Hủy"
               okButtonProps={{ danger: false, type: 'primary' }}
               onConfirm={() => void do_('unblock', () => tasksApi.unblock(task.id, ''))}
             >
@@ -863,7 +946,7 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
         }}
         okText="Gửi báo cáo"
         okButtonProps={{ style: { background: '#fa8c16', borderColor: '#fa8c16' } }}
-        cancelText="Huỷ" width={440} zIndex={1050}
+        cancelText="Hủy" width={440} zIndex={1050}
       >
         <div style={{ paddingTop: 4 }}>
           <Text style={{ display: 'block', marginBottom: 8 }}>
@@ -893,7 +976,7 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
         }}
         okText="Xác nhận chuyển"
         okButtonProps={{ style: { background: '#722ed1', borderColor: '#722ed1' } }}
-        cancelText="Huỷ" width={460} zIndex={1050}
+        cancelText="Hủy" width={460} zIndex={1050}
       >
         <div style={{ paddingTop: 4 }}>
           {/* Hiển thị tiến độ hiện tại để tham khảo khi chuyển */}
@@ -903,7 +986,7 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
               padding: '8px 12px', marginBottom: 12, fontSize: 13,
             }}>
               <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>
-                📋 Ghi chú tiến độ hiện tại (sẽ được giữ lại cho người nhận):
+                Ghi chú tiến độ hiện tại (sẽ được giữ lại cho người nhận):
               </Text>
               <Text style={{ color: '#389e0d' }}>{task.last_update_note}</Text>
             </div>
@@ -914,7 +997,7 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
               padding: '8px 12px', marginBottom: 12, fontSize: 13,
             }}>
               <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>
-                🆘 Cần hỗ trợ (sẽ tự động reset sau khi chuyển):
+                Trạng thái hỗ trợ hiện tại (sẽ tự động đặt lại sau khi chuyển):
               </Text>
               <Text style={{ color: '#d46b08' }}>{task.help_reason || 'Đã báo cần hỗ trợ'}</Text>
             </div>
@@ -970,7 +1053,7 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
         }}
         okText="Lưu ghi chú"
         okButtonProps={{ style: { background: '#597ef7', borderColor: '#597ef7' } }}
-        cancelText="Huỷ" width={460} zIndex={1050}
+        cancelText="Hủy" width={460} zIndex={1050}
       >
         <div style={{ paddingTop: 4 }}>
           <Text style={{ display: 'block', marginBottom: 8 }}>
@@ -1006,7 +1089,7 @@ function TaskCard({ task, users, assigneeDirectory, onRefresh, onEdit, lastReadA
             }}
             style={{ color: '#597ef7', fontSize: 12 }}
           >
-            Bình luận &amp; Files
+            Trao đổi &amp; tệp
           </Button>
         </Badge>
       </div>
@@ -1034,11 +1117,17 @@ export interface TaskPanelProps {
   onTasksChange?: () => void;
 }
 
+type TaskPanelSortMode = 'RISK' | 'DUE_ASC' | 'UPDATED_DESC' | 'PRIORITY_DESC';
+
 export default function TaskPanel({ entityType, entityId, entityCode, onTasksChange }: TaskPanelProps) {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskItem | null>(null);
   const [quickFilter, setQuickFilter] = useState<'ALL' | 'OVERDUE' | 'HELP' | 'BLOCKING' | 'DEPENDENCY'>('ALL');
   const [quickHandleMode, setQuickHandleMode] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
+  const deferredSearchInput = useDeferredValue(searchInput);
+  const [sortMode, setSortMode] = useState<TaskPanelSortMode>('RISK');
+  const [showClosedTasks, setShowClosedTasks] = useState(false);
   const [assigneeSearch, setAssigneeSearch] = useState('');
   const [assigneeRoleId, setAssigneeRoleId] = useState<number | undefined>(undefined);
   const [assigneeTeamId, setAssigneeTeamId] = useState<number | undefined>(undefined);
@@ -1115,7 +1204,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
   const createMutation = useMutation({
     mutationFn: tasksApi.create,
     onSuccess: () => {
-      void message.success('Đã tạo nhiệm vụ!');
+      void message.success('Đã tạo nhiệm vụ.');
       createForm.resetFields();
       setShowCreateForm(false);
       invalidate();
@@ -1136,7 +1225,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
       due_date: values.due_date ? values.due_date.format('YYYY-MM-DD') : null,
     };
     if (payload.is_blocking) {
-      void message.warning({ content: `⚠️ Mã hàng ${entityCode ?? `#${entityId}`} sẽ bị khoá sản xuất. Dùng "Bỏ chặn" nếu nhầm.`, duration: 4 });
+      void message.warning({ content: `Mã hàng ${entityCode ?? `#${entityId}`} sẽ bị khóa sản xuất. Nếu cần, hãy dùng thao tác "Bỏ chặn" sau đó.`, duration: 4 });
     }
     createMutation.mutate(payload);
   };
@@ -1145,7 +1234,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
   const editMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<TaskCreatePayload> }) => tasksApi.update(id, data),
     onSuccess: () => {
-      void message.success('Đã lưu thay đổi!');
+      void message.success('Đã lưu thay đổi.');
       setEditingTask(null);
       editForm.resetFields();
       invalidate();
@@ -1171,7 +1260,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
   const handleEditFinish = (values: FormValues) => {
     if (!editingTask) return;
     if (!editingTask.is_blocking && values.is_blocking) {
-      void message.warning({ content: `⚠️ Mã hàng ${entityCode ?? `#${entityId}`} sẽ bị khoá sản xuất sau khi lưu.`, duration: 4 });
+      void message.warning({ content: `Mã hàng ${entityCode ?? `#${entityId}`} sẽ bị khóa sản xuất sau khi lưu.`, duration: 4 });
     }
     editMutation.mutate({
       id: editingTask.id,
@@ -1194,6 +1283,9 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
   const helpCount = openTasks.filter((t) => t.needs_help).length;
   const overdueCount = openTasks.filter((t) => t.due_date && dayjs(t.due_date).isBefore(dayjs(), 'day')).length;
   const dependencyBlockedCount = openTasks.filter((t) => t.depends_on_info && t.depends_on_info.status !== 'DONE').length;
+  const dueTodayCount = openTasks.filter((t) => t.due_date && dayjs(t.due_date).isSame(dayjs(), 'day')).length;
+  const unassignedCount = openTasks.filter((t) => !t.assigned_to).length;
+  const hotCount = openTasks.filter((t) => t.priority === 'HIGH' || t.priority === 'URGENT').length;
   const filteredOpenTasks = openTasks.filter((t) => {
     if (quickFilter === 'OVERDUE') return !!(t.due_date && dayjs(t.due_date).isBefore(dayjs(), 'day'));
     if (quickFilter === 'HELP') return !!t.needs_help;
@@ -1201,97 +1293,185 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
     if (quickFilter === 'DEPENDENCY') return !!(t.depends_on_info && t.depends_on_info.status !== 'DONE');
     return true;
   });
-  const priorityWeight: Record<TaskPriority, number> = { LOW: 1, MEDIUM: 2, HIGH: 3, URGENT: 4 };
-  const getOverdueDays = (t: TaskItem) =>
-    t.due_date && dayjs(t.due_date).isBefore(dayjs(), 'day') ? dayjs().startOf('day').diff(dayjs(t.due_date), 'day') : 0;
-  const getRiskScore = (t: TaskItem) => {
-    const overdueDays = getOverdueDays(t);
-    const depBlocked = t.depends_on_info && t.depends_on_info.status !== 'DONE' ? 1 : 0;
-    return (
-      (t.is_blocking ? 400 : 0) +
-      (t.needs_help ? 280 : 0) +
-      overdueDays * 18 +
-      (priorityWeight[t.priority as TaskPriority] ?? 1) * 25 +
-      depBlocked * 60
-    );
-  };
-  const displayOpenTasks = quickHandleMode
-    ? [...filteredOpenTasks].sort((a, b) => {
-        const scoreDiff = getRiskScore(b) - getRiskScore(a);
-        if (scoreDiff !== 0) return scoreDiff;
-        return dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf();
-      })
-    : filteredOpenTasks;
+  const searchKeyword = deferredSearchInput.trim().toLowerCase();
+  const matchesSearch = useCallback((task: TaskItem) => {
+    if (!searchKeyword) return true;
+    const haystack = [
+      task.title,
+      task.description,
+      task.assigned_to_info?.full_name,
+      task.assigned_by_info?.full_name,
+      task.help_reason,
+      task.last_update_note,
+      task.entity_code,
+      ...(task.tags ?? []),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(searchKeyword);
+  }, [searchKeyword]);
+  const compareRisk = useCallback((a: TaskItem, b: TaskItem) => {
+    const scoreDiff = getTaskRiskScore(b) - getTaskRiskScore(a);
+    if (scoreDiff !== 0) return scoreDiff;
+    return dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf();
+  }, []);
+  const compareBySortMode = useCallback((a: TaskItem, b: TaskItem) => {
+    if (sortMode === 'DUE_ASC') {
+      return (a.due_date || '9999-12-31').localeCompare(b.due_date || '9999-12-31');
+    }
+    if (sortMode === 'UPDATED_DESC') {
+      return (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || '');
+    }
+    if (sortMode === 'PRIORITY_DESC') {
+      const diff = (TASK_PRIORITY_WEIGHT[b.priority as TaskPriority] ?? 0) - (TASK_PRIORITY_WEIGHT[a.priority as TaskPriority] ?? 0);
+      if (diff !== 0) return diff;
+    }
+    return compareRisk(a, b);
+  }, [compareRisk, sortMode]);
+  const searchedOpenTasks = filteredOpenTasks.filter(matchesSearch);
+  const searchedDoneTasks = doneTasks.filter(matchesSearch);
+  const displayOpenTasks = (quickHandleMode ? [...searchedOpenTasks].sort(compareRisk) : [...searchedOpenTasks].sort(compareBySortMode));
+  const displayDoneTasks = [...searchedDoneTasks].sort((a, b) => (b.completed_at || b.updated_at || '').localeCompare(a.completed_at || a.updated_at || ''));
   const quickQueueCount = displayOpenTasks.filter((t) => t.is_blocking || t.needs_help || getOverdueDays(t) > 0).length;
+  const activeFilterTags: string[] = [];
+  const tags = activeFilterTags;
+    if (searchKeyword) tags.push(`Từ khóa: ${deferredSearchInput.trim()}`);
+    if (quickFilter === 'OVERDUE') tags.push('Đang lọc: Quá hạn');
+    if (quickFilter === 'HELP') tags.push('Đang lọc: Cần hỗ trợ');
+    if (quickFilter === 'BLOCKING') tags.push('Đang lọc: Đang chặn');
+    if (quickFilter === 'DEPENDENCY') tags.push('Đang lọc: Chờ công đoạn trước');
+    if (quickHandleMode) tags.push(`Xử lý nhanh: Bật (${quickQueueCount})`);
+    if (sortMode === 'DUE_ASC') tags.push('Sắp xếp: Hạn gần nhất');
+    if (sortMode === 'UPDATED_DESC') tags.push('Sắp xếp: Cập nhật mới nhất');
+    if (sortMode === 'PRIORITY_DESC') tags.push('Sắp xếp: Ưu tiên cao trước');
+    if (showClosedTasks) tags.push('Đang hiện nhiệm vụ đã kết thúc');
+  
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div style={{ padding: '0 2px' }}>
-      {/* Help banner */}
-      {helpCount > 0 && (
-        <div style={{
-          background: '#fff7e6', border: '1px solid #ffd591', borderRadius: 10,
-          padding: '10px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10,
-        }}>
-          <AlertOutlined style={{ color: '#d46b08', fontSize: 18, flexShrink: 0 }} />
-          <Text strong style={{ color: '#874d00', fontSize: 13 }}>
-            {helpCount} nhiệm vụ đang cần hỗ trợ — xem chi tiết bên dưới
-          </Text>
-        </div>
-      )}
-
-      {/* Blocking banner */}
-      {blockingCount > 0 && (
-        <div style={{
-          background: '#fff2f0', border: '1px solid #ffa39e', borderRadius: 10,
-          padding: '10px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10,
-        }}>
-          <LockOutlined style={{ color: '#ff4d4f', fontSize: 18, flexShrink: 0 }} />
-          <div>
-            <Text strong style={{ color: '#cf1322', fontSize: 13, display: 'block' }}>
-              {blockingCount} nhiệm vụ blocking đang khoá sản xuất
-            </Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Hoàn thành hoặc bỏ blocking để có thể tạo lệnh sản xuất.
-            </Text>
+    <div style={{ padding: '0 2px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+          gap: 10,
+        }}
+      >
+        {[
+          { label: 'Đang mở', value: openTasks.length, tone: '#1d4ed8' },
+          { label: 'Quá hạn', value: overdueCount, tone: '#dc2626' },
+          { label: 'Đến hạn hôm nay', value: dueTodayCount, tone: '#d97706' },
+          { label: 'Cần hỗ trợ', value: helpCount, tone: '#b45309' },
+          { label: 'Chưa giao', value: unassignedCount, tone: '#7c3aed' },
+          { label: 'Đã kết thúc', value: doneTasks.length, tone: '#0f766e' },
+        ].map((item) => (
+          <div key={item.label} style={SUMMARY_TILE_STYLE}>
+            <Text type="secondary" style={{ fontSize: 12 }}>{item.label}</Text>
+            <div style={{ fontSize: 28, fontWeight: 700, color: item.tone, lineHeight: 1.15, marginTop: 6 }}>
+              {item.value}
+            </div>
           </div>
-        </div>
-      )}
+        ))}
+      </div>
 
-      {/* Overdue banner */}
-      {overdueCount > 0 && (
-        <div style={{
-          background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 10,
-          padding: '10px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10,
-        }}>
-          <WarningOutlined style={{ color: '#d48806', fontSize: 18, flexShrink: 0 }} />
-          <div>
-            <Text strong style={{ color: '#ad6800', fontSize: 13, display: 'block' }}>
-              {overdueCount} nhiệm vụ quá hạn cần xử lý ngay
-            </Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Dùng nút "Nhắc quá hạn" trong từng nhiệm vụ để gửi cảnh báo tức thì.
-            </Text>
-          </div>
-        </div>
-      )}
-
-      {/* Task list */}
       {(overdueCount > 0 || helpCount > 0 || blockingCount > 0 || dependencyBlockedCount > 0) && (
-        <div style={{ marginBottom: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <Alert
+          showIcon
+          type={overdueCount > 0 || blockingCount > 0 ? 'warning' : 'info'}
+          message="Đối tượng này đang có nhiệm vụ cần ưu tiên xử lý"
+          description={[
+            blockingCount > 0 ? `${blockingCount} nhiệm vụ đang chặn luồng sản xuất` : null,
+            overdueCount > 0 ? `${overdueCount} nhiệm vụ quá hạn` : null,
+            helpCount > 0 ? `${helpCount} nhiệm vụ đang cần hỗ trợ` : null,
+            dependencyBlockedCount > 0 ? `${dependencyBlockedCount} nhiệm vụ đang chờ công đoạn trước` : null,
+          ].filter(Boolean).join(' · ')}
+        />
+      )}
+
+      <div
+        style={{
+          border: '1px solid #e5e7eb',
+          borderRadius: 18,
+          padding: '14px 16px',
+          background: '#ffffff',
+          boxShadow: '0 12px 24px rgba(15, 23, 42, 0.04)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <Space wrap>
+            <Text strong style={{ fontSize: 16 }}>Điều phối nhiệm vụ</Text>
+            <Tag color="processing" style={{ marginInlineEnd: 0 }}>
+              Mã đối tượng: {entityCode || `#${entityId}`}
+            </Tag>
+            {hotCount > 0 && (
+              <Tag color="volcano" style={{ marginInlineEnd: 0 }}>
+                Ưu tiên cao/khẩn: {hotCount}
+              </Tag>
+            )}
+          </Space>
+          <Space wrap>
+            <Button
+              onClick={() => {
+                setSearchInput('');
+                setQuickFilter('ALL');
+                setSortMode('RISK');
+                setQuickHandleMode(false);
+              }}
+            >
+              Đặt lại bộ lọc
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                resetAssigneeDirectory();
+                setShowCreateForm((value) => !value);
+              }}
+            >
+              {showCreateForm ? 'Ẩn biểu mẫu tạo' : 'Tạo nhiệm vụ'}
+            </Button>
+          </Space>
+        </div>
+
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Input
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+            placeholder="Tìm theo tiêu đề, mô tả, người xử lý, nhãn..."
+            allowClear
+            style={{ width: 300 }}
+          />
+          <Select<TaskPanelSortMode>
+            value={sortMode}
+            onChange={setSortMode}
+            style={{ width: 200 }}
+            options={[
+              { value: 'RISK', label: 'Rủi ro cao trước' },
+              { value: 'DUE_ASC', label: 'Hạn gần nhất trước' },
+              { value: 'UPDATED_DESC', label: 'Cập nhật mới nhất' },
+              { value: 'PRIORITY_DESC', label: 'Ưu tiên cao trước' },
+            ]}
+          />
+          <Button onClick={() => setShowClosedTasks((value) => !value)}>
+            {showClosedTasks ? 'Ẩn nhiệm vụ đã kết thúc' : `Hiện nhiệm vụ đã kết thúc (${displayDoneTasks.length})`}
+          </Button>
           <Tag
             color={quickHandleMode ? 'processing' : 'default'}
             style={{ cursor: 'pointer', marginInlineEnd: 0 }}
-            onClick={() => setQuickHandleMode((v) => !v)}
+            onClick={() => setQuickHandleMode((value) => !value)}
           >
-            {quickHandleMode ? `Xử lý nhanh: ON (${quickQueueCount})` : 'Xử lý nhanh: OFF'}
+            {quickHandleMode ? `Xử lý nhanh: Bật (${quickQueueCount})` : 'Xử lý nhanh: Tắt'}
           </Tag>
+        </div>
+
+        <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <Tag
             color={quickFilter === 'ALL' ? 'processing' : 'default'}
             style={{ cursor: 'pointer', marginInlineEnd: 0 }}
             onClick={() => setQuickFilter('ALL')}
           >
-            Tất cả
+            Tất cả ({openTasks.length})
           </Tag>
           {overdueCount > 0 && (
             <Tag
@@ -1317,7 +1497,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
               style={{ cursor: 'pointer', marginInlineEnd: 0 }}
               onClick={() => setQuickFilter('BLOCKING')}
             >
-              Blocking ({blockingCount})
+              Đang chặn ({blockingCount})
             </Tag>
           )}
           {dependencyBlockedCount > 0 && (
@@ -1329,13 +1509,26 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
               Chờ công đoạn trước ({dependencyBlockedCount})
             </Tag>
           )}
+          <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+            Hiển thị: {displayOpenTasks.length} nhiệm vụ mở
+          </Tag>
         </div>
-      )}
+
+        {activeFilterTags.length > 0 && (
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {activeFilterTags.map((item) => (
+              <Tag key={item}>{item}</Tag>
+            ))}
+          </div>
+        )}
+      </div>
 
       {isLoading ? (
         <div style={{ textAlign: 'center', padding: 24, color: '#8c8c8c' }}>Đang tải...</div>
       ) : openTasks.length === 0 && doneTasks.length === 0 ? (
-        <Empty description="Chưa có nhiệm vụ nào" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '12px 0 8px' }} />
+        <Empty description="Chưa có nhiệm vụ nào cho đối tượng này" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '12px 0 8px' }} />
+      ) : displayOpenTasks.length === 0 && (!showClosedTasks || displayDoneTasks.length === 0) ? (
+        <Empty description="Không có nhiệm vụ khớp bộ lọc hiện tại" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '12px 0 8px' }} />
       ) : (
         <>
           {displayOpenTasks.map((t, idx) => (
@@ -1351,16 +1544,14 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
               queueRank={quickHandleMode ? idx + 1 : undefined}
             />
           ))}
-          {doneTasks.length > 0 && (
+          {doneTasks.length > 0 && showClosedTasks && (
             <div style={{ marginTop: displayOpenTasks.length > 0 ? 8 : 0 }}>
-              {displayOpenTasks.length > 0 && (
-                <div style={{ fontSize: 11, color: '#bfbfbf', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <div style={{ flex: 1, height: 1, background: '#f0f0f0' }} />
-                  {doneTasks.length} đã kết thúc
-                  <div style={{ flex: 1, height: 1, background: '#f0f0f0' }} />
-                </div>
-              )}
-              {doneTasks.map((t) => (
+              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
+                {displayDoneTasks.length} nhiệm vụ đã kết thúc
+                <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
+              </div>
+              {displayDoneTasks.map((t) => (
                 <TaskCard
                   key={t.id}
                   task={t}
@@ -1397,12 +1588,7 @@ export default function TaskPanel({ entityType, entityId, entityCode, onTasksCha
             </div>
           </Form>
         </div>
-      ) : (
-        <Button type="dashed" icon={<PlusOutlined />} size="small"
-          onClick={() => { resetAssigneeDirectory(); setShowCreateForm(true); }} style={{ marginTop: 10, width: '100%' }}>
-          Thêm nhiệm vụ mới
-        </Button>
-      )}
+      ) : null}
 
       {/* Edit Modal */}
       <Modal
@@ -1434,7 +1620,7 @@ export function BlockingTasksBadge({ count, children }: { count: number; childre
   return (
     <Badge
       count={
-        <Tooltip title={`${count} nhiệm vụ blocking đang chặn sản xuất`}>
+        <Tooltip title={`${count} nhiệm vụ chặn đang ảnh hưởng sản xuất`}>
           <LockOutlined style={{ color: '#ff4d4f', fontSize: 11 }} />
         </Tooltip>
       }

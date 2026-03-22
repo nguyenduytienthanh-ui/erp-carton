@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Button,
+  Card,
   DatePicker,
   Descriptions,
   Drawer,
@@ -10,15 +12,18 @@ import {
   Modal,
   Select,
   Space,
+  Statistic,
   Table,
   Tag,
   Tooltip,
+  Typography,
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
+import { useSearchParams } from 'react-router-dom';
 import { inventoryApi } from '../../api/inventory';
 import { productsApi } from '../../api/products';
 import { purchasingApi } from '../../api/purchasing';
@@ -37,10 +42,21 @@ import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { getToastMessage } from '../../shared/apiError';
 
+const { Text, Title } = Typography;
 
 type Filters = {
   status?: string;
   supplier?: number;
+};
+type PurchaseOrderViewSnapshot = {
+  search_input: string;
+  status: string;
+  supplier: number | null;
+};
+type PurchaseOrderNamedPreset = {
+  id: string;
+  name: string;
+  filters: PurchaseOrderViewSnapshot;
 };
 
 type ReasonModalState =
@@ -91,8 +107,22 @@ function formatMoney(value: string | number | null | undefined): string {
   return Number.isFinite(numeric) ? numeric.toLocaleString('vi-VN') : '0';
 }
 
+const SUMMARY_TILE_STYLE = {
+  border: '1px solid #e5e7eb',
+  borderRadius: 18,
+  padding: '14px 16px',
+  background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+  boxShadow: '0 12px 24px rgba(15, 23, 42, 0.04)',
+  height: '100%',
+};
+
 
 export default function PurchaseOrderList() {
+  const [searchParams] = useSearchParams();
+  const initialSearch = searchParams.get('q') || searchParams.get('search') || '';
+  const initialStatus = searchParams.get('status') || undefined;
+  const focusCode = searchParams.get('focus');
+  const focusId = Number(searchParams.get('focus_id') || 0) || null;
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
   const canManage = canManagePurchasingData();
@@ -100,14 +130,19 @@ export default function PurchaseOrderList() {
   const canApprove = canApprovePurchaseOrders();
   const canReceive = canReceivePurchaseOrders();
   const canCancel = canCancelPurchaseOrders();
-  const [searchInput, setSearchInput] = useState('');
-  const [filters, setFilters] = useState<Filters>({});
+  const [searchInput, setSearchInput] = useState(initialSearch);
+  const [filters, setFilters] = useState<Filters>(initialStatus ? { status: initialStatus } : {});
   const [page, setPage] = useState(1);
-  const [drawerOrder, setDrawerOrder] = useState<PurchaseOrder | null>(null);
+  const focusKey = `${focusId ?? ''}:${focusCode ?? ''}`;
+  const [drawerOrderId, setDrawerOrderId] = useState<number | null>(null);
+  const [dismissedFocusKey, setDismissedFocusKey] = useState<string | null>(null);
   const [editingOrder, setEditingOrder] = useState<PurchaseOrder | null>(null);
   const [openForm, setOpenForm] = useState(false);
   const [reasonModalState, setReasonModalState] = useState<ReasonModalState>(null);
   const [receiveModalState, setReceiveModalState] = useState<ReceiveModalState>(null);
+  const [selectedViewPresetId, setSelectedViewPresetId] = useState('NONE');
+  const [isViewPresetModalOpen, setIsViewPresetModalOpen] = useState(false);
+  const [viewPresetName, setViewPresetName] = useState('');
   const [reasonForm] = Form.useForm<{ reason: string }>();
   const [receiveForm] = Form.useForm<{
     receipt_date: dayjs.Dayjs;
@@ -124,7 +159,40 @@ export default function PurchaseOrderList() {
   }>();
   const receiveWarehouseId = Form.useWatch('warehouse', receiveForm);
   const { config, saveConfig } = useUserPreferences(PAGES.PURCHASING_ORDERS);
-  const pageSize = Number((config as Record<string, unknown>)?.pageSize ?? 20);
+  const configRecord = config as Record<string, unknown>;
+  const pageSize = Number(configRecord?.pageSize ?? 20);
+  const namedPresets = useMemo(() => {
+    const raw = configRecord?.saved_views;
+    if (!Array.isArray(raw)) return [] as PurchaseOrderNamedPreset[];
+    return raw
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const record = item as Record<string, unknown>;
+        const id = typeof record.id === 'string' ? record.id : '';
+        const name = typeof record.name === 'string' ? record.name : '';
+        const filters = record.filters;
+        if (!id || !name || !filters || typeof filters !== 'object') return null;
+        const filterRecord = filters as Record<string, unknown>;
+        const statusValue = typeof filterRecord.status === 'string' ? filterRecord.status : '';
+        if (statusValue && !Object.prototype.hasOwnProperty.call(STATUS_LABELS, statusValue)) {
+          return null;
+        }
+        return {
+          id,
+          name,
+          filters: {
+            search_input: typeof filterRecord.search_input === 'string' ? filterRecord.search_input : '',
+            status: statusValue,
+            supplier: typeof filterRecord.supplier === 'number' ? filterRecord.supplier : null,
+          },
+        } as PurchaseOrderNamedPreset;
+      })
+      .filter((item): item is PurchaseOrderNamedPreset => item !== null);
+  }, [configRecord]);
+  const selectedViewPreset = useMemo(
+    () => namedPresets.find((item) => item.id === selectedViewPresetId) ?? null,
+    [namedPresets, selectedViewPresetId],
+  );
 
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
@@ -147,6 +215,16 @@ export default function PurchaseOrderList() {
     queryKey: ['purchasing-orders', params],
     queryFn: () => purchasingApi.getOrders(params),
   });
+  const rows = useMemo(() => ordersQuery.data?.results ?? [], [ordersQuery.data?.results]);
+  const focusedOrder = useMemo(
+    () => rows.find((row) => (focusId ? row.id === focusId : false) || (focusCode ? row.code === focusCode : false)) ?? null,
+    [focusCode, focusId, rows],
+  );
+  const effectiveDrawerOrderId = drawerOrderId ?? (focusedOrder && dismissedFocusKey !== focusKey ? focusedOrder.id : null);
+  const drawerOrder = useMemo(
+    () => rows.find((row) => row.id === effectiveDrawerOrderId) ?? null,
+    [effectiveDrawerOrderId, rows],
+  );
   const suppliersQuery = useQuery({
     queryKey: ['purchasing-supplier-options'],
     queryFn: () => purchasingApi.getSuppliers({ page_size: 200, ordering: 'code', is_active: 'true' }),
@@ -164,14 +242,14 @@ export default function PurchaseOrderList() {
     queryFn: () => inventoryApi.getLocations({ page_size: 200, ordering: 'code', is_active: 'true' }),
   });
   const receiptOverviewQuery = useQuery({
-    queryKey: ['purchasing-order-receipts', drawerOrder?.id],
-    queryFn: () => purchasingApi.getOrderReceiptOverview(drawerOrder!.id),
-    enabled: !!drawerOrder,
+    queryKey: ['purchasing-order-receipts', effectiveDrawerOrderId],
+    queryFn: () => purchasingApi.getOrderReceiptOverview(effectiveDrawerOrderId as number),
+    enabled: effectiveDrawerOrderId !== null,
   });
   const approvalHistoryQuery = useQuery({
-    queryKey: ['purchasing-order-history', drawerOrder?.id],
-    queryFn: () => purchasingApi.getOrderApprovalHistory(drawerOrder!.id),
-    enabled: !!drawerOrder,
+    queryKey: ['purchasing-order-history', effectiveDrawerOrderId],
+    queryFn: () => purchasingApi.getOrderApprovalHistory(effectiveDrawerOrderId as number),
+    enabled: effectiveDrawerOrderId !== null,
   });
 
   const invalidateAll = async () => {
@@ -268,15 +346,172 @@ export default function PurchaseOrderList() {
     });
   }, [receiveForm, receiveModalState]);
 
-  const rows = ordersQuery.data?.results ?? [];
-  const supplierOptions: Supplier[] = suppliersQuery.data?.results ?? [];
-  const productOptions = productsQuery.data?.results ?? [];
-  const warehouseOptions = warehousesQuery.data?.results ?? [];
-  const locationOptions = locationsQuery.data?.results ?? [];
+  const supplierOptions = useMemo<Supplier[]>(
+    () => suppliersQuery.data?.results ?? [],
+    [suppliersQuery.data?.results],
+  );
+  const productOptions = useMemo(
+    () => productsQuery.data?.results ?? [],
+    [productsQuery.data?.results],
+  );
+  const warehouseOptions = useMemo(
+    () => warehousesQuery.data?.results ?? [],
+    [warehousesQuery.data?.results],
+  );
+  const locationOptions = useMemo(
+    () => locationsQuery.data?.results ?? [],
+    [locationsQuery.data?.results],
+  );
   const receiveLocationOptions = useMemo(() => {
     if (!receiveWarehouseId) return locationOptions;
     return locationOptions.filter((item) => item.warehouse === receiveWarehouseId);
   }, [locationOptions, receiveWarehouseId]);
+  const summary = useMemo(() => {
+    const draftCount = rows.filter((row) => row.status === 'DRAFT').length;
+    const submittedCount = rows.filter((row) => row.status === 'SUBMITTED').length;
+    const approvedCount = rows.filter((row) => row.status === 'APPROVED').length;
+    const pendingReceiveCount = rows.filter((row) => ['APPROVED', 'PARTIAL_RECEIVED'].includes(row.status)).length;
+    const overdueReceiptCount = rows.filter((row) => {
+      if (!row.expected_receipt_date) return false;
+      if (['RECEIVED', 'CANCELLED'].includes(row.status)) return false;
+      return dayjs(row.expected_receipt_date).isBefore(dayjs(), 'day');
+    }).length;
+    const totalValue = rows.reduce((acc, row) => acc + Number(row.total ?? 0), 0);
+    return { draftCount, submittedCount, approvedCount, pendingReceiveCount, overdueReceiptCount, totalValue };
+  }, [rows]);
+  const activeFilterTags = useMemo(() => {
+    const tags: string[] = [];
+    if (intentSearch.trim()) tags.push(`Từ khóa: ${intentSearch.trim()}`);
+    if (intentFilters.status) tags.push(`Trạng thái: ${STATUS_LABELS[intentFilters.status] || intentFilters.status}`);
+    if (intentFilters.supplier) {
+      const supplier = supplierOptions.find((item) => item.id === intentFilters.supplier);
+      tags.push(`Nhà cung cấp: ${supplier ? `${supplier.code} - ${supplier.name}` : `#${intentFilters.supplier}`}`);
+    }
+    if (selectedViewPreset) tags.push(`Mẫu đang dùng: ${selectedViewPreset.name}`);
+    return tags;
+  }, [intentFilters.status, intentFilters.supplier, intentSearch, selectedViewPreset, supplierOptions]);
+
+  const buildCurrentSnapshot = (): PurchaseOrderViewSnapshot => ({
+    search_input: searchInput,
+    status: filters.status ?? '',
+    supplier: filters.supplier ?? null,
+  });
+
+  const applySnapshot = (snapshot: PurchaseOrderViewSnapshot) => {
+    setSearchInput(snapshot.search_input);
+    setFilters({
+      status: snapshot.status || undefined,
+      supplier: snapshot.supplier ?? undefined,
+    });
+    setPage(1);
+  };
+
+  const saveCurrentView = async () => {
+    try {
+      await saveConfig({
+        ...configRecord,
+        pageSize,
+        ...buildCurrentSnapshot(),
+        saved_views: namedPresets,
+      });
+      messageApi.success('Đã lưu chế độ xem đơn mua.');
+    } catch {
+      messageApi.error('Không thể lưu chế độ xem đơn mua.');
+    }
+  };
+
+  const applySavedView = () => {
+    const rawStatus = typeof configRecord?.status === 'string' ? configRecord.status : '';
+    const snapshot: PurchaseOrderViewSnapshot = {
+      search_input: typeof configRecord?.search_input === 'string' ? configRecord.search_input : '',
+      status: rawStatus && Object.prototype.hasOwnProperty.call(STATUS_LABELS, rawStatus) ? rawStatus : '',
+      supplier: typeof configRecord?.supplier === 'number' ? configRecord.supplier : null,
+    };
+    applySnapshot(snapshot);
+    messageApi.success('Đã khôi phục chế độ xem đơn mua đã lưu.');
+  };
+
+  const saveNamedPreset = async () => {
+    const name = viewPresetName.trim();
+    if (!name) {
+      messageApi.error('Vui lòng nhập tên mẫu lọc.');
+      return;
+    }
+    const currentSnapshot = buildCurrentSnapshot();
+    const existing = namedPresets.find((item) => item.name.toLowerCase() === name.toLowerCase());
+    const nextPreset: PurchaseOrderNamedPreset = existing
+      ? { ...existing, name, filters: currentSnapshot }
+      : { id: `${Date.now()}`, name, filters: currentSnapshot };
+    const nextPresets = existing
+      ? namedPresets.map((item) => (item.id === existing.id ? nextPreset : item))
+      : [...namedPresets, nextPreset];
+    try {
+      await saveConfig({
+        ...configRecord,
+        pageSize,
+        ...currentSnapshot,
+        saved_views: nextPresets,
+      });
+      setSelectedViewPresetId(nextPreset.id);
+      setViewPresetName('');
+      setIsViewPresetModalOpen(false);
+      messageApi.success(existing ? 'Đã cập nhật mẫu lọc đơn mua.' : 'Đã lưu mẫu lọc đơn mua mới.');
+    } catch {
+      messageApi.error('Không thể lưu mẫu lọc đơn mua.');
+    }
+  };
+
+  const applyNamedPreset = () => {
+    const preset = namedPresets.find((item) => item.id === selectedViewPresetId);
+    if (!preset) {
+      messageApi.warning('Vui lòng chọn mẫu lọc đơn mua.');
+      return;
+    }
+    applySnapshot(preset.filters);
+    messageApi.success(`Đã áp dụng mẫu lọc "${preset.name}".`);
+  };
+
+  const deleteNamedPreset = async () => {
+    const preset = namedPresets.find((item) => item.id === selectedViewPresetId);
+    if (!preset) {
+      messageApi.warning('Vui lòng chọn mẫu lọc đơn mua để xóa.');
+      return;
+    }
+    const nextPresets = namedPresets.filter((item) => item.id !== preset.id);
+    try {
+      await saveConfig({
+        ...configRecord,
+        pageSize,
+        ...buildCurrentSnapshot(),
+        saved_views: nextPresets,
+      });
+      setSelectedViewPresetId('NONE');
+      messageApi.success(`Đã xóa mẫu lọc "${preset.name}".`);
+    } catch {
+      messageApi.error('Không thể xóa mẫu lọc đơn mua.');
+    }
+  };
+  const statusAlert = useMemo(() => {
+    if (summary.overdueReceiptCount > 0) {
+      return {
+        type: 'warning' as const,
+        message: `Có ${summary.overdueReceiptCount} đơn mua đã quá ngày dự kiến nhận hàng.`,
+        description: 'Nên rà lại các đơn quá hạn để điều phối nhập kho, đẩy nhắc nhà cung cấp hoặc hủy phần không còn cần.',
+      };
+    }
+    if (summary.submittedCount > 0) {
+      return {
+        type: 'info' as const,
+        message: `Hiện có ${summary.submittedCount} đơn mua đang chờ duyệt.`,
+        description: 'Bạn có thể ưu tiên duyệt các đơn gắn với forecast khẩn và các đơn đang chờ nhập kho tiếp theo.',
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'Pipeline đơn mua đang ở trạng thái ổn định.',
+      description: 'Không có cảnh báo tồn đọng nổi bật trên bộ lọc hiện tại.',
+    };
+  }, [summary.overdueReceiptCount, summary.submittedCount]);
 
   const openReasonModal = (state: ReasonModalState) => {
     setReasonModalState(state);
@@ -351,11 +586,12 @@ export default function PurchaseOrderList() {
       fixed: 'right',
       render: (_, row) => (
         <Space wrap>
-          <Button size="small" onClick={() => setDrawerOrder(row)}>
+          <Button size="small" data-testid={`purchase-order-view-${row.id}`} onClick={() => { setDrawerOrderId(row.id); setDismissedFocusKey(focusKey); }}>
             Xem
           </Button>
           <Button
             size="small"
+            data-testid={`purchase-order-edit-${row.id}`}
             disabled={!canManage || !['DRAFT', 'REJECTED'].includes(row.status)}
             onClick={() => {
               setEditingOrder(row);
@@ -366,6 +602,7 @@ export default function PurchaseOrderList() {
           </Button>
           <Button
             size="small"
+            data-testid={`purchase-order-submit-${row.id}`}
             disabled={!canSubmit || !['DRAFT', 'REJECTED'].includes(row.status)}
             onClick={() => void submitMutation.mutateAsync(row.id)}
           >
@@ -374,6 +611,7 @@ export default function PurchaseOrderList() {
           <Button
             size="small"
             type="primary"
+            data-testid={`purchase-order-approve-${row.id}`}
             disabled={!canApprove || row.status !== 'SUBMITTED'}
             onClick={() => void approveMutation.mutateAsync(row.id)}
           >
@@ -382,6 +620,7 @@ export default function PurchaseOrderList() {
           <Button
             size="small"
             danger
+            data-testid={`purchase-order-reject-${row.id}`}
             disabled={!canApprove || row.status !== 'SUBMITTED'}
             onClick={() => openReasonModal({ type: 'reject', order: row })}
           >
@@ -389,6 +628,7 @@ export default function PurchaseOrderList() {
           </Button>
           <Button
             size="small"
+            data-testid={`purchase-order-receive-${row.id}`}
             disabled={!canReceive || !['APPROVED', 'PARTIAL_RECEIVED'].includes(row.status)}
             onClick={() => setReceiveModalState({ order: row })}
           >
@@ -397,6 +637,7 @@ export default function PurchaseOrderList() {
           <Button
             size="small"
             danger
+            data-testid={`purchase-order-cancel-${row.id}`}
             disabled={!canCancel || !['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED'].includes(row.status)}
             onClick={() => openReasonModal({ type: 'cancel', order: row })}
           >
@@ -405,6 +646,7 @@ export default function PurchaseOrderList() {
           <Button
             size="small"
             danger
+            data-testid={`purchase-order-delete-${row.id}`}
             disabled={!canManage || !['DRAFT', 'REJECTED'].includes(row.status)}
             onClick={() =>
               Modal.confirm({
@@ -442,75 +684,148 @@ export default function PurchaseOrderList() {
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {contextHolder}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h2 style={{ margin: 0 }}>Đơn mua</h2>
-          <div style={{ color: '#8c8c8c' }}>Quản lý đơn mua, duyệt mua và nhập kho mua hàng</div>
-        </div>
-        <Tooltip title={supplierOptions.length === 0 ? 'Vui lòng tạo nhà cung cấp trước' : ''}>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            disabled={!canManage || supplierOptions.length === 0}
-            onClick={() => {
-              setEditingOrder(null);
-              setOpenForm(true);
-            }}
-          >
-            Tạo đơn mua
-          </Button>
-        </Tooltip>
-      </div>
+      <Card>
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <Space wrap>
+                <Tag color="blue">Mua hàng</Tag>
+                <Tag color="gold">Đơn mua</Tag>
+                <Tag color="processing">Duyệt và nhập kho</Tag>
+              </Space>
+              <Title level={3} style={{ margin: '8px 0 4px' }}>Trung tâm đơn mua</Title>
+              <Text type="secondary">Điều phối toàn bộ luồng từ tạo đơn, gửi duyệt tới nhập kho và theo dõi tiến độ nhận hàng trên cùng một màn hình.</Text>
+            </div>
+            <Tooltip title={supplierOptions.length === 0 ? 'Vui lòng tạo nhà cung cấp trước' : ''}>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                disabled={!canManage || supplierOptions.length === 0}
+                onClick={() => {
+                  setEditingOrder(null);
+                  setOpenForm(true);
+                }}
+              >
+                Tạo đơn mua
+              </Button>
+            </Tooltip>
+          </div>
 
-      <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <Input
-          value={searchInput}
-          onChange={(e) => {
-            setSearchInput(e.target.value);
-            setPage(1);
-          }}
-          placeholder="Tìm kiếm tất cả cột..."
-          style={{ width: 320 }}
-          suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined}
-        />
-        <Select
-          value={filters.status ?? ''}
-          style={{ width: 220 }}
-          onChange={(value) => {
-            setFilters((prev) => ({ ...prev, status: value || undefined }));
-            setPage(1);
-          }}
-          options={[
-            { value: '', label: 'Tất cả trạng thái' },
-            ...Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label })),
-          ]}
-        />
-        <Select
-          showSearch
-          optionFilterProp="label"
-          value={filters.supplier ?? ''}
-          style={{ width: 260 }}
-          onChange={(value) => {
-            setFilters((prev) => ({ ...prev, supplier: typeof value === 'number' ? value : undefined }));
-            setPage(1);
-          }}
-          options={[
-            { value: '', label: 'Tất cả nhà cung cấp' },
-            ...supplierOptions.map((item) => ({ value: item.id, label: `${item.code} - ${item.name}` })),
-          ]}
-        />
-        <Button
-          onClick={() => {
-            setSearchInput('');
-            setFilters({});
-            setPage(1);
-          }}
-        >
-          Xóa bộ lọc
-        </Button>
-      </div>
+          <Alert showIcon type={statusAlert.type} message={statusAlert.message} description={statusAlert.description} />
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Giá trị trên trang" value={summary.totalValue} formatter={(value) => `${formatMoney(value)} đ`} />
+            </div>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Nháp" value={summary.draftCount} suffix="đơn" />
+            </div>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Chờ duyệt" value={summary.submittedCount} suffix="đơn" valueStyle={{ color: summary.submittedCount > 0 ? '#1677ff' : undefined }} />
+            </div>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Chờ nhập kho" value={summary.pendingReceiveCount} suffix="đơn" />
+            </div>
+          </div>
+        </Space>
+      </Card>
+
+      <Card data-testid="purchase-orders-command-strip">
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div data-testid="purchase-orders-command-search">
+              <Input
+                value={searchInput}
+                onChange={(e) => {
+                  setSearchInput(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Tìm kiếm tất cả cột..."
+                style={{ width: 320 }}
+                suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined}
+              />
+            </div>
+            <Select
+              value={filters.status ?? ''}
+              style={{ width: 220 }}
+              onChange={(value) => {
+                setFilters((prev) => ({ ...prev, status: value || undefined }));
+                setPage(1);
+              }}
+              options={[
+                { value: '', label: 'Tất cả trạng thái' },
+                ...Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label })),
+              ]}
+            />
+            <Select
+              showSearch
+              optionFilterProp="label"
+              value={filters.supplier ?? ''}
+              style={{ width: 260 }}
+              onChange={(value) => {
+                setFilters((prev) => ({ ...prev, supplier: typeof value === 'number' ? value : undefined }));
+                setPage(1);
+              }}
+              options={[
+                { value: '', label: 'Tất cả nhà cung cấp' },
+                ...supplierOptions.map((item) => ({ value: item.id, label: `${item.code} - ${item.name}` })),
+              ]}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Button data-testid="purchase-orders-save-view" onClick={() => void saveCurrentView()}>
+              Lưu chế độ xem
+            </Button>
+            <Button data-testid="purchase-orders-restore-view" onClick={applySavedView}>
+              Khôi phục
+            </Button>
+            <Button
+              data-testid="purchase-orders-open-preset-modal"
+              onClick={() => setIsViewPresetModalOpen(true)}
+            >
+              Tạo mẫu lọc
+            </Button>
+            <div data-testid="purchase-orders-preset-select">
+              <Select
+                value={selectedViewPresetId}
+                onChange={setSelectedViewPresetId}
+                style={{ width: 240 }}
+                options={[
+                  { value: 'NONE', label: 'Chọn mẫu đơn mua' },
+                  ...namedPresets.map((preset) => ({ value: preset.id, label: preset.name })),
+                ]}
+              />
+            </div>
+            <Button data-testid="purchase-orders-apply-preset" onClick={applyNamedPreset}>
+              Áp dụng mẫu
+            </Button>
+            <Button
+              danger
+              data-testid="purchase-orders-delete-preset"
+              disabled={!selectedViewPreset}
+              onClick={() => void deleteNamedPreset()}
+            >
+              Xóa mẫu
+            </Button>
+            <Button
+              onClick={() => {
+                setSearchInput('');
+                setFilters({});
+                setPage(1);
+              }}
+            >
+              Xóa bộ lọc
+            </Button>
+          </div>
+          <Space wrap>
+            {activeFilterTags.length > 0 ? activeFilterTags.map((tag) => <Tag key={tag}>{tag}</Tag>) : <Text type="secondary">Đang hiển thị toàn bộ đơn mua.</Text>}
+            <Tag color="success">{`Đã duyệt: ${summary.approvedCount}`}</Tag>
+            <Tag color="warning">{`Quá hạn nhận: ${summary.overdueReceiptCount}`}</Tag>
+          </Space>
+        </Space>
+      </Card>
 
       <Table
         rowKey="id"
@@ -553,6 +868,30 @@ export default function PurchaseOrderList() {
           ) : undefined,
         }}
       />
+
+      <Modal
+        open={isViewPresetModalOpen}
+        title="Lưu mẫu lọc đơn mua"
+        okText="Lưu mẫu"
+        cancelText="Đóng"
+        onOk={() => void saveNamedPreset()}
+        onCancel={() => {
+          setIsViewPresetModalOpen(false);
+          setViewPresetName('');
+        }}
+      >
+        <Form layout="vertical">
+          <Form.Item label="Tên mẫu lọc">
+            <Input
+              data-testid="purchase-orders-preset-name"
+              placeholder="Ví dụ: Ca sáng chờ nhập kho"
+              value={viewPresetName}
+              onChange={(event) => setViewPresetName(event.target.value)}
+              onPressEnter={() => void saveNamedPreset()}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <PurchaseOrderForm
         open={openForm}
@@ -662,7 +1001,10 @@ export default function PurchaseOrderList() {
         title={drawerOrder ? `Chi tiết ${drawerOrder.code}` : 'Chi tiết đơn mua'}
         width={960}
         open={!!drawerOrder}
-        onClose={() => setDrawerOrder(null)}
+        onClose={() => {
+          setDrawerOrderId(null);
+          setDismissedFocusKey(focusKey);
+        }}
       >
         {drawerOrder ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

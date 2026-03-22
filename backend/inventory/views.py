@@ -112,10 +112,10 @@ class WarehouseViewSet(InventoryManagePermissionMixin, viewsets.ModelViewSet):
         return Warehouse.objects.filter(deleted_at__isnull=True).select_related('manager')
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        serializer.save(created_by=self.request.user)
 
     def perform_update(self, serializer):
-        serializer.save(updated_by=self.request.user)
+        serializer.save()
 
     def perform_destroy(self, instance):
         if instance.transactions.filter(status=InventoryTransactionStatus.POSTED).exists():
@@ -163,10 +163,10 @@ class WarehouseLocationViewSet(InventoryManagePermissionMixin, viewsets.ModelVie
         return WarehouseLocation.objects.filter(deleted_at__isnull=True).select_related('warehouse', 'parent')
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        serializer.save(created_by=self.request.user)
 
     def perform_update(self, serializer):
-        serializer.save(updated_by=self.request.user)
+        serializer.save()
 
     def perform_destroy(self, instance):
         if instance.transactions.filter(status=InventoryTransactionStatus.POSTED).exists():
@@ -321,12 +321,13 @@ class InventoryTransactionViewSet(InventoryManagePermissionMixin, viewsets.Model
             raise ValidationError(detail) from exc
         AuditLog.objects.create(
             user=request.user,
-            action='CANCEL',
+            action='VOID',
             entity_type='InventoryTransaction',
             entity_id=tx.id,
             entity_code=tx.code,
             old_values={'status': InventoryTransactionStatus.POSTED},
             new_values={'status': InventoryTransactionStatus.CANCELLED, 'reason': reason},
+            changed_fields=['status', 'cancel_reason'],
             ip_address=get_client_ip(request),
             user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
@@ -352,7 +353,7 @@ class InventoryReservationViewSet(InventoryManagePermissionMixin, viewsets.Model
         )
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        serializer.save(created_by=self.request.user)
 
     @action(detail=True, methods=['post'])
     def release(self, request, pk=None):
@@ -657,12 +658,12 @@ class WarehouseTransferViewSet(InventoryManagePermissionMixin, viewsets.ModelVie
         return qs
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        serializer.save(created_by=self.request.user)
 
     def perform_update(self, serializer):
         if serializer.instance.status != 'DRAFT':
             raise ValidationError('Chỉ được sửa transfer ở trạng thái Nháp.')
-        serializer.save(updated_by=self.request.user)
+        serializer.save()
 
     @action(detail=True, methods=['post'])
     def submit_transfer(self, request, pk=None):
@@ -675,10 +676,13 @@ class WarehouseTransferViewSet(InventoryManagePermissionMixin, viewsets.ModelVie
         transfer.status = 'SUBMITTED'
         transfer.submitted_by = request.user
         transfer.submitted_at = timezone.now()
-        transfer.save(update_fields=['status', 'submitted_by', 'submitted_at', 'updated_at'])
+        transfer.save(update_fields=['status', 'submitted_by', 'submitted_at'])
         AuditLog.objects.create(
             user=request.user, action='SUBMIT', entity_type='WarehouseTransfer',
             entity_id=transfer.id, entity_code=transfer.code,
+            old_values={'status': 'DRAFT'},
+            new_values={'status': 'SUBMITTED'},
+            changed_fields=['status'],
             ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
         return Response({'status': transfer.status})
@@ -713,10 +717,13 @@ class WarehouseTransferViewSet(InventoryManagePermissionMixin, viewsets.ModelVie
             locked_transfer.status = 'IN_TRANSIT'
             locked_transfer.posted_by = request.user
             locked_transfer.posted_at = timezone.now()
-            locked_transfer.save(update_fields=['status', 'posted_by', 'posted_at', 'updated_at'])
+            locked_transfer.save(update_fields=['status', 'posted_by', 'posted_at'])
         AuditLog.objects.create(
             user=request.user, action='POST', entity_type='WarehouseTransfer',
             entity_id=transfer.id, entity_code=transfer.code,
+            old_values={'status': 'SUBMITTED'},
+            new_values={'status': 'IN_TRANSIT'},
+            changed_fields=['status'],
             ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
         return Response({'status': 'IN_TRANSIT'})
@@ -760,14 +767,17 @@ class WarehouseTransferViewSet(InventoryManagePermissionMixin, viewsets.ModelVie
                     )
 
             locked_transfer.status = 'RECEIVED'
-            locked_transfer.save(update_fields=['status', 'updated_at'])
+            locked_transfer.save(update_fields=['status'])
         
         AuditLog.objects.create(
-            user=request.user, action='RECEIVE', entity_type='WarehouseTransfer',
+            user=request.user, action='UPDATE', entity_type='WarehouseTransfer',
             entity_id=transfer.id, entity_code=transfer.code,
+            old_values={'status': 'IN_TRANSIT'},
+            new_values={'status': 'RECEIVED'},
+            changed_fields=['status', 'received_qty'],
             ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
-        return Response({'status': transfer.status})
+        return Response({'status': 'RECEIVED'})
 
     @action(detail=True, methods=['post'])
     def cancel_transfer(self, request, pk=None):
@@ -802,11 +812,13 @@ class WarehouseTransferViewSet(InventoryManagePermissionMixin, viewsets.ModelVie
             locked_transfer.cancelled_by = request.user
             locked_transfer.cancelled_at = timezone.now()
             locked_transfer.cancel_reason = reason
-            locked_transfer.save(update_fields=['status', 'cancelled_by', 'cancelled_at', 'cancel_reason', 'updated_at'])
+            locked_transfer.save(update_fields=['status', 'cancelled_by', 'cancelled_at', 'cancel_reason'])
         AuditLog.objects.create(
-            user=request.user, action='CANCEL', entity_type='WarehouseTransfer',
+            user=request.user, action='VOID', entity_type='WarehouseTransfer',
             entity_id=transfer.id, entity_code=transfer.code,
+            old_values={'status': transfer.status},
+            new_values={'status': 'CANCELLED', 'reason': reason},
+            changed_fields=['status', 'cancel_reason'],
             ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
         )
         return Response({'status': 'CANCELLED'})
-

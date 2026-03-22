@@ -133,6 +133,51 @@ export interface PurchaseOrderFormValues {
   }>;
 }
 
+export interface PurchaseForecastRow {
+  product_id: number;
+  product_code: string;
+  product_name: string;
+  current_stock: number;
+  avg_monthly_demand: number;
+  lead_time: number;
+  reorder_point: number;
+  suggested_qty: number;
+  estimated_cost: number;
+  urgency: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+export interface SupplierAnalyticsRow {
+  id?: number;
+  supplier_id?: number;
+  supplier?: string | null;
+  supplier_name?: string | null;
+  on_time_rate?: number | string | null;
+  on_time_delivery_rate?: number | string | null;
+  quality_score?: number | string | null;
+  price_variance?: number | string | null;
+  lead_time?: number | string | null;
+}
+
+export interface CreatePurchaseOrderFromForecastPayload {
+  supplier: number;
+  warehouse?: number | null;
+  location?: number | null;
+  order_date?: string;
+  expected_receipt_date?: string | null;
+  reference?: string;
+  notes?: string;
+  payment_terms_days?: number;
+  items: Array<{
+    product_id: number;
+    qty: number;
+    unit_price?: number;
+    discount_pct?: number;
+    tax_pct?: number;
+    note?: string;
+    urgency?: 'HIGH' | 'MEDIUM' | 'LOW';
+  }>;
+}
+
 export interface PurchaseReceiptLine {
   id: number;
   line_number: number;
@@ -179,9 +224,15 @@ export interface PurchaseReceipt {
 
 export interface PurchaseApprovalHistoryItem {
   action: string;
+  action_label?: string;
   user?: string | null;
   comments?: string | null;
   created_at: string;
+}
+
+export interface PurchaseWorkflowStateSummary {
+  current: string;
+  next_states: string[];
 }
 
 /** Yêu cầu mua (Purchase Request) */
@@ -262,4 +313,3 @@ export interface PurchaseReturn {
   updated_at: string;
   lines?: PurchaseReturnLine[];
 }
-

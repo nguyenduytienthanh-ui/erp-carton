@@ -4,6 +4,11 @@ import type {
   PaginatedResponse,
   Quote,
   QuoteLine,
+  SalesDiscountApplicability,
+  SalesDiscountRule,
+  SalesDiscountStatus,
+  SalesDiscountSummary,
+  SalesDiscountType,
   SalesOrder,
   SalesOrderDeliveryOverviewItem,
   SalesOrderFormValues,
@@ -18,6 +23,20 @@ import type {
 } from '../types/sales';
 
 type SalesOrderPayload = Omit<SalesOrderFormValues, never>;
+type SalesDiscountPayload = {
+  code: string;
+  name: string;
+  type: SalesDiscountType;
+  value: number | string;
+  applicable_to: SalesDiscountApplicability;
+  min_order_value?: number | string;
+  min_quantity?: number | string | null;
+  max_discount_amount?: number | string | null;
+  start_date: string;
+  end_date?: string | null;
+  status: SalesDiscountStatus;
+  note?: string;
+};
 
 export const salesApi = {
   getOrders: async (params?: Record<string, unknown>): Promise<PaginatedResponse<SalesOrder>> => {
@@ -259,6 +278,34 @@ export const salesApi = {
       params: { shipment_id: shipmentId },
       responseType: 'blob',
     });
+    return response.data;
+  },
+
+  getDiscounts: async (params?: Record<string, unknown>): Promise<PaginatedResponse<SalesDiscountRule>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.SALES_DISCOUNTS, { params });
+    return response.data;
+  },
+  createDiscount: async (payload: SalesDiscountPayload): Promise<SalesDiscountRule> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.SALES_DISCOUNTS, payload);
+    return response.data;
+  },
+  updateDiscount: async (id: number, payload: Partial<SalesDiscountPayload>): Promise<SalesDiscountRule> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.SALES_DISCOUNTS}${id}/`, payload);
+    return response.data;
+  },
+  deleteDiscount: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.SALES_DISCOUNTS}${id}/`);
+  },
+  getDiscountSummary: async (params?: Record<string, unknown>): Promise<SalesDiscountSummary> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.SALES_DISCOUNTS}summary/`, { params });
+    return response.data;
+  },
+  activateDiscount: async (id: number): Promise<SalesDiscountRule> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.SALES_DISCOUNTS}${id}/activate/`);
+    return response.data;
+  },
+  deactivateDiscount: async (id: number): Promise<SalesDiscountRule> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.SALES_DISCOUNTS}${id}/deactivate/`);
     return response.data;
   },
 

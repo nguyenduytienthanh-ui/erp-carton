@@ -110,6 +110,59 @@ def _log_production_audit(request, *, action, entity_type, entity_id, entity_cod
     )
 
 
+def _approval_action_label(action):
+    return {
+        'CREATE': 'Đã tạo',
+        'UPDATE': 'Đã cập nhật',
+        'SUBMIT': 'Gửi duyệt',
+        'APPROVE': 'Đã duyệt',
+        'REJECT': 'Từ chối',
+        'REVOKE': 'Thu hồi',
+        'RESUBMIT': 'Gửi lại',
+        'ISSUE': 'Đã cấp vật tư',
+        'RECEIVE': 'Đã ghi nhận',
+        'POST': 'Đã vào sổ',
+        'CANCEL': 'Đã hủy',
+    }.get(str(action or '').upper(), str(action or ''))
+
+
+def _serialize_approval_history_item(item):
+    return {
+        'action': item.action,
+        'action_label': _approval_action_label(item.action),
+        'user': getattr(item.user, 'username', None),
+        'comments': item.comments,
+        'created_at': item.created_at,
+    }
+
+
+def _serialize_audit_timeline_item(item):
+    new_values = item.new_values if isinstance(item.new_values, dict) else {}
+    comments = ''
+    action = str(item.action or '').upper()
+    if action in {'RECEIVE', 'ISSUE'}:
+        qty = new_values.get('total_qty')
+        amount = new_values.get('total_amount')
+        segments = []
+        if qty not in (None, ''):
+            segments.append(f'Số lượng {qty}')
+        if amount not in (None, ''):
+            segments.append(f'Giá trị {amount}')
+        comments = ', '.join(segments)
+    elif action in {'CANCEL', 'REJECT'}:
+        comments = str(new_values.get('reason') or new_values.get('cancel_reason') or '').strip()
+    elif action == 'CREATE':
+        comments = str(new_values.get('reference') or '').strip()
+
+    return {
+        'action': item.action,
+        'action_label': _approval_action_label(item.action),
+        'user': getattr(item.user, 'username', None),
+        'comments': comments,
+        'created_at': item.created_at,
+    }
+
+
 class SearchTextMixin:
     search_text_field = 'search_text'
 
@@ -746,15 +799,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             entity_type='ProductionOrder',
             entity_id=order.id,
         ).order_by('-created_at').select_related('user')
-        return Response([
-            {
-                'action': item.get_action_display(),
-                'user': getattr(item.user, 'username', None),
-                'comments': item.comments,
-                'created_at': item.created_at,
-            }
-            for item in history
-        ])
+        return Response([_serialize_approval_history_item(item) for item in history])
 
     @action(detail=True, methods=['get'])
     def issue_overview(self, request, pk=None):
@@ -892,6 +937,24 @@ class ProductionIssueViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
         )
         return Response({'status': ProductionIssueStatus.CANCELLED})
 
+    @action(detail=True, methods=['get'])
+    def lifecycle_history(self, request, pk=None):
+        issue = self.get_object()
+        history = AuditLog.objects.filter(
+            entity_type='ProductionIssue',
+            entity_id=issue.id,
+        ).order_by('-created_at').select_related('user')
+        return Response([_serialize_audit_timeline_item(item) for item in history])
+
+    @action(detail=True, methods=['get'])
+    def next_states(self, request, pk=None):
+        issue = self.get_object()
+        mapping = {
+            ProductionIssueStatus.POSTED: [ProductionIssueStatus.CANCELLED],
+            ProductionIssueStatus.CANCELLED: [],
+        }
+        return Response({'current': issue.status, 'next_states': mapping.get(issue.status, [])})
+
 
 class ProductionReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
     serializer_class = ProductionReceiptSerializer
@@ -974,3 +1037,21 @@ class ProductionReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
             new_values={'status': ProductionReceiptStatus.CANCELLED, 'reason': reason},
         )
         return Response({'status': ProductionReceiptStatus.CANCELLED})
+
+    @action(detail=True, methods=['get'])
+    def lifecycle_history(self, request, pk=None):
+        receipt = self.get_object()
+        history = AuditLog.objects.filter(
+            entity_type='ProductionReceipt',
+            entity_id=receipt.id,
+        ).order_by('-created_at').select_related('user')
+        return Response([_serialize_audit_timeline_item(item) for item in history])
+
+    @action(detail=True, methods=['get'])
+    def next_states(self, request, pk=None):
+        receipt = self.get_object()
+        mapping = {
+            ProductionReceiptStatus.POSTED: [ProductionReceiptStatus.CANCELLED],
+            ProductionReceiptStatus.CANCELLED: [],
+        }
+        return Response({'current': receipt.status, 'next_states': mapping.get(receipt.status, [])})

@@ -226,10 +226,22 @@ export interface SalaryAdvanceApprovalQueueResponse {
   items: SalaryAdvanceApprovalQueueItem[];
 }
 
+export interface SalaryAdvanceApprovalHistoryItem {
+  action: string;
+  action_label?: string;
+  level?: number;
+  user?: string | null;
+  comments?: string | null;
+  created_at: string;
+}
+
 export interface SalaryAdvanceApprovalSlaPolicy {
   sla_hours_l1: number;
   sla_hours_l2: number;
   remind_every_hours: number;
+  escalation_hours_l1: number;
+  escalation_hours_l2: number;
+  escalation_cooldown_hours: number;
   window_days: number;
 }
 
@@ -250,6 +262,28 @@ export interface SalaryAdvanceApprovalSlaOverviewResponse {
     total_amount: string;
     max_wait_hours: number;
   }>;
+}
+
+export interface SalaryAdvanceApprovalSlaReminderHistoryItem {
+  level_key: number;
+  level_label: string;
+  latest_created_at: string;
+  sent_count: number;
+  unread_count: number;
+  read_count: number;
+  read_rate: number;
+  sample_recipients: string[];
+}
+
+export interface SalaryAdvanceApprovalSlaReminderHistoryResponse {
+  days: number;
+  summary: {
+    total_sent: number;
+    total_read: number;
+    total_unread: number;
+    overall_read_rate: number;
+  };
+  items: SalaryAdvanceApprovalSlaReminderHistoryItem[];
 }
 
 export type PayrollStatus = 'UNLOCKED' | 'LOCKED';

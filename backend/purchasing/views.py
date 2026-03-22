@@ -107,6 +107,58 @@ def _log_procurement_audit(request, *, action, entity_type, entity_id, entity_co
     )
 
 
+def _approval_action_label(action):
+    return {
+        'CREATE': 'Đã tạo',
+        'UPDATE': 'Đã cập nhật',
+        'SUBMIT': 'Gửi duyệt',
+        'APPROVE': 'Đã duyệt',
+        'REJECT': 'Từ chối',
+        'REVOKE': 'Thu hồi',
+        'RESUBMIT': 'Gửi lại',
+        'RECEIVE': 'Đã ghi sổ',
+        'POST': 'Đã vào sổ',
+        'CANCEL': 'Đã hủy',
+    }.get(str(action or '').upper(), str(action or ''))
+
+
+def _serialize_approval_history_item(item):
+    return {
+        'action': item.action,
+        'action_label': _approval_action_label(item.action),
+        'user': getattr(item.user, 'username', None),
+        'comments': item.comments,
+        'created_at': item.created_at,
+    }
+
+
+def _serialize_audit_timeline_item(item):
+    new_values = item.new_values if isinstance(item.new_values, dict) else {}
+    comments = ''
+    action = str(item.action or '').upper()
+    if action in {'RECEIVE', 'POST'}:
+        qty = new_values.get('total_qty')
+        amount = new_values.get('total_amount')
+        segments = []
+        if qty not in (None, ''):
+            segments.append(f'Số lượng {qty}')
+        if amount not in (None, ''):
+            segments.append(f'Giá trị {amount}')
+        comments = ', '.join(segments)
+    elif action in {'CANCEL', 'REJECT'}:
+        comments = str(new_values.get('reason') or new_values.get('cancel_reason') or '').strip()
+    elif action == 'CREATE':
+        comments = str(new_values.get('reference') or '').strip()
+
+    return {
+        'action': item.action,
+        'action_label': _approval_action_label(item.action),
+        'user': getattr(item.user, 'username', None),
+        'comments': comments,
+        'created_at': item.created_at,
+    }
+
+
 class SearchTextMixin:
     search_text_field = 'search_text'
 
@@ -675,15 +727,7 @@ class PurchaseOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             entity_type='PurchaseOrder',
             entity_id=order.id,
         ).order_by('-created_at').select_related('user')
-        return Response([
-            {
-                'action': item.get_action_display(),
-                'user': getattr(item.user, 'username', None),
-                'comments': item.comments,
-                'created_at': item.created_at,
-            }
-            for item in history
-        ])
+        return Response([_serialize_approval_history_item(item) for item in history])
 
     @action(detail=True, methods=['get'])
     def receipt_overview(self, request, pk=None):
@@ -832,6 +876,24 @@ class PurchaseReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
         )
         return Response({'status': PurchaseReceiptStatus.CANCELLED})
 
+    @action(detail=True, methods=['get'])
+    def lifecycle_history(self, request, pk=None):
+        receipt = self.get_object()
+        history = AuditLog.objects.filter(
+            entity_type='PurchaseReceipt',
+            entity_id=receipt.id,
+        ).order_by('-created_at').select_related('user')
+        return Response([_serialize_audit_timeline_item(item) for item in history])
+
+    @action(detail=True, methods=['get'])
+    def next_states(self, request, pk=None):
+        receipt = self.get_object()
+        mapping = {
+            PurchaseReceiptStatus.POSTED: [PurchaseReceiptStatus.CANCELLED],
+            PurchaseReceiptStatus.CANCELLED: [],
+        }
+        return Response({'current': receipt.status, 'next_states': mapping.get(receipt.status, [])})
+
 
 class PurchaseRequestViewSet(viewsets.ModelViewSet):
     """Yêu cầu mua (Purchase Request) – CRUD."""
@@ -878,9 +940,27 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         pr = self.get_object()
         if pr.status != PurchaseRequestStatus.DRAFT:
             return Response({'error': 'Chỉ gửi duyệt yêu cầu ở trạng thái Nháp.'}, status=400)
+        old_status = pr.status
         pr.status = PurchaseRequestStatus.SUBMITTED
         pr.requested_by = request.user
         pr.save(update_fields=['status', 'requested_by', 'updated_at'])
+        ApprovalHistory.objects.create(
+            entity_type='PurchaseRequest',
+            entity_id=pr.id,
+            entity_code=pr.code,
+            action='SUBMIT',
+            user=request.user,
+            level=1,
+        )
+        _log_procurement_audit(
+            request,
+            action='SUBMIT',
+            entity_type='PurchaseRequest',
+            entity_id=int(pr.id),
+            entity_code=pr.code,
+            old_values={'status': old_status},
+            new_values={'status': pr.status},
+        )
         return Response({'status': pr.status})
 
     @action(detail=True, methods=['post'])
@@ -889,6 +969,7 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         pr = self.get_object()
         if pr.status != PurchaseRequestStatus.SUBMITTED:
             return Response({'error': 'Chỉ duyệt yêu cầu đã gửi.'}, status=400)
+        old_status = pr.status
         pr.status = PurchaseRequestStatus.APPROVED
         pr.approved_by = request.user
         pr.approved_at = timezone.now()
@@ -896,6 +977,23 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         pr.rejected_at = None
         pr.reject_reason = ''
         pr.save(update_fields=['status', 'approved_by', 'approved_at', 'rejected_by', 'rejected_at', 'reject_reason', 'updated_at'])
+        ApprovalHistory.objects.create(
+            entity_type='PurchaseRequest',
+            entity_id=pr.id,
+            entity_code=pr.code,
+            action='APPROVE',
+            user=request.user,
+            level=1,
+        )
+        _log_procurement_audit(
+            request,
+            action='APPROVE',
+            entity_type='PurchaseRequest',
+            entity_id=int(pr.id),
+            entity_code=pr.code,
+            old_values={'status': old_status},
+            new_values={'status': pr.status},
+        )
         return Response({'status': pr.status})
 
     @action(detail=True, methods=['post'])
@@ -905,6 +1003,7 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         if pr.status != PurchaseRequestStatus.SUBMITTED:
             return Response({'error': 'Chỉ từ chối yêu cầu đã gửi.'}, status=400)
         reason = (request.data.get('reason') or '').strip() or 'Từ chối'
+        old_status = pr.status
         pr.status = PurchaseRequestStatus.REJECTED
         pr.rejected_by = request.user
         pr.rejected_at = timezone.now()
@@ -912,7 +1011,34 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         pr.approved_by = None
         pr.approved_at = None
         pr.save(update_fields=['status', 'rejected_by', 'rejected_at', 'reject_reason', 'approved_by', 'approved_at', 'updated_at'])
+        ApprovalHistory.objects.create(
+            entity_type='PurchaseRequest',
+            entity_id=pr.id,
+            entity_code=pr.code,
+            action='REJECT',
+            user=request.user,
+            comments=reason,
+            level=1,
+        )
+        _log_procurement_audit(
+            request,
+            action='REJECT',
+            entity_type='PurchaseRequest',
+            entity_id=int(pr.id),
+            entity_code=pr.code,
+            old_values={'status': old_status},
+            new_values={'status': pr.status, 'reason': reason},
+        )
         return Response({'status': pr.status})
+
+    @action(detail=True, methods=['get'])
+    def approval_history(self, request, pk=None):
+        pr = self.get_object()
+        history = ApprovalHistory.objects.filter(
+            entity_type='PurchaseRequest',
+            entity_id=pr.id,
+        ).order_by('-created_at').select_related('user')
+        return Response([_serialize_approval_history_item(item) for item in history])
 
 
 # Purchase Return ViewSet
@@ -948,14 +1074,26 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         ret = self.get_object()
         if ret.status != PurchaseReturnStatus.DRAFT:
             return Response({'error': 'Chỉ gửi duyệt phiếu trả ở trạng thái Nháp.'}, status=400)
+        previous_status = ret.status
         ret.status = PurchaseReturnStatus.SUBMITTED
         ret.submitted_by = request.user
         ret.submitted_at = timezone.now()
         ret.save(update_fields=['status', 'submitted_by', 'submitted_at', 'updated_at'])
-        AuditLog.objects.create(
-            user=request.user, action='SUBMIT', entity_type='PurchaseReturn',
-            entity_id=ret.id, entity_code=ret.code,
-            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        ApprovalHistory.objects.create(
+            user=request.user,
+            action='SUBMIT',
+            entity_type='PurchaseReturn',
+            entity_id=ret.id,
+            comments='Gửi duyệt phiếu trả hàng',
+        )
+        _log_procurement_audit(
+            request,
+            action='SUBMIT',
+            entity_type='PurchaseReturn',
+            entity_id=int(ret.id),
+            entity_code=ret.code,
+            old_values={'status': previous_status},
+            new_values={'status': ret.status},
         )
         return Response({'status': ret.status})
 
@@ -965,14 +1103,26 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         ret = self.get_object()
         if ret.status != PurchaseReturnStatus.SUBMITTED:
             return Response({'error': 'Chỉ duyệt phiếu trả đã gửi.'}, status=400)
+        previous_status = ret.status
         ret.status = PurchaseReturnStatus.APPROVED
         ret.approved_by = request.user
         ret.approved_at = timezone.now()
         ret.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
-        AuditLog.objects.create(
-            user=request.user, action='APPROVE', entity_type='PurchaseReturn',
-            entity_id=ret.id, entity_code=ret.code,
-            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        ApprovalHistory.objects.create(
+            user=request.user,
+            action='APPROVE',
+            entity_type='PurchaseReturn',
+            entity_id=ret.id,
+            comments='Duyệt phiếu trả hàng',
+        )
+        _log_procurement_audit(
+            request,
+            action='APPROVE',
+            entity_type='PurchaseReturn',
+            entity_id=int(ret.id),
+            entity_code=ret.code,
+            old_values={'status': previous_status},
+            new_values={'status': ret.status},
         )
         generate_tasks_for_entity('PurchaseReturn', ret.id, ret.code, 'APPROVE', triggered_by=request.user)
         return Response({'status': ret.status})
@@ -984,25 +1134,38 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         if ret.status != PurchaseReturnStatus.APPROVED:
             return Response({'error': 'Chỉ post phiếu trả đã duyệt.'}, status=400)
         
+        previous_status = ret.status
+
         with transaction.atomic():
-            # Reverse inventory for each line
-            from inventory.services import update_inventory_qty
+            from inventory.serializers import InventoryTransactionSerializer
             from finance.models import PayableDocument, PayableStatus
             from finance.services import refresh_payable_status
-            
+
+            warehouse_id = getattr(ret.purchase_order, 'warehouse_id', None)
+            location_id = getattr(ret.purchase_order, 'location_id', None)
             for line in ret.lines.all():
                 if line.product:
-                    # Create reverse transaction (RETURN to warehouse)
-                    for loc in line.product.warehouse_locations.all():
-                        update_inventory_qty(
-                            product=line.product,
-                            warehouse=loc.warehouse,
-                            location=loc,
-                            qty_change=-line.qty,
-                            transaction_type=InventoryTransactionType.RETURN,
-                            reference_code=ret.code,
-                            reference_type='PurchaseReturn',
-                        )
+                    if not warehouse_id:
+                        raise ValidationError({'error': 'Thiếu kho nguồn để post phiếu trả hàng. Vui lòng khai báo kho trên đơn mua liên quan.'})
+                    serializer = InventoryTransactionSerializer(data={
+                        'transaction_type': 'ISSUE',
+                        'transaction_date': ret.return_date,
+                        'product': line.product_id,
+                        'warehouse': warehouse_id,
+                        'location': location_id,
+                        'quantity': str(line.qty),
+                        'unit_cost': str(line.unit_price or 0),
+                        'reference': ret.code,
+                        'reason': ret.return_reason,
+                        'note': line.note or ret.return_notes or '',
+                    })
+                    serializer.is_valid(raise_exception=True)
+                    serializer.save(
+                        created_by=request.user,
+                        updated_by=request.user,
+                        posted_by=request.user,
+                        purchase_order=ret.purchase_order,
+                    )
 
             reduction_amount = Decimal(str(ret.total or 0))
             payable_qs = PayableDocument.objects.select_for_update().exclude(status=PayableStatus.CANCELLED)
@@ -1060,13 +1223,20 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
             ret.posted_by = request.user
             ret.posted_at = timezone.now()
             ret.save(update_fields=['status', 'posted_by', 'posted_at', 'updated_at'])
-            
-            AuditLog.objects.create(
-                user=request.user, action='POST', entity_type='PurchaseReturn',
-                entity_id=ret.id, entity_code=ret.code,
-                ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
-            )
-        
+
+        _log_procurement_audit(
+            request,
+            action='POST',
+            entity_type='PurchaseReturn',
+            entity_id=int(ret.id),
+            entity_code=ret.code,
+            old_values={'status': previous_status},
+            new_values={
+                'status': ret.status,
+                'total_amount': str(ret.total or 0),
+            },
+        )
+
         return Response({'status': ret.status})
 
     @action(detail=True, methods=['post'])
@@ -1074,15 +1244,49 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         """Cancel return - any status -> CANCELLED."""
         ret = self.get_object()
         reason = (request.data.get('reason') or '').strip() or 'Hủy phiếu trả'
+        previous_status = ret.status
         ret.status = PurchaseReturnStatus.CANCELLED
         ret.cancelled_by = request.user
         ret.cancelled_at = timezone.now()
         ret.cancel_reason = reason
         ret.save(update_fields=['status', 'cancelled_by', 'cancelled_at', 'cancel_reason', 'updated_at'])
-        AuditLog.objects.create(
-            user=request.user, action='CANCEL', entity_type='PurchaseReturn',
-            entity_id=ret.id, entity_code=ret.code,
-            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+        _log_procurement_audit(
+            request,
+            action='CANCEL',
+            entity_type='PurchaseReturn',
+            entity_id=int(ret.id),
+            entity_code=ret.code,
+            old_values={'status': previous_status},
+            new_values={'status': ret.status, 'reason': reason},
         )
         return Response({'status': ret.status})
 
+    @action(detail=True, methods=['get'])
+    def approval_history(self, request, pk=None):
+        ret = self.get_object()
+        history = ApprovalHistory.objects.filter(
+            entity_type='PurchaseReturn',
+            entity_id=ret.id,
+        ).select_related('user').order_by('-created_at')
+        return Response([_serialize_approval_history_item(item) for item in history])
+
+    @action(detail=True, methods=['get'])
+    def lifecycle_history(self, request, pk=None):
+        ret = self.get_object()
+        history = AuditLog.objects.filter(
+            entity_type='PurchaseReturn',
+            entity_id=ret.id,
+        ).order_by('-created_at').select_related('user')
+        return Response([_serialize_audit_timeline_item(item) for item in history])
+
+    @action(detail=True, methods=['get'])
+    def next_states(self, request, pk=None):
+        ret = self.get_object()
+        mapping = {
+            PurchaseReturnStatus.DRAFT: [PurchaseReturnStatus.SUBMITTED, PurchaseReturnStatus.CANCELLED],
+            PurchaseReturnStatus.SUBMITTED: [PurchaseReturnStatus.APPROVED, PurchaseReturnStatus.CANCELLED],
+            PurchaseReturnStatus.APPROVED: [PurchaseReturnStatus.POSTED, PurchaseReturnStatus.CANCELLED],
+            PurchaseReturnStatus.POSTED: [],
+            PurchaseReturnStatus.CANCELLED: [],
+        }
+        return Response({'current': ret.status, 'next_states': mapping.get(ret.status, [])})

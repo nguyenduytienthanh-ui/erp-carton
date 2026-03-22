@@ -22,7 +22,7 @@ export interface PayablePayment {
 export interface PayableDocument {
   id?: number;
   code: string;
-  supplier_id: number;
+  supplier_id: number | null;
   supplier_name?: string;
   supplier_code?: string;
   bill_date: string;

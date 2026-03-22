@@ -1,14 +1,19 @@
 import { useMemo, useState } from 'react';
 import {
+  Alert,
   Button,
+  Card,
   Form,
   Input,
   InputNumber,
   Modal,
   Select,
   Space,
+  Statistic,
   Switch,
   Table,
+  Tag,
+  Typography,
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -26,11 +31,26 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { canManageWorkforceData } from '../../utils/authz';
+import { PAGES } from '../../utils/constants';
 import { getToastMessage } from '../../shared/apiError';
+
+const { Text, Title } = Typography;
 
 type BonusPenaltyFilters = {
   month: string;
   record_type: '' | BonusPenaltyType;
+};
+
+type BonusPenaltyViewSnapshot = {
+  search: string;
+  month: string;
+  record_type: '' | BonusPenaltyType;
+};
+
+type BonusPenaltyNamedPreset = {
+  id: string;
+  name: string;
+  filters: BonusPenaltyViewSnapshot;
 };
 
 const today = new Date();
@@ -47,6 +67,15 @@ const CALC_OPTIONS: Array<{ value: BonusPenaltyCalculationType; label: string }>
   { value: 'DAILY_RATIO', label: 'Theo ngày công' },
 ];
 
+const SUMMARY_TILE_STYLE = {
+  border: '1px solid #e5e7eb',
+  borderRadius: 18,
+  padding: '14px 16px',
+  background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+  boxShadow: '0 12px 24px rgba(15, 23, 42, 0.04)',
+  height: '100%',
+};
+
 function serializeFilters(filters: BonusPenaltyFilters): string {
   return JSON.stringify(filters);
 }
@@ -61,6 +90,26 @@ function parseFilters(raw: string): BonusPenaltyFilters {
   } catch {
     return { month: currentMonth, record_type: '' };
   }
+}
+
+function toNumber(value: unknown): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatCurrency(value: number): string {
+  return `${value.toLocaleString('vi-VN')} đ`;
+}
+
+function parseViewSnapshot(value: unknown): BonusPenaltyViewSnapshot | null {
+  if (!value || typeof value !== 'object') return null;
+  const obj = value as Record<string, unknown>;
+  const recordType = obj.record_type;
+  return {
+    search: typeof obj.search === 'string' ? obj.search : '',
+    month: typeof obj.month === 'string' && obj.month ? obj.month : currentMonth,
+    record_type: recordType === 'BONUS' || recordType === 'PENALTY' ? recordType : '',
+  };
 }
 
 type BonusPenaltyForm = {
@@ -94,14 +143,21 @@ export default function BonusPenaltyList() {
   const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState('');
   const [filters, setFilters] = useState<BonusPenaltyFilters>({ month: currentMonth, record_type: '' });
+  const [selectedPresetId, setSelectedPresetId] = useState<string>();
+  const [isPresetModalOpen, setIsPresetModalOpen] = useState(false);
+  const [presetName, setPresetName] = useState('');
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<BonusPenaltyRecord | null>(null);
   const [openModal, setOpenModal] = useState(false);
   const [form] = Form.useForm<BonusPenaltyForm>();
-  const { config, saveConfig } = useUserPreferences('workforce-bonus-penalty-list');
+  const {
+    config,
+    saveConfig,
+    isLoading: isPreferencesLoading,
+  } = useUserPreferences(PAGES.WORKFORCE_BONUS_PENALTY);
   const canManage = canManageWorkforceData();
-
-  const pageSize = Number((config as Record<string, unknown>)?.pageSize ?? 20);
+  const configRecord = config as Record<string, unknown>;
+  const pageSize = Number(configRecord.pageSize ?? 20);
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
     filterValues: filters,
@@ -117,12 +173,12 @@ export default function BonusPenaltyList() {
   });
 
   const params = useMemo(() => {
-    const p: Record<string, unknown> = { page, page_size: pageSize, ordering: '-record_date' };
-    if (intentSearch.trim()) p.q = intentSearch.trim();
-    if (intentFilters.month) p.month = intentFilters.month;
-    if (intentFilters.record_type) p.record_type = intentFilters.record_type;
-    return p;
-  }, [intentSearch, intentFilters, page, pageSize]);
+    const next: Record<string, unknown> = { page, page_size: pageSize, ordering: '-record_date' };
+    if (intentSearch.trim()) next.q = intentSearch.trim();
+    if (intentFilters.month) next.month = intentFilters.month;
+    if (intentFilters.record_type) next.record_type = intentFilters.record_type;
+    return next;
+  }, [intentFilters, intentSearch, page, pageSize]);
 
   const listQuery = useQuery({
     queryKey: ['workforce-bonus-penalty', params],
@@ -156,24 +212,194 @@ export default function BonusPenaltyList() {
   });
 
   const employees = (employeesQuery.data?.results ?? []).filter(
-    (item) => item.is_active && item.status !== 'RESIGNED'
+    (item) => item.is_active && item.status !== 'RESIGNED',
   );
   const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
   const total = listQuery.data?.count ?? 0;
 
   const summary = useMemo(() => {
-    const totalBonus = rows
-      .filter((item) => item.record_type === 'BONUS')
-      .reduce((acc, item) => acc + Number(item.amount), 0);
-    const totalPenalty = rows
-      .filter((item) => item.record_type === 'PENALTY')
-      .reduce((acc, item) => acc + Number(item.amount), 0);
+    const bonusRows = rows.filter((item) => item.record_type === 'BONUS');
+    const penaltyRows = rows.filter((item) => item.record_type === 'PENALTY');
+    const totalBonus = bonusRows.reduce((acc, item) => acc + toNumber(item.amount), 0);
+    const totalPenalty = penaltyRows.reduce((acc, item) => acc + toNumber(item.amount), 0);
     return {
       totalBonus,
       totalPenalty,
       delta: totalBonus - totalPenalty,
+      bonusCount: bonusRows.length,
+      penaltyCount: penaltyRows.length,
+      dailyRatioCount: rows.filter((item) => item.calculation_type === 'DAILY_RATIO').length,
     };
   }, [rows]);
+
+  const statusAlert = useMemo(() => {
+    if (summary.totalPenalty > summary.totalBonus) {
+      return {
+        type: 'warning' as const,
+        message: 'Giá trị phạt đang lớn hơn giá trị thưởng trên tập dữ liệu hiện tại.',
+        description: 'Nên rà lại các bản ghi phạt, lý do và cách tính trước khi chuyển dữ liệu sang bước tính lương.',
+      };
+    }
+    if (summary.penaltyCount > 0) {
+      return {
+        type: 'info' as const,
+        message: `Có ${summary.penaltyCount} bản ghi phạt trong tháng đang xem.`,
+        description: 'Bạn có thể dùng bộ lọc loại để rà riêng các khoản phạt và đối chiếu lý do duyệt.',
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'Dữ liệu thưởng/phạt đang ở trạng thái cân bằng.',
+      description: 'Không có tín hiệu phạt nổi bật trên bộ lọc hiện tại.',
+    };
+  }, [summary.penaltyCount, summary.totalBonus, summary.totalPenalty]);
+
+  const activeFilterTags = useMemo(() => {
+    const tags = [`Tháng: ${intentFilters.month || currentMonth}`];
+    if (intentSearch.trim()) tags.push(`Từ khóa: ${intentSearch.trim()}`);
+    if (intentFilters.record_type) {
+      tags.push(`Loại: ${TYPE_OPTIONS.find((item) => item.value === intentFilters.record_type)?.label ?? intentFilters.record_type}`);
+    }
+    return tags;
+  }, [intentFilters, intentSearch]);
+
+  const namedPresets = useMemo(() => {
+    const raw = configRecord.saved_views;
+    if (!Array.isArray(raw)) return [] as BonusPenaltyNamedPreset[];
+    return raw
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const obj = item as Record<string, unknown>;
+        const id = typeof obj.id === 'string' ? obj.id : '';
+        const name = typeof obj.name === 'string' ? obj.name : '';
+        const filtersValue = parseViewSnapshot(obj.filters);
+        if (!id || !name || !filtersValue) return null;
+        return { id, name, filters: filtersValue };
+      })
+      .filter((value): value is BonusPenaltyNamedPreset => value !== null);
+  }, [configRecord.saved_views]);
+
+  const selectedPreset = useMemo(
+    () => namedPresets.find((preset) => preset.id === selectedPresetId) ?? null,
+    [namedPresets, selectedPresetId]
+  );
+
+  const savedViewSnapshot = useMemo(() => {
+    const directSnapshot = parseViewSnapshot(configRecord.saved_view_snapshot);
+    if (directSnapshot) return directSnapshot;
+    return parseViewSnapshot({
+      search: configRecord.search,
+      month: configRecord.month,
+      record_type: configRecord.record_type,
+    });
+  }, [configRecord.month, configRecord.record_type, configRecord.saved_view_snapshot, configRecord.search]);
+
+  const commandContextTags = useMemo(() => {
+    if (!selectedPreset) return activeFilterTags;
+    return [...activeFilterTags, `Mẫu đang dùng: ${selectedPreset.name}`];
+  }, [activeFilterTags, selectedPreset]);
+
+  const buildCurrentSnapshot = (): BonusPenaltyViewSnapshot => ({
+    search: searchInput,
+    month: filters.month || currentMonth,
+    record_type: filters.record_type,
+  });
+
+  const applySnapshot = (snapshot: BonusPenaltyViewSnapshot) => {
+    setSearchInput(snapshot.search);
+    setFilters({
+      month: snapshot.month || currentMonth,
+      record_type: snapshot.record_type,
+    });
+    setPage(1);
+  };
+
+  const saveCurrentView = async () => {
+    const currentSnapshot = buildCurrentSnapshot();
+    try {
+      await saveConfig({
+        ...config,
+        pageSize,
+        ...currentSnapshot,
+        saved_view_snapshot: currentSnapshot,
+        saved_views: namedPresets,
+      });
+      messageApi.success('Đã lưu chế độ xem thưởng/phạt.');
+    } catch {
+      messageApi.error('Không thể lưu chế độ xem thưởng/phạt.');
+    }
+  };
+
+  const applySavedView = () => {
+    if (!savedViewSnapshot) {
+      messageApi.warning('Chưa có chế độ xem đã lưu.');
+      return;
+    }
+    applySnapshot(savedViewSnapshot);
+    messageApi.success('Đã áp dụng chế độ xem đã lưu.');
+  };
+
+  const saveNamedPreset = async () => {
+    const name = presetName.trim();
+    if (!name) {
+      messageApi.error('Vui lòng nhập tên mẫu lọc.');
+      return;
+    }
+    const currentSnapshot = buildCurrentSnapshot();
+    const existing = namedPresets.find((preset) => preset.name.toLowerCase() === name.toLowerCase());
+    const nextPreset: BonusPenaltyNamedPreset = existing
+      ? { ...existing, name, filters: currentSnapshot }
+      : { id: `${Date.now()}`, name, filters: currentSnapshot };
+    const nextPresets = existing
+      ? namedPresets.map((preset) => (preset.id === existing.id ? nextPreset : preset))
+      : [...namedPresets, nextPreset];
+    try {
+      await saveConfig({
+        ...config,
+        pageSize,
+        ...currentSnapshot,
+        saved_view_snapshot: currentSnapshot,
+        saved_views: nextPresets,
+      });
+      setSelectedPresetId(nextPreset.id);
+      setPresetName('');
+      setIsPresetModalOpen(false);
+      messageApi.success(existing ? 'Đã cập nhật mẫu lọc.' : 'Đã lưu mẫu lọc mới.');
+    } catch {
+      messageApi.error('Không thể lưu mẫu lọc.');
+    }
+  };
+
+  const applyNamedPreset = () => {
+    if (!selectedPreset) {
+      messageApi.warning('Vui lòng chọn mẫu lọc.');
+      return;
+    }
+    applySnapshot(selectedPreset.filters);
+    messageApi.success(`Đã áp dụng mẫu lọc "${selectedPreset.name}".`);
+  };
+
+  const deleteNamedPreset = async () => {
+    if (!selectedPreset) {
+      messageApi.warning('Vui lòng chọn mẫu lọc để xóa.');
+      return;
+    }
+    const currentSnapshot = buildCurrentSnapshot();
+    const nextPresets = namedPresets.filter((preset) => preset.id !== selectedPreset.id);
+    try {
+      await saveConfig({
+        ...config,
+        pageSize,
+        ...currentSnapshot,
+        saved_view_snapshot: currentSnapshot,
+        saved_views: nextPresets,
+      });
+      setSelectedPresetId(undefined);
+      messageApi.success(`Đã xóa mẫu lọc "${selectedPreset.name}".`);
+    } catch {
+      messageApi.error('Không thể xóa mẫu lọc.');
+    }
+  };
 
   const columns: ColumnsType<BonusPenaltyRecord> = [
     { title: 'Ngày', dataIndex: 'record_date', width: 110 },
@@ -183,8 +409,8 @@ export default function BonusPenaltyList() {
     {
       title: 'Loại',
       dataIndex: 'record_type',
-      width: 100,
-      render: (value: BonusPenaltyType) => (value === 'BONUS' ? 'Thưởng' : 'Phạt'),
+      width: 110,
+      render: (value: BonusPenaltyType) => <Tag color={value === 'BONUS' ? 'success' : 'error'}>{value === 'BONUS' ? 'Thưởng' : 'Phạt'}</Tag>,
     },
     {
       title: 'Số tiền',
@@ -192,9 +418,9 @@ export default function BonusPenaltyList() {
       width: 150,
       align: 'right',
       render: (value: string, row) => {
-        const formatted = Number(value || 0).toLocaleString('vi-VN');
-        if (row.record_type === 'BONUS') return <span style={{ color: '#389e0d', fontWeight: 600 }}>{formatted} đ</span>;
-        return <span style={{ color: '#cf1322', fontWeight: 600 }}>-{formatted} đ</span>;
+        const formatted = formatCurrency(toNumber(value));
+        if (row.record_type === 'BONUS') return <span style={{ color: '#389e0d', fontWeight: 600 }}>{formatted}</span>;
+        return <span style={{ color: '#cf1322', fontWeight: 600 }}>-{formatted}</span>;
       },
     },
     { title: 'Lý do', dataIndex: 'reason', width: 260 },
@@ -216,7 +442,7 @@ export default function BonusPenaltyList() {
                     month: row.month,
                     record_type: row.record_type,
                     reason: row.reason,
-                    amount: Number(row.amount),
+                    amount: toNumber(row.amount),
                     calculation_type: row.calculation_type,
                     record_date: row.record_date,
                     approved_by_name: row.approved_by_name || '',
@@ -254,7 +480,7 @@ export default function BonusPenaltyList() {
     month: values.month,
     record_type: values.record_type,
     reason: values.reason.trim(),
-    amount: Number(values.amount || 0),
+    amount: toNumber(values.amount),
     calculation_type: values.calculation_type,
     record_date: values.record_date,
     approved_by_name: values.approved_by_name || '',
@@ -274,82 +500,156 @@ export default function BonusPenaltyList() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {contextHolder}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h2 style={{ margin: 0 }}>Thưởng / phạt</h2>
-          <div style={{ color: '#8c8c8c' }}>Quản lý thưởng phạt theo tháng</div>
-        </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          disabled={!canManage}
-          onClick={() => {
-            setEditing(null);
-            form.setFieldsValue({ ...emptyForm, month: filters.month || currentMonth });
-            setOpenModal(true);
-          }}
-        >
-          Thêm thưởng/phạt
-        </Button>
-      </div>
 
-      <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <Input
-          value={searchInput}
-          onChange={(e) => {
-            setSearchInput(e.target.value);
-            setPage(1);
-          }}
-          placeholder="Tìm kiếm tất cả cột..."
-          style={{ width: 320 }}
-          suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined}
-        />
-        <Input
-          type="month"
-          value={filters.month}
-          onChange={(e) => {
-            setFilters((prev) => ({ ...prev, month: e.target.value || currentMonth }));
-            setPage(1);
-          }}
-          style={{ width: 180 }}
-        />
-        <Select
-          value={filters.record_type || undefined}
-          placeholder="Loại"
-          options={TYPE_OPTIONS}
-          style={{ width: 140 }}
-          onChange={(value) => {
-            setFilters((prev) => ({ ...prev, record_type: (value ?? '') as '' | BonusPenaltyType }));
-            setPage(1);
-          }}
-        />
-        <Button
-          onClick={() => {
-            setSearchInput('');
-            setFilters({ month: currentMonth, record_type: '' });
-            setPage(1);
-          }}
-        >
-          Xóa bộ lọc
-        </Button>
-      </div>
+      <Card>
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <Space wrap>
+                <Tag color="blue">Nhân sự</Tag>
+                <Tag color="gold">Thưởng / Phạt</Tag>
+                <Tag color={canManage ? 'processing' : 'default'}>{canManage ? 'Điều phối ảnh hưởng lương' : 'Theo quyền hiện tại'}</Tag>
+              </Space>
+              <Title level={3} style={{ margin: '8px 0 4px' }}>Trung tâm thưởng và phạt</Title>
+              <Text type="secondary">Theo dõi nhanh chênh lệch thưởng/phạt, cách tính và các khoản ảnh hưởng trực tiếp tới bảng lương tháng.</Text>
+            </div>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              disabled={!canManage}
+              onClick={() => {
+                setEditing(null);
+                form.setFieldsValue({ ...emptyForm, month: filters.month || currentMonth });
+                setOpenModal(true);
+              }}
+            >
+              Thêm thưởng/phạt
+            </Button>
+            {selectedPreset ? (
+              <Tag color="purple" style={{ marginInlineEnd: 0 }}>
+                Mẫu đang dùng: {selectedPreset.name}
+              </Tag>
+            ) : null}
+          </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
-        <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-          <div style={{ color: '#8c8c8c' }}>Tổng thưởng</div>
-          <div style={{ fontWeight: 700, color: '#389e0d', fontSize: 20 }}>{summary.totalBonus.toLocaleString('vi-VN')} đ</div>
-        </div>
-        <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-          <div style={{ color: '#8c8c8c' }}>Tổng phạt</div>
-          <div style={{ fontWeight: 700, color: '#cf1322', fontSize: 20 }}>{summary.totalPenalty.toLocaleString('vi-VN')} đ</div>
-        </div>
-        <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 10 }}>
-          <div style={{ color: '#8c8c8c' }}>Chênh lệch</div>
-          <div style={{ fontWeight: 700, fontSize: 20 }}>{summary.delta.toLocaleString('vi-VN')} đ</div>
-        </div>
-      </div>
+          <Alert showIcon type={statusAlert.type} message={statusAlert.message} description={statusAlert.description} />
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Tổng thưởng" value={summary.totalBonus} formatter={(value) => formatCurrency(toNumber(value))} valueStyle={{ color: '#389e0d' }} />
+            </div>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Tổng phạt" value={summary.totalPenalty} formatter={(value) => formatCurrency(toNumber(value))} valueStyle={{ color: '#cf1322' }} />
+            </div>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Chênh lệch" value={summary.delta} formatter={(value) => formatCurrency(toNumber(value))} />
+            </div>
+            <div style={SUMMARY_TILE_STYLE}>
+              <Statistic title="Bản ghi theo ngày công" value={summary.dailyRatioCount} suffix="bản ghi" />
+            </div>
+          </div>
+        </Space>
+      </Card>
+
+      <Card>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div data-testid="bonus-penalty-search" style={{ display: 'inline-block' }}>
+              <Input
+                value={searchInput}
+                onChange={(e) => {
+                  setSearchInput(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Tìm kiếm tất cả cột..."
+                style={{ width: 320 }}
+                suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined}
+              />
+            </div>
+            <div data-testid="bonus-penalty-month-filter" style={{ display: 'inline-block' }}>
+              <Input
+                type="month"
+                value={filters.month}
+                onChange={(e) => {
+                  setFilters((prev) => ({ ...prev, month: e.target.value || currentMonth }));
+                  setPage(1);
+                }}
+                style={{ width: 180 }}
+              />
+            </div>
+            <div data-testid="bonus-penalty-type-filter" style={{ display: 'inline-block' }}>
+              <Select
+                value={filters.record_type || undefined}
+                placeholder="Loại"
+                options={TYPE_OPTIONS}
+                style={{ width: 140 }}
+                onChange={(value) => {
+                  setFilters((prev) => ({ ...prev, record_type: (value ?? '') as '' | BonusPenaltyType }));
+                  setPage(1);
+                }}
+              />
+            </div>
+            <Button
+              onClick={() => {
+                setSearchInput('');
+                setFilters({ month: currentMonth, record_type: '' });
+                setPage(1);
+                setSelectedPresetId(undefined);
+              }}
+            >
+              Xóa bộ lọc
+            </Button>
+          </div>
+          <div
+            data-testid="bonus-penalty-command-strip"
+            style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}
+          >
+            <Button data-testid="bonus-penalty-save-view" onClick={() => void saveCurrentView()} disabled={isPreferencesLoading}>
+              Lưu chế độ xem
+            </Button>
+            <Button data-testid="bonus-penalty-restore-view" onClick={applySavedView} disabled={isPreferencesLoading}>
+              Áp dụng chế độ đã lưu
+            </Button>
+            <Button
+              data-testid="bonus-penalty-open-preset-modal"
+              onClick={() => {
+                setPresetName(selectedPreset?.name ?? '');
+                setIsPresetModalOpen(true);
+              }}
+              disabled={isPreferencesLoading}
+            >
+              Lưu mẫu mới
+            </Button>
+            <div data-testid="bonus-penalty-preset-select" style={{ display: 'inline-block' }}>
+              <Select<string>
+                allowClear
+                placeholder="Chọn mẫu thưởng/phạt"
+                value={selectedPresetId}
+                onChange={(value) => setSelectedPresetId(value)}
+                disabled={isPreferencesLoading}
+                style={{ width: 220 }}
+                options={namedPresets.map((preset) => ({ value: preset.id, label: preset.name }))}
+              />
+            </div>
+            <Button data-testid="bonus-penalty-apply-preset" onClick={applyNamedPreset} disabled={isPreferencesLoading}>
+              Áp dụng mẫu lọc
+            </Button>
+            <Button danger data-testid="bonus-penalty-delete-preset" onClick={() => void deleteNamedPreset()} disabled={isPreferencesLoading}>
+              Xóa mẫu lọc
+            </Button>
+            {savedViewSnapshot ? <Tag color="default">Có chế độ xem đã lưu</Tag> : null}
+          </div>
+          <Space wrap>
+            {commandContextTags.map((tag) => (
+              <Tag key={tag}>{tag}</Tag>
+            ))}
+            <Tag color="success">{`Số bản ghi thưởng: ${summary.bonusCount}`}</Tag>
+            <Tag color="error">{`Số bản ghi phạt: ${summary.penaltyCount}`}</Tag>
+          </Space>
+        </Space>
+      </Card>
 
       <Table
         rowKey="id"
@@ -366,14 +666,32 @@ export default function BonusPenaltyList() {
           onChange: async (nextPage, nextPageSize) => {
             setPage(nextPage);
             if (nextPageSize !== pageSize) {
-              await saveConfig({
-                ...(config as Record<string, unknown>),
-                pageSize: nextPageSize,
-              });
+              await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
             }
           },
         }}
       />
+
+      <Modal
+        title="Lưu mẫu lọc thưởng/phạt"
+        open={isPresetModalOpen}
+        onCancel={() => {
+          setIsPresetModalOpen(false);
+          setPresetName('');
+        }}
+        onOk={() => void saveNamedPreset()}
+        okText="Lưu mẫu"
+        cancelText="Hủy"
+      >
+        <Input
+          data-testid="bonus-penalty-preset-name"
+          value={presetName}
+          onChange={(event) => setPresetName(event.target.value)}
+          placeholder="Ví dụ: Chỉ thưởng / Chỉ phạt / Theo dõi cuối tháng"
+          maxLength={80}
+          autoFocus
+        />
+      </Modal>
 
       <Modal
         title={editing ? 'Sửa thưởng/phạt' : 'Thêm thưởng/phạt'}
@@ -426,4 +744,3 @@ export default function BonusPenaltyList() {
     </div>
   );
 }
-

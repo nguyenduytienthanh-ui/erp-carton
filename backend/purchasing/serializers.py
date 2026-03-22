@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 
 from purchasing.models import (
@@ -499,14 +500,12 @@ class PurchaseReturnSerializer(serializers.ModelSerializer):
         return getattr(obj.purchase_order, 'code', None) if obj.purchase_order else None
 
     def create(self, validated_data):
-        from purchasing.services import get_next_po_code
         from datetime import date
         lines_data = validated_data.pop('lines', [])
         return_date = validated_data.get('return_date')
         if not return_date:
             return_date = date.today()
-        # Generate code similar to PO
-        validated_data['code'] = f"RET-{return_date.strftime('%Y%m%d')}-{int(date.today().timestamp()) % 10000}"
+        validated_data['code'] = f"RET-{return_date.strftime('%Y%m%d')}-{timezone.now().strftime('%H%M%S%f')}"
         with transaction.atomic():
             ret = PurchaseReturn.objects.create(**validated_data)
             for i, line_data in enumerate(lines_data, start=1):
@@ -528,4 +527,3 @@ class PurchaseReturnSerializer(serializers.ModelSerializer):
                     line_data['purchase_return'] = instance
                     PurchaseReturnLine.objects.create(**line_data)
         return instance
-

@@ -7,6 +7,7 @@ import type {
   ProductionOrder,
   ProductionOrderFormValues,
   ProductionReceipt,
+  ProductionWorkflowStateSummary,
 } from '../types/production';
 
 
@@ -16,6 +17,22 @@ type ProductionOrderPayload = Omit<ProductionOrderFormValues, never>;
 export const productionApi = {
   getOrders: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ProductionOrder>> => {
     const response = await axiosInstance.get(API_ENDPOINTS.PRODUCTION_ORDERS, { params });
+    return response.data;
+  },
+  getIssues: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ProductionIssue>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.PRODUCTION_ISSUES, { params });
+    return response.data;
+  },
+  getReceipts: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ProductionReceipt>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.PRODUCTION_RECEIPTS, { params });
+    return response.data;
+  },
+  getReceipt: async (id: number): Promise<ProductionReceipt> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_RECEIPTS}${id}/`);
+    return response.data;
+  },
+  getIssue: async (id: number): Promise<ProductionIssue> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_ISSUES}${id}/`);
     return response.data;
   },
   getOrderSummary: async (params?: Record<string, unknown>): Promise<{
@@ -147,8 +164,24 @@ export const productionApi = {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_ORDERS}${id}/approval_history/`);
     return response.data;
   },
-  getOrderNextStates: async (id: number): Promise<{ current: string; next_states: string[] }> => {
+  getOrderNextStates: async (id: number): Promise<ProductionWorkflowStateSummary> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_ORDERS}${id}/next_states/`);
+    return response.data;
+  },
+  getIssueLifecycleHistory: async (id: number): Promise<ProductionApprovalHistoryItem[]> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_ISSUES}${id}/lifecycle_history/`);
+    return response.data;
+  },
+  getIssueNextStates: async (id: number): Promise<ProductionWorkflowStateSummary> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_ISSUES}${id}/next_states/`);
+    return response.data;
+  },
+  getReceiptLifecycleHistory: async (id: number): Promise<ProductionApprovalHistoryItem[]> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_RECEIPTS}${id}/lifecycle_history/`);
+    return response.data;
+  },
+  getReceiptNextStates: async (id: number): Promise<ProductionWorkflowStateSummary> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_RECEIPTS}${id}/next_states/`);
     return response.data;
   },
   cancelIssue: async (id: number, reason: string): Promise<{ status: string }> => {

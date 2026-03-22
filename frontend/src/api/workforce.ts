@@ -11,7 +11,10 @@ import type {
   EmployeePayload,
   PaginatedResponse,
   PayrollRecord,
+  SalaryAdvanceApprovalHistoryItem,
   SalaryAdvanceApprovalSlaOverviewResponse,
+  SalaryAdvanceApprovalSlaPolicy,
+  SalaryAdvanceApprovalSlaReminderHistoryResponse,
   SalaryAdvanceApprovalQueueResponse,
   SalaryAdvanceRecord,
   SalaryAdvanceRecordPayload,
@@ -127,9 +130,27 @@ export const workforceApi = {
     const response = await axiosInstance.get(API_ENDPOINTS.WORKFORCE_SALARY_ADVANCE_APPROVAL_QUEUE);
     return response.data as SalaryAdvanceApprovalQueueResponse;
   },
+  getSalaryAdvanceApprovalHistory: async (id: number): Promise<SalaryAdvanceApprovalHistoryItem[]> => {
+    const response = await axiosInstance.get(
+      API_ENDPOINTS.WORKFORCE_SALARY_ADVANCE_APPROVAL_HISTORY.replace('{id}', String(id))
+    );
+    return response.data as SalaryAdvanceApprovalHistoryItem[];
+  },
   getSalaryAdvanceApprovalSlaOverview: async (): Promise<SalaryAdvanceApprovalSlaOverviewResponse> => {
     const response = await axiosInstance.get(API_ENDPOINTS.WORKFORCE_SALARY_ADVANCE_APPROVAL_SLA_OVERVIEW);
     return response.data as SalaryAdvanceApprovalSlaOverviewResponse;
+  },
+  getSalaryAdvanceApprovalSlaReminderHistory: async (params?: { days?: number }): Promise<SalaryAdvanceApprovalSlaReminderHistoryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.WORKFORCE_SALARY_ADVANCE_APPROVAL_SLA_REMINDER_HISTORY, { params });
+    return response.data as SalaryAdvanceApprovalSlaReminderHistoryResponse;
+  },
+  getSalaryAdvanceApprovalSlaPolicy: async (): Promise<SalaryAdvanceApprovalSlaPolicy> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.WORKFORCE_SALARY_ADVANCE_APPROVAL_SLA_POLICY);
+    return response.data as SalaryAdvanceApprovalSlaPolicy;
+  },
+  saveSalaryAdvanceApprovalSlaPolicy: async (payload: Partial<SalaryAdvanceApprovalSlaPolicy>): Promise<{ success: boolean; policy: SalaryAdvanceApprovalSlaPolicy }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.WORKFORCE_SALARY_ADVANCE_APPROVAL_SLA_POLICY, payload);
+    return response.data as { success: boolean; policy: SalaryAdvanceApprovalSlaPolicy };
   },
   remindSalaryAdvancePendingApprovals: async (payload?: { dry_run?: boolean }): Promise<{
     success: boolean;

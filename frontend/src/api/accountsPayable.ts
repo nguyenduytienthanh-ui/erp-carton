@@ -1,5 +1,16 @@
 import axiosInstance from './axios';
 import type { PaginatedResponse } from '../types/finance';
+import type {
+  PayableDocument as PayableDocumentView,
+  PayablePayment,
+} from '../types/accountsPayable';
+import type {
+  PayableDocument as PayableDocumentRecord,
+  PayableSettlement,
+} from '../types/finance';
+
+type PayablePaymentPayload = Record<string, unknown>;
+type ActionResponse = Record<string, unknown>;
 
 const mapPayableStatus = (status: string, daysOverdue?: number): string => {
   if (status === 'CANCELLED') return 'CANCELLED';
@@ -10,7 +21,7 @@ const mapPayableStatus = (status: string, daysOverdue?: number): string => {
   return status;
 };
 
-const transformSettlement = (item: any) => ({
+const transformSettlement = (item: PayableSettlement): PayablePayment => ({
   id: item.id,
   settlement_date: item.settlement_date,
   amount: Number(item.amount || 0),
@@ -20,7 +31,7 @@ const transformSettlement = (item: any) => ({
   created_by_name: '',
 });
 
-const transformPayable = (item: any) => ({
+const transformPayable = (item: PayableDocumentRecord): PayableDocumentView => ({
   id: item.id,
   code: item.code,
   supplier_id: item.supplier ?? null,
@@ -29,12 +40,12 @@ const transformPayable = (item: any) => ({
   bill_date: item.document_date,
   bill_number: item.vendor_invoice_no || item.code,
   due_date: item.due_date,
-  purchase_order: item.source_purchase_order_code ? null : null,
+  purchase_order: null,
   purchase_order_code: item.source_purchase_order_code ?? null,
   amount: Number(item.total_amount || 0),
   paid_amount: Number(item.settled_amount || 0),
   outstanding_amount: Number(item.remaining_amount || 0),
-  status: mapPayableStatus(item.status, item.days_overdue),
+  status: mapPayableStatus(item.status, item.days_overdue) as PayableDocumentView['status'],
   days_overdue: item.days_overdue || 0,
   payments: Array.isArray(item.settlements) ? item.settlements.map(transformSettlement) : [],
   note: item.note || '',
@@ -43,48 +54,42 @@ const transformPayable = (item: any) => ({
 });
 
 export const accountsPayableApi = {
-  // Lấy danh sách công nợ phải trả
-  getPayables: async (params?: Record<string, unknown>): Promise<PaginatedResponse<any>> => {
+  getPayables: async (params?: Record<string, unknown>): Promise<PaginatedResponse<PayableDocumentView>> => {
     const normalizedParams = {
       ...params,
       search: params?.search || params?.q,
       supplier: params?.supplier_id || params?.supplier,
       overdue_only: params?.aging_bucket ? 'true' : undefined,
     };
-    const response = await axiosInstance.get('/finance/payables/', { params: normalizedParams });
+    const response = await axiosInstance.get<PaginatedResponse<PayableDocumentRecord>>('/finance/payables/', { params: normalizedParams });
     return {
       ...response.data,
       results: (response.data?.results || []).map(transformPayable),
     };
   },
 
-  // Lấy chi tiết một công nợ
-  getPayable: async (id: number): Promise<any> => {
-    const response = await axiosInstance.get(`/finance/payables/${id}/`);
+  getPayable: async (id: number): Promise<PayableDocumentView> => {
+    const response = await axiosInstance.get<PayableDocumentRecord>(`/finance/payables/${id}/`);
     return transformPayable(response.data);
   },
 
-  // Read-only backend: "xóa" sẽ map sang hủy chứng từ
-  deletePayable: async (id: number): Promise<any> => {
-    const response = await axiosInstance.post(`/finance/payables/${id}/cancel/`, { reason: 'Hủy từ giao diện' });
+  deletePayable: async (id: number): Promise<ActionResponse> => {
+    const response = await axiosInstance.post<ActionResponse>(`/finance/payables/${id}/cancel/`, { reason: 'Há»§y tá»« giao diá»‡n' });
     return response.data;
   },
 
-  // Ghi nhận thanh toán
-  recordPayment: async (id: number, data: any): Promise<any> => {
-    const response = await axiosInstance.post(`/finance/payables/${id}/pay/`, data);
+  recordPayment: async (id: number, data: PayablePaymentPayload): Promise<PayableDocumentView> => {
+    const response = await axiosInstance.post<PayableDocumentRecord>(`/finance/payables/${id}/pay/`, data);
     return transformPayable(response.data);
   },
 
-  // Hủy công nợ
-  cancelPayable: async (id: number, reason: string): Promise<any> => {
-    const response = await axiosInstance.post(`/finance/payables/${id}/cancel/`, { reason });
+  cancelPayable: async (id: number, reason: string): Promise<ActionResponse> => {
+    const response = await axiosInstance.post<ActionResponse>(`/finance/payables/${id}/cancel/`, { reason });
     return response.data;
   },
 
-  // Lấy danh sách thanh toán cho công nợ
-  getPayments: async (id: number): Promise<any> => {
-    const response = await axiosInstance.get(`/finance/payables/${id}/settlements/`);
+  getPayments: async (id: number): Promise<PayablePayment[]> => {
+    const response = await axiosInstance.get<PayableSettlement[]>(`/finance/payables/${id}/settlements/`);
     return (response.data || []).map(transformSettlement);
   },
 };

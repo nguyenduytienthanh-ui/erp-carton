@@ -1,12 +1,21 @@
 from datetime import timedelta
+from decimal import Decimal
 
 from rest_framework.test import APITestCase
 from django.utils import timezone
 
-from core.models import User
+from core.models import ApprovalHistory, AuditLog, User
 from inventory.models import InventoryTransaction, Warehouse, WarehouseLocation
 from products.models import Product, ProductUnit
-from purchasing.models import PurchaseOrder, PurchaseOrderLine, PurchaseReceipt
+from purchasing.models import (
+    MaterialPurchasePrice,
+    PurchaseOrder,
+    PurchaseOrderLine,
+    PurchaseReceipt,
+    PurchaseRequest,
+    PurchaseReturn,
+)
+from sales.models import SalesOrder, SalesOrderLine
 
 
 class PurchasingWorkflowTests(APITestCase):
@@ -26,6 +35,7 @@ class PurchasingWorkflowTests(APITestCase):
             unit=self.unit,
             cost_price=10000,
             sale_price=15000,
+            min_stock=5,
             status='ACTIVE',
             created_by=self.user,
             updated_by=self.user,
@@ -122,6 +132,107 @@ class PurchasingWorkflowTests(APITestCase):
         self.assertEqual(inventory_tx.purchase_order_line_id, line.id)
         self.assertEqual(inventory_tx.purchase_receipt_id, receipt.id)
 
+    def test_purchase_order_reject_edit_resubmit_and_receive_tracks_full_lifecycle(self):
+        order = self._create_purchase_order(qty='8')
+        order_id = order['id']
+
+        draft_update = self.client.patch(
+            f'/api/purchasing/orders/{order_id}/',
+            {
+                'version': order['version'],
+                'notes': 'Cap nhat draft truoc khi gui duyet',
+                'lines': [
+                    {
+                        'id': order['lines'][0]['id'],
+                        'line_number': 1,
+                        'product': self.product.id,
+                        'qty': '9',
+                        'unit_price': '12000',
+                        'discount_pct': '0',
+                        'tax_pct': '8',
+                        'note': 'Cap nhat so luong draft',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(draft_update.status_code, 200, draft_update.data)
+
+        self.client.post(f'/api/purchasing/orders/{order_id}/submit/', format='json')
+        reject_response = self.client.post(
+            f'/api/purchasing/orders/{order_id}/reject/',
+            {'reason': 'Can bo sung du toan mua hang'},
+            format='json',
+        )
+        self.assertEqual(reject_response.status_code, 200, reject_response.data)
+        self.assertEqual(reject_response.data['status'], 'REJECTED')
+
+        rejected_update = self.client.patch(
+            f'/api/purchasing/orders/{order_id}/',
+            {
+                'version': PurchaseOrder.objects.get(pk=order_id).version,
+                'notes': 'Da cap nhat sau khi bi tu choi',
+                'lines': [
+                    {
+                        'id': draft_update.data['lines'][0]['id'],
+                        'line_number': 1,
+                        'product': self.product.id,
+                        'qty': '10',
+                        'unit_price': '12100',
+                        'discount_pct': '0',
+                        'tax_pct': '8',
+                        'note': 'Bo sung du toan va don gia',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(rejected_update.status_code, 200, rejected_update.data)
+
+        resubmit_response = self.client.post(f'/api/purchasing/orders/{order_id}/submit/', format='json')
+        self.assertEqual(resubmit_response.status_code, 200, resubmit_response.data)
+        approve_response = self.client.post(f'/api/purchasing/orders/{order_id}/approve/', format='json')
+        self.assertEqual(approve_response.status_code, 200, approve_response.data)
+
+        order_obj = PurchaseOrder.objects.get(pk=order_id)
+        self.assertEqual(order_obj.status, 'APPROVED')
+        self.assertEqual(order_obj.reject_reason, '')
+        self.assertEqual(str(order_obj.lines.first().qty), '10.0000')
+
+        next_states_response = self.client.get(f'/api/purchasing/orders/{order_id}/next_states/')
+        self.assertEqual(next_states_response.status_code, 200, next_states_response.data)
+        self.assertEqual(next_states_response.data['current'], 'APPROVED')
+        self.assertIn('CANCELLED', next_states_response.data['next_states'])
+
+        line = PurchaseOrderLine.objects.get(purchase_order_id=order_id, line_number=1)
+        receive_response = self.client.post(
+            f'/api/purchasing/orders/{order_id}/receive/',
+            {
+                'receipt_date': '2026-03-14',
+                'warehouse': self.warehouse.id,
+                'location': self.location.id,
+                'reference': 'GRN-004',
+                'items': [
+                    {
+                        'purchase_order_line': line.id,
+                        'quantity': '10',
+                        'unit_cost': '12100',
+                        'note': 'Nhan sau khi resubmit',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(receive_response.status_code, 201, receive_response.data)
+        history_actions = list(
+            ApprovalHistory.objects
+            .filter(entity_type='PurchaseOrder', entity_id=order_id)
+            .order_by('created_at', 'id')
+            .values_list('action', flat=True)
+        )
+        self.assertEqual(history_actions, ['SUBMIT', 'REJECT', 'SUBMIT', 'APPROVE'])
+        self.assertTrue(AuditLog.objects.filter(entity_type='PurchaseOrder', entity_id=order_id, action='REJECT').exists())
+
     def test_cancel_purchase_receipt_rolls_back_order_receiving(self):
         order = self._create_purchase_order(qty='8')
         order_id = order['id']
@@ -167,6 +278,65 @@ class PurchasingWorkflowTests(APITestCase):
         self.assertEqual(receipt.status, 'CANCELLED')
         self.assertEqual(inventory_tx.status, 'CANCELLED')
 
+    def test_purchase_receipt_exposes_next_states_and_lifecycle_history(self):
+        order = self._create_purchase_order(qty='5')
+        order_id = order['id']
+        self.client.post(f'/api/purchasing/orders/{order_id}/submit/', format='json')
+        self.client.post(f'/api/purchasing/orders/{order_id}/approve/', format='json')
+
+        line = PurchaseOrderLine.objects.get(purchase_order_id=order_id, line_number=1)
+        receive_response = self.client.post(
+            f'/api/purchasing/orders/{order_id}/receive/',
+            {
+                'receipt_date': '2026-03-14',
+                'warehouse': self.warehouse.id,
+                'location': self.location.id,
+                'reference': 'GRN-003',
+                'items': [
+                    {
+                        'purchase_order_line': line.id,
+                        'quantity': '5',
+                        'unit_cost': '11800',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(receive_response.status_code, 201, receive_response.data)
+        receipt_id = receive_response.data['id']
+
+        next_states_response = self.client.get(f'/api/purchasing/receipts/{receipt_id}/next_states/')
+        self.assertEqual(next_states_response.status_code, 200, next_states_response.data)
+        self.assertEqual(next_states_response.data['current'], 'POSTED')
+        self.assertEqual(next_states_response.data['next_states'], ['CANCELLED'])
+
+        history_response = self.client.get(f'/api/purchasing/receipts/{receipt_id}/lifecycle_history/')
+        self.assertEqual(history_response.status_code, 200, history_response.data)
+        self.assertEqual(history_response.data[0]['action'], 'RECEIVE')
+        self.assertEqual(history_response.data[0]['action_label'], 'Đã ghi sổ')
+        self.assertIn('Số lượng', history_response.data[0]['comments'])
+
+        cancel_response = self.client.post(
+            f'/api/purchasing/receipts/{receipt_id}/cancel/',
+            {'reason': 'Huy doi soat nhap kho'},
+            format='json',
+        )
+        self.assertEqual(cancel_response.status_code, 200, cancel_response.data)
+
+        cancelled_states = self.client.get(f'/api/purchasing/receipts/{receipt_id}/next_states/')
+        self.assertEqual(cancelled_states.status_code, 200, cancelled_states.data)
+        self.assertEqual(cancelled_states.data['current'], 'CANCELLED')
+        self.assertEqual(cancelled_states.data['next_states'], [])
+
+        cancelled_history = self.client.get(f'/api/purchasing/receipts/{receipt_id}/lifecycle_history/')
+        self.assertEqual(cancelled_history.status_code, 200, cancelled_history.data)
+        self.assertEqual([item['action'] for item in cancelled_history.data[:2]], ['CANCEL', 'RECEIVE'])
+        self.assertEqual(cancelled_history.data[0]['action_label'], 'Đã hủy')
+        self.assertEqual(cancelled_history.data[0]['comments'], 'Huy doi soat nhap kho')
+
+        audit_rows = AuditLog.objects.filter(entity_type='PurchaseReceipt', entity_id=receipt_id)
+        self.assertEqual(audit_rows.count(), 2)
+
     def test_summary_endpoint_returns_procurement_counts(self):
         order = self._create_purchase_order(qty='6')
         order_id = order['id']
@@ -181,3 +351,336 @@ class PurchasingWorkflowTests(APITestCase):
         self.assertEqual(response.data['approved_count'], 1)
         self.assertEqual(response.data['waiting_receipt_count'], 1)
         self.assertEqual(response.data['overdue_receipt_count'], 1)
+
+    def test_create_purchase_order_from_forecast_creates_real_po(self):
+        MaterialPurchasePrice.objects.create(
+            product=self.product,
+            supplier_id=self.supplier_id,
+            unit_price=Decimal('11500'),
+            currency='VND',
+            uom='CAI',
+            effective_from=timezone.localdate() - timedelta(days=5),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.post(
+            '/api/purchasing/forecast/create_po_from_forecast/',
+            {
+                'supplier': self.supplier_id,
+                'warehouse': self.warehouse.id,
+                'location': self.location.id,
+                'order_date': timezone.localdate().isoformat(),
+                'expected_receipt_date': (timezone.localdate() + timedelta(days=7)).isoformat(),
+                'reference': 'FC-PO-001',
+                'notes': 'Sinh tu forecast',
+                'items': [
+                    {
+                        'product_id': self.product.id,
+                        'qty': '12',
+                        'urgency': 'HIGH',
+                    }
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['status'], 'DRAFT')
+        self.assertEqual(response.data['supplier'], self.supplier_id)
+        self.assertEqual(response.data['warehouse'], self.warehouse.id)
+        self.assertEqual(response.data['location'], self.location.id)
+        self.assertEqual(len(response.data['lines']), 1)
+        self.assertEqual(response.data['lines'][0]['product'], self.product.id)
+        self.assertEqual(str(response.data['lines'][0]['unit_price']), '11500.00')
+
+        order = PurchaseOrder.objects.get(pk=response.data['id'])
+        self.assertEqual(order.reference, 'FC-PO-001')
+        self.assertEqual(order.lines.count(), 1)
+        self.assertEqual(str(order.lines.first().qty), '12.0000')
+
+    def test_inventory_forecast_endpoint_returns_operational_fields(self):
+        sales_order = SalesOrder.objects.create(
+            code='SO-FORECAST-001',
+            doc_type='SO',
+            order_date=timezone.localdate(),
+            status='POSTED',
+            currency='VND',
+            exchange_rate=1,
+            owner=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        SalesOrderLine.objects.create(
+            sales_order=sales_order,
+            line_number=1,
+            product=self.product,
+            internal_product_code=self.product.code,
+            product_snapshot={'code': self.product.code, 'name': self.product.name},
+            uom='CAI',
+            qty='18',
+            unit_price='15000',
+            discount_pct='0',
+            tax_pct='0',
+            note='Demand for forecast',
+        )
+        sales_order.recalc_totals()
+
+        response = self.client.get('/api/inventory/forecast/?months=3&lead_time=10')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertTrue(len(response.data) >= 1)
+        row = next(item for item in response.data if item['product_id'] == self.product.id)
+        self.assertIn('avg_monthly_usage', row)
+        self.assertIn('lead_time_days', row)
+        self.assertIn('safety_stock', row)
+        self.assertIn('status', row)
+        self.assertIn('stockout_risk', row)
+
+    def test_purchase_request_submit_approve_and_reject_flow(self):
+        create_response = self.client.post('/api/purchasing/requests/', {
+            'request_date': timezone.localdate().isoformat(),
+            'reference': 'PR-REF-001',
+            'notes': 'Yeu cau mua can duyet',
+            'lines': [
+                {
+                    'line_number': 1,
+                    'product': self.product.id,
+                    'qty': '5',
+                    'note': 'Dong mua test',
+                }
+            ],
+        }, format='json')
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        request_id = create_response.data['id']
+
+        submit_response = self.client.post(f'/api/purchasing/requests/{request_id}/submit/', format='json')
+        self.assertEqual(submit_response.status_code, 200, submit_response.data)
+        self.assertEqual(submit_response.data['status'], 'SUBMITTED')
+        submit_audit = AuditLog.objects.filter(
+            entity_type='PurchaseRequest',
+            entity_code=create_response.data['code'],
+            action='SUBMIT',
+        )
+        self.assertTrue(submit_audit.exists())
+
+        approve_response = self.client.post(f'/api/purchasing/requests/{request_id}/approve/', format='json')
+        self.assertEqual(approve_response.status_code, 200, approve_response.data)
+        self.assertEqual(approve_response.data['status'], 'APPROVED')
+
+        request_obj = PurchaseRequest.objects.get(pk=request_id)
+        self.assertEqual(request_obj.status, 'APPROVED')
+        self.assertEqual(request_obj.approved_by_id, self.user.id)
+        self.assertIsNotNone(request_obj.approved_at)
+        self.assertEqual(request_obj.lines.count(), 1)
+        self.assertEqual(str(request_obj.lines.first().qty), '5.0000')
+        self.assertEqual(
+            ApprovalHistory.objects.filter(entity_type='PurchaseRequest', entity_id=request_id).count(),
+            2,
+        )
+        history_response = self.client.get(f'/api/purchasing/requests/{request_id}/approval_history/')
+        self.assertEqual(history_response.status_code, 200, history_response.data)
+        self.assertEqual([item['action'] for item in history_response.data], ['APPROVE', 'SUBMIT'])
+        self.assertEqual(history_response.data[0]['action_label'], 'Đã duyệt')
+        approve_audit = AuditLog.objects.filter(
+            entity_type='PurchaseRequest',
+            entity_code=create_response.data['code'],
+            action='APPROVE',
+        )
+        self.assertTrue(approve_audit.exists())
+
+        reject_candidate = self.client.post('/api/purchasing/requests/', {
+            'request_date': timezone.localdate().isoformat(),
+            'reference': 'PR-REF-002',
+            'notes': 'Yeu cau mua de tu choi',
+        }, format='json')
+        self.assertEqual(reject_candidate.status_code, 201, reject_candidate.data)
+        reject_id = reject_candidate.data['id']
+
+        self.client.post(f'/api/purchasing/requests/{reject_id}/submit/', format='json')
+        reject_response = self.client.post(
+            f'/api/purchasing/requests/{reject_id}/reject/',
+            {'reason': 'Khong con nhu cau mua'},
+            format='json',
+        )
+        self.assertEqual(reject_response.status_code, 200, reject_response.data)
+        self.assertEqual(reject_response.data['status'], 'REJECTED')
+
+        rejected_obj = PurchaseRequest.objects.get(pk=reject_id)
+        self.assertEqual(rejected_obj.status, 'REJECTED')
+        self.assertEqual(rejected_obj.reject_reason, 'Khong con nhu cau mua')
+        self.assertEqual(rejected_obj.rejected_by_id, self.user.id)
+        reject_history = ApprovalHistory.objects.filter(
+            entity_type='PurchaseRequest',
+            entity_id=reject_id,
+        )
+        self.assertEqual(reject_history.count(), 2)
+        self.assertTrue(reject_history.filter(action='REJECT', comments='Khong con nhu cau mua').exists())
+        reject_audit = AuditLog.objects.filter(
+            entity_type='PurchaseRequest',
+            entity_code=reject_candidate.data['code'],
+            action='REJECT',
+        )
+        self.assertTrue(reject_audit.exists())
+
+    def test_purchase_request_only_draft_can_be_edited_or_deleted(self):
+        create_response = self.client.post('/api/purchasing/requests/', {
+            'request_date': timezone.localdate().isoformat(),
+            'reference': 'PR-LOCK-001',
+            'notes': 'Yeu cau khoa sau khi submit',
+        }, format='json')
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        request_id = create_response.data['id']
+
+        submit_response = self.client.post(f'/api/purchasing/requests/{request_id}/submit/', format='json')
+        self.assertEqual(submit_response.status_code, 200, submit_response.data)
+
+        patch_response = self.client.patch(
+            f'/api/purchasing/requests/{request_id}/',
+            {'notes': 'Cap nhat sau khi submit'},
+            format='json',
+        )
+        self.assertEqual(patch_response.status_code, 403, patch_response.data)
+
+        delete_response = self.client.delete(f'/api/purchasing/requests/{request_id}/')
+        self.assertEqual(delete_response.status_code, 403, delete_response.data)
+
+    def test_purchase_return_create_submit_approve_exposes_history_and_next_states(self):
+        create_response = self.client.post('/api/purchasing/returns/', {
+            'return_date': timezone.localdate().isoformat(),
+            'supplier': self.supplier_id,
+            'reference': 'RET-REF-001',
+            'return_reason': 'OTHER',
+            'return_notes': 'Tra hang de kiem thu workflow',
+            'lines': [
+                {
+                    'line_number': 1,
+                    'product': self.product.id,
+                    'qty': '2',
+                    'unit_price': '12000',
+                    'tax_pct': '0',
+                    'note': 'Dong tra hang test',
+                }
+            ],
+        }, format='json')
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        self.assertTrue(str(create_response.data['code']).startswith('RET-'))
+        return_id = create_response.data['id']
+
+        draft_next_states = self.client.get(f'/api/purchasing/returns/{return_id}/next_states/')
+        self.assertEqual(draft_next_states.status_code, 200, draft_next_states.data)
+        self.assertEqual(draft_next_states.data['current'], 'DRAFT')
+        self.assertEqual(draft_next_states.data['next_states'], ['SUBMITTED', 'CANCELLED'])
+
+        submit_response = self.client.post(f'/api/purchasing/returns/{return_id}/submit_return/', format='json')
+        self.assertEqual(submit_response.status_code, 200, submit_response.data)
+        self.assertEqual(submit_response.data['status'], 'SUBMITTED')
+
+        approve_response = self.client.post(f'/api/purchasing/returns/{return_id}/approve_return/', format='json')
+        self.assertEqual(approve_response.status_code, 200, approve_response.data)
+        self.assertEqual(approve_response.data['status'], 'APPROVED')
+
+        return_obj = PurchaseReturn.objects.get(pk=return_id)
+        self.assertEqual(return_obj.status, 'APPROVED')
+        self.assertEqual(return_obj.approved_by_id, self.user.id)
+        self.assertIsNotNone(return_obj.approved_at)
+
+        history_rows = ApprovalHistory.objects.filter(entity_type='PurchaseReturn', entity_id=return_id)
+        self.assertEqual(history_rows.count(), 2)
+        self.assertTrue(history_rows.filter(action='SUBMIT').exists())
+        self.assertTrue(history_rows.filter(action='APPROVE').exists())
+
+        history_response = self.client.get(f'/api/purchasing/returns/{return_id}/approval_history/')
+        self.assertEqual(history_response.status_code, 200, history_response.data)
+        self.assertEqual([item['action'] for item in history_response.data], ['APPROVE', 'SUBMIT'])
+        self.assertEqual(history_response.data[0]['action_label'], 'Đã duyệt')
+
+        approved_next_states = self.client.get(f'/api/purchasing/returns/{return_id}/next_states/')
+        self.assertEqual(approved_next_states.status_code, 200, approved_next_states.data)
+        self.assertEqual(approved_next_states.data['current'], 'APPROVED')
+        self.assertEqual(approved_next_states.data['next_states'], ['POSTED', 'CANCELLED'])
+
+    def test_purchase_return_exposes_lifecycle_history_without_duplicate_audit_rows(self):
+        order = self._create_purchase_order(qty='6')
+        order_id = order['id']
+
+        self.client.post(f'/api/purchasing/orders/{order_id}/submit/', format='json')
+        self.client.post(f'/api/purchasing/orders/{order_id}/approve/', format='json')
+
+        line = PurchaseOrderLine.objects.get(purchase_order_id=order_id, line_number=1)
+        receive_response = self.client.post(
+            f'/api/purchasing/orders/{order_id}/receive/',
+            {
+                'receipt_date': '2026-03-14',
+                'warehouse': self.warehouse.id,
+                'location': self.location.id,
+                'reference': 'GRN-RET-001',
+                'items': [
+                    {
+                        'purchase_order_line': line.id,
+                        'quantity': '6',
+                        'unit_cost': '11800',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(receive_response.status_code, 201, receive_response.data)
+
+        create_response = self.client.post('/api/purchasing/returns/', {
+            'return_date': timezone.localdate().isoformat(),
+            'supplier': self.supplier_id,
+            'purchase_order': order_id,
+            'reference': 'RET-LIFE-001',
+            'return_reason': 'OTHER',
+            'return_notes': 'Tra hang de test lifecycle',
+            'lines': [
+                {
+                    'line_number': 1,
+                    'product': self.product.id,
+                    'qty': '2',
+                    'unit_price': '11800',
+                    'tax_pct': '0',
+                }
+            ],
+        }, format='json')
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        return_id = create_response.data['id']
+
+        self.client.post(f'/api/purchasing/returns/{return_id}/submit_return/', format='json')
+        self.client.post(f'/api/purchasing/returns/{return_id}/approve_return/', format='json')
+
+        post_response = self.client.post(f'/api/purchasing/returns/{return_id}/post_return/', format='json')
+        self.assertEqual(post_response.status_code, 200, post_response.data)
+        self.assertEqual(post_response.data['status'], 'POSTED')
+
+        posted_states = self.client.get(f'/api/purchasing/returns/{return_id}/next_states/')
+        self.assertEqual(posted_states.status_code, 200, posted_states.data)
+        self.assertEqual(posted_states.data['current'], 'POSTED')
+        self.assertEqual(posted_states.data['next_states'], [])
+
+        history_response = self.client.get(f'/api/purchasing/returns/{return_id}/lifecycle_history/')
+        self.assertEqual(history_response.status_code, 200, history_response.data)
+        self.assertEqual([item['action'] for item in history_response.data], ['POST', 'APPROVE', 'SUBMIT'])
+        self.assertEqual(history_response.data[0]['action_label'], 'Đã vào sổ')
+
+        cancel_response = self.client.post(
+            f'/api/purchasing/returns/{return_id}/cancel_return/',
+            {'reason': 'Huy sau doi soat lifecycle'},
+            format='json',
+        )
+        self.assertEqual(cancel_response.status_code, 200, cancel_response.data)
+        self.assertEqual(cancel_response.data['status'], 'CANCELLED')
+
+        cancelled_states = self.client.get(f'/api/purchasing/returns/{return_id}/next_states/')
+        self.assertEqual(cancelled_states.status_code, 200, cancelled_states.data)
+        self.assertEqual(cancelled_states.data['current'], 'CANCELLED')
+        self.assertEqual(cancelled_states.data['next_states'], [])
+
+        cancelled_history = self.client.get(f'/api/purchasing/returns/{return_id}/lifecycle_history/')
+        self.assertEqual(cancelled_history.status_code, 200, cancelled_history.data)
+        self.assertEqual([item['action'] for item in cancelled_history.data], ['CANCEL', 'POST', 'APPROVE', 'SUBMIT'])
+        self.assertEqual(cancelled_history.data[0]['action_label'], 'Đã hủy')
+        self.assertEqual(cancelled_history.data[0]['comments'], 'Huy sau doi soat lifecycle')
+
+        audit_rows = AuditLog.objects.filter(entity_type='PurchaseReturn', entity_id=return_id)
+        self.assertEqual(audit_rows.count(), 4)

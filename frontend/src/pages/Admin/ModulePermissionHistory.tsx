@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Button, Card, Col, DatePicker, Input, Modal, Row, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, DatePicker, Input, Modal, Row, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
 import { DownloadOutlined, HistoryOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { Dayjs } from 'dayjs';
@@ -39,6 +39,15 @@ function parseFilters(raw: string): HistoryFilters {
 
 type HistoryPrefConfig = {
   pageSize?: number;
+};
+
+const SUMMARY_TILE_STYLE = {
+  border: '1px solid #e5e7eb',
+  borderRadius: 18,
+  padding: '14px 16px',
+  background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+  boxShadow: '0 12px 24px rgba(15, 23, 42, 0.04)',
+  height: '100%',
 };
 
 export default function ModulePermissionHistory() {
@@ -141,7 +150,7 @@ export default function ModulePermissionHistory() {
     });
     setFreezeContext(null);
     setFreezeConfirmText('');
-    messageApi.success('Đã đóng băng user khỏi quyền chỉnh phân quyền trong 24h.');
+    messageApi.success('Đã đóng băng tài khoản khỏi quyền chỉnh phân quyền trong 24 giờ.');
     await queryClient.invalidateQueries({ queryKey: ['admin-module-permissions-history'] });
     await queryClient.invalidateQueries({ queryKey: ['admin-module-permissions-freeze-history'] });
   };
@@ -150,7 +159,7 @@ export default function ModulePermissionHistory() {
       user_id: userId,
       confirm_text: 'UNFREEZE',
     });
-    messageApi.success('Đã gỡ đóng băng user.');
+    messageApi.success('Đã gỡ đóng băng tài khoản.');
     await queryClient.invalidateQueries({ queryKey: ['admin-module-permissions-history'] });
     await queryClient.invalidateQueries({ queryKey: ['admin-module-permissions-freeze-history'] });
   };
@@ -158,7 +167,7 @@ export default function ModulePermissionHistory() {
   const userOptions = useMemo(
     () => (historyMetaQuery.data?.users ?? []).map((item) => ({
       value: item.id,
-      label: item.full_name?.trim() || item.username || `User #${item.id}`,
+      label: item.full_name?.trim() || item.username || `Người dùng #${item.id}`,
     })),
     [historyMetaQuery.data?.users]
   );
@@ -178,6 +187,10 @@ export default function ModulePermissionHistory() {
   const summary = listQuery.data?.summary;
   const trendItems = useMemo(() => summary?.trend_12m ?? [], [summary?.trend_12m]);
   const anomalies24h = useMemo(() => summary?.anomalies_24h ?? [], [summary?.anomalies_24h]);
+  const frozenActorCount = useMemo(
+    () => anomalies24h.filter((item) => Boolean(item.is_frozen)).length,
+    [anomalies24h]
+  );
   const maxTrendEvents = useMemo(() => {
     if (trendItems.length === 0) return 1;
     return Math.max(...trendItems.map((item) => Number(item.events || 0)), 1);
@@ -241,7 +254,7 @@ export default function ModulePermissionHistory() {
               const rbNext = Boolean(next.rbac_manage);
               return (
                 <div key={`${record.id}-${roleId}`}>
-                  <strong>{roleName || roleCode || `Role #${roleId}`}</strong>{' '}
+                  <strong>{roleName || roleCode || `Vai trò #${roleId}`}</strong>{' '}
                   <Tag color={wfNext ? 'green' : 'default'}>Nhân sự: {wfPrev ? 'Bật' : 'Tắt'} {"->"} {wfNext ? 'Bật' : 'Tắt'}</Tag>
                   <Tag color={fiNext ? 'green' : 'default'}>Tài chính: {fiPrev ? 'Bật' : 'Tắt'} {"->"} {fiNext ? 'Bật' : 'Tắt'}</Tag>
                   <Tag color={rbNext ? 'gold' : 'default'}>RBAC: {rbPrev ? 'Bật' : 'Tắt'} {"->"} {rbNext ? 'Bật' : 'Tắt'}</Tag>
@@ -282,13 +295,13 @@ export default function ModulePermissionHistory() {
       ),
     },
     {
-      title: 'User mục tiêu',
+      title: 'Tài khoản mục tiêu',
       dataIndex: 'target_user',
       render: (target: RoleModulePermissionFreezeHistoryItem['target_user']) => (
         <Space size={4} wrap>
           <strong>{target.full_name?.trim() || target.username || '-'}</strong>
           {target.username ? <Tag>{target.username}</Tag> : null}
-          {target.is_active_freeze ? <Tag color="blue">Đang freeze đến {target.frozen_until || '-'}</Tag> : null}
+          {target.is_active_freeze ? <Tag color="blue">Đang đóng băng đến {target.frozen_until || '-'}</Tag> : null}
         </Space>
       ),
     },
@@ -298,6 +311,55 @@ export default function ModulePermissionHistory() {
     if (filters.days === 'all') return 'Toàn thời gian';
     return `${filters.days} ngày gần nhất`;
   }, [filters.days]);
+  const historyFilterTags = useMemo(() => {
+    const tags: string[] = [];
+    if (intentSearch.trim()) tags.push(`Từ khóa: ${intentSearch.trim()}`);
+    if (intentFilters.roleCodeInput.trim()) tags.push(`Mã vai trò: ${intentFilters.roleCodeInput.trim()}`);
+    if (intentFilters.userId != null) {
+      const userLabel = userOptions.find((item) => item.value === intentFilters.userId)?.label;
+      if (userLabel) tags.push(`Người thao tác: ${userLabel}`);
+    }
+    if (intentFilters.changedType !== 'all') {
+      const changedLabel = changedTypeOptions.find((item) => item.value === intentFilters.changedType)?.label;
+      if (changedLabel) tags.push(`Loại thay đổi: ${changedLabel}`);
+    }
+    tags.push(`Khoảng thời gian: ${selectedDaysLabel}`);
+    return tags;
+  }, [
+    changedTypeOptions,
+    intentFilters.changedType,
+    intentFilters.roleCodeInput,
+    intentFilters.userId,
+    intentSearch,
+    selectedDaysLabel,
+    userOptions,
+  ]);
+  const activeActorCount = useMemo(() => new Set(rows.map((item) => item.user?.username || item.user?.id || 'system')).size, [rows]);
+  const lockedEntries24h = useMemo(
+    () => (freezeHistoryQuery.data?.results ?? []).filter((item) => item.action === 'LOCK').length,
+    [freezeHistoryQuery.data?.results]
+  );
+  const historyStatusAlert = useMemo(() => {
+    if (anomalies24h.length > 0) {
+      return {
+        type: 'warning' as const,
+        message: 'Có tín hiệu bất thường trong luồng thay đổi phân quyền.',
+        description: `${anomalies24h.length} tài khoản đang vượt ngưỡng cảnh báo trong 24 giờ gần nhất. Nên kiểm tra lịch sử và cân nhắc đóng băng tạm thời nếu cần.`,
+      };
+    }
+    if (frozenActorCount > 0) {
+      return {
+        type: 'info' as const,
+        message: 'Đang có tài khoản bị đóng băng thao tác.',
+        description: `${frozenActorCount} tài khoản đang bị khóa quyền chỉnh phân quyền. Cần rà lại để xác nhận đã xử lý xong nguyên nhân.`,
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'Lịch sử phân quyền đang ổn định.',
+      description: 'Chưa ghi nhận bất thường nổi bật trong cửa sổ đang theo dõi và không có cảnh báo khẩn cần can thiệp ngay.',
+    };
+  }, [anomalies24h.length, frozenActorCount]);
 
   const datePickerValue = useMemo((): [Dayjs, Dayjs] | null => {
     if (filters.days === 'all') return null;
@@ -317,7 +379,7 @@ export default function ModulePermissionHistory() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'module_permission_history.xlsx';
+      a.download = 'lich_su_phan_quyen_phan_he.xlsx';
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -335,7 +397,7 @@ export default function ModulePermissionHistory() {
       title={(
         <Space>
           <HistoryOutlined />
-          <span>Lịch sử thay đổi phân quyền module</span>
+          <span>Trung tâm lịch sử phân quyền phân hệ</span>
         </Space>
       )}
       extra={(
@@ -353,26 +415,52 @@ export default function ModulePermissionHistory() {
       )}
     >
       <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-        Tra cứu lịch sử bật/tắt toàn bộ quyền module theo vai trò, kèm cảnh báo bất thường và lịch sử đóng băng user thao tác.
+        Theo dõi toàn bộ lịch sử thay đổi quyền theo vai trò, tín hiệu bất thường và các quyết định đóng băng tài khoản thao tác trong cùng một màn điều phối.
       </Typography.Paragraph>
+      <div style={{ marginBottom: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Tag color={anomalies24h.length > 0 ? 'volcano' : 'green'}>
+          {anomalies24h.length > 0 ? `Bất thường 24h: ${anomalies24h.length}` : 'Không có bất thường 24h'}
+        </Tag>
+        <Tag color={frozenActorCount > 0 ? 'blue' : 'default'}>
+          {`Đang đóng băng: ${frozenActorCount}`}
+        </Tag>
+        <Tag>{`Người thao tác trong bộ lọc: ${activeActorCount}`}</Tag>
+        <Tag>{`Khoảng xem: ${selectedDaysLabel}`}</Tag>
+      </div>
 
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
         <Col xs={24} sm={12} lg={6}>
-          <Card size="small">
+          <div style={SUMMARY_TILE_STYLE}>
             <Statistic title="Tổng sự kiện" value={summary?.total_events ?? 0} />
-          </Card>
+            <Typography.Text type="secondary">Số lượt thay đổi đã ghi nhận trong cửa sổ đang xem.</Typography.Text>
+          </div>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card size="small">
-            <Statistic title="Lượt đổi theo role" value={summary?.total_role_changes ?? 0} />
-          </Card>
+          <div style={SUMMARY_TILE_STYLE}>
+            <Statistic title="Lượt đổi theo vai trò" value={summary?.total_role_changes ?? 0} />
+            <Typography.Text type="secondary">Tổng số bản ghi thay đổi quyền ở cấp vai trò.</Typography.Text>
+          </div>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card size="small">
-            <Statistic title="User bất thường 24h" value={historyMetaQuery.data?.anomalies_24h_count ?? anomalies24h.length} />
-          </Card>
+          <div style={SUMMARY_TILE_STYLE}>
+            <Statistic title="Tài khoản bất thường 24h" value={historyMetaQuery.data?.anomalies_24h_count ?? anomalies24h.length} />
+            <Typography.Text type="secondary">Tài khoản vượt ngưỡng cảnh báo trong 24 giờ gần nhất.</Typography.Text>
+          </div>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <div style={SUMMARY_TILE_STYLE}>
+            <Statistic title="Lượt khóa gần đây" value={lockedEntries24h} />
+            <Typography.Text type="secondary">{`Tài khoản đang đóng băng hiện tại: ${frozenActorCount}.`}</Typography.Text>
+          </div>
         </Col>
       </Row>
+      <Alert
+        style={{ marginBottom: 12 }}
+        showIcon
+        type={historyStatusAlert.type}
+        message={historyStatusAlert.message}
+        description={historyStatusAlert.description}
+      />
       <div style={{ marginBottom: 12 }}>
         <Space size={[8, 8]} wrap>
           {Object.entries(summary?.by_changed_type ?? {}).map(([key, value]) => {
@@ -404,7 +492,7 @@ export default function ModulePermissionHistory() {
                     <div style={{ width: `${widthPercent}%`, height: '100%', background: '#1677ff' }} />
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    {item.events} sự kiện / {item.role_changes} lượt role
+                    {item.events} sự kiện / {item.role_changes} lượt vai trò
                   </div>
                 </div>
               );
@@ -419,7 +507,7 @@ export default function ModulePermissionHistory() {
         ) : (
           <Space direction="vertical" style={{ width: '100%' }}>
             {anomalies24h.map((item) => {
-              const displayName = (item.full_name || item.username || 'system').trim();
+              const displayName = (item.full_name || item.username || 'Hệ thống').trim();
               const canAct = typeof item.user_id === 'number' && item.user_id > 0;
               const dangerColor = item.severity === 'high' ? 'red' : 'orange';
               return (
@@ -437,20 +525,22 @@ export default function ModulePermissionHistory() {
                   }}
                 >
                   <Space size={[6, 6]} wrap>
-                    <Tag color={dangerColor}>{item.severity.toUpperCase()}</Tag>
+                    <Tag color={dangerColor}>
+                      {item.severity === 'high' ? 'Mức cao' : item.severity === 'medium' ? 'Mức trung bình' : 'Mức theo dõi'}
+                    </Tag>
                     <strong>{displayName}</strong>
                     <Tag>{item.events_24h} sự kiện/24h</Tag>
-                    <Tag>{item.role_changes_24h} lượt role/24h</Tag>
+                    <Tag>{item.role_changes_24h} lượt vai trò/24h</Tag>
                     {item.is_frozen ? <Tag color="blue">Đang đóng băng đến {item.frozen_until || '-'}</Tag> : null}
                   </Space>
-                  {canAct && canManageRbac ? (
-                    item.is_frozen ? (
+                    {canAct && canManageRbac ? (
+                      item.is_frozen ? (
                       <Button
                         size="small"
                         onClick={() => {
                           Modal.confirm({
                             title: `Gỡ đóng băng ${displayName}?`,
-                            content: 'Hành động này khôi phục quyền chỉnh phân quyền module cho user.',
+                            content: 'Hành động này khôi phục quyền chỉnh phân quyền phân hệ cho tài khoản.',
                             okText: 'Gỡ đóng băng',
                             cancelText: 'Hủy',
                             onOk: async () => {
@@ -470,10 +560,10 @@ export default function ModulePermissionHistory() {
                             await freezePrepareAction(
                               item.user_id as number,
                               displayName,
-                              `Anomaly 24h: ${item.events_24h} events, ${item.role_changes_24h} role changes`,
+                              `Bất thường 24h: ${item.events_24h} sự kiện, ${item.role_changes_24h} lượt đổi vai trò`,
                             );
                           } catch {
-                            messageApi.error('Không thể chuẩn bị đóng băng user.');
+                            messageApi.error('Không thể chuẩn bị đóng băng tài khoản.');
                           }
                         }}
                       >
@@ -510,9 +600,9 @@ export default function ModulePermissionHistory() {
         <Input
           value={filters.roleCodeInput}
           onChange={(e) => setFilters((prev) => ({ ...prev, roleCodeInput: e.target.value }))}
-          placeholder="Lọc theo mã role..."
+          placeholder="Lọc theo mã vai trò..."
           style={{ width: 220 }}
-          suffix={filters.roleCodeInput.trim() ? <QuickClearIcon onClear={() => setFilters((prev) => ({ ...prev, roleCodeInput: '' }))} title="Xóa mã role" /> : undefined}
+          suffix={filters.roleCodeInput.trim() ? <QuickClearIcon onClear={() => setFilters((prev) => ({ ...prev, roleCodeInput: '' }))} title="Xóa mã vai trò" /> : undefined}
         />
         <Select
           value={filters.userId}
@@ -555,6 +645,14 @@ export default function ModulePermissionHistory() {
           Xóa bộ lọc
         </Button>
       </div>
+      {historyFilterTags.length > 0 && (
+        <div style={{ marginBottom: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {historyFilterTags.map((item) => (
+            <Tag key={item}>{item}</Tag>
+          ))}
+          <Tag color="processing">{`Đang hiển thị ${rows.length}/${total} bản ghi`}</Tag>
+        </div>
+      )}
 
       <Table<RoleModulePermissionHistoryItem>
         rowKey="id"
@@ -606,7 +704,7 @@ export default function ModulePermissionHistory() {
         }}
       >
         <Typography.Paragraph>
-          Hành động này sẽ chặn user thay đổi phân quyền module trong 24 giờ.
+          Hành động này sẽ chặn tài khoản thay đổi phân quyền phân hệ trong 24 giờ.
         </Typography.Paragraph>
         <Typography.Paragraph type="secondary">
           Nhập <strong>FREEZE</strong> để xác nhận bước 2.

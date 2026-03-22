@@ -7,10 +7,10 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.test import APIClient
-from core.models import Customer, Team, Task
+from core.models import AuditLog, Customer, Team, Task
 from inventory.models import InventoryTransaction, OutboundShipment, OutboundShipmentPackage
 from products.models import Product, ProductUnit
-from sales.models import SalesOrder, SalesOrderLine, SalesOrderDeliveryPlan, SalesOrderStatus, PeriodSequence
+from sales.models import SalesOrder, SalesOrderLine, SalesOrderDeliveryPlan, SalesOrderStatus, PeriodSequence, OutboundShipment as SalesOutboundShipment
 from sales.document_policy import calc_line_totals, round_money
 from sales.services import (
     build_sales_order_line_package_trace_code,
@@ -799,3 +799,141 @@ class SalesOrderSummaryApiTests(TestCase):
         self.assertEqual(response.data['submitted_count'], 1)
         self.assertEqual(response.data['posted_count'], 1)
         self.assertEqual(response.data['overdue_delivery_count'], 1)
+
+
+class ShipmentWorkflowApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username='shipment_admin', password='test', is_staff=True)
+        self.user.is_superuser = True
+        self.user.save(update_fields=['is_superuser'])
+        self.client.force_authenticate(self.user)
+
+        self.customer = Customer.objects.create(
+            code='CUS-SHIP-01',
+            name='Khach shipment test',
+            is_active=True,
+            created_by=self.user,
+        )
+        self.unit = ProductUnit.objects.create(code='SHIP-PCS', name='Piece')
+        self.product = Product.objects.create(
+            code='SHIP-PRD-01',
+            name='Shipment Product',
+            unit=self.unit,
+            sale_price=Decimal('12500'),
+            is_active=True,
+        )
+
+    def test_create_shipment_and_progress_workflow(self):
+        create_response = self.client.post(
+            '/api/sales/shipments/',
+            {
+                'customer': self.customer.id,
+                'shipment_date': '2026-03-21',
+                'reference': 'SHIP-REF-001',
+                'shipping_address': '123 Test Street',
+                'carrier': 'Noi bo',
+                'tracking_number': 'TRACK-001',
+                'notes': 'Shipment workflow regression',
+                'lines': [
+                    {
+                        'line_number': 1,
+                        'product': self.product.id,
+                        'qty_ordered': '2',
+                        'qty_shipped': '2',
+                        'qty_received': '0',
+                        'unit_price': '12500',
+                        'discount_pct': '0',
+                        'tax_pct': '0',
+                        'notes': 'Line 1',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.json())
+        shipment_id = create_response.json()['id']
+
+        submit_response = self.client.post(f'/api/sales/shipments/{shipment_id}/submit_shipment/', format='json')
+        self.assertEqual(submit_response.status_code, 200, submit_response.json())
+        self.assertEqual(submit_response.json()['status'], 'SUBMITTED')
+
+        approve_response = self.client.post(f'/api/sales/shipments/{shipment_id}/approve_shipment/', format='json')
+        self.assertEqual(approve_response.status_code, 200, approve_response.json())
+        self.assertEqual(approve_response.json()['status'], 'APPROVED')
+
+        pack_response = self.client.post(f'/api/sales/shipments/{shipment_id}/pack_shipment/', format='json')
+        self.assertEqual(pack_response.status_code, 200, pack_response.json())
+        self.assertEqual(pack_response.json()['status'], 'PACKED')
+
+        send_response = self.client.post(f'/api/sales/shipments/{shipment_id}/send_shipment/', format='json')
+        self.assertEqual(send_response.status_code, 200, send_response.json())
+        self.assertEqual(send_response.json()['status'], 'IN_TRANSIT')
+
+        deliver_response = self.client.post(
+            f'/api/sales/shipments/{shipment_id}/confirm_delivery/',
+            {'actual_delivery_date': '2026-03-21'},
+            format='json',
+        )
+        self.assertEqual(deliver_response.status_code, 200, deliver_response.json())
+        self.assertEqual(deliver_response.json()['status'], 'DELIVERED')
+
+        shipment = SalesOutboundShipment.objects.get(pk=shipment_id)
+        self.assertEqual(shipment.status, 'DELIVERED')
+        self.assertEqual(shipment.lines.count(), 1)
+        self.assertEqual(
+            AuditLog.objects.filter(entity_type='OutboundShipment', entity_id=shipment_id).count(),
+            6,
+        )
+
+    def test_shipment_can_be_edited_in_draft_and_cancelled_before_delivery(self):
+        create_response = self.client.post(
+            '/api/sales/shipments/',
+            {
+                'customer': self.customer.id,
+                'shipment_date': '2026-03-21',
+                'reference': 'SHIP-REF-002',
+                'shipping_address': 'Initial address',
+                'carrier': 'Noi bo',
+                'tracking_number': 'TRACK-002',
+                'notes': 'Shipment edit and cancel regression',
+                'lines': [
+                    {
+                        'line_number': 1,
+                        'product': self.product.id,
+                        'qty_ordered': '3',
+                        'qty_shipped': '3',
+                        'qty_received': '0',
+                        'unit_price': '12500',
+                        'discount_pct': '0',
+                        'tax_pct': '0',
+                        'notes': 'Initial line',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.json())
+        shipment_id = create_response.json()['id']
+
+        update_response = self.client.patch(
+            f'/api/sales/shipments/{shipment_id}/',
+            {
+                'shipping_address': 'Updated address before approval',
+                'notes': 'Draft updated before submit',
+            },
+            format='json',
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.content)
+
+        self.client.post(f'/api/sales/shipments/{shipment_id}/submit_shipment/', format='json')
+        self.client.post(f'/api/sales/shipments/{shipment_id}/approve_shipment/', format='json')
+        cancel_response = self.client.post(f'/api/sales/shipments/{shipment_id}/cancel_shipment/', format='json')
+        self.assertEqual(cancel_response.status_code, 200, cancel_response.json())
+        self.assertEqual(cancel_response.json()['status'], 'CANCELLED')
+
+        shipment = SalesOutboundShipment.objects.get(pk=shipment_id)
+        self.assertEqual(shipment.status, 'CANCELLED')
+        self.assertEqual(shipment.shipping_address, 'Updated address before approval')
+        self.assertEqual(shipment.notes, 'Draft updated before submit')
+        self.assertTrue(AuditLog.objects.filter(entity_type='OutboundShipment', entity_id=shipment_id, action='VOID').exists())

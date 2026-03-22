@@ -164,6 +164,7 @@ export const tasksApi = {
     ordering_mode?: 'quick_queue';
     q?: string;
     tag?: string;
+    page_size?: number;
   }) {
     const toFlag = (value?: boolean) => (value ? '1' : undefined);
     return axiosInstance
@@ -179,7 +180,7 @@ export const tasksApi = {
           is_blocking: toFlag(params.is_blocking),
           is_overdue: toFlag(params.is_overdue),
           dependency_blocked: toFlag(params.dependency_blocked),
-          page_size: 200,
+          page_size: params.page_size ?? 200,
         },
       })
       .then((r) => {

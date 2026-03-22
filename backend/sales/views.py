@@ -74,6 +74,23 @@ def _user_role_names(user):
     return names
 
 
+def _create_outbound_shipment_audit_log(*, request, shipment, action, old_status=None):
+    payload = {
+        'user': request.user,
+        'action': action,
+        'entity_type': 'OutboundShipment',
+        'entity_id': shipment.id,
+        'entity_code': shipment.code or '',
+        'new_values': {'status': shipment.status},
+        'changed_fields': ['status'],
+        'ip_address': get_client_ip(request),
+        'user_agent': (request.META.get('HTTP_USER_AGENT') or '')[:500],
+    }
+    if old_status is not None:
+        payload['old_values'] = {'status': old_status}
+    AuditLog.objects.create(**payload)
+
+
 def _can_manage_inventory_execution(user):
     if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
         return True
@@ -2321,17 +2338,16 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         
         try:
             with transaction.atomic():
+                previous_status = shipment.status
                 shipment.status = OutboundShipmentStatus.SUBMITTED
                 shipment.submitted_by = request.user
                 shipment.submitted_at = timezone.now()
                 shipment.save()
-                
-                AuditLog.objects.create(
-                    user=request.user,
+                _create_outbound_shipment_audit_log(
+                    request=request,
+                    shipment=shipment,
                     action='SUBMIT',
-                    model_name='OutboundShipment',
-                    object_id=shipment.id,
-                    changes={'status': OutboundShipmentStatus.SUBMITTED}
+                    old_status=previous_status,
                 )
             
             serializer = self.get_serializer(shipment)
@@ -2351,17 +2367,16 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         
         try:
             with transaction.atomic():
+                previous_status = shipment.status
                 shipment.status = OutboundShipmentStatus.APPROVED
                 shipment.approved_by = request.user
                 shipment.approved_at = timezone.now()
                 shipment.save()
-                
-                AuditLog.objects.create(
-                    user=request.user,
+                _create_outbound_shipment_audit_log(
+                    request=request,
+                    shipment=shipment,
                     action='APPROVE',
-                    model_name='OutboundShipment',
-                    object_id=shipment.id,
-                    changes={'status': OutboundShipmentStatus.APPROVED}
+                    old_status=previous_status,
                 )
             
             serializer = self.get_serializer(shipment)
@@ -2381,17 +2396,16 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         
         try:
             with transaction.atomic():
+                previous_status = shipment.status
                 shipment.status = OutboundShipmentStatus.PACKED
                 shipment.packed_by = request.user
                 shipment.packed_at = timezone.now()
                 shipment.save()
-                
-                AuditLog.objects.create(
-                    user=request.user,
-                    action='PACK',
-                    model_name='OutboundShipment',
-                    object_id=shipment.id,
-                    changes={'status': OutboundShipmentStatus.PACKED}
+                _create_outbound_shipment_audit_log(
+                    request=request,
+                    shipment=shipment,
+                    action='UPDATE',
+                    old_status=previous_status,
                 )
             
             serializer = self.get_serializer(shipment)
@@ -2411,15 +2425,14 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         
         try:
             with transaction.atomic():
+                previous_status = shipment.status
                 shipment.status = OutboundShipmentStatus.IN_TRANSIT
                 shipment.save()
-                
-                AuditLog.objects.create(
-                    user=request.user,
-                    action='SEND',
-                    model_name='OutboundShipment',
-                    object_id=shipment.id,
-                    changes={'status': OutboundShipmentStatus.IN_TRANSIT}
+                _create_outbound_shipment_audit_log(
+                    request=request,
+                    shipment=shipment,
+                    action='UPDATE',
+                    old_status=previous_status,
                 )
             
             serializer = self.get_serializer(shipment)
@@ -2438,24 +2451,23 @@ class ShipmentViewSet(viewsets.ModelViewSet):
             )
         
         actual_delivery_date = request.data.get('actual_delivery_date')
-        delivered_by = request.data.get('delivered_by')
-        delivery_notes = request.data.get('delivery_notes', '')
+        delivered_by = str(request.data.get('delivered_by') or '').strip()
+        delivery_notes = str(request.data.get('delivery_notes') or '').strip()
         
         try:
             with transaction.atomic():
+                previous_status = shipment.status
                 shipment.status = OutboundShipmentStatus.DELIVERED
                 shipment.actual_delivery_date = actual_delivery_date or timezone.now().date()
                 shipment.delivered_by = delivered_by
                 shipment.delivery_notes = delivery_notes
                 shipment.delivered_by_user = request.user
                 shipment.save()
-                
-                AuditLog.objects.create(
-                    user=request.user,
-                    action='DELIVER',
-                    model_name='OutboundShipment',
-                    object_id=shipment.id,
-                    changes={'status': OutboundShipmentStatus.DELIVERED}
+                _create_outbound_shipment_audit_log(
+                    request=request,
+                    shipment=shipment,
+                    action='UPDATE',
+                    old_status=previous_status,
                 )
             
             serializer = self.get_serializer(shipment)
@@ -2475,15 +2487,14 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         
         try:
             with transaction.atomic():
+                previous_status = shipment.status
                 shipment.status = OutboundShipmentStatus.CANCELLED
                 shipment.save()
-                
-                AuditLog.objects.create(
-                    user=request.user,
-                    action='CANCEL',
-                    model_name='OutboundShipment',
-                    object_id=shipment.id,
-                    changes={'status': OutboundShipmentStatus.CANCELLED}
+                _create_outbound_shipment_audit_log(
+                    request=request,
+                    shipment=shipment,
+                    action='VOID',
+                    old_status=previous_status,
                 )
             
             serializer = self.get_serializer(shipment)

@@ -7,6 +7,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from core.models import AuditLog
 from inventory.models import (
     InventoryReservation,
     InventoryReservationStatus,
@@ -14,6 +15,8 @@ from inventory.models import (
     InventoryTransaction,
     InventoryTransactionStatus,
     OutboundShipment,
+    Stocktake,
+    WarehouseTransfer,
     Warehouse,
     WarehouseLocation,
 )
@@ -1349,3 +1352,219 @@ class InventoryApiFlowTest(TestCase):
         target_rows = target_stock.json()['results']
         self.assertEqual(len(target_rows), 1)
         self.assertEqual(Decimal(str(target_rows[0]['on_hand'])), Decimal('4'))
+
+    def test_create_stocktake_complete_and_delete_draft(self):
+        create_response = self.client.post(
+            '/api/inventory/stocktakes/',
+            {
+                'warehouse': self.warehouse.id,
+                'count_date': str(timezone.localdate()),
+                'note': 'Phieu kiem ton regression',
+                'lines_data': [
+                    {
+                        'product_id': self.product.id,
+                        'count_qty': '9',
+                        'note': 'Dong 1',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.json())
+        stocktake_id = create_response.json()['id']
+
+        stocktake = Stocktake.objects.get(pk=stocktake_id)
+        self.assertEqual(stocktake.status, 'DRAFT')
+        self.assertEqual(stocktake.created_by, self.user)
+        self.assertEqual(stocktake.lines.count(), 1)
+        line = stocktake.lines.first()
+        self.assertIsNotNone(line)
+        self.assertEqual(line.product_id, self.product.id)
+        self.assertEqual(line.count_qty, Decimal('9'))
+
+        complete_response = self.client.post(
+            f'/api/inventory/stocktakes/{stocktake_id}/complete/',
+            format='json',
+        )
+        self.assertEqual(complete_response.status_code, 200, complete_response.json())
+        self.assertEqual(complete_response.json()['status'], 'COMPLETED')
+
+        stocktake.refresh_from_db()
+        self.assertEqual(stocktake.status, 'COMPLETED')
+        self.assertEqual(stocktake.completed_by, self.user)
+        self.assertIsNotNone(stocktake.completed_at)
+
+        delete_blocked_response = self.client.delete(f'/api/inventory/stocktakes/{stocktake_id}/')
+        self.assertEqual(delete_blocked_response.status_code, 400, delete_blocked_response.json())
+
+        draft_delete_response = self.client.post(
+            '/api/inventory/stocktakes/',
+            {
+                'warehouse': self.warehouse.id,
+                'count_date': str(timezone.localdate()),
+                'note': 'Phieu kiem ton xoa',
+                'lines_data': [
+                    {
+                        'product_id': self.product.id,
+                        'count_qty': '3',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(draft_delete_response.status_code, 201, draft_delete_response.json())
+        draft_stocktake_id = draft_delete_response.json()['id']
+
+        delete_response = self.client.delete(f'/api/inventory/stocktakes/{draft_stocktake_id}/')
+        self.assertEqual(delete_response.status_code, 204, delete_response.content)
+        self.assertFalse(Stocktake.objects.filter(pk=draft_stocktake_id).exists())
+
+    def test_create_warehouse_transfer_and_progress_workflow(self):
+        target_warehouse = Warehouse.objects.create(code='K3', name='Kho 3')
+        InventoryTransaction.objects.create(
+            code='INVTX-TEST-TRN-001',
+            transaction_type='RECEIPT',
+            transaction_date=timezone.localdate(),
+            product=self.product,
+            warehouse=self.warehouse,
+            quantity=Decimal('15'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+
+        create_response = self.client.post(
+            '/api/inventory/warehouse-transfers/',
+            {
+                'transfer_date': str(timezone.localdate()),
+                'from_warehouse': self.warehouse.id,
+                'to_warehouse': target_warehouse.id,
+                'reference': 'TRN-REG-001',
+                'note': 'Transfer regression',
+                'lines': [
+                    {
+                        'line_number': 1,
+                        'product': self.product.id,
+                        'qty': '6',
+                        'note': 'Line 1',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.json())
+        transfer_id = create_response.json()['id']
+
+        transfer = WarehouseTransfer.objects.get(pk=transfer_id)
+        self.assertEqual(transfer.status, 'DRAFT')
+        self.assertEqual(transfer.created_by, self.user)
+        self.assertEqual(transfer.lines.count(), 1)
+
+        submit_response = self.client.post(
+            f'/api/inventory/warehouse-transfers/{transfer_id}/submit_transfer/',
+            format='json',
+        )
+        self.assertEqual(submit_response.status_code, 200, submit_response.json())
+        self.assertEqual(submit_response.json()['status'], 'SUBMITTED')
+
+        post_response = self.client.post(
+            f'/api/inventory/warehouse-transfers/{transfer_id}/post_transfer/',
+            format='json',
+        )
+        self.assertEqual(post_response.status_code, 200, post_response.json())
+        self.assertEqual(post_response.json()['status'], 'IN_TRANSIT')
+
+        transfer.refresh_from_db()
+        self.assertEqual(transfer.status, 'IN_TRANSIT')
+        self.assertEqual(transfer.posted_by, self.user)
+        self.assertIsNotNone(transfer.posted_at)
+
+        receive_response = self.client.post(
+            f'/api/inventory/warehouse-transfers/{transfer_id}/receive_transfer/',
+            {
+                'lines': [
+                    {
+                        'id': transfer.lines.first().id,
+                        'received_qty': '6',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(receive_response.status_code, 200, receive_response.json())
+        self.assertEqual(receive_response.json()['status'], 'RECEIVED')
+
+        transfer.refresh_from_db()
+        self.assertEqual(transfer.status, 'RECEIVED')
+        transfer_line = transfer.lines.first()
+        self.assertIsNotNone(transfer_line)
+        self.assertEqual(transfer_line.received_qty, Decimal('6'))
+
+        source_stock = self.client.get('/api/inventory/stock/', {'warehouse': self.warehouse.id, 'product': self.product.id})
+        self.assertEqual(source_stock.status_code, 200)
+        source_rows = source_stock.json()['results']
+        self.assertEqual(len(source_rows), 1)
+        self.assertEqual(Decimal(str(source_rows[0]['on_hand'])), Decimal('9'))
+
+        target_stock = self.client.get('/api/inventory/stock/', {'warehouse': target_warehouse.id, 'product': self.product.id})
+        self.assertEqual(target_stock.status_code, 200)
+        target_rows = target_stock.json()['results']
+        self.assertEqual(len(target_rows), 1)
+        self.assertEqual(Decimal(str(target_rows[0]['on_hand'])), Decimal('6'))
+
+    def test_cancel_in_transit_transfer_restores_source_stock(self):
+        target_warehouse = Warehouse.objects.create(code='K4', name='Kho 4')
+        InventoryTransaction.objects.create(
+            code='INVTX-TEST-TRN-002',
+            transaction_type='RECEIPT',
+            transaction_date=timezone.localdate(),
+            product=self.product,
+            warehouse=self.warehouse,
+            quantity=Decimal('15'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+
+        create_response = self.client.post(
+            '/api/inventory/warehouse-transfers/',
+            {
+                'transfer_date': str(timezone.localdate()),
+                'from_warehouse': self.warehouse.id,
+                'to_warehouse': target_warehouse.id,
+                'reference': 'TRN-REG-002',
+                'note': 'Transfer cancel regression',
+                'lines': [
+                    {
+                        'line_number': 1,
+                        'product': self.product.id,
+                        'qty': '4',
+                        'note': 'Cancel before receipt',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.json())
+        transfer_id = create_response.json()['id']
+
+        self.client.post(f'/api/inventory/warehouse-transfers/{transfer_id}/submit_transfer/', format='json')
+        self.client.post(f'/api/inventory/warehouse-transfers/{transfer_id}/post_transfer/', format='json')
+        cancel_response = self.client.post(
+            f'/api/inventory/warehouse-transfers/{transfer_id}/cancel_transfer/',
+            {'reason': 'Hoan lai chuyen kho de doi lich xe'},
+            format='json',
+        )
+        self.assertEqual(cancel_response.status_code, 200, cancel_response.json())
+        self.assertEqual(cancel_response.json()['status'], 'CANCELLED')
+
+        transfer = WarehouseTransfer.objects.get(pk=transfer_id)
+        self.assertEqual(transfer.status, 'CANCELLED')
+        self.assertEqual(transfer.cancel_reason, 'Hoan lai chuyen kho de doi lich xe')
+
+        source_stock = self.client.get('/api/inventory/stock/', {'warehouse': self.warehouse.id, 'product': self.product.id})
+        self.assertEqual(source_stock.status_code, 200)
+        source_rows = source_stock.json()['results']
+        self.assertEqual(len(source_rows), 1)
+        self.assertEqual(Decimal(str(source_rows[0]['on_hand'])), Decimal('15'))
+        self.assertTrue(AuditLog.objects.filter(entity_type='WarehouseTransfer', entity_id=transfer_id, action='VOID').exists())

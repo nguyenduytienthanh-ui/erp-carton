@@ -62,7 +62,9 @@ from finance.views import (
 
 try:
     from phase5_viewsets import (
+        BudgetManagementViewSet,
         PurchaseOrderForecastViewSet,
+        SalesDiscountViewSet,
         SupplierPerformanceViewSet,
         InventoryForecastViewSet,
         CustomReportViewSet,
@@ -137,6 +139,8 @@ if _phase5_available:
     router.register(r'purchasing/forecast', PurchaseOrderForecastViewSet, basename='po-forecast')
     router.register(r'purchasing/supplier-analytics', SupplierPerformanceViewSet, basename='supplier-analytics')
     router.register(r'inventory/forecast', InventoryForecastViewSet, basename='inventory-forecast')
+    router.register(r'sales/discounts', SalesDiscountViewSet, basename='sales-discounts')
+    router.register(r'finance/budgets', BudgetManagementViewSet, basename='finance-budgets')
     router.register(r'reports/custom', CustomReportViewSet, basename='custom-reports')
 
 urlpatterns = [

@@ -4,7 +4,7 @@ from decimal import Decimal
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from core.models import AuditLog, User
+from core.models import ApprovalHistory, AuditLog, User
 from finance.models import AdvanceTransaction, CashAccount, CashTransaction
 
 
@@ -66,6 +66,42 @@ class FinanceAdvanceApprovalWorkflowTest(TestCase):
         self.assertEqual(l2_ok.status_code, 200)
         adv.refresh_from_db()
         self.assertEqual(adv.approval_status, AdvanceTransaction.APPROVAL_APPROVED)
+
+        history_rows = ApprovalHistory.objects.filter(entity_type='AdvanceTransaction', entity_id=adv.id).order_by('created_at')
+        self.assertEqual(history_rows.count(), 3)
+        self.assertEqual(list(history_rows.values_list('action', flat=True)), ['SUBMIT', 'APPROVE', 'APPROVE'])
+        self.assertEqual(list(history_rows.values_list('level', flat=True)), [1, 1, 2])
+
+        history_resp = self.client.get(f'/api/finance/advance-transactions/{adv.id}/approval_history/')
+        self.assertEqual(history_resp.status_code, 200)
+        payload = history_resp.json()
+        self.assertEqual(len(payload), 3)
+        self.assertEqual(payload[0]['action'], 'APPROVE_L2')
+        self.assertEqual(payload[0]['level'], 2)
+        self.assertEqual(payload[0]['action_label'], 'Duyệt cấp 2')
+
+    def test_reject_and_resubmit_create_approval_history(self):
+        adv = self._create_advance('TA-APP-007', Decimal('3000000'))
+        self.client.post(f'/api/finance/advance-transactions/{adv.id}/submit_approval/', {}, format='json')
+        reject_resp = self.client.post(
+            f'/api/finance/advance-transactions/{adv.id}/reject_approval/',
+            {'reason': 'Thiếu chứng từ'},
+            format='json',
+        )
+        self.assertEqual(reject_resp.status_code, 200)
+
+        resubmit_resp = self.client.post(f'/api/finance/advance-transactions/{adv.id}/submit_approval/', {}, format='json')
+        self.assertEqual(resubmit_resp.status_code, 200)
+
+        history_rows = ApprovalHistory.objects.filter(entity_type='AdvanceTransaction', entity_id=adv.id).order_by('created_at')
+        self.assertEqual(list(history_rows.values_list('action', flat=True)), ['SUBMIT', 'REJECT', 'RESUBMIT'])
+
+        history_resp = self.client.get(f'/api/finance/advance-transactions/{adv.id}/approval_history/')
+        self.assertEqual(history_resp.status_code, 200)
+        payload = history_resp.json()
+        self.assertEqual(payload[0]['action'], 'RESUBMIT')
+        self.assertEqual(payload[1]['action'], 'REJECT')
+        self.assertEqual(payload[1]['comments'], 'Thiếu chứng từ')
 
     def test_settlement_requires_approved_advance(self):
         adv = self._create_advance('TA-APP-002', Decimal('2000000'))

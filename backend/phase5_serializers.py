@@ -3,6 +3,9 @@
 
 from rest_framework import serializers
 from django.db import models
+from core.models import CustomReportDefinition, CustomReportRun
+from finance.models import BudgetPlan
+from sales.models import SalesDiscountRule
 
 # ============================================================================
 # PURCHASING SERIALIZERS
@@ -77,6 +80,135 @@ class BudgetSerializer(serializers.Serializer):
     variance = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
     variance_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
     fiscal_year = serializers.IntegerField()
+
+
+class SalesDiscountRuleSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    is_currently_active = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SalesDiscountRule
+        fields = [
+            'id',
+            'code',
+            'name',
+            'type',
+            'value',
+            'applicable_to',
+            'min_order_value',
+            'min_quantity',
+            'max_discount_amount',
+            'start_date',
+            'end_date',
+            'status',
+            'usage_count',
+            'total_discount_value',
+            'note',
+            'created_by',
+            'created_by_name',
+            'updated_by',
+            'created_at',
+            'updated_at',
+            'is_currently_active',
+        ]
+        read_only_fields = [
+            'usage_count',
+            'total_discount_value',
+            'created_by',
+            'created_by_name',
+            'updated_by',
+            'created_at',
+            'updated_at',
+            'is_currently_active',
+        ]
+
+    def get_created_by_name(self, obj):
+        user = getattr(obj, 'created_by', None)
+        return getattr(user, 'full_name', None) or getattr(user, 'username', None)
+
+    def get_is_currently_active(self, obj):
+        return bool(getattr(obj, 'is_currently_active', False))
+
+    def validate_value(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError('Gia tri chiet khau phai lon hon 0.')
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        discount_type = attrs.get('type', getattr(self.instance, 'type', SalesDiscountRule.TYPE_PERCENTAGE))
+        value = attrs.get('value', getattr(self.instance, 'value', 0))
+        start_date = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+        end_date = attrs.get('end_date', getattr(self.instance, 'end_date', None))
+        if discount_type == SalesDiscountRule.TYPE_PERCENTAGE and value > 100:
+            raise serializers.ValidationError({'value': 'Chiet khau phan tram khong duoc vuot qua 100.'})
+        if end_date and start_date and end_date < start_date:
+            raise serializers.ValidationError({'end_date': 'Ngay ket thuc phai lon hon hoac bang ngay bat dau.'})
+        return attrs
+
+
+class BudgetPlanSerializer(serializers.ModelSerializer):
+    available = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+    variance_percentage = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BudgetPlan
+        fields = [
+            'id',
+            'department',
+            'category',
+            'fiscal_year',
+            'budgeted_amount',
+            'actual_amount',
+            'committed_amount',
+            'available',
+            'status',
+            'variance_percentage',
+            'note',
+            'is_active',
+            'created_by',
+            'updated_by',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'available',
+            'status',
+            'variance_percentage',
+            'created_by',
+            'updated_by',
+            'created_at',
+            'updated_at',
+        ]
+
+    def get_available(self, obj):
+        return obj.available_amount
+
+    def get_status(self, obj):
+        return obj.status
+
+    def get_variance_percentage(self, obj):
+        budget = float(obj.budgeted_amount or 0)
+        if budget <= 0:
+            return 0
+        consumed = float((obj.actual_amount or 0) + (obj.committed_amount or 0))
+        return round((consumed / budget) * 100, 2)
+
+    def validate_budgeted_amount(self, value):
+        if value is None or value < 0:
+            raise serializers.ValidationError('Ngan sach khong duoc am.')
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        actual_amount = attrs.get('actual_amount', getattr(self.instance, 'actual_amount', 0))
+        committed_amount = attrs.get('committed_amount', getattr(self.instance, 'committed_amount', 0))
+        if actual_amount is not None and actual_amount < 0:
+            raise serializers.ValidationError({'actual_amount': 'Da su dung khong duoc am.'})
+        if committed_amount is not None and committed_amount < 0:
+            raise serializers.ValidationError({'committed_amount': 'Cam ket khong duoc am.'})
+        return attrs
 
 
 class CostAllocationSerializer(serializers.Serializer):
@@ -175,16 +307,124 @@ class EquipmentSerializer(serializers.Serializer):
 # REPORTING SERIALIZERS
 # ============================================================================
 
-class CustomReportSerializer(serializers.Serializer):
-    """Custom report builder"""
-    report_code = serializers.CharField(max_length=100)
-    report_name = serializers.CharField(max_length=200)
-    module = serializers.CharField(max_length=50)
-    fields = serializers.JSONField()
-    filters = serializers.JSONField(required=False)
-    sort_by = serializers.JSONField(required=False)
-    schedule = serializers.ChoiceField(choices=['ONCE', 'DAILY', 'WEEKLY', 'MONTHLY'], required=False)
-    email_recipients = serializers.JSONField(required=False)
+class CustomReportRunSerializer(serializers.ModelSerializer):
+    generated_by_name = serializers.SerializerMethodField()
+    report_code = serializers.CharField(source='report.code', read_only=True)
+    report_name = serializers.CharField(source='report.name', read_only=True)
+
+    class Meta:
+        model = CustomReportRun
+        fields = [
+            'id',
+            'report',
+            'report_code',
+            'report_name',
+            'trigger_type',
+            'status',
+            'period_start',
+            'period_end',
+            'summary',
+            'row_count',
+            'duration_ms',
+            'error_message',
+            'generated_by',
+            'generated_by_name',
+            'generated_at',
+        ]
+        read_only_fields = fields
+
+    def get_generated_by_name(self, obj):
+        user = getattr(obj, 'generated_by', None)
+        return getattr(user, 'full_name', None) or getattr(user, 'username', None)
+
+
+class CustomReportDefinitionSerializer(serializers.ModelSerializer):
+    generated_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomReportDefinition
+        fields = [
+            'id',
+            'code',
+            'name',
+            'report_type',
+            'description',
+            'status',
+            'is_system',
+            'period_start',
+            'period_end',
+            'config',
+            'schedule_frequency',
+            'schedule_enabled',
+            'schedule_time',
+            'schedule_day_of_week',
+            'schedule_day_of_month',
+            'schedule_recipients',
+            'schedule_name',
+            'next_run_at',
+            'last_generated_at',
+            'last_generated_by',
+            'generated_by_name',
+            'last_run_status',
+            'last_run_error',
+            'last_run_summary',
+            'run_count',
+            'created_by',
+            'updated_by',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'schedule_name',
+            'next_run_at',
+            'last_generated_at',
+            'last_generated_by',
+            'generated_by_name',
+            'last_run_status',
+            'last_run_error',
+            'last_run_summary',
+            'run_count',
+            'created_by',
+            'updated_by',
+            'created_at',
+            'updated_at',
+        ]
+
+    def get_generated_by_name(self, obj):
+        user = getattr(obj, 'last_generated_by', None)
+        return getattr(user, 'full_name', None) or getattr(user, 'username', None)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        period_start = attrs.get('period_start', getattr(self.instance, 'period_start', None))
+        period_end = attrs.get('period_end', getattr(self.instance, 'period_end', None))
+        if period_start and period_end and period_end < period_start:
+            raise serializers.ValidationError({'period_end': 'Ngay ket thuc phai lon hon hoac bang ngay bat dau.'})
+
+        schedule_enabled = attrs.get('schedule_enabled', getattr(self.instance, 'schedule_enabled', False))
+        schedule_frequency = attrs.get('schedule_frequency', getattr(self.instance, 'schedule_frequency', CustomReportDefinition.SCHEDULE_NONE))
+        schedule_day_of_week = attrs.get('schedule_day_of_week', getattr(self.instance, 'schedule_day_of_week', None))
+        schedule_day_of_month = attrs.get('schedule_day_of_month', getattr(self.instance, 'schedule_day_of_month', None))
+        if schedule_enabled and schedule_frequency == CustomReportDefinition.SCHEDULE_NONE:
+            raise serializers.ValidationError({'schedule_frequency': 'Can chon tan suat lap lich khi bat scheduler.'})
+        if schedule_frequency == CustomReportDefinition.SCHEDULE_WEEKLY and schedule_day_of_week is not None:
+            if int(schedule_day_of_week) < 0 or int(schedule_day_of_week) > 6:
+                raise serializers.ValidationError({'schedule_day_of_week': 'Thu trong tuan phai nam trong khoang 0-6.'})
+        if schedule_frequency == CustomReportDefinition.SCHEDULE_MONTHLY and schedule_day_of_month is not None:
+            if int(schedule_day_of_month) < 1 or int(schedule_day_of_month) > 31:
+                raise serializers.ValidationError({'schedule_day_of_month': 'Ngay trong thang phai nam trong khoang 1-31.'})
+        return attrs
+
+
+class CustomReportDetailSerializer(CustomReportDefinitionSerializer):
+    recent_runs = serializers.SerializerMethodField()
+
+    class Meta(CustomReportDefinitionSerializer.Meta):
+        fields = CustomReportDefinitionSerializer.Meta.fields + ['recent_runs']
+
+    def get_recent_runs(self, obj):
+        runs = obj.runs.select_related('generated_by').order_by('-generated_at', '-id')[:10]
+        return CustomReportRunSerializer(runs, many=True).data
 
 
 class DataExportImportSerializer(serializers.Serializer):

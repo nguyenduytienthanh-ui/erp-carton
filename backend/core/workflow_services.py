@@ -12,13 +12,13 @@ import traceback
 WORKFLOW_PLAYBOOKS = {
     'SalesOrder': {
         'STANDARD_ORDER': {
-            'name': 'Quy trinh don hang carton chuan',
-            'description': 'Tu dong tao chuoi xu ly don hang tu tiep nhan den giao hang.',
+            'name': 'Quy trình đơn hàng carton chuẩn',
+            'description': 'Tự động tạo chuỗi xử lý đơn hàng từ tiếp nhận đến giao hàng.',
             'items': [
                 {
                     'trigger': 'SUBMIT',
-                    'title_template': 'Xac nhan thong tin don {entity_code}',
-                    'description_template': 'Kiem tra thong tin khach hang, quy cach, so luong va deadline.',
+                    'title_template': 'Xác nhận thông tin đơn {entity_code}',
+                    'description_template': 'Kiểm tra thông tin khách hàng, quy cách, số lượng và hạn chót.',
                     'due_in_days': 1,
                     'priority': 'HIGH',
                     'is_blocking': True,
@@ -27,8 +27,8 @@ WORKFLOW_PLAYBOOKS = {
                 },
                 {
                     'trigger': 'SUBMIT',
-                    'title_template': 'Lap ke hoach vat tu cho don {entity_code}',
-                    'description_template': 'Tinh toan giay, muc in, keo va phu kien theo dinh muc.',
+                    'title_template': 'Lập kế hoạch vật tư cho đơn {entity_code}',
+                    'description_template': 'Tính toán giấy, mực in, keo và phụ kiện theo định mức.',
                     'due_in_days': 1,
                     'priority': 'HIGH',
                     'is_blocking': True,
@@ -37,8 +37,8 @@ WORKFLOW_PLAYBOOKS = {
                 },
                 {
                     'trigger': 'SUBMIT',
-                    'title_template': 'Dieu do san xuat don {entity_code}',
-                    'description_template': 'Xep may, ca san xuat, theo doi tien do va xu ly vuong mac.',
+                    'title_template': 'Điều độ sản xuất đơn {entity_code}',
+                    'description_template': 'Xếp máy, ca sản xuất, theo dõi tiến độ và xử lý vướng mắc.',
                     'due_in_days': 2,
                     'priority': 'MEDIUM',
                     'is_blocking': True,
@@ -47,8 +47,8 @@ WORKFLOW_PLAYBOOKS = {
                 },
                 {
                     'trigger': 'SUBMIT',
-                    'title_template': 'QC thanh pham don {entity_code}',
-                    'description_template': 'Kiem tra kich thuoc, mau in, do ben va ty le loi.',
+                    'title_template': 'QC thành phẩm đơn {entity_code}',
+                    'description_template': 'Kiểm tra kích thước, màu in, độ bền và tỷ lệ lỗi.',
                     'due_in_days': 1,
                     'priority': 'HIGH',
                     'is_blocking': True,
@@ -57,8 +57,8 @@ WORKFLOW_PLAYBOOKS = {
                 },
                 {
                     'trigger': 'SUBMIT',
-                    'title_template': 'Chuan bi giao hang don {entity_code}',
-                    'description_template': 'Dong goi, lap lich giao, xac nhan bien ban ban giao.',
+                    'title_template': 'Chuẩn bị giao hàng đơn {entity_code}',
+                    'description_template': 'Đóng gói, lập lịch giao, xác nhận biên bản bàn giao.',
                     'due_in_days': 1,
                     'priority': 'MEDIUM',
                     'is_blocking': False,
@@ -70,13 +70,13 @@ WORKFLOW_PLAYBOOKS = {
     },
     'Product': {
         'SAMPLE_DEVELOPMENT': {
-            'name': 'Quy trinh lam mau san pham',
-            'description': 'Bo mau quy trinh tu tiep nhan yeu cau mau den chot mau.',
+            'name': 'Quy trình làm mẫu sản phẩm',
+            'description': 'Bộ mẫu quy trình từ tiếp nhận yêu cầu mẫu đến chốt mẫu.',
             'items': [
                 {
                     'trigger': 'MANUAL',
-                    'title_template': 'Tiep nhan yeu cau lam mau {entity_code}',
-                    'description_template': 'Tong hop yeu cau ky thuat, quy cach va deadline mau.',
+                    'title_template': 'Tiếp nhận yêu cầu làm mẫu {entity_code}',
+                    'description_template': 'Tổng hợp yêu cầu kỹ thuật, quy cách và hạn chót làm mẫu.',
                     'due_in_days': 1,
                     'priority': 'HIGH',
                     'is_blocking': False,
@@ -85,8 +85,8 @@ WORKFLOW_PLAYBOOKS = {
                 },
                 {
                     'trigger': 'MANUAL',
-                    'title_template': 'Thiet ke cau truc carton {entity_code}',
-                    'description_template': 'Thiet ke ket cau, chat lieu, ban ve va thong so ky thuat.',
+                    'title_template': 'Thiết kế cấu trúc carton {entity_code}',
+                    'description_template': 'Thiết kế kết cấu, chất liệu, bản vẽ và thông số kỹ thuật.',
                     'due_in_days': 2,
                     'priority': 'HIGH',
                     'is_blocking': True,
@@ -95,8 +95,8 @@ WORKFLOW_PLAYBOOKS = {
                 },
                 {
                     'trigger': 'MANUAL',
-                    'title_template': 'Duyet mau noi bo {entity_code}',
-                    'description_template': 'Danh gia mau thu voi bo phan kinh doanh va ky thuat.',
+                    'title_template': 'Duyệt mẫu nội bộ {entity_code}',
+                    'description_template': 'Đánh giá mẫu thử với bộ phận kinh doanh và kỹ thuật.',
                     'due_in_days': 1,
                     'priority': 'MEDIUM',
                     'is_blocking': True,
@@ -105,8 +105,8 @@ WORKFLOW_PLAYBOOKS = {
                 },
                 {
                     'trigger': 'MANUAL',
-                    'title_template': 'Gui mau khach hang {entity_code}',
-                    'description_template': 'Ban giao mau va thu thap phan hoi de dieu chinh.',
+                    'title_template': 'Gửi mẫu khách hàng {entity_code}',
+                    'description_template': 'Bàn giao mẫu và thu thập phản hồi để điều chỉnh.',
                     'due_in_days': 2,
                     'priority': 'MEDIUM',
                     'is_blocking': False,
@@ -115,8 +115,8 @@ WORKFLOW_PLAYBOOKS = {
                 },
                 {
                     'trigger': 'MANUAL',
-                    'title_template': 'Chot mau va cap nhat BOM {entity_code}',
-                    'description_template': 'Cap nhat BOM, thong so san xuat va tai lieu lien quan.',
+                    'title_template': 'Chốt mẫu và cập nhật BOM {entity_code}',
+                    'description_template': 'Cập nhật BOM, thông số sản xuất và tài liệu liên quan.',
                     'due_in_days': 1,
                     'priority': 'HIGH',
                     'is_blocking': True,
@@ -128,13 +128,13 @@ WORKFLOW_PLAYBOOKS = {
     },
     'Customer': {
         'CUSTOMER_ONBOARDING': {
-            'name': 'Quy trinh onboarding khach hang',
-            'description': 'Quy trinh tiep nhan va kich hoat khach hang moi.',
+            'name': 'Quy trình khởi tạo khách hàng',
+            'description': 'Quy trình tiếp nhận và kích hoạt khách hàng mới.',
             'items': [
                 {
                     'trigger': 'MANUAL',
-                    'title_template': 'Kiem tra ho so khach hang {entity_code}',
-                    'description_template': 'Xac minh thong tin phap ly, MST va thong tin lien he.',
+                    'title_template': 'Kiểm tra hồ sơ khách hàng {entity_code}',
+                    'description_template': 'Xác minh thông tin pháp lý, MST và thông tin liên hệ.',
                     'due_in_days': 1,
                     'priority': 'MEDIUM',
                     'is_blocking': False,
@@ -143,8 +143,8 @@ WORKFLOW_PLAYBOOKS = {
                 },
                 {
                     'trigger': 'MANUAL',
-                    'title_template': 'Tham dinh han muc cong no {entity_code}',
-                    'description_template': 'Danh gia han muc, dieu khoan thanh toan va rui ro.',
+                    'title_template': 'Thẩm định hạn mức công nợ {entity_code}',
+                    'description_template': 'Đánh giá hạn mức, điều khoản thanh toán và rủi ro.',
                     'due_in_days': 2,
                     'priority': 'HIGH',
                     'is_blocking': True,
@@ -153,8 +153,8 @@ WORKFLOW_PLAYBOOKS = {
                 },
                 {
                     'trigger': 'MANUAL',
-                    'title_template': 'Kich hoat khach hang tren he thong {entity_code}',
-                    'description_template': 'Hoan tat cau hinh bang gia, chinh sach giao nhan va nguoi phu trach.',
+                    'title_template': 'Kích hoạt khách hàng trên hệ thống {entity_code}',
+                    'description_template': 'Hoàn tất cấu hình bảng giá, chính sách giao nhận và người phụ trách.',
                     'due_in_days': 1,
                     'priority': 'MEDIUM',
                     'is_blocking': False,
@@ -166,8 +166,8 @@ WORKFLOW_PLAYBOOKS = {
     },
     'PurchaseOrder': {
         'STANDARD_PROCUREMENT': {
-            'name': 'Quy trinh mua hang tieu chuan',
-            'description': 'Theo doi don mua tu luc gui duyet den khi nhan hang.',
+            'name': 'Quy trình mua hàng tiêu chuẩn',
+            'description': 'Theo dõi đơn mua từ lúc gửi duyệt đến khi nhận hàng.',
             'items': [
                 {
                     'trigger': 'SUBMIT',
@@ -181,7 +181,7 @@ WORKFLOW_PLAYBOOKS = {
                 },
                 {
                     'trigger': 'SUBMIT',
-                    'title_template': 'Xác nhận NCC và lead time {entity_code}',
+                    'title_template': 'Xác nhận NCC và thời gian cung ứng {entity_code}',
                     'description_template': 'Làm việc với nhà cung cấp để chốt điều kiện nhận hàng và thanh toán.',
                     'due_in_days': 1,
                     'priority': 'MEDIUM',
@@ -204,8 +204,8 @@ WORKFLOW_PLAYBOOKS = {
     },
     'ProductionOrder': {
         'STANDARD_PRODUCTION': {
-            'name': 'Quy trinh san xuat tieu chuan',
-            'description': 'Theo doi lenh san xuat tu phat lenh den nhap kho thanh pham.',
+            'name': 'Quy trình sản xuất tiêu chuẩn',
+            'description': 'Theo dõi lệnh sản xuất từ phát lệnh đến nhập kho thành phẩm.',
             'items': [
                 {
                     'trigger': 'RELEASE',
@@ -489,7 +489,7 @@ def _extract_wip_limit(tags: list | None) -> Optional[int]:
 
 def get_workflow_playbook_suggestions(entity_type: str, scenario: str | None = None) -> dict:
     """
-    Lay bo goi y template workflow theo entity_type va scenario.
+    Lấy bộ gợi ý template workflow theo entity_type và scenario.
     """
     entity_playbooks = WORKFLOW_PLAYBOOKS.get(entity_type, {})
     if not entity_playbooks:
@@ -498,7 +498,7 @@ def get_workflow_playbook_suggestions(entity_type: str, scenario: str | None = N
             'scenario': scenario or '',
             'available_scenarios': [],
             'items': [],
-            'meta': {'message': 'Chua co playbook cho entity nay.'},
+            'meta': {'message': 'Chưa có playbook cho entity này.'},
         }
 
     available_scenarios = sorted(entity_playbooks.keys())
@@ -510,7 +510,7 @@ def get_workflow_playbook_suggestions(entity_type: str, scenario: str | None = N
             'scenario': chosen_scenario,
             'available_scenarios': available_scenarios,
             'items': [],
-            'meta': {'message': 'Scenario playbook khong ton tai cho entity nay.'},
+            'meta': {'message': 'Scenario playbook không tồn tại cho entity này.'},
         }
 
     normalized_items = []
@@ -548,7 +548,7 @@ def apply_workflow_playbook(
     overwrite_existing: bool = False,
 ) -> dict:
     """
-    Ap dung playbook vao bang WorkflowTaskTemplate.
+    Áp dụng playbook vào bảng WorkflowTaskTemplate.
     """
     from core.models import WorkflowTaskTemplate
 
@@ -557,7 +557,7 @@ def apply_workflow_playbook(
     if not items:
         return {
             'success': False,
-            'error': suggestion.get('meta', {}).get('message') or 'Khong co du lieu playbook de ap dung.',
+            'error': suggestion.get('meta', {}).get('message') or 'Không có dữ liệu playbook để áp dụng.',
             'created_count': 0,
             'updated_count': 0,
             'skipped_count': 0,
@@ -1785,7 +1785,7 @@ def run_due_automation_schedules_job(lock_timeout_sec: int = 240) -> dict:
             old_values={},
             new_values={
                 'status': 'SKIPPED_LOCKED',
-                'message': 'Skipped due to existing running scheduler job.',
+                'message': 'Bỏ qua vì đang có tác vụ bộ lập lịch khác chạy.',
                 'lock_timeout_sec': lock_timeout,
                 'run_mode': 'SCHEDULE_JOB',
             },
@@ -1793,7 +1793,7 @@ def run_due_automation_schedules_job(lock_timeout_sec: int = 240) -> dict:
         return {
             'success': True,
             'skipped_locked': True,
-            'message': 'Skipped: another scheduler job is running.',
+            'message': 'Bỏ qua: đang có tác vụ bộ lập lịch khác chạy.',
         }
 
     started_at = timezone.now()
@@ -1812,7 +1812,7 @@ def run_due_automation_schedules_job(lock_timeout_sec: int = 240) -> dict:
             old_values={},
             new_values={
                 'status': 'SUCCESS',
-                'message': 'Scheduler job executed.',
+                'message': 'Tác vụ bộ lập lịch đã chạy thành công.',
                 'run_mode': 'SCHEDULE_JOB',
                 'duration_ms': duration_ms,
                 'users_count': int(result.get('users_count') or 0),
@@ -1867,7 +1867,7 @@ def run_due_automation_schedules_job(lock_timeout_sec: int = 240) -> dict:
 def _maybe_auto_disable_scheduler_on_fail(failure_threshold: int = 3, reason: str = '') -> dict:
     """
     Auto-recovery policy:
-    - Nếu fail liên tiếp >= ngưỡng thì tự tắt scheduler global.
+    - Nếu lỗi liên tiếp >= ngưỡng thì tự tắt bộ lập lịch toàn cục.
     - Gửi cảnh báo cho staff/superuser.
     """
     from core.models import AuditLog, Notification, User
@@ -1935,7 +1935,7 @@ def _maybe_auto_disable_scheduler_on_fail(failure_threshold: int = 3, reason: st
             'reason': 'AUTO_DISABLED_BY_FAILURE_POLICY',
             'failure_threshold': max(1, int(failure_threshold or 3)),
             'consecutive_failures': consecutive_failures,
-            'message': reason or 'Scheduler auto-disabled due to repeated failures.',
+            'message': reason or 'Scheduler đã tự tắt do lỗi lặp lại nhiều lần.',
         },
     )
     admin_ids = list(
@@ -1949,9 +1949,9 @@ def _maybe_auto_disable_scheduler_on_fail(failure_threshold: int = 3, reason: st
         Notification.objects.create(
             recipient_id=uid,
             notification_type='system',
-            title='⚠️ Scheduler automation đã tự tắt',
+            title='⚠️ Tự động hóa bộ lập lịch đã tự tắt',
             message=(
-                f'Hệ thống tự tắt scheduler do fail liên tiếp {consecutive_failures} lần. '
+                f'Hệ thống tự tắt bộ lập lịch do lỗi liên tiếp {consecutive_failures} lần. '
                 f'Lý do gần nhất: {reason or "Không rõ"}'
             ),
             entity_type='WorkflowAutomationJob',
@@ -1968,7 +1968,7 @@ def _maybe_auto_disable_scheduler_on_fail(failure_threshold: int = 3, reason: st
 
 def get_scheduler_policy() -> dict:
     """
-    Chính sách scheduler lưu trong Setting.
+    Chính sách bộ lập lịch lưu trong Setting.
     """
     from core.models import Setting
 
@@ -2012,8 +2012,8 @@ def notify_scheduler_admins(message: str, actor=None) -> dict:
         Notification.objects.create(
             recipient_id=uid,
             notification_type='system',
-            title='📣 Cảnh báo vận hành scheduler',
-            message=message or 'Cảnh báo thủ công từ dashboard scheduler.',
+            title='📣 Cảnh báo vận hành bộ lập lịch',
+            message=message or 'Cảnh báo thủ công từ bảng điều khiển bộ lập lịch.',
             entity_type='WorkflowAutomationJob',
             entity_id=0,
             actor=actor,
@@ -2032,7 +2032,7 @@ def evaluate_scheduler_auto_recovery(reason: str = '') -> dict:
     )
 
 
-def simulate_scheduler_failure(reason: str = 'Manual failure simulation', actor=None) -> dict:
+def simulate_scheduler_failure(reason: str = 'Mô phỏng lỗi thủ công', actor=None) -> dict:
     from core.models import AuditLog
 
     AuditLog.objects.create(
@@ -2046,12 +2046,12 @@ def simulate_scheduler_failure(reason: str = 'Manual failure simulation', actor=
         old_values={},
         new_values={
             'status': 'FAILED',
-            'message': str(reason or 'Manual failure simulation.'),
+            'message': str(reason or 'Mô phỏng lỗi thủ công.'),
             'run_mode': 'MANUAL_SIMULATION',
             'duration_ms': 0,
         },
     )
-    auto_recovery = evaluate_scheduler_auto_recovery(reason=str(reason or 'Manual failure simulation.'))
+    auto_recovery = evaluate_scheduler_auto_recovery(reason=str(reason or 'Mô phỏng lỗi thủ công.'))
     return {
         'success': True,
         'simulated': True,
@@ -2131,7 +2131,7 @@ def execute_insight_actions_batch(
     items: [{insight_type, suggested_action}]
     """
     if not isinstance(items, list) or not items:
-        return {'success': False, 'error': 'Danh sách items trống.'}
+        return {'success': False, 'error': 'Danh sách mục trống.'}
 
     results = []
     success_count = 0
@@ -2283,7 +2283,7 @@ def bulk_pipeline_action(
     if action_normalized not in ('ADVANCE', 'FAIL', 'RETRY_FAILED'):
         return {'success': False, 'error': 'action không hợp lệ.'}
     if not items:
-        return {'success': False, 'error': 'Danh sách items trống.'}
+        return {'success': False, 'error': 'Danh sách mục trống.'}
 
     results = []
     success_count = 0

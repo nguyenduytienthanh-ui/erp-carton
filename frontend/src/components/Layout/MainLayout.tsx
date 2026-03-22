@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
-import { Layout, Menu, Button, Popover, Space, message, Divider, Drawer, Badge } from 'antd';
+import { Layout, Menu, Button, Popover, Space, Divider, Drawer, Badge } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   MenuFoldOutlined,
@@ -23,17 +23,27 @@ import {
   SafetyOutlined,
   DatabaseOutlined,
   CarOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
+import { authApi } from '../../api/auth';
 import { storage } from '../../utils/storage';
 import TaskQuickLauncher from '../TaskQuickLauncher/TaskQuickLauncher';
+import GlobalCommandPalette from './GlobalCommandPalette';
 import { notificationsApi } from '../../api/notifications';
 import { operationsApi } from '../../api/operations';
 import { adminApi } from '../../api/admin';
 import { financeApi } from '../../api/finance';
 import { workforceApi } from '../../api/workforce';
+import {
+  buildCommandPaletteCatalog,
+  getCommandPaletteFavoritePaths,
+  getNextCommandPaletteRecentPaths,
+  persistCommandPaletteRecentPaths,
+  toggleCommandPaletteFavoritePath,
+} from '../../utils/commandPalette';
 import {
   canManageFinanceData,
   canAccessSalesOrders,
@@ -41,8 +51,19 @@ import {
   canManageStocktake,
   canManagePurchasingData,
   canManageProductionData,
+  canManageUserAccessExceptions,
   canManageModulePermissionSettings,
+  canManageUserAccessReviews,
+  canManageOnboardingStudio,
+  canManageRoleTeamGovernance,
+  canManageUserDirectory,
+  canManageUserLifecycle,
+  canManageUserProvisioning,
   canManageWorkforceData,
+  canViewApprovalControlTower,
+  canViewAdminAuditCenter,
+  canViewAdminObservabilityCenter,
+  canViewAccessGovernanceCenter,
   canViewModulePermissionHistory,
   canViewOperationsLog,
   canViewOpsHub,
@@ -69,6 +90,7 @@ function shouldSkipRouteChunkPrefetch(): boolean {
 
 const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/': () => import('../../pages/Dashboard'),
+  '/account': () => import('../../pages/Account/AccountCenter'),
   '/products': () => import('../../pages/Products/ProductList'),
   '/sales-orders': () => import('../../pages/Sales/SalesOrderList'),
   '/shipments': () => import('../../pages/Sales/ShipmentList'),
@@ -90,6 +112,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/purchase-returns': () => import('../../pages/Purchasing/PurchaseReturnList'),
   '/production-orders': () => import('../../pages/Production/ProductionOrderList'),
   '/material-issues': () => import('../../pages/Production/MaterialIssueList'),
+  '/production-receipts': () => import('../../pages/Production/ProductionReceiptList'),
   '/production-costing': () => import('../../pages/Management/ProductionCostingReport'),
   '/reports': () => import('../../pages/Management/ReportsCenter'),
   '/warehouses': () => import('../../pages/Inventory/WarehouseList'),
@@ -126,13 +149,34 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/trial-balance': () => import('../../pages/Finance/TrialBalance'),
   '/bank-reconciliation': () => import('../../pages/Finance/BankReconciliationList'),
   '/employee-performance': () => import('../../pages/Management/EmployeePerformanceReport'),
+  '/admin/approval-control-tower': () => import('../../pages/Admin/ApprovalControlTower'),
+  '/admin/audit-center': () => import('../../pages/Admin/AdminAuditCenter'),
+  '/admin/observability': () => import('../../pages/Admin/AdminObservabilityCenter'),
+  '/admin/access-governance': () => import('../../pages/Admin/AccessGovernanceCenter'),
+  '/admin/access-exceptions': () => import('../../pages/Admin/AccessExceptionCenter'),
+  '/admin/access-reviews': () => import('../../pages/Admin/AccessReviewCenter'),
+  '/admin/user-provisioning': () => import('../../pages/Admin/UserProvisioningDesk'),
+  '/admin/user-lifecycle': () => import('../../pages/Admin/UserOffboardingDesk'),
+  '/admin/onboarding-studio': () => import('../../pages/Admin/OnboardingStudio'),
+  '/admin/roles-teams': () => import('../../pages/Admin/RoleTeamGovernance'),
+  '/admin/users': () => import('../../pages/Admin/UserControlCenter'),
   '/admin/module-permissions': () => import('../../pages/Admin/ModulePermissionSettings'),
   '/admin/module-permissions-history': () => import('../../pages/Admin/ModulePermissionHistory'),
+};
+
+type WorkspaceHeaderSignal = {
+  key: string;
+  label: string;
+  value: string;
+  tone: 'critical' | 'warning' | 'steady';
+  path: string;
 };
 
 const MainLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenuVisible, setMobileMenuVisible] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [favoriteCommandPaths, setFavoriteCommandPaths] = useState<string[]>(() => getCommandPaletteFavoritePaths());
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [openMenuKeys, setOpenMenuKeys] = useState<string[]>(() => {
     try {
@@ -162,8 +206,19 @@ const MainLayout = () => {
   const canManagePurchasing = canManagePurchasingData();
   const canManageProduction = canManageProductionData();
   const canManageWorkforce = canManageWorkforceData();
+  const canViewApprovalTower = canViewApprovalControlTower();
   const canManageModulePermissions = canManageModulePermissionSettings();
+  const canManageAccessExceptions = canManageUserAccessExceptions();
+  const canManageAccessReviews = canManageUserAccessReviews();
+  const canManageLifecycle = canManageUserLifecycle();
+  const canManageProvisioning = canManageUserProvisioning();
+  const canManageOnboarding = canManageOnboardingStudio();
+  const canManageRoleTeams = canManageRoleTeamGovernance();
+  const canManageUsers = canManageUserDirectory();
   const canViewRbacAudit = canViewModulePermissionHistory();
+  const canViewAdminAudit = canViewAdminAuditCenter();
+  const canViewAdminObservability = canViewAdminObservabilityCenter();
+  const canViewAccessGovernance = canViewAccessGovernanceCenter();
   const headerNotificationInterval = useRealtimePollingInterval({
     enabled: true,
     activeMs: 30_000, // Increased from 15s to 30s to reduce polling frequency
@@ -287,6 +342,174 @@ const MainLayout = () => {
   const unreadCount = unreadQuery.data?.length ?? 0;
   const operationsFailedCount = operationsLogMetaQuery.data?.recent_failed_count_24h ?? 0;
   const rbacAnomalyCount = rbacHistoryMetaQuery.data?.anomalies_24h_count ?? 0;
+  const commandPaletteCommands = useMemo(() => buildCommandPaletteCatalog({
+    canViewReports,
+    canViewSalesOrders,
+    canManagePurchasing,
+    canManageProduction,
+    canManageInventory,
+    canManageStocktake: canManageStocktakeMenu,
+    canManageFinance,
+    canManageWorkforce,
+    canViewOps,
+    canViewWorkflow,
+    canManageWorkflow,
+    canViewOpsLog,
+    canViewApprovalTower,
+    canViewAdminAudit,
+    canViewAdminObservability,
+    canViewAccessGovernance,
+    canManageAccessExceptions,
+    canManageAccessReviews,
+    canManageProvisioning,
+    canManageLifecycle,
+    canManageOnboarding,
+    canManageRoleTeams,
+    canManageUsers,
+    canManageModulePermissions,
+    canViewRbacAudit,
+    unreadCount,
+    overdue90Count,
+    salaryAdvancePendingCount,
+    operationsFailedCount,
+    rbacAnomalyCount,
+  }), [
+    canManageAccessExceptions,
+    canManageAccessReviews,
+    canManageFinance,
+    canManageInventory,
+    canManageLifecycle,
+    canManageModulePermissions,
+    canManageOnboarding,
+    canManageProduction,
+    canManageProvisioning,
+    canManagePurchasing,
+    canManageRoleTeams,
+    canManageStocktakeMenu,
+    canManageUsers,
+    canManageWorkflow,
+    canManageWorkforce,
+    canViewApprovalTower,
+    canViewAdminAudit,
+    canViewAccessGovernance,
+    canViewAdminObservability,
+    canViewOps,
+    canViewOpsLog,
+    canViewRbacAudit,
+    canViewReports,
+    canViewSalesOrders,
+    canViewWorkflow,
+    operationsFailedCount,
+    overdue90Count,
+    rbacAnomalyCount,
+    salaryAdvancePendingCount,
+    unreadCount,
+  ]);
+  const activeCommand = useMemo(
+    () => commandPaletteCommands.find((command) => command.path === location.pathname) ?? null,
+    [commandPaletteCommands, location.pathname]
+  );
+  const workspaceSignals = useMemo<WorkspaceHeaderSignal[]>(() => {
+    const signals: WorkspaceHeaderSignal[] = [];
+    if (unreadCount > 0) {
+      signals.push({
+        key: 'notifications',
+        label: 'Thong bao moi',
+        value: String(unreadCount),
+        tone: unreadCount >= 10 ? 'critical' : 'warning',
+        path: '/notifications',
+      });
+    }
+    if (overdue90Count > 0) {
+      signals.push({
+        key: 'finance-overdue',
+        label: 'Tam ung 90+',
+        value: String(overdue90Count),
+        tone: 'critical',
+        path: '/advance-transactions',
+      });
+    }
+    if (salaryAdvancePendingCount > 0) {
+      signals.push({
+        key: 'salary-advance',
+        label: 'Ung luong cho duyet',
+        value: String(salaryAdvancePendingCount),
+        tone: salaryAdvancePendingCount >= 5 ? 'critical' : 'warning',
+        path: '/salary-advance',
+      });
+    }
+    if (operationsFailedCount > 0) {
+      signals.push({
+        key: 'operations-log',
+        label: 'Su co van hanh',
+        value: String(operationsFailedCount),
+        tone: 'critical',
+        path: '/operations-log',
+      });
+    }
+    if (rbacAnomalyCount > 0) {
+      signals.push({
+        key: 'rbac-audit',
+        label: 'Bat thuong RBAC',
+        value: String(rbacAnomalyCount),
+        tone: 'warning',
+        path: '/admin/module-permissions-history',
+      });
+    }
+    if (signals.length === 0) {
+      return [{
+        key: 'steady-state',
+        label: 'Nen van hanh',
+        value: 'OK',
+        tone: 'steady',
+        path: '/',
+      }];
+    }
+    return signals.slice(0, 3);
+  }, [
+    operationsFailedCount,
+    overdue90Count,
+    rbacAnomalyCount,
+    salaryAdvancePendingCount,
+    unreadCount,
+  ]);
+  const workspaceSummary = useMemo(() => {
+    const fragments: string[] = [];
+    if (unreadCount > 0) fragments.push(`${unreadCount} thong bao moi`);
+    if (overdue90Count > 0) fragments.push(`${overdue90Count} ho so tam ung qua 90 ngay`);
+    if (salaryAdvancePendingCount > 0) fragments.push(`${salaryAdvancePendingCount} ho so ung luong cho duyet`);
+    if (operationsFailedCount > 0) fragments.push(`${operationsFailedCount} su co can ra soat`);
+    if (rbacAnomalyCount > 0) fragments.push(`${rbacAnomalyCount} bat thuong phan quyen`);
+    if (fragments.length === 0) {
+      return activeCommand?.description ?? 'He thong dang san sang cho nhung luong cong viec uu tien.';
+    }
+    return fragments.slice(0, 3).join(' • ');
+  }, [
+    activeCommand?.description,
+    operationsFailedCount,
+    overdue90Count,
+    rbacAnomalyCount,
+    salaryAdvancePendingCount,
+    unreadCount,
+  ]);
+  const recentCommandPaths = useMemo(
+    () => getNextCommandPaletteRecentPaths(location.pathname),
+    [location.pathname],
+  );
+
+  useEffect(() => {
+    persistCommandPaletteRecentPaths(recentCommandPaths);
+  }, [recentCommandPaths]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return;
+      event.preventDefault();
+      setCommandPaletteOpen((current) => !current);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const menuItems: MenuProps['items'] = [
     {
@@ -404,7 +627,11 @@ const MainLayout = () => {
         },
         {
           key: '/material-issues',
-          label: renderMenuLabel('/material-issues', 'Phát hành NVL'),
+          label: renderMenuLabel('/material-issues', 'Cấp vật tư'),
+        },
+        {
+          key: '/production-receipts',
+          label: renderMenuLabel('/production-receipts', 'Nhập thành phẩm'),
         },
         {
           key: '/production-costing',
@@ -421,7 +648,7 @@ const MainLayout = () => {
           { key: '/inventory-stock', label: renderMenuLabel('/inventory-stock', 'Tồn kho') },
           { key: '/inventory-forecast', label: renderMenuLabel('/inventory-forecast', 'Dự báo tồn kho') },
           { key: '/inventory-transactions', label: renderMenuLabel('/inventory-transactions', 'Sổ kho') },
-          { key: '/inventory-reservations', label: renderMenuLabel('/inventory-reservations', 'Reservation') },
+          { key: '/inventory-reservations', label: renderMenuLabel('/inventory-reservations', 'Giữ chỗ tồn kho') },
           { key: '/stock-alerts', label: renderMenuLabel('/stock-alerts', 'Cảnh báo tồn kho') },
           { key: '/warehouse-transfers', label: renderMenuLabel('/warehouse-transfers', 'Chuyển kho') },
           { key: '/warehouses', label: renderMenuLabel('/warehouses', 'Kho hàng') },
@@ -558,7 +785,7 @@ const MainLayout = () => {
         },
         {
           key: '/bi-dashboard',
-          label: renderMenuLabel('/bi-dashboard', 'BI Dashboard'),
+          label: renderMenuLabel('/bi-dashboard', 'Điều hành BI'),
         },
         {
           key: '/task-operations',
@@ -569,7 +796,7 @@ const MainLayout = () => {
     (canManageWorkflow || canViewWorkflow) ? {
       key: 'workflow-group',
       icon: <ApartmentOutlined />,
-      label: 'Workflow',
+      label: 'Quy trình',
       children: [
         ...(canManageWorkflow ? [{
           key: '/workflow-task-templates',
@@ -584,11 +811,23 @@ const MainLayout = () => {
         }] : []),
       ],
     } : null,
-    (canViewOpsLog || canManageModulePermissions || canViewRbacAudit) ? {
+    (canViewOpsLog || canViewApprovalTower || canViewAdminAudit || canViewAdminObservability || canViewAccessGovernance || canManageAccessExceptions || canManageAccessReviews || canManageLifecycle || canManageProvisioning || canManageOnboarding || canManageRoleTeams || canManageUsers || canManageModulePermissions || canViewRbacAudit) ? {
       key: 'governance-group',
       icon: <SafetyOutlined />,
       label: 'Kiểm soát',
       children: [
+        ...(canViewApprovalTower ? [{
+          key: '/admin/approval-control-tower',
+          label: renderMenuLabel('/admin/approval-control-tower', 'Trung tâm điều phối duyệt'),
+        }] : []),
+        ...(canViewAdminAudit ? [{
+          key: '/admin/audit-center',
+          label: renderMenuLabel('/admin/audit-center', 'Trung tâm kiểm soát audit'),
+        }] : []),
+        ...(canViewAdminObservability ? [{
+          key: '/admin/observability',
+          label: renderMenuLabel('/admin/observability', 'Trung tâm sức khỏe hệ thống'),
+        }] : []),
         ...(canViewOpsLog ? [{
           key: '/operations-log',
           label: renderMenuLabel(
@@ -597,6 +836,38 @@ const MainLayout = () => {
               Nhật ký vận hành {operationsFailedCount > 0 ? <Badge count={operationsFailedCount} size="small" overflowCount={99} /> : null}
             </span>
           ),
+        }] : []),
+        ...(canViewAccessGovernance ? [{
+          key: '/admin/access-governance',
+          label: renderMenuLabel('/admin/access-governance', 'Trung tâm giám sát truy cập'),
+        }] : []),
+        ...(canManageAccessExceptions ? [{
+          key: '/admin/access-exceptions',
+          label: renderMenuLabel('/admin/access-exceptions', 'Ngoại lệ truy cập'),
+        }] : []),
+        ...(canManageAccessReviews ? [{
+          key: '/admin/access-reviews',
+          label: renderMenuLabel('/admin/access-reviews', 'Review truy cập'),
+        }] : []),
+        ...(canManageProvisioning ? [{
+          key: '/admin/user-provisioning',
+          label: renderMenuLabel('/admin/user-provisioning', 'Bàn cấp tài khoản'),
+        }] : []),
+        ...(canManageLifecycle ? [{
+          key: '/admin/user-lifecycle',
+          label: renderMenuLabel('/admin/user-lifecycle', 'Bàn kết thúc vòng đời'),
+        }] : []),
+        ...(canManageOnboarding ? [{
+          key: '/admin/onboarding-studio',
+          label: renderMenuLabel('/admin/onboarding-studio', 'Onboarding studio'),
+        }] : []),
+        ...(canManageRoleTeams ? [{
+          key: '/admin/roles-teams',
+          label: renderMenuLabel('/admin/roles-teams', 'Role va team'),
+        }] : []),
+        ...(canManageUsers ? [{
+          key: '/admin/users',
+          label: renderMenuLabel('/admin/users', 'Quan tri nguoi dung'),
         }] : []),
         ...(canManageModulePermissions ? [{
           key: '/admin/module-permissions',
@@ -615,7 +886,13 @@ const MainLayout = () => {
     } : null,
   ];
 
-  const handleLogout = useCallback(() => {
+  const handleLogout = useCallback(async () => {
+    const refreshToken = storage.getRefreshToken();
+    try {
+      await authApi.logout(refreshToken);
+    } catch {
+      // Clear client-side auth state even if the server-side logout request fails.
+    }
     storage.clear();
     navigate('/login');
   }, [navigate]);
@@ -626,8 +903,10 @@ const MainLayout = () => {
         role="button"
         tabIndex={0}
         style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
-        onClick={() => message.info('Chức năng đang phát triển')}
-        onKeyDown={(e) => e.key === 'Enter' && message.info('Chức năng đang phát triển')}
+        onMouseEnter={() => prefetchRouteChunk('/account')}
+        onFocus={() => prefetchRouteChunk('/account')}
+        onClick={() => navigate('/account')}
+        onKeyDown={(e) => e.key === 'Enter' && navigate('/account')}
       >
         <UserOutlined />
         Thông tin cá nhân
@@ -637,8 +916,12 @@ const MainLayout = () => {
         role="button"
         tabIndex={0}
         style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, color: '#ff4d4f' }}
-        onClick={handleLogout}
-        onKeyDown={(e) => e.key === 'Enter' && handleLogout()}
+        onClick={() => { void handleLogout(); }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            void handleLogout();
+          }
+        }}
       >
         <LogoutOutlined />
         Đăng xuất
@@ -712,6 +995,23 @@ const MainLayout = () => {
     if (isMobile) setMobileMenuVisible(false);
   }, [navigate, isMobile, location.pathname]);
 
+  const handleCommandNavigate = useCallback((path: string) => {
+    prefetchRouteChunk(path);
+    if (path !== location.pathname) {
+      navigate(path);
+      window.setTimeout(() => {
+        if (window.location.pathname !== path) {
+          window.location.assign(path);
+        }
+      }, 80);
+    }
+    if (isMobile) setMobileMenuVisible(false);
+  }, [isMobile, location.pathname, navigate, prefetchRouteChunk]);
+
+  const handleToggleFavoriteCommand = useCallback((path: string) => {
+    setFavoriteCommandPaths(toggleCommandPaletteFavoritePath(path));
+  }, []);
+
   const menuContent = (
     <Menu
       theme={isMobile ? 'light' : 'dark'}
@@ -738,18 +1038,14 @@ const MainLayout = () => {
             borderRight: '1px solid rgba(255, 255, 255, 0.1)',
           }}
         >
-          <div
-            style={{
-              height: '64px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'white',
-              fontSize: '18px',
-              fontWeight: 'bold',
-            }}
-          >
-            {collapsed ? '🏭' : '🏭 ERP Carton'}
+          <div className={`workspace-brand${collapsed ? ' workspace-brand--collapsed' : ''}`}>
+            <div className="workspace-brand-mark">EC</div>
+            {!collapsed ? (
+              <div className="workspace-brand-copy">
+                <div className="workspace-brand-title">ERP Carton</div>
+                <div className="workspace-brand-subtitle">Enterprise command center</div>
+              </div>
+            ) : null}
           </div>
           {menuContent}
         </Sider>
@@ -759,9 +1055,12 @@ const MainLayout = () => {
       {isMobile && (
         <Drawer
           title={
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: '20px' }}>🏭</span>
-              <span style={{ fontSize: '18px', fontWeight: 'bold' }}>ERP Carton</span>
+            <div className="workspace-brand">
+              <div className="workspace-brand-mark">EC</div>
+              <div className="workspace-brand-copy">
+                <div className="workspace-brand-title">ERP Carton</div>
+                <div className="workspace-brand-subtitle">Enterprise command center</div>
+              </div>
             </div>
           }
           placement="left"
@@ -781,8 +1080,9 @@ const MainLayout = () => {
             padding: isMobile ? '0 12px' : '0 16px',
             background: '#fff',
             display: 'flex',
-            justifyContent: 'space-between',
+            justifyContent: 'flex-start',
             alignItems: 'center',
+            gap: 12,
             height: isMobile ? '56px' : '64px',
             boxShadow: isMobile ? '0 1px 6px rgba(15, 23, 42, 0.08)' : 'none',
             borderBottom: '1px solid #eef2f7',
@@ -791,28 +1091,102 @@ const MainLayout = () => {
             zIndex: 999,
           }}
         >
-          <Button
-            type="text"
-            icon={isMobile ? (mobileMenuVisible ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />) : (collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />)}
-            onClick={() => {
-              if (isMobile) {
-                setMobileMenuVisible(!mobileMenuVisible);
-              } else {
-                setCollapsed(!collapsed);
-              }
-            }}
-            style={{
-              fontSize: '18px',
-              width: isMobile ? 44 : desktopControlSize,
-              height: isMobile ? 44 : desktopControlSize,
-            }}
-          />
+          <div className="workspace-header-leading">
+            <Button
+              type="text"
+              className="workspace-shell-action"
+              icon={isMobile ? (mobileMenuVisible ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />) : (collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />)}
+              onClick={() => {
+                if (isMobile) {
+                  setMobileMenuVisible(!mobileMenuVisible);
+                } else {
+                  setCollapsed(!collapsed);
+                }
+              }}
+              style={{
+                fontSize: '18px',
+                width: isMobile ? 44 : desktopControlSize,
+                height: isMobile ? 44 : desktopControlSize,
+              }}
+            />
+            <div className="workspace-header-copy">
+              <div className="workspace-header-kicker">
+                <span>{activeCommand?.group ?? 'ERP Carton workspace'}</span>
+                {!isMobile ? <span className="workspace-live-indicator">Live</span> : null}
+                {!isMobile ? <span>{dayjs().format('DD/MM/YYYY')}</span> : null}
+              </div>
+              <div className="workspace-header-title">
+                {activeCommand?.title ?? 'ERP Carton'}
+              </div>
+              {!isMobile ? (
+                <div className="workspace-header-summary">
+                  {workspaceSummary}
+                </div>
+              ) : null}
+            </div>
+          </div>
 
-          <Space size={10}>
+          {!isMobile ? (
+            <div className="workspace-header-signal-row">
+              {workspaceSignals.map((signal) => (
+                <button
+                  key={signal.key}
+                  type="button"
+                  className={`workspace-header-signal workspace-header-signal--${signal.tone}`}
+                  onMouseEnter={() => prefetchRouteChunk(signal.path)}
+                  onFocus={() => prefetchRouteChunk(signal.path)}
+                  onClick={() => navigate(signal.path)}
+                >
+                  <span className="workspace-header-signal-count">{signal.value}</span>
+                  <span className="workspace-header-signal-label">{signal.label}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <Space size={10} style={{ marginLeft: 'auto' }}>
+            <Button
+              type="text"
+              className="workspace-search-trigger workspace-shell-action"
+              icon={<SearchOutlined />}
+              data-testid="command-palette-open-button"
+              onClick={() => setCommandPaletteOpen(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                height: isMobile ? 40 : desktopControlSize,
+                paddingInline: isMobile ? 10 : 14,
+                border: '1px solid #e2e8f0',
+                borderRadius: 999,
+                background: '#f8fafc',
+                color: '#0f172a',
+              }}
+            >
+              {!isMobile ? (
+                <>
+                  <span>Tìm nhanh</span>
+                  <span
+                    style={{
+                      border: '1px solid #dbeafe',
+                      background: '#eff6ff',
+                      color: '#2563eb',
+                      borderRadius: 999,
+                      padding: '1px 8px',
+                      fontSize: 11,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Ctrl+K
+                  </span>
+                </>
+              ) : null}
+            </Button>
             {!isMobile && <TaskQuickLauncher />}
             <Popover content={notificationPopoverContent} placement="bottomRight" trigger="click">
               <Button
                 type="text"
+                className="workspace-shell-action"
                 icon={<BellOutlined />}
                 style={{ fontSize: isMobile ? '14px' : '15px', height: isMobile ? 40 : desktopControlSize }}
               >
@@ -823,7 +1197,7 @@ const MainLayout = () => {
               </Button>
             </Popover>
             <Popover content={accountMenuContent} placement="bottomRight" trigger="click">
-              <Button type="text" icon={<UserOutlined />} style={{ fontSize: isMobile ? '14px' : '15px', height: isMobile ? 40 : desktopControlSize }}>
+              <Button className="workspace-shell-action" type="text" icon={<UserOutlined />} style={{ fontSize: isMobile ? '14px' : '15px', height: isMobile ? 40 : desktopControlSize }}>
                 {isMobile ? (user?.username || 'Tài khoản') : `Tài khoản ${user?.username ? `(${user.username})` : ''}`}
               </Button>
             </Popover>
@@ -844,6 +1218,18 @@ const MainLayout = () => {
         >
           <Outlet />
         </Content>
+        <GlobalCommandPalette
+          key={commandPaletteOpen ? 'command-palette-open' : 'command-palette-closed'}
+          open={commandPaletteOpen}
+          compact={isMobile}
+          commands={commandPaletteCommands}
+          favoritePaths={favoriteCommandPaths}
+          recentPaths={recentCommandPaths}
+          onClose={() => setCommandPaletteOpen(false)}
+          onNavigate={handleCommandNavigate}
+          onPrefetch={prefetchRouteChunk}
+          onToggleFavorite={handleToggleFavoriteCommand}
+        />
       </Layout>
     </Layout>
   );

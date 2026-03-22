@@ -18,6 +18,7 @@ function shouldSkipPrefetch(): boolean {
 }
 
 const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
+  '/account': () => import('../../pages/Account/AccountCenter'),
   '/task-inbox': () => import('../../pages/Tasks/TaskInbox'),
   '/products': () => import('../../pages/Products/ProductList'),
   '/sales-orders': () => import('../../pages/Sales/SalesOrderList'),
@@ -32,6 +33,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/purchase-orders': () => import('../../pages/Purchasing/PurchaseOrderList'),
   '/purchase-receipts': () => import('../../pages/Purchasing/PurchaseReceiptList'),
   '/production-orders': () => import('../../pages/Production/ProductionOrderList'),
+  '/production-receipts': () => import('../../pages/Production/ProductionReceiptList'),
   '/reports': () => import('../../pages/Management/ReportsCenter'),
   '/receivables': () => import('../../pages/Finance/AccountsReceivableList'),
   '/payables': () => import('../../pages/Finance/AccountsPayableList'),
@@ -47,12 +49,13 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
 
 function getRoutePrefetchOrder(pathname: string, canAccessOps: boolean, canViewReports: boolean, canViewWorkflow: boolean, canManageWorkflow: boolean, canManageRbac: boolean, canManageInventory: boolean, canManagePurchasing: boolean, canManageProduction: boolean, canManageFinance: boolean, canAccessSales: boolean): string[] {
   const common = [
+    '/account',
     '/task-inbox',
     ...(canViewReports ? ['/reports'] : []),
     '/products',
     ...(canAccessSales ? ['/sales-orders'] : []),
     ...(canManagePurchasing ? ['/purchase-orders', '/purchase-receipts', '/suppliers', '/material-prices'] : []),
-    ...(canManageProduction ? ['/production-orders'] : []),
+    ...(canManageProduction ? ['/production-orders', '/production-receipts'] : []),
     ...(canManageFinance ? ['/receivables', '/payables', '/finance-summary'] : []),
     '/notifications',
     ...(canManageInventory ? ['/inventory-stock', '/inventory-transactions'] : []),

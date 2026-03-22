@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { Button, DatePicker, Form, Input, InputNumber, Modal, Select, Typography } from 'antd';
+import { Alert, Button, DatePicker, Form, Input, InputNumber, Modal, Select, Typography } from 'antd';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useQuery } from '@tanstack/react-query';
@@ -8,7 +8,6 @@ import type { Warehouse, WarehouseLocation } from '../../types/inventory';
 import type { Product } from '../../types/product';
 import type { ProductionOrder, ProductionOrderFormValues } from '../../types/production';
 import type { SalesOrder } from '../../types/sales';
-
 
 type Props = {
   open: boolean;
@@ -21,7 +20,6 @@ type Props = {
   onCancel: () => void;
   onSubmit: (payload: ProductionOrderFormValues) => Promise<void>;
 };
-
 
 type ProductionOrderFormState = {
   order_date: dayjs.Dayjs;
@@ -47,6 +45,7 @@ type ProductionOrderFormState = {
   }>;
 };
 
+const { Title } = Typography;
 
 export default function ProductionOrderForm({
   open,
@@ -66,7 +65,7 @@ export default function ProductionOrderForm({
   const salesOrderDetailQuery = useQuery({
     queryKey: ['production-form-sales-order', selectedSalesOrderId],
     queryFn: () => salesApi.getOrder(Number(selectedSalesOrderId)),
-    enabled: !!selectedSalesOrderId,
+    enabled: Boolean(selectedSalesOrderId),
   });
 
   useEffect(() => {
@@ -141,7 +140,7 @@ export default function ProductionOrderForm({
           source_warehouse: null,
           source_location: null,
           note: `Tự động từ thành phần ${child.code}`,
-        }))
+        })),
       );
     }
   };
@@ -195,18 +194,29 @@ export default function ProductionOrderForm({
 
   return (
     <Modal
+      data-testid="production-order-form-modal"
       title={editing ? `Sửa lệnh sản xuất ${editing.code}` : 'Tạo lệnh sản xuất'}
       open={open}
       onCancel={onCancel}
       onOk={() => void handleOk()}
+      okText={editing ? 'Lưu thay đổi' : 'Tạo lệnh'}
+      cancelText="Đóng"
       confirmLoading={submitting}
       width={1120}
       destroyOnClose
     >
       <Form form={form} layout="vertical">
+        <Alert
+          showIcon
+          type="info"
+          style={{ marginBottom: 16 }}
+          message="Có thể liên kết đơn bán, tự sinh nhu cầu vật tư từ cấu trúc thành phần và ghi trước kho nhập thành phẩm."
+        />
+
         <Form.Item name="version" hidden>
           <InputNumber />
         </Form.Item>
+
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
           <Form.Item name="order_date" label="Ngày lệnh" rules={[{ required: true, message: 'Bắt buộc' }]}>
             <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" />
@@ -217,6 +227,7 @@ export default function ProductionOrderForm({
           <Form.Item name="planned_end_date" label="Ngày kết thúc">
             <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" />
           </Form.Item>
+
           <Form.Item name="sales_order" label="Đơn hàng bán liên kết">
             <Select
               showSearch
@@ -246,6 +257,7 @@ export default function ProductionOrderForm({
               onChange={handleProductChange}
             />
           </Form.Item>
+
           <Form.Item name="planned_qty" label="Số lượng kế hoạch" rules={[{ required: true, message: 'Bắt buộc' }]}>
             <InputNumber min={0.0001} style={{ width: '100%' }} />
           </Form.Item>
@@ -253,8 +265,9 @@ export default function ProductionOrderForm({
             <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item name="reference" label="Tham chiếu">
-            <Input />
+            <Input data-testid="production-order-form-reference" placeholder="Ví dụ: theo forecast tuần hoặc đơn bán gấp" />
           </Form.Item>
+
           <Form.Item name="target_warehouse" label="Kho nhập thành phẩm">
             <Select
               showSearch
@@ -274,16 +287,16 @@ export default function ProductionOrderForm({
         </div>
 
         <Form.Item name="notes" label="Ghi chú">
-          <Input.TextArea rows={2} />
+          <Input.TextArea data-testid="production-order-form-notes" rows={2} />
         </Form.Item>
 
         <Form.List name="material_requirements">
           {(fields, { add, remove }) => (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Typography.Title level={5} style={{ margin: 0 }}>
+                <Title level={5} style={{ margin: 0 }}>
                   Nhu cầu vật tư
-                </Typography.Title>
+                </Title>
                 <Button
                   icon={<PlusOutlined />}
                   onClick={() => add({ line_number: fields.length + 1, material_product: undefined, required_qty: 0 })}
@@ -291,12 +304,13 @@ export default function ProductionOrderForm({
                   Thêm vật tư
                 </Button>
               </div>
+
               {fields.map((field, index) => (
                 <div
                   key={field.key}
                   style={{
                     border: '1px solid #f0f0f0',
-                    borderRadius: 10,
+                    borderRadius: 12,
                     padding: 12,
                     display: 'grid',
                     gridTemplateColumns: '2fr 1fr 1.2fr 1.2fr auto',
@@ -331,6 +345,7 @@ export default function ProductionOrderForm({
                     <Select
                       showSearch
                       optionFilterProp="label"
+                      placeholder="Chọn kho nguồn"
                       options={warehouses.map((item) => ({ value: item.id, label: `${item.code} - ${item.name}` }))}
                     />
                   </Form.Item>
@@ -338,21 +353,19 @@ export default function ProductionOrderForm({
                     <Select
                       showSearch
                       optionFilterProp="label"
+                      placeholder="Chọn vị trí"
                       options={locations.map((item) => ({ value: item.id, label: `${item.code} - ${item.name}` }))}
                     />
                   </Form.Item>
-                  <Button
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={() => remove(field.name)}
-                  />
+                  <Button danger icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
+
                   <Form.Item
                     {...field}
                     label="Ghi chú"
                     name={[field.name, 'note']}
                     style={{ marginBottom: 0, gridColumn: '1 / span 4' }}
                   >
-                    <Input />
+                    <Input placeholder="Ghi rõ nguồn cấp hoặc lưu ý tách lô nếu cần" />
                   </Form.Item>
                 </div>
               ))}

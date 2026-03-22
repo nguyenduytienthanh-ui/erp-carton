@@ -200,7 +200,13 @@ export interface ProductionOrderFormValues {
 
 export interface ProductionApprovalHistoryItem {
   action: string;
+  action_label?: string;
   user?: string | null;
   comments?: string | null;
   created_at: string;
+}
+
+export interface ProductionWorkflowStateSummary {
+  current: string;
+  next_states: string[];
 }
