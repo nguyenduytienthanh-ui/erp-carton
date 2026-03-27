@@ -91,4 +91,4 @@ python manage.py smoke_http --backend-base http://127.0.0.1:8000 --frontend-base
 - **Bắt đầu làm việc:** `git pull` (hoặc `.\scripts\sync-pull.ps1`)
 - **Kết thúc làm việc:** `git add .` → `git commit -m "..."` → `git push` (hoặc `.\scripts\sync-push.ps1`)
 
-Chi tiết: [GIT_SYNC_COMMANDS.md](./GIT_SYNC_COMMANDS.md)
+Chi tiết: [GIT_WORKFLOW_GUIDE.md](./GIT_WORKFLOW_GUIDE.md)

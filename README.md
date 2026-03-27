@@ -1,26 +1,30 @@
 # ERP Carton
 
-Hệ thống ERP quản lý sản phẩm, khách hàng, đơn hàng.
+Hệ thống ERP cho doanh nghiệp thùng carton, gồm các nhóm nghiệp vụ bán hàng, mua hàng, kho, sản xuất, tài chính, quản trị và điều hành tác vụ.
 
-## Setup máy mới
+## Đọc trước
 
-Xem [docs/SETUP_MACHINE_MOI.md](docs/SETUP_MACHINE_MOI.md)
+- Bộ tài liệu chuẩn: [docs/START_HERE.md](docs/START_HERE.md)
+- Bản quyết định cho chủ dự án: [docs/OWNER_DECISION_GUIDE.md](docs/OWNER_DECISION_GUIDE.md)
+- Quy tắc dùng chung bắt buộc: [docs/COMMON_RULES_STANDARD.md](docs/COMMON_RULES_STANDARD.md)
+- Quy tắc nghiệp vụ lõi: [docs/BUSINESS_RULES_STANDARD.md](docs/BUSINESS_RULES_STANDARD.md)
+- Quy tắc theo module: [docs/MODULE_RULES_STANDARD.md](docs/MODULE_RULES_STANDARD.md)
+- Quy tắc làm việc của AI: [AGENTS.md](AGENTS.md)
 
-## UAT và demo role
+## Thiết lập và đồng bộ
 
-- Bootstrap user/role/team mẫu: [docs/UAT_DEMO_USERS.md](docs/UAT_DEMO_USERS.md)
-- Runbook production và deploy: [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)
-- Checklist diễn tập staging: [docs/STAGING_REHEARSAL_CHECKLIST.md](docs/STAGING_REHEARSAL_CHECKLIST.md)
+- Setup máy mới: [docs/SETUP_MACHINE_MOI.md](docs/SETUP_MACHINE_MOI.md)
+- Đồng bộ Git an toàn: [docs/GIT_WORKFLOW_GUIDE.md](docs/GIT_WORKFLOW_GUIDE.md)
+- User, role, team mẫu để UAT: [docs/UAT_DEMO_USERS.md](docs/UAT_DEMO_USERS.md)
+
+## Vận hành và go-live
+
+- Production runbook: [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)
 - Monitoring và alerting: [docs/MONITORING_ALERTING.md](docs/MONITORING_ALERTING.md)
+- Checklist diễn tập staging: [docs/STAGING_REHEARSAL_CHECKLIST.md](docs/STAGING_REHEARSAL_CHECKLIST.md)
+- Deployment guide: [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)
 - Docker/systemd templates: [deploy/README.md](deploy/README.md)
 - CI workflow: `.github/workflows/ci.yml`
-
-## Đồng bộ Git (máy công ty ↔ máy nhà)
-
-- **Bắt đầu:** `git pull` hoặc `.\scripts\sync-pull.ps1`
-- **Kết thúc:** `git add .` → `git commit -m "..."` → `git push` hoặc `.\scripts\sync-push.ps1`
-
-Chi tiết: [docs/GIT_SYNC_COMMANDS.md](docs/GIT_SYNC_COMMANDS.md)
 
 ## Chạy ứng dụng
 
@@ -34,24 +38,20 @@ cd frontend
 npm run dev
 ```
 
-Mở http://localhost:5173/
+Mở `http://localhost:5173/`
 
 ## Frontend API endpoint
-
-Frontend hỗ trợ cấu hình API bằng biến môi trường Vite:
 
 ```powershell
 cd frontend
 copy .env.example .env.local
 ```
 
-Biến chính:
-
 ```env
 VITE_API_BASE_URL=http://127.0.0.1:8000/api
 ```
 
-## Smoke check sau khi chạy app
+## Smoke check nhanh
 
 ```powershell
 cd backend

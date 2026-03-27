@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 
 /**
  * **QuickClearIcon — Chuẩn UI xóa nhanh dùng chung.** KHÔNG dùng allowClear của Ant Design.
- * Mọi ô input/search/filter dùng QuickClearIcon trong suffix (hoặc đặt cạnh ô). Xem docs/QUICK_CLEAR_ICON_USAGE.md.
+ * Mọi ô input/search/filter dùng QuickClearIcon trong suffix (hoặc đặt cạnh ô). Xem docs/COMMON_RULES_STANDARD.md.
  *
  * ## Cách dùng
  *

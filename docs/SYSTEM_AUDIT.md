@@ -62,8 +62,7 @@
 
 ## 4. Backend – API chưa đăng ký (Phase 5)
 
-Các ViewSet trong `backend/phase5_viewsets.py` (forecast, supplier-analytics, budgets, inventory/forecast, …) **chưa** được đăng ký trong `backend/core/urls.py`.  
-Tài liệu: `backend/PHASE5_URL_ROUTING.md` mô tả cách thêm route.
+Các ViewSet trong `backend/phase5_viewsets.py` (forecast, supplier-analytics, budgets, inventory/forecast, …) **chưa** được đăng ký trong `backend/core/urls.py`.
 
 **Khuyến nghị:** Khi frontend chuyển từ mock sang API thật cho từng tính năng Phase 5, cần:
 - Import ViewSet tương ứng vào `core/urls.py`,
