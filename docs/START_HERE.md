@@ -40,13 +40,10 @@ Các tài liệu dưới đây vẫn cần thiết, nhưng chỉ dùng cho mục
 - `docs/PRODUCTION_RUNBOOK.md`
 - `docs/MONITORING_ALERTING.md`
 - `docs/STAGING_REHEARSAL_CHECKLIST.md`
-- `docs/PERFORMANCE_TESTING_GUIDE.md`
 - `docs/PERFORMANCE_READINESS.md`
-- `docs/MEMORY_OPTIMIZATION_GUIDE.md`
 - `docs/GO_LIVE_HANDOFF.md`
 - `docs/RELEASE_LOCK.md`
 - `docs/RELEASE_HYGIENE.md`
-- `docs/SYSTEM_AUDIT.md`
 - `deploy/README.md`
 
 ## Nguyên tắc đọc và cập nhật
