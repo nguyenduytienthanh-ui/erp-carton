@@ -1,19 +1,29 @@
 # Tải toàn bộ từ Git — chạy khi BẮT ĐẦU làm việc (công ty hoặc nhà)
+. "$PSScriptRoot\ensure-workspace-ready.ps1"
+
 Set-Location $PSScriptRoot\..
 Write-Host "=== TAI TU GIT (sync-pull) ===" -ForegroundColor Cyan
 git pull
-Write-Host "`nKiem tra dependencies..." -ForegroundColor Yellow
-if (Test-Path "backend\requirements.txt") {
-    Push-Location backend
-    pip install -r requirements.txt -q 2>$null
-    python manage.py migrate --noinput 2>$null
-    # Seed master data nếu chưa có (ĐVT, Sóng, Kiểu) - cần cho form Thêm sản phẩm
-    python manage.py seed_master_data 2>$null
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+Write-Host "`nKiem tra va chuan bi moi truong..." -ForegroundColor Yellow
+Ensure-WorkspaceReady -EnsureBackendEnv -EnsureBackendDependencies -EnsureFrontendDependencies
+
+Push-Location backend
+try {
+    python manage.py migrate --noinput
+    if ($LASTEXITCODE -ne 0) {
+        throw "python manage.py migrate that bai."
+    }
+
+    python manage.py seed_master_data
+    if ($LASTEXITCODE -ne 0) {
+        throw "python manage.py seed_master_data that bai."
+    }
+} finally {
     Pop-Location
 }
-if (Test-Path "frontend\package.json") {
-    Push-Location frontend
-    npm install 2>$null
-    Pop-Location
-}
+
 Write-Host "Da tai va dong bo xong." -ForegroundColor Green

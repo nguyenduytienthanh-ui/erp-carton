@@ -84,6 +84,14 @@ cd backend
 python manage.py smoke_http --backend-base http://127.0.0.1:8000 --frontend-base http://127.0.0.1:5173 --username uat_admin --password Demo123!
 ```
 
+### 4.2 Kiểm tra một lệnh
+
+```powershell
+.\scripts\quality-check.ps1
+```
+
+Script này tự chuẩn bị các phần thường thiếu như `backend/.env` và frontend dependencies trước khi chạy kiểm tra chuẩn.
+
 ---
 
 ## 5. Đồng bộ hàng ngày

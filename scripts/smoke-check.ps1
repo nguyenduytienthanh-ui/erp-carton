@@ -5,9 +5,12 @@ param(
     [string]$Password = "Demo123!"
 )
 
+. "$PSScriptRoot\ensure-workspace-ready.ps1"
+
 Set-Location "$PSScriptRoot\.."
 
 Write-Host "=== ERP Carton Smoke Check ===" -ForegroundColor Cyan
+Ensure-WorkspaceReady -EnsureBackendEnv -EnsureBackendDependencies
 Push-Location backend
 python manage.py smoke_http --backend-base $BackendBase --frontend-base $FrontendBase --username $Username --password $Password
 Pop-Location

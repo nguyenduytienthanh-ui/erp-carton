@@ -18,6 +18,8 @@ Hoặc dùng script:
 .\scripts\sync-pull.ps1
 ```
 
+Script này sẽ cố gắng tự chuẩn bị môi trường cục bộ: tạo `backend/.env` nếu thiếu, cài dependency còn thiếu và chạy migrate/seed cơ bản.
+
 ## Nếu có thay đổi package hoặc migration
 
 ```powershell
@@ -46,6 +48,17 @@ Hoặc dùng script:
 ```powershell
 .\scripts\sync-push.ps1
 ```
+
+## Kiểm tra nhanh trước khi kết thúc
+
+```powershell
+.\scripts\quality-check.ps1
+```
+
+Script này tự xử lý các lỗi thường gặp kiểu thiếu `.env`, thiếu `node_modules`, thiếu `eslint` hoặc `tsc`, rồi mới chạy:
+- frontend lint
+- frontend build
+- backend test chuẩn
 
 ## Nguyên tắc an toàn
 

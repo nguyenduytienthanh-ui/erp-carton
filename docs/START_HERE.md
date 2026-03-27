@@ -36,7 +36,6 @@ Các tài liệu dưới đây vẫn cần thiết, nhưng chỉ dùng cho mục
 
 - `docs/SETUP_MACHINE_MOI.md`
 - `docs/UAT_DEMO_USERS.md`
-- `docs/DEPLOYMENT_GUIDE.md`
 - `docs/PRODUCTION_RUNBOOK.md`
 - `docs/MONITORING_ALERTING.md`
 - `docs/STAGING_REHEARSAL_CHECKLIST.md`
@@ -45,6 +44,13 @@ Các tài liệu dưới đây vẫn cần thiết, nhưng chỉ dùng cho mục
 - `docs/RELEASE_LOCK.md`
 - `docs/RELEASE_HYGIENE.md`
 - `deploy/README.md`
+
+## Script nên dùng
+
+- `.\scripts\quality-check.ps1`: tự chuẩn bị môi trường cục bộ rồi chạy `lint`, `build` và bộ test backend chuẩn.
+- `.\scripts\preflight-check.ps1`: kiểm tra backend trước khi staging/go-live.
+- `.\scripts\smoke-check.ps1`: chạy smoke check backend/frontend.
+- `.\scripts\deploy-validate.ps1`: kiểm tra triển khai đầy đủ hơn trước khi go-live.
 
 ## Nguyên tắc đọc và cập nhật
 

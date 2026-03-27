@@ -22,7 +22,6 @@ Hệ thống ERP cho doanh nghiệp thùng carton, gồm các nhóm nghiệp v�
 - Production runbook: [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)
 - Monitoring và alerting: [docs/MONITORING_ALERTING.md](docs/MONITORING_ALERTING.md)
 - Checklist diễn tập staging: [docs/STAGING_REHEARSAL_CHECKLIST.md](docs/STAGING_REHEARSAL_CHECKLIST.md)
-- Deployment guide: [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)
 - Docker/systemd templates: [deploy/README.md](deploy/README.md)
 - CI workflow: `.github/workflows/ci.yml`
 
@@ -59,6 +58,14 @@ python manage.py bootstrap_uat_demo --reset-passwords --password Demo123!
 python manage.py smoke_http --backend-base http://127.0.0.1:8000 --frontend-base http://127.0.0.1:5173 --username uat_admin --password Demo123!
 ```
 
+## Kiểm tra chất lượng một lệnh
+
+```powershell
+.\scripts\quality-check.ps1
+```
+
+Script này sẽ tự chuẩn bị `backend/.env`, đồng bộ dependency còn thiếu và chạy lại `lint`, `build`, cùng bộ test backend chuẩn.
+
 ## Ops scripts
 
 ```powershell
@@ -66,6 +73,7 @@ python manage.py smoke_http --backend-base http://127.0.0.1:8000 --frontend-base
 .\scripts\backup-now.ps1
 .\scripts\smoke-check.ps1
 .\scripts\deploy-validate.ps1
+.\scripts\quality-check.ps1
 ```
 
 ## Browser smoke test

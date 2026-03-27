@@ -41,6 +41,7 @@
 
 ## Kiểm tra trước khi kết thúc
 
+- Ưu tiên: `.\scripts\quality-check.ps1`
 - Frontend: `cd frontend && npm run lint`
 - Frontend: `cd frontend && npm run build`
 - Backend: `cd backend && python manage.py test core.tests_auth_smoke core.tests_module_permissions core.tests_operations_log`

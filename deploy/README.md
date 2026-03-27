@@ -54,3 +54,9 @@ Có thể chạy nhanh bằng script:
 ```powershell
 .\scripts\deploy-validate.ps1 -BackendBase <backend-url> -FrontendBase <frontend-url>
 ```
+
+Nếu cần kiểm tra nhanh môi trường cục bộ trước khi đóng gói:
+
+```powershell
+.\scripts\quality-check.ps1
+```

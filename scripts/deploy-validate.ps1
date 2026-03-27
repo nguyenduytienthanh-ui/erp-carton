@@ -5,9 +5,12 @@ param(
     [string]$Password = "Demo123!"
 )
 
+. "$PSScriptRoot\ensure-workspace-ready.ps1"
+
 Set-Location "$PSScriptRoot\.."
 
 Write-Host "=== ERP Carton Deploy Validate ===" -ForegroundColor Cyan
+Ensure-WorkspaceReady -EnsureBackendEnv -EnsureBackendDependencies -EnsureFrontendDependencies
 
 Push-Location backend
 python manage.py preflight_check --strict
