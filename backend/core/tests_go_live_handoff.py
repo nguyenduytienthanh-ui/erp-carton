@@ -35,10 +35,7 @@ class GoLiveHandoffCommandTests(TestCase):
 
         self.assertEqual(payload['summary']['uat_personas_available'], 9)
         self.assertEqual(payload['release_readiness']['migrations']['pending_count'], 0)
-        self.assertIn('docs/GO_LIVE_HANDOFF.md', payload['document_refs'])
-        self.assertIn('docs/RELEASE_HYGIENE.md', payload['document_refs'])
-        self.assertIn('docs/RELEASE_LOCK.md', payload['document_refs'])
-        self.assertIn('docs/PERFORMANCE_READINESS.md', payload['document_refs'])
+        self.assertEqual(payload['document_refs'], ['AGENTS.md'])
         self.assertIn('release_hygiene', payload)
         self.assertIn('performance_readiness', payload)
         self.assertIn('permission_surface_audit', payload)

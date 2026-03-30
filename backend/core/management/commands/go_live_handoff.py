@@ -24,6 +24,28 @@ class Command(BaseCommand):
         call_command(*args, '--json', stdout=stdout)
         return json.loads(stdout.getvalue())
 
+    @staticmethod
+    def _known_blockers(*, release_readiness, release_hygiene, performance_readiness):
+        external_secrets = list(release_readiness.get('alerts', {}).get('external_blockers') or [])
+        dirty_unrelated_worktree = []
+        if str(release_hygiene.get('status') or '').lower() != 'ok':
+            dirty_unrelated_worktree.append(
+                f"Working tree still has {int(release_hygiene.get('total_changes') or 0)} open change(s)."
+            )
+            if release_hygiene.get('migration_candidates'):
+                dirty_unrelated_worktree.append('Open migration files are still present in the current working tree.')
+        performance_follow_up = []
+        for row in list(performance_readiness.get('datasets') or []):
+            if str(row.get('rehearsal_status') or '').lower() == 'pending':
+                performance_follow_up.append(
+                    f"{row.get('route') or row.get('key')}: rehearsal is still pending for {row.get('label') or row.get('key')}."
+                )
+        return {
+            'external_secrets': external_secrets,
+            'dirty_unrelated_worktree': dirty_unrelated_worktree,
+            'performance_follow_up': performance_follow_up,
+        }
+
     def handle(self, *args, **options):
         environment = str(options.get('environment') or 'staging').strip().lower()
         release_readiness = self._run_command_json('release_readiness')
@@ -59,22 +81,18 @@ class Command(BaseCommand):
                 'python manage.py send_test_alert --json',
                 'python manage.py purge_audit_logs --dry-run --json',
             ],
-            'document_refs': [
-                'docs/PRODUCTION_RUNBOOK.md',
-                'docs/STAGING_REHEARSAL_CHECKLIST.md',
-                'docs/MONITORING_ALERTING.md',
-                'docs/RELEASE_HYGIENE.md',
-                'docs/RELEASE_LOCK.md',
-                'docs/PERFORMANCE_READINESS.md',
-                'docs/UAT_DEMO_USERS.md',
-                'docs/GO_LIVE_HANDOFF.md',
-            ],
+            'document_refs': ['AGENTS.md'],
             'release_readiness': release_readiness,
             'release_hygiene': release_hygiene,
             'performance_readiness': performance_readiness,
             'promotion_rehearsal': promotion_rehearsal,
             'uat_access_matrix': uat_access_matrix,
             'permission_surface_audit': permission_surface_audit,
+            'known_blockers': self._known_blockers(
+                release_readiness=release_readiness,
+                release_hygiene=release_hygiene,
+                performance_readiness=performance_readiness,
+            ),
         }
 
         output = str(options.get('output') or '').strip()
@@ -82,7 +100,7 @@ class Command(BaseCommand):
         if output:
             output_path = Path(output)
         else:
-            output_path = Path(settings.BASE_DIR).parent / 'docs' / 'GO_LIVE_HANDOFF_LATEST.json'
+            output_path = Path(settings.BASE_DIR).parent / 'artifacts' / 'ops' / 'GO_LIVE_HANDOFF_LATEST.json'
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding='utf-8')
 

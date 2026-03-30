@@ -35,5 +35,5 @@ class ReleaseLockfileCommandTests(TestCase):
 
         self.assertEqual(payload['environment'], 'staging')
         self.assertIn('permission_surface_audit', payload)
-        self.assertIn('docs/RELEASE_LOCK.md', payload['document_refs'])
+        self.assertEqual(payload['document_refs'], ['AGENTS.md'])
         self.assertTrue(AuditLog.objects.filter(entity_type='ReleaseLockfile', action='EXPORT').exists())

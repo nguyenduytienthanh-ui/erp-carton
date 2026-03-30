@@ -1,9 +1,0 @@
-# ================================================================
-# LỆNH ĐƠN DÒNG - COPY VÀ PASTE VÀO POWERSHELL Ở MÁY CÔNG TY
-# ================================================================
-
-cd D:\Projects\erp-carton; git checkout sprint2-business-models; git add .; git commit -m "feat: Sync all changes from company machine"; git push origin sprint2-business-models; git status
-
-# ================================================================
-# HOẶC CHẠY SCRIPT TỰ ĐỘNG (Copy file PUSH_ALL_AUTO.ps1 và chạy)
-# ================================================================
