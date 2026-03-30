@@ -373,6 +373,39 @@ export interface ShipmentPackageLoadResponse {
   total_gross_weight_kg?: string;
 }
 
+export interface ShipmentScanResolveResponse {
+  order_id: number | null;
+  order_code?: string | null;
+  shipment_id: number | null;
+  shipment_code?: string | null;
+  shipment_status?: string | null;
+  shipment_date?: string | null;
+  reference?: string | null;
+  carrier_name?: string | null;
+  tracking_number?: string | null;
+  vehicle_no?: string | null;
+  driver_name?: string | null;
+  driver_phone?: string | null;
+  loading_reference?: string | null;
+  handover_receiver_name?: string | null;
+  handover_receiver_phone?: string | null;
+  loading_confirmed_at?: string | null;
+  delivery_reference?: string | null;
+  customer_receiver_name?: string | null;
+  customer_receiver_phone?: string | null;
+  delivery_confirmed_at?: string | null;
+  matched_by?: 'package_code' | 'label_qr_value' | string;
+  can_manage_execution: boolean;
+  package: SalesOrderShipmentPackageItem;
+  packages: SalesOrderShipmentPackageItem[];
+  package_count: number;
+  verified_package_count: number;
+  loaded_package_count: number;
+  pending_verify_count: number;
+  pending_load_count: number;
+  total_gross_weight_kg?: string;
+}
+
 export interface ShipmentLoadingConfirmationResponse {
   shipment_id: number;
   shipment_code: string;

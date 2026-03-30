@@ -153,6 +153,18 @@ class AccessSurfaceMatrixApiTests(TestCase):
         self.assertIn('sales_order_post', finance_row['allowed_critical_action_keys'])
         self.assertNotIn('sales_order_submit', finance_row['allowed_critical_action_keys'])
 
+    def test_route_labels_use_user_facing_vietnamese_names_for_key_workspaces(self):
+        self._login('uat_admin')
+        body = self._matrix()
+        routes = self._route_map(body)
+
+        self.assertEqual(routes['sales_orders']['label'], 'Đơn hàng xuất')
+        self.assertEqual(routes['shipments']['label'], 'Phiếu xuất')
+        self.assertEqual(routes['production_orders']['label'], 'Lệnh sản xuất')
+        self.assertEqual(routes['advance_transactions']['label'], 'Tạm ứng - quyết toán')
+        self.assertEqual(routes['salary_advance']['label'], 'Ứng lương')
+        self.assertEqual(routes['onboarding_studio']['label'], 'Trợ lý triển khai công việc')
+
     def test_uat_access_matrix_command_strict_fails_when_persona_missing(self):
         User.objects.filter(username='uat_product').delete()
 

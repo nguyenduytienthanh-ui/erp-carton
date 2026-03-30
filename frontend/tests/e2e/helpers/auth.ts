@@ -1,4 +1,4 @@
-import { expect, type APIResponse, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
 export const adminUser = {
   username: process.env.E2E_ADMIN_USERNAME || 'uat_admin',
@@ -10,24 +10,17 @@ export const salesUser = {
   password: process.env.E2E_SALES_PASSWORD || 'Demo123!',
 };
 
-type LoginApiResponse = {
-  access: string;
-  refresh: string;
+export const financeUser = {
+  username: process.env.E2E_FINANCE_USERNAME || 'uat_finance',
+  password: process.env.E2E_FINANCE_PASSWORD || 'Demo123!',
 };
 
-type StoredUserProfile = {
-  username: string;
-  [key: string]: unknown;
+export const hrUser = {
+  username: process.env.E2E_HR_USERNAME || 'uat_hr',
+  password: process.env.E2E_HR_PASSWORD || 'Demo123!',
 };
 
-const PLAYWRIGHT_API_BASE_URL = process.env.PLAYWRIGHT_API_BASE_URL || 'http://127.0.0.1:8000/api';
-
-async function readJson<T>(response: APIResponse, context: string): Promise<T> {
-  if (!response.ok()) {
-    throw new Error(`${context} thất bại với mã ${response.status()}: ${await response.text()}`);
-  }
-  return (await response.json()) as T;
-}
+export const PLAYWRIGHT_API_BASE_URL = process.env.PLAYWRIGHT_API_BASE_URL || 'http://127.0.0.1:8000/api';
 
 export async function login(page: Page, username: string, password: string) {
   await page.goto('/login');
@@ -38,36 +31,10 @@ export async function login(page: Page, username: string, password: string) {
     window.sessionStorage.clear();
   });
 
-  const loginPayload = await readJson<LoginApiResponse>(
-    await page.request.post(`${PLAYWRIGHT_API_BASE_URL}/auth/login/`, {
-      data: { username, password },
-    }),
-    `Đăng nhập API cho ${username}`,
-  );
-
-  const profile = await readJson<StoredUserProfile>(
-    await page.request.get(`${PLAYWRIGHT_API_BASE_URL}/users/me/`, {
-      headers: {
-        Authorization: `Bearer ${loginPayload.access}`,
-      },
-    }),
-    `Tải hồ sơ người dùng ${username}`,
-  );
-
-  await page.evaluate(
-    ({ access, refresh, user }) => {
-      window.localStorage.setItem('access_token', access);
-      window.localStorage.setItem('refresh_token', refresh);
-      window.localStorage.setItem('user', JSON.stringify(user));
-    },
-    {
-      access: loginPayload.access,
-      refresh: loginPayload.refresh,
-      user: profile,
-    },
-  );
-
-  await page.goto('/');
+  await page.locator('#login_username').fill(username);
+  await page.locator('#login_password').fill(password);
+  await page.getByRole('button', { name: /Đăng nhập/i }).click();
+  await page.waitForURL(/\/$/, { timeout: 20_000 });
   await page.waitForLoadState('networkidle');
   await expect(page).toHaveURL(/\/$/);
 }

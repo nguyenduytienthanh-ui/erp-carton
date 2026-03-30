@@ -12,7 +12,11 @@ export type CommandPaletteCommand = {
 type BuildCommandPaletteCatalogOptions = {
   canViewReports: boolean;
   canViewSalesOrders: boolean;
+  canUseShipmentExecutionWorkspace: boolean;
   canManagePurchasing: boolean;
+  canAccessProductionCenter: boolean;
+  canAccessMaterialIssues: boolean;
+  canAccessProductionReceipts: boolean;
   canManageProduction: boolean;
   canManageInventory: boolean;
   canManageStocktake: boolean;
@@ -251,19 +255,38 @@ export function buildCommandPaletteCatalog(
       path: '/sales-orders',
       title: 'Đơn hàng xuất',
       group: 'Bán hàng',
-      description: 'Điều phối đơn hàng, tình trạng giao và các mốc tác nghiệp bán hàng.',
-      keywords: ['don hang xuat', 'sales order', 'so', 'ban hang'],
+      description: 'Lập kế hoạch giao hàng theo từng dòng, theo dõi tiến độ giao và xử lý các bước bán hàng chính.',
+      keywords: ['don hang xuat', 'sales order', 'so', 'ban hang', 'ke hoach giao hang', 'lap ke hoach giao hang'],
       enabled: options.canViewSalesOrders,
       spotlight: options.canViewSalesOrders,
+    },
+    {
+      key: 'sales-delivery-planning',
+      path: '/sales-orders?section=delivery-planning',
+      title: 'Kế hoạch giao hàng',
+      group: 'Bán hàng',
+      description: 'Đi thẳng tới Đơn hàng xuất để rà kế hoạch giao theo từng dòng hàng, đơn đến hạn và đơn quá hạn.',
+      keywords: ['ke hoach giao hang', 'delivery planning', 'lich giao', 'giao hang theo dong'],
+      enabled: options.canViewSalesOrders,
     },
     {
       key: 'shipments',
       path: '/shipments',
       title: 'Phiếu xuất',
       group: 'Bán hàng',
-      description: 'Theo dõi chứng từ giao hàng, tiến độ xuất kho và hoàn tất giao nhận.',
-      keywords: ['phieu xuat', 'shipment', 'giao hang'],
+      description: 'Điều phối giao hàng, xe, tài xế, đóng gói, bàn giao xe và xác nhận giao xong.',
+      keywords: ['phieu xuat', 'shipment', 'giao hang', 'dieu phoi giao hang', 'dieu phoi xe'],
       enabled: options.canViewSalesOrders,
+    },
+    {
+      key: 'shipments-scan',
+      path: '/shipments/scan',
+      title: 'Quét QR kiện',
+      group: 'Bán hàng',
+      description: 'Quét nhanh mã kiện để tra cứu, xác minh, bốc xếp và chốt bàn giao giao hàng ngay trên điện thoại.',
+      keywords: ['quet qr', 'qr', 'quet kien', 'ban giao xe', 'giao xong', 'boc xep'],
+      enabled: true,
+      spotlight: options.canUseShipmentExecutionWorkspace,
     },
     {
       key: 'quotes',
@@ -380,10 +403,10 @@ export function buildCommandPaletteCatalog(
       path: '/production-orders',
       title: 'Lệnh sản xuất',
       group: 'Sản xuất',
-      description: 'Điều độ lệnh sản xuất, cấp phát vật tư và nhập kho thành phẩm từ một nơi.',
-      keywords: ['lenh san xuat', 'production order', 'mo'],
-      enabled: options.canManageProduction,
-      spotlight: options.canManageProduction,
+      description: 'Theo dõi lệnh sản xuất, phát lệnh, cấp vật tư và nhập thành phẩm trong cùng một command center.',
+      keywords: ['lenh san xuat', 'trung tam lenh san xuat', 'production order', 'mo'],
+      enabled: options.canAccessProductionCenter,
+      spotlight: options.canAccessProductionCenter,
     },
     {
       key: 'material-issues',
@@ -392,7 +415,7 @@ export function buildCommandPaletteCatalog(
       group: 'Sản xuất',
       description: 'Quản lý chứng từ cấp vật tư, số lượng cấp thực tế và hủy chứng từ an toàn.',
       keywords: ['cap vat tu', 'material issue', 'issue'],
-      enabled: options.canManageProduction,
+      enabled: options.canAccessMaterialIssues,
     },
     {
       key: 'production-receipts',
@@ -401,7 +424,7 @@ export function buildCommandPaletteCatalog(
       group: 'Sản xuất',
       description: 'Theo dõi nhập kho thành phẩm, hủy chứng từ và liên kết với lệnh sản xuất.',
       keywords: ['nhap thanh pham', 'production receipt', 'finished goods'],
-      enabled: options.canManageProduction,
+      enabled: options.canAccessProductionReceipts,
     },
     {
       key: 'production-costing',
@@ -827,10 +850,10 @@ export function buildCommandPaletteCatalog(
     {
       key: 'onboarding-studio',
       path: '/admin/onboarding-studio',
-      title: 'Xưởng onboarding',
-      group: 'Kiểm soát',
-      description: 'Xây preset onboarding, preview trước khi áp dụng và audit hoạt động triển khai.',
-      keywords: ['onboarding studio', 'preset onboarding', 'xuong onboarding'],
+      title: 'Trợ lý triển khai công việc',
+      group: 'Quy trình',
+      description: 'Tạo preset rollout, xem trước triển khai và theo dõi lịch sử áp dụng cho từng người dùng.',
+      keywords: ['tro ly trien khai cong viec', 'onboarding studio', 'preset onboarding', 'rollout', 'ai ho tro trien khai'],
       enabled: options.canManageOnboarding,
     },
     {

@@ -300,6 +300,39 @@ export function canCancelProductionOrders(): boolean {
   ]);
 }
 
+export function canAccessProductionCenter(): boolean {
+  return (
+    canManageProductionData()
+    || canSubmitProductionOrders()
+    || canApproveProductionOrders()
+    || canReleaseProductionOrders()
+    || canIssueProductionMaterials()
+    || canReceiveProductionOutput()
+    || canCancelProductionOrders()
+  );
+}
+
+export function canAccessMaterialIssues(): boolean {
+  return canManageProductionData() || canIssueProductionMaterials();
+}
+
+export function canAccessProductionReceipts(): boolean {
+  return canManageProductionData() || canReceiveProductionOutput();
+}
+
+export function canUpdateProductionOperations(): boolean {
+  return (
+    canManageProductionData()
+    || canReleaseProductionOrders()
+    || canIssueProductionMaterials()
+    || canReceiveProductionOutput()
+  );
+}
+
+export function canUseShipmentExecutionWorkspace(): boolean {
+  return canManageInventoryData();
+}
+
 export function canSubmitPurchaseOrders(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;

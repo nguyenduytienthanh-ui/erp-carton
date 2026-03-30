@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import MainLayout from './MainLayout';
-import { canAccessOpsModules, canAccessSalesOrders, canManageFinanceData, canManageInventoryData, canManageModulePermissionSettings, canManageProductionData, canManagePurchasingData, canViewReportsCenter, canViewWorkflowData, canManageWorkflowData } from '../../utils/authz';
+import { canAccessOpsModules, canAccessSalesOrders, canAccessMaterialIssues, canAccessProductionCenter, canAccessProductionReceipts, canManageFinanceData, canManageInventoryData, canManageModulePermissionSettings, canManageProductionData, canManagePurchasingData, canViewReportsCenter, canViewWorkflowData, canManageWorkflowData } from '../../utils/authz';
 import { usersApi } from '../../api/users';
 import { storage } from '../../utils/storage';
 
@@ -22,6 +22,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/task-inbox': () => import('../../pages/Tasks/TaskInbox'),
   '/products': () => import('../../pages/Products/ProductList'),
   '/sales-orders': () => import('../../pages/Sales/SalesOrderList'),
+  '/shipments/scan': () => import('../../pages/Sales/ShipmentScanCenter'),
   '/warehouses': () => import('../../pages/Inventory/WarehouseList'),
   '/warehouse-locations': () => import('../../pages/Inventory/WarehouseLocationList'),
   '/inventory-stock': () => import('../../pages/Inventory/InventoryStockOverview'),
@@ -47,15 +48,17 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/admin/module-permissions-history': () => import('../../pages/Admin/ModulePermissionHistory'),
 };
 
-function getRoutePrefetchOrder(pathname: string, canAccessOps: boolean, canViewReports: boolean, canViewWorkflow: boolean, canManageWorkflow: boolean, canManageRbac: boolean, canManageInventory: boolean, canManagePurchasing: boolean, canManageProduction: boolean, canManageFinance: boolean, canAccessSales: boolean): string[] {
+function getRoutePrefetchOrder(pathname: string, canAccessOps: boolean, canViewReports: boolean, canViewWorkflow: boolean, canManageWorkflow: boolean, canManageRbac: boolean, canManageInventory: boolean, canManagePurchasing: boolean, canAccessProduction: boolean, canAccessMaterialIssueRoute: boolean, canAccessProductionReceiptRoute: boolean, canManageFinance: boolean, canAccessSales: boolean): string[] {
   const common = [
     '/account',
     '/task-inbox',
     ...(canViewReports ? ['/reports'] : []),
     '/products',
-    ...(canAccessSales ? ['/sales-orders'] : []),
+    ...(canAccessSales ? ['/sales-orders', '/shipments/scan'] : ['/shipments/scan']),
     ...(canManagePurchasing ? ['/purchase-orders', '/purchase-receipts', '/suppliers', '/material-prices'] : []),
-    ...(canManageProduction ? ['/production-orders', '/production-receipts'] : []),
+    ...(canAccessProduction ? ['/production-orders'] : []),
+    ...(canAccessMaterialIssueRoute ? ['/material-issues'] : []),
+    ...(canAccessProductionReceiptRoute ? ['/production-receipts'] : []),
     ...(canManageFinance ? ['/receivables', '/payables', '/finance-summary'] : []),
     '/notifications',
     ...(canManageInventory ? ['/inventory-stock', '/inventory-transactions'] : []),
@@ -144,10 +147,13 @@ export default function AuthenticatedShell() {
     const canManageInventory = canManageInventoryData();
     const canManagePurchasing = canManagePurchasingData();
     const canManageProduction = canManageProductionData();
+    const canAccessProduction = canAccessProductionCenter();
+    const canAccessMaterialIssueRoute = canAccessMaterialIssues();
+    const canAccessProductionReceiptRoute = canAccessProductionReceipts();
     const canViewWorkflow = canViewWorkflowData();
     const canManageWorkflow = canManageWorkflowData();
     const canManageRbac = canManageModulePermissionSettings();
-    const routePrefetchTasks = getRoutePrefetchOrder(pathname, canAccessOps, canViewReports, canViewWorkflow, canManageWorkflow, canManageRbac, canManageInventory, canManagePurchasing, canManageProduction, canManageFinance, canAccessSales)
+    const routePrefetchTasks = getRoutePrefetchOrder(pathname, canAccessOps, canViewReports, canViewWorkflow, canManageWorkflow, canManageRbac, canManageInventory, canManagePurchasing, canAccessProduction || canManageProduction, canAccessMaterialIssueRoute, canAccessProductionReceiptRoute, canManageFinance, canAccessSales)
       .filter((routePath) => routePath !== pathname)
       .map((routePath) => routeChunkPrefetchers[routePath])
       .filter((v): v is (() => Promise<unknown>) => typeof v === 'function');

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Button,
@@ -20,6 +20,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, DownloadOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { shipmentsApi } from '../../api/shipments';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
@@ -140,6 +141,8 @@ function matchesShipmentLane(item: OutboundShipment, laneFilter: ShipmentLaneFil
 }
 
 export default function ShipmentList() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState('');
@@ -152,6 +155,9 @@ export default function ShipmentList() {
   const [formOpen, setFormOpen] = useState(false);
   const [editShipment, setEditShipment] = useState<OutboundShipment | null>(null);
   const [detailShipment, setDetailShipment] = useState<OutboundShipment | null>(null);
+  const [dismissedFocusId, setDismissedFocusId] = useState<number | null>(null);
+  const focusShipmentId = Number(searchParams.get('focus_id') || 0) || null;
+  const focusOrderId = Number(searchParams.get('order_id') || 0) || null;
   const {
     config,
     saveConfig,
@@ -256,6 +262,17 @@ export default function ShipmentList() {
   });
 
   const rows = useMemo(() => shipmentsQuery.data?.results ?? [], [shipmentsQuery.data?.results]);
+
+  useEffect(() => {
+    if (!focusShipmentId || dismissedFocusId === focusShipmentId || detailShipment) return;
+    const target = rows.find((item) => item.id === focusShipmentId) ?? null;
+    if (target) {
+      const timer = window.setTimeout(() => {
+        setDetailShipment(target);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [detailShipment, dismissedFocusId, focusShipmentId, rows]);
 
   const summary = useMemo(() => {
     const draftCount = rows.filter((item) => item.status === 'DRAFT').length;
@@ -520,6 +537,20 @@ export default function ShipmentList() {
             Xem
           </Button>
           <Button
+            size="small"
+            onClick={() => navigate(`/shipments/scan?shipment_id=${row.id}${row.sales_order ? `&order_id=${row.sales_order}` : ''}`)}
+          >
+            QR nhanh
+          </Button>
+          {row.sales_order ? (
+            <Button
+              size="small"
+              onClick={() => navigate(`/sales-orders?focus_id=${row.sales_order}&section=delivery-planning`)}
+            >
+              Đơn gốc
+            </Button>
+          ) : null}
+          <Button
             data-testid={`shipment-edit-${row.id}`}
             size="small"
             disabled={row.status !== 'DRAFT'}
@@ -670,8 +701,7 @@ export default function ShipmentList() {
               Trung tâm điều phối giao hàng
             </Title>
             <Text type="secondary">
-              Theo dõi toàn bộ phiếu giao, ưu tiên các chuyến đang chờ xử lý hoặc đang vận chuyển,
-              và khóa nhanh thao tác duyệt, đóng gói, bàn giao từ cùng một workspace.
+              `Phiếu xuất` là nơi điều phối giao hàng thực tế: xe, tài xế, đóng gói, quét kiện, bàn giao xe và xác nhận giao xong.
             </Text>
           </div>
           <Space wrap>
@@ -888,12 +918,42 @@ export default function ShipmentList() {
       <Modal
         title={detailShipment ? `Chi tiết phiếu giao hàng - ${detailShipment.code}` : 'Chi tiết phiếu giao hàng'}
         open={Boolean(detailShipment)}
-        onCancel={() => setDetailShipment(null)}
+        onCancel={() => {
+          setDetailShipment(null);
+          if (focusShipmentId && detailShipment?.id === focusShipmentId) {
+            setDismissedFocusId(focusShipmentId);
+          }
+        }}
         footer={null}
         width={980}
       >
         {detailShipment ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <Alert
+                showIcon
+                type="info"
+                message="Phiếu xuất là nơi điều phối giao hàng. Nếu cần sửa kế hoạch giao theo từng dòng, quay lại Đơn hàng xuất."
+                style={{ flex: '1 1 420px' }}
+              />
+              <Space wrap>
+                {detailShipment.sales_order ? (
+                  <Button
+                    onClick={() => navigate(`/sales-orders?focus_id=${detailShipment.sales_order}&section=delivery-planning`)}
+                  >
+                    Về Đơn hàng xuất
+                  </Button>
+                ) : null}
+                <Button
+                  type="primary"
+                  onClick={() =>
+                    navigate(`/shipments/scan?shipment_id=${detailShipment.id}${detailShipment.sales_order ? `&order_id=${detailShipment.sales_order}` : ''}`)
+                  }
+                >
+                  Mở QR nhanh
+                </Button>
+              </Space>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
               <Card size="small" style={SUMMARY_TILE_STYLE}>
                 <Statistic title="Tổng dòng" value={detailShipment.lines?.length ?? 0} />
@@ -923,6 +983,11 @@ export default function ShipmentList() {
                   key: 'reference',
                   label: 'Tham chiếu',
                   children: detailShipment.reference || '-',
+                },
+                {
+                  key: 'sales_order',
+                  label: 'Đơn hàng xuất',
+                  children: detailShipment.sales_order_code || (focusOrderId ? `#${focusOrderId}` : '-'),
                 },
                 {
                   key: 'expected',

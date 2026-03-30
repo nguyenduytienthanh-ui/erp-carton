@@ -5,6 +5,25 @@ export type StoredUserProfile =
   Pick<CurrentUserProfile, 'username'> &
   Partial<Omit<CurrentUserProfile, 'username'>>;
 
+function readStoredUser(): StoredUserProfile | null {
+  const rawUser = localStorage.getItem(STORAGE_KEYS.USER);
+  if (!rawUser || rawUser === 'undefined' || rawUser === 'null') {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawUser) as StoredUserProfile | null;
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.username !== 'string') {
+      localStorage.removeItem(STORAGE_KEYS.USER);
+      return null;
+    }
+    return parsed;
+  } catch {
+    localStorage.removeItem(STORAGE_KEYS.USER);
+    return null;
+  }
+}
+
 export const storage = {
   // Token management
   getAccessToken: (): string | null => {
@@ -25,8 +44,7 @@ export const storage = {
 
   // User management
   getUser: (): StoredUserProfile | null => {
-    const user = localStorage.getItem(STORAGE_KEYS.USER);
-    return user ? (JSON.parse(user) as StoredUserProfile) : null;
+    return readStoredUser();
   },
 
   setUser: (user: StoredUserProfile): void => {

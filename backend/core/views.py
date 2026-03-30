@@ -403,7 +403,7 @@ ACCOUNT_ACCESS_MODULES = [
     {
         'key': 'sales',
         'label': 'Kinh doanh',
-        'description': 'Don hang, bao gia va giao hang',
+        'description': 'Đơn hàng xuất, báo giá và giao hàng',
         'primary_route': '/sales-orders',
         'permissions': [
             ('SALESORDER', 'SUBMIT'),
@@ -418,7 +418,7 @@ ACCOUNT_ACCESS_MODULES = [
     {
         'key': 'inventory',
         'label': 'Kho',
-        'description': 'Ton kho, kiem ton va chuyen kho',
+        'description': 'Tồn kho, kiểm tồn và chuyển kho',
         'primary_route': '/inventory-stock',
         'permissions': [
             ('INVENTORY', 'MANAGE'),
@@ -429,8 +429,8 @@ ACCOUNT_ACCESS_MODULES = [
     },
     {
         'key': 'purchasing',
-        'label': 'Mua hang',
-        'description': 'Nha cung cap, don mua va nhap mua',
+        'label': 'Mua hàng',
+        'description': 'Nhà cung cấp, đơn mua và nhập mua',
         'primary_route': '/purchase-orders',
         'permissions': [
             ('PURCHASING', 'MANAGE'),
@@ -444,8 +444,8 @@ ACCOUNT_ACCESS_MODULES = [
     },
     {
         'key': 'production',
-        'label': 'San xuat',
-        'description': 'Lenh san xuat, cap vat tu va nhap thanh pham',
+        'label': 'Sản xuất',
+        'description': 'Lệnh sản xuất, cấp vật tư và nhập thành phẩm',
         'primary_route': '/production-orders',
         'permissions': [
             ('PRODUCTION', 'MANAGE'),
@@ -456,12 +456,12 @@ ACCOUNT_ACCESS_MODULES = [
             ('PRODUCTIONORDER', 'RECEIVE'),
         ],
         'role_names': {'admin', 'manager', 'operation-manager', 'ops-manager', 'product-manager', 'finance-manager', 'quan-ly', 'quanly'},
-        'matcher': '_can_manage_production_data',
+        'matcher': '_can_access_production_center',
     },
     {
         'key': 'workforce',
-        'label': 'Nhan su',
-        'description': 'Nhan vien, cham cong, luong va ung luong',
+        'label': 'Nhân sự',
+        'description': 'Nhân viên, chấm công, lương và ứng lương',
         'primary_route': '/employees',
         'permissions': [
             ('WORKFORCE', 'MANAGE'),
@@ -471,8 +471,8 @@ ACCOUNT_ACCESS_MODULES = [
     },
     {
         'key': 'finance',
-        'label': 'Tai chinh',
-        'description': 'Cong no, so cai, ngan sach va doi soat',
+        'label': 'Tài chính',
+        'description': 'Công nợ, sổ cái, ngân sách và đối soát',
         'primary_route': '/finance-summary',
         'permissions': [
             ('FINANCE', 'MANAGE'),
@@ -482,8 +482,8 @@ ACCOUNT_ACCESS_MODULES = [
     },
     {
         'key': 'workflow',
-        'label': 'Quy trinh',
-        'description': 'Pipeline, nhiem vu va workflow analytics',
+        'label': 'Quy trình',
+        'description': 'Pipeline, nhiệm vụ và workflow analytics',
         'primary_route': '/workflow-pipeline',
         'permissions': [
             ('WORKFLOW', 'VIEW'),
@@ -760,6 +760,23 @@ def _can_manage_production_data(user):
     return _has_any_role_name(user, {'admin', 'manager', 'operation-manager', 'ops-manager', 'product-manager', 'finance-manager', 'quan-ly', 'quanly'})
 
 
+def _can_access_production_center(user):
+    if _can_manage_production_data(user):
+        return True
+    if not user or not user.is_authenticated:
+        return False
+    if (
+        check_action_permission(user, 'PRODUCTIONORDER', 'SUBMIT', strict=True)
+        or check_action_permission(user, 'PRODUCTIONORDER', 'APPROVE', strict=True)
+        or check_action_permission(user, 'PRODUCTIONORDER', 'RELEASE', strict=True)
+        or check_action_permission(user, 'PRODUCTIONORDER', 'ISSUE', strict=True)
+        or check_action_permission(user, 'PRODUCTIONORDER', 'RECEIVE', strict=True)
+        or check_action_permission(user, 'PRODUCTIONORDER', 'CANCEL', strict=True)
+    ):
+        return True
+    return False
+
+
 def _can_access_sales_orders(user):
     if not user or not user.is_authenticated:
         return False
@@ -821,14 +838,14 @@ def _can_view_approval_control_tower(user):
 
 
 ACCESS_SURFACE_ROUTE_DEFINITIONS = [
-    {'key': 'sales_orders', 'label': 'Sales orders', 'path': '/sales-orders', 'capability': 'sales_orders', 'group': 'sales'},
-    {'key': 'shipments', 'label': 'Shipments', 'path': '/shipments', 'capability': 'sales_orders', 'group': 'sales'},
+    {'key': 'sales_orders', 'label': 'Đơn hàng xuất', 'path': '/sales-orders', 'capability': 'sales_orders', 'group': 'sales'},
+    {'key': 'shipments', 'label': 'Phiếu xuất', 'path': '/shipments', 'capability': 'sales_orders', 'group': 'sales'},
     {'key': 'quotes', 'label': 'Quotes', 'path': '/quotes', 'capability': 'sales_orders', 'group': 'sales'},
     {'key': 'purchase_orders', 'label': 'Purchase orders', 'path': '/purchase-orders', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_receipts', 'label': 'Purchase receipts', 'path': '/purchase-receipts', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_requests', 'label': 'Purchase requests', 'path': '/purchase-requests', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_returns', 'label': 'Purchase returns', 'path': '/purchase-returns', 'capability': 'purchasing', 'group': 'purchasing'},
-    {'key': 'production_orders', 'label': 'Production orders', 'path': '/production-orders', 'capability': 'production', 'group': 'production'},
+    {'key': 'production_orders', 'label': 'Lệnh sản xuất', 'path': '/production-orders', 'capability': 'production', 'group': 'production'},
     {'key': 'material_issues', 'label': 'Material issues', 'path': '/material-issues', 'capability': 'production', 'group': 'production'},
     {'key': 'production_receipts', 'label': 'Production receipts', 'path': '/production-receipts', 'capability': 'production', 'group': 'production'},
     {'key': 'warehouses', 'label': 'Warehouses', 'path': '/warehouses', 'capability': 'inventory', 'group': 'inventory'},
@@ -845,7 +862,7 @@ ACCESS_SURFACE_ROUTE_DEFINITIONS = [
     {'key': 'workflow_task_templates', 'label': 'Workflow task templates', 'path': '/workflow-task-templates', 'capability': 'workflow_manage', 'group': 'workflow'},
     {'key': 'operations_log', 'label': 'Operations log', 'path': '/operations-log', 'capability': 'operations_log', 'group': 'operations'},
     {'key': 'finance_summary', 'label': 'Finance summary', 'path': '/finance-summary', 'capability': 'finance', 'group': 'finance'},
-    {'key': 'advance_transactions', 'label': 'Advance transactions', 'path': '/advance-transactions', 'capability': 'finance', 'group': 'finance'},
+    {'key': 'advance_transactions', 'label': 'Tạm ứng - quyết toán', 'path': '/advance-transactions', 'capability': 'finance', 'group': 'finance'},
     {'key': 'receivables', 'label': 'Receivables', 'path': '/receivables', 'capability': 'finance', 'group': 'finance'},
     {'key': 'payables', 'label': 'Payables', 'path': '/payables', 'capability': 'finance', 'group': 'finance'},
     {'key': 'budget_management', 'label': 'Budget management', 'path': '/budget-management', 'capability': 'finance', 'group': 'finance'},
@@ -853,7 +870,7 @@ ACCESS_SURFACE_ROUTE_DEFINITIONS = [
     {'key': 'employees', 'label': 'Employees', 'path': '/employees', 'capability': 'workforce', 'group': 'workforce'},
     {'key': 'attendance', 'label': 'Attendance', 'path': '/attendance', 'capability': 'workforce', 'group': 'workforce'},
     {'key': 'payroll', 'label': 'Payroll', 'path': '/payroll', 'capability': 'workforce', 'group': 'workforce'},
-    {'key': 'salary_advance', 'label': 'Salary advance', 'path': '/salary-advance', 'capability': 'workforce', 'group': 'workforce'},
+    {'key': 'salary_advance', 'label': 'Ứng lương', 'path': '/salary-advance', 'capability': 'workforce', 'group': 'workforce'},
     {'key': 'approval_control_tower', 'label': 'Approval control tower', 'path': '/admin/approval-control-tower', 'capability': 'approval_control_tower', 'group': 'admin'},
     {'key': 'admin_audit', 'label': 'Admin audit center', 'path': '/admin/audit-center', 'capability': 'admin_audit', 'group': 'admin'},
     {'key': 'admin_observability', 'label': 'Admin observability', 'path': '/admin/observability', 'capability': 'admin_observability', 'group': 'admin'},
@@ -862,7 +879,7 @@ ACCESS_SURFACE_ROUTE_DEFINITIONS = [
     {'key': 'access_reviews', 'label': 'Access reviews', 'path': '/admin/access-reviews', 'capability': 'user_access_reviews', 'group': 'admin'},
     {'key': 'user_provisioning', 'label': 'User provisioning', 'path': '/admin/user-provisioning', 'capability': 'user_provisioning', 'group': 'admin'},
     {'key': 'user_lifecycle', 'label': 'User lifecycle', 'path': '/admin/user-lifecycle', 'capability': 'user_lifecycle', 'group': 'admin'},
-    {'key': 'onboarding_studio', 'label': 'Onboarding studio', 'path': '/admin/onboarding-studio', 'capability': 'onboarding', 'group': 'admin'},
+    {'key': 'onboarding_studio', 'label': 'Trợ lý triển khai công việc', 'path': '/admin/onboarding-studio', 'capability': 'onboarding', 'group': 'admin'},
     {'key': 'roles_teams', 'label': 'Roles and teams', 'path': '/admin/roles-teams', 'capability': 'role_team_governance', 'group': 'admin'},
     {'key': 'user_directory', 'label': 'User directory', 'path': '/admin/users', 'capability': 'user_directory', 'group': 'admin'},
     {'key': 'module_permissions', 'label': 'Module permission settings', 'path': '/admin/module-permissions', 'capability': 'module_permission_settings', 'group': 'admin'},
@@ -940,7 +957,7 @@ def _build_access_capability_map(user):
     return {
         'sales_orders': _can_access_sales_orders(user),
         'purchasing': _can_manage_purchasing_data(user),
-        'production': _can_manage_production_data(user),
+        'production': _can_access_production_center(user),
         'inventory': _can_manage_inventory_data(user),
         'stocktake': _can_manage_stocktake(user),
         'ops_hub': _can_view_ops_hub(user),
@@ -1267,7 +1284,7 @@ def _get_notification_summary(user):
 
 def _get_module_source_roles(user, module_config):
     if getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False):
-        return ['Khoi van hanh']
+        return ['Khối vận hành']
     permission_pairs = {(resource.upper(), action.upper()) for resource, action in module_config.get('permissions', [])}
     accepted_roles = {str(item).strip().lower() for item in module_config.get('role_names', set())}
     labels = []
@@ -1296,6 +1313,7 @@ def _get_access_summary(user):
         '_can_access_sales_orders': _can_access_sales_orders,
         '_can_access_inventory_hub': _can_access_inventory_hub,
         '_can_manage_purchasing_data': _can_manage_purchasing_data,
+        '_can_access_production_center': _can_access_production_center,
         '_can_manage_production_data': _can_manage_production_data,
         '_can_manage_workforce_data': _can_manage_workforce_data,
         '_can_manage_finance_data': _can_manage_finance_data,
@@ -1391,7 +1409,7 @@ def _build_account_activity_items(user, limit=15, kind='all'):
             items.append({
                 'id': f'notification-{notification.id}',
                 'kind': 'notification',
-                'kind_label': 'Thong bao',
+                'kind_label': 'Thông báo',
                 'timestamp': notification.created_at,
                 'title': notification.title,
                 'summary': notification.message,
@@ -1420,7 +1438,7 @@ def _build_account_activity_items(user, limit=15, kind='all'):
             items.append({
                 'id': f'audit-{log.id}',
                 'kind': 'audit',
-                'kind_label': 'Hoat dong',
+                'kind_label': 'Hoạt động',
                 'timestamp': log.created_at,
                 'title': f'{log.get_action_display()} {log.entity_type}',
                 'summary': summary,
@@ -1444,14 +1462,14 @@ def _build_account_activity_items(user, limit=15, kind='all'):
         for session in sessions:
             event_time = session.logout_at or session.last_active or session.login_at
             is_closed = not session.is_active
-            browser = session.device_info.get('browser', 'Khong ro')
-            operating_system = session.device_info.get('os', 'Khong ro')
+            browser = session.device_info.get('browser', 'Không rõ')
+            operating_system = session.device_info.get('os', 'Không rõ')
             items.append({
                 'id': f'session-{session.id}',
                 'kind': 'session',
-                'kind_label': 'Bao mat',
+                'kind_label': 'Bảo mật',
                 'timestamp': event_time,
-                'title': f'Phien dang nhap tren {browser}',
+                'title': f'Phiên đăng nhập trên {browser}',
                 'summary': f'{operating_system} · {session.ip_address}',
                 'status': 'revoked' if is_closed else 'active',
                 'tone': 'default' if is_closed else 'processing',

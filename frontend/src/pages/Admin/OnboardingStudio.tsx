@@ -829,8 +829,8 @@ export default function OnboardingStudio() {
     <>
       {contextHolder}
       <PageHeader
-        title="Xưởng preset onboarding"
-        subtitle="Thiết kế preset onboarding để admin rollout quyền, nhóm, checklist và workflow một cách nhất quán."
+        title="Trợ lý triển khai công việc"
+        subtitle="Thiết kế preset rollout để triển khai quyền, nhóm, checklist và workflow cho người dùng một cách nhất quán."
         extra={[
           <Button
             key="reload"
@@ -1275,7 +1275,7 @@ export default function OnboardingStudio() {
 
       <Modal
         open={isViewPresetModalOpen}
-        title="Lưu mẫu lọc onboarding studio"
+        title="Lưu mẫu lọc trợ lý triển khai công việc"
         okText="Lưu mẫu"
         cancelText="Đóng"
         onOk={() => void saveNamedPreset()}
@@ -1286,7 +1286,7 @@ export default function OnboardingStudio() {
       >
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
           <Text type="secondary">
-            Lưu nhanh góc nhìn preset và nhật ký để đội rollout mở lại đúng danh mục đang rà soát theo ca.
+            Lưu nhanh góc nhìn preset và nhật ký để đội triển khai mở lại đúng danh mục đang rà soát theo ca.
           </Text>
           <Input
             data-testid="onboarding-studio-preset-name"

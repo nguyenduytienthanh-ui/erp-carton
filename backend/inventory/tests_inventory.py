@@ -944,6 +944,67 @@ class InventoryApiFlowTest(TestCase):
         self.assertEqual(shipment_overview.status_code, 200)
         self.assertEqual(shipment_overview.json()['results'][0]['verified_package_count'], 1)
 
+    def test_resolve_scan_finds_package_by_code_and_qr_value(self):
+        InventoryTransaction.objects.create(
+            code='INVTX-TEST-006RESOLVE',
+            transaction_type='RECEIPT',
+            transaction_date=timezone.localdate(),
+            product=self.product,
+            warehouse=self.warehouse,
+            location=self.location,
+            quantity=Decimal('10'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        reservation = InventoryReservation.objects.create(
+            code='INVRSV-TEST-006RESOLVE',
+            reservation_date=timezone.localdate(),
+            sales_order=self.order,
+            sales_order_line=self.order_line,
+            product=self.product,
+            warehouse=self.warehouse,
+            location=self.location,
+            reserved_qty=Decimal('4'),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        ship_response = self.client.post(
+            f'/api/sales/orders/{self.order.id}/ship/',
+            {'reservation_id': reservation.id, 'transaction_date': str(timezone.localdate()), 'quantity': '4'},
+            format='json',
+        )
+        shipment = OutboundShipment.objects.get(pk=ship_response.json()['shipment_id'])
+        tx = shipment.transactions.get(status='POSTED')
+        self.client.post(
+            f'/api/sales/orders/{self.order.id}/pack_shipment/',
+            {'shipment_id': shipment.id, 'items': [{'transaction_id': tx.id, 'package_count': 2}]},
+            format='json',
+        )
+        package = OutboundShipmentPackage.objects.filter(shipment=shipment, status='ACTIVE').order_by('package_no').first()
+        package.label_qr_value = f'QR-{package.package_code}'
+        package.save(update_fields=['label_qr_value'])
+
+        by_code = self.client.post(
+            '/api/sales/shipments/resolve_scan/',
+            {'scan_value': package.package_code},
+            format='json',
+        )
+        self.assertEqual(by_code.status_code, 200, by_code.json())
+        self.assertEqual(by_code.json()['matched_by'], 'package_code')
+        self.assertEqual(by_code.json()['order_id'], self.order.id)
+        self.assertEqual(by_code.json()['shipment_id'], shipment.id)
+        self.assertEqual(by_code.json()['package']['id'], package.id)
+
+        by_qr = self.client.post(
+            '/api/sales/shipments/resolve_scan/',
+            {'scan_value': package.label_qr_value},
+            format='json',
+        )
+        self.assertEqual(by_qr.status_code, 200, by_qr.json())
+        self.assertEqual(by_qr.json()['matched_by'], 'label_qr_value')
+        self.assertEqual(by_qr.json()['package']['package_code'], package.package_code)
+
     def test_mark_shipment_packages_loaded_requires_verified_scan(self):
         InventoryTransaction.objects.create(
             code='INVTX-TEST-006LOAD',

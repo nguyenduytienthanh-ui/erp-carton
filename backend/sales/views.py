@@ -272,6 +272,46 @@ def _build_package_summary(packages):
     }
 
 
+def _serialize_shipment_package(package):
+    return {
+        'id': package.id,
+        'shipment_id': package.shipment_id,
+        'shipment_code': getattr(package.shipment, 'code', None),
+        'transaction_id': package.inventory_transaction_id,
+        'line_id': package.sales_order_line_id,
+        'line_number': getattr(getattr(package, 'sales_order_line', None), 'line_number', None),
+        'product_code': getattr(getattr(getattr(package, 'inventory_transaction', None), 'product', None), 'code', None),
+        'product_name': getattr(getattr(getattr(package, 'inventory_transaction', None), 'product', None), 'name', None),
+        'status': package.status,
+        'package_no': package.package_no,
+        'total_packages': package.total_packages,
+        'quantity': package.quantity,
+        'package_type': package.package_type,
+        'gross_weight_kg': package.gross_weight_kg,
+        'length_cm': package.length_cm,
+        'width_cm': package.width_cm,
+        'height_cm': package.height_cm,
+        'package_code': package.package_code,
+        'label_qr_value': package.label_qr_value,
+        'note': package.note,
+        'verified_at': package.verified_at,
+        'verified_by': package.verified_by_id,
+        'verified_by_name': (
+            getattr(package.verified_by, 'full_name', None) or getattr(package.verified_by, 'username', None)
+            if getattr(package, 'verified_by', None)
+            else None
+        ),
+        'loaded_at': package.loaded_at,
+        'loaded_by': package.loaded_by_id,
+        'loaded_by_name': (
+            getattr(package.loaded_by, 'full_name', None) or getattr(package.loaded_by, 'username', None)
+            if getattr(package, 'loaded_by', None)
+            else None
+        ),
+        'cancel_reason': package.cancel_reason,
+    }
+
+
 LOAD_PROOF_ATTACHMENT_PREFIX = '[LOAD_PROOF]'
 DELIVERY_PROOF_ATTACHMENT_PREFIX = '[DELIVERY_PROOF]'
 
@@ -2325,6 +2365,73 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         context = super().get_serializer_context()
         context['request'] = self.request
         return context
+
+    @action(detail=False, methods=['post'])
+    def resolve_scan(self, request):
+        scan_value = str(
+            request.data.get('scan_value')
+            or request.data.get('package_code')
+            or request.data.get('qr_value')
+            or ''
+        ).strip()
+        if not scan_value:
+            return Response({'error': 'Thiếu mã kiện hoặc QR để tra cứu.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        OutboundShipmentPackage = apps.get_model('inventory', 'OutboundShipmentPackage')
+        package = (
+            OutboundShipmentPackage.objects.filter(status='ACTIVE')
+            .filter(Q(package_code__iexact=scan_value) | Q(label_qr_value__iexact=scan_value))
+            .select_related(
+                'shipment',
+                'shipment__sales_order',
+                'inventory_transaction__product',
+                'sales_order_line',
+                'verified_by',
+                'loaded_by',
+            )
+            .first()
+        )
+        if not package:
+            return Response({'error': 'Không tìm thấy kiện phù hợp với mã đã quét.'}, status=status.HTTP_404_NOT_FOUND)
+
+        shipment = getattr(package, 'shipment', None)
+        order = getattr(shipment, 'sales_order', None)
+        packages = list(
+            shipment.packages.filter(status='ACTIVE').select_related(
+                'inventory_transaction__product',
+                'sales_order_line',
+                'verified_by',
+                'loaded_by',
+            )
+        ) if shipment else []
+        summary = _build_package_summary(packages)
+        return Response({
+            'order_id': getattr(order, 'id', None),
+            'order_code': getattr(order, 'code', None),
+            'shipment_id': getattr(shipment, 'id', None),
+            'shipment_code': getattr(shipment, 'code', None),
+            'shipment_status': getattr(shipment, 'status', None),
+            'shipment_date': getattr(shipment, 'shipment_date', None),
+            'reference': getattr(shipment, 'reference', None),
+            'carrier_name': getattr(shipment, 'carrier_name', None),
+            'tracking_number': getattr(shipment, 'tracking_number', None),
+            'vehicle_no': getattr(shipment, 'vehicle_no', None),
+            'driver_name': getattr(shipment, 'driver_name', None),
+            'driver_phone': getattr(shipment, 'driver_phone', None),
+            'loading_reference': getattr(shipment, 'loading_reference', None),
+            'handover_receiver_name': getattr(shipment, 'handover_receiver_name', None),
+            'handover_receiver_phone': getattr(shipment, 'handover_receiver_phone', None),
+            'loading_confirmed_at': getattr(shipment, 'loading_confirmed_at', None),
+            'delivery_reference': getattr(shipment, 'delivery_reference', None),
+            'customer_receiver_name': getattr(shipment, 'customer_receiver_name', None),
+            'customer_receiver_phone': getattr(shipment, 'customer_receiver_phone', None),
+            'delivery_confirmed_at': getattr(shipment, 'delivery_confirmed_at', None),
+            'matched_by': 'package_code' if str(package.package_code or '').strip().lower() == scan_value.lower() else 'label_qr_value',
+            'can_manage_execution': _can_manage_inventory_execution(request.user),
+            'package': _serialize_shipment_package(package),
+            'packages': [_serialize_shipment_package(item) for item in packages],
+            **summary,
+        })
     
     @action(detail=True, methods=['post'])
     def submit_shipment(self, request, pk=None):

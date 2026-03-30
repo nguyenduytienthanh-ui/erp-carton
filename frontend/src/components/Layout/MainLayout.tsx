@@ -23,6 +23,7 @@ import {
   SafetyOutlined,
   DatabaseOutlined,
   CarOutlined,
+  QrcodeOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -51,6 +52,9 @@ import {
   canManageStocktake,
   canManagePurchasingData,
   canManageProductionData,
+  canAccessProductionCenter,
+  canAccessMaterialIssues,
+  canAccessProductionReceipts,
   canManageUserAccessExceptions,
   canManageModulePermissionSettings,
   canManageUserAccessReviews,
@@ -70,6 +74,7 @@ import {
   canViewReportsCenter,
   canViewWorkflowData,
   canManageWorkflowData,
+  canUseShipmentExecutionWorkspace,
 } from '../../utils/authz';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
@@ -94,6 +99,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/products': () => import('../../pages/Products/ProductList'),
   '/sales-orders': () => import('../../pages/Sales/SalesOrderList'),
   '/shipments': () => import('../../pages/Sales/ShipmentList'),
+  '/shipments/scan': () => import('../../pages/Sales/ShipmentScanCenter'),
   '/quotes': () => import('../../pages/Sales/QuoteListNew'),
   '/quote-analytics': () => import('../../pages/Management/QuoteAnalytics'),
   '/sales-analytics': () => import('../../pages/Sales/SalesAnalyticsDashboard'),
@@ -205,7 +211,11 @@ const MainLayout = () => {
   const canManageStocktakeMenu = canManageStocktake();
   const canManagePurchasing = canManagePurchasingData();
   const canManageProduction = canManageProductionData();
+  const canAccessProduction = canAccessProductionCenter();
+  const canAccessMaterialIssueRoute = canAccessMaterialIssues();
+  const canAccessProductionReceiptRoute = canAccessProductionReceipts();
   const canManageWorkforce = canManageWorkforceData();
+  const canUseShipmentExecution = canUseShipmentExecutionWorkspace();
   const canViewApprovalTower = canViewApprovalControlTower();
   const canManageModulePermissions = canManageModulePermissionSettings();
   const canManageAccessExceptions = canManageUserAccessExceptions();
@@ -345,7 +355,11 @@ const MainLayout = () => {
   const commandPaletteCommands = useMemo(() => buildCommandPaletteCatalog({
     canViewReports,
     canViewSalesOrders,
+    canUseShipmentExecutionWorkspace: canUseShipmentExecution,
     canManagePurchasing,
+    canAccessProductionCenter: canAccessProduction,
+    canAccessMaterialIssues: canAccessMaterialIssueRoute,
+    canAccessProductionReceipts: canAccessProductionReceiptRoute,
     canManageProduction,
     canManageInventory,
     canManageStocktake: canManageStocktakeMenu,
@@ -374,6 +388,9 @@ const MainLayout = () => {
     operationsFailedCount,
     rbacAnomalyCount,
   }), [
+    canAccessMaterialIssueRoute,
+    canAccessProduction,
+    canAccessProductionReceiptRoute,
     canManageAccessExceptions,
     canManageAccessReviews,
     canManageFinance,
@@ -399,6 +416,7 @@ const MainLayout = () => {
     canViewReports,
     canViewSalesOrders,
     canViewWorkflow,
+    canUseShipmentExecution,
     operationsFailedCount,
     overdue90Count,
     rbacAnomalyCount,
@@ -414,7 +432,7 @@ const MainLayout = () => {
     if (unreadCount > 0) {
       signals.push({
         key: 'notifications',
-        label: 'Thong bao moi',
+        label: 'Thông báo mới',
         value: String(unreadCount),
         tone: unreadCount >= 10 ? 'critical' : 'warning',
         path: '/notifications',
@@ -423,7 +441,7 @@ const MainLayout = () => {
     if (overdue90Count > 0) {
       signals.push({
         key: 'finance-overdue',
-        label: 'Tam ung 90+',
+        label: 'Tạm ứng 90+',
         value: String(overdue90Count),
         tone: 'critical',
         path: '/advance-transactions',
@@ -432,7 +450,7 @@ const MainLayout = () => {
     if (salaryAdvancePendingCount > 0) {
       signals.push({
         key: 'salary-advance',
-        label: 'Ung luong cho duyet',
+        label: 'Ứng lương chờ duyệt',
         value: String(salaryAdvancePendingCount),
         tone: salaryAdvancePendingCount >= 5 ? 'critical' : 'warning',
         path: '/salary-advance',
@@ -441,7 +459,7 @@ const MainLayout = () => {
     if (operationsFailedCount > 0) {
       signals.push({
         key: 'operations-log',
-        label: 'Su co van hanh',
+        label: 'Sự cố vận hành',
         value: String(operationsFailedCount),
         tone: 'critical',
         path: '/operations-log',
@@ -450,7 +468,7 @@ const MainLayout = () => {
     if (rbacAnomalyCount > 0) {
       signals.push({
         key: 'rbac-audit',
-        label: 'Bat thuong RBAC',
+        label: 'Bất thường RBAC',
         value: String(rbacAnomalyCount),
         tone: 'warning',
         path: '/admin/module-permissions-history',
@@ -459,7 +477,7 @@ const MainLayout = () => {
     if (signals.length === 0) {
       return [{
         key: 'steady-state',
-        label: 'Nen van hanh',
+        label: 'Nền vận hành',
         value: 'OK',
         tone: 'steady',
         path: '/',
@@ -475,13 +493,13 @@ const MainLayout = () => {
   ]);
   const workspaceSummary = useMemo(() => {
     const fragments: string[] = [];
-    if (unreadCount > 0) fragments.push(`${unreadCount} thong bao moi`);
-    if (overdue90Count > 0) fragments.push(`${overdue90Count} ho so tam ung qua 90 ngay`);
-    if (salaryAdvancePendingCount > 0) fragments.push(`${salaryAdvancePendingCount} ho so ung luong cho duyet`);
-    if (operationsFailedCount > 0) fragments.push(`${operationsFailedCount} su co can ra soat`);
-    if (rbacAnomalyCount > 0) fragments.push(`${rbacAnomalyCount} bat thuong phan quyen`);
+    if (unreadCount > 0) fragments.push(`${unreadCount} thông báo mới`);
+    if (overdue90Count > 0) fragments.push(`${overdue90Count} hồ sơ tạm ứng quá 90 ngày`);
+    if (salaryAdvancePendingCount > 0) fragments.push(`${salaryAdvancePendingCount} hồ sơ ứng lương chờ duyệt`);
+    if (operationsFailedCount > 0) fragments.push(`${operationsFailedCount} sự cố cần rà soát`);
+    if (rbacAnomalyCount > 0) fragments.push(`${rbacAnomalyCount} bất thường phân quyền`);
     if (fragments.length === 0) {
-      return activeCommand?.description ?? 'He thong dang san sang cho nhung luong cong viec uu tien.';
+      return activeCommand?.description ?? 'Hệ thống đang sẵn sàng cho những luồng công việc ưu tiên.';
     }
     return fragments.slice(0, 3).join(' • ');
   }, [
@@ -616,27 +634,27 @@ const MainLayout = () => {
         },
       ],
     } : null,
-    canManageProduction ? {
+    (canAccessProduction || canAccessMaterialIssueRoute || canAccessProductionReceiptRoute || canManageProduction) ? {
       key: 'production-group',
       icon: <BuildOutlined />,
       label: 'Sản xuất',
       children: [
-        {
+        ...(canAccessProduction ? [{
           key: '/production-orders',
           label: renderMenuLabel('/production-orders', 'Lệnh sản xuất'),
-        },
-        {
+        }] : []),
+        ...(canAccessMaterialIssueRoute ? [{
           key: '/material-issues',
           label: renderMenuLabel('/material-issues', 'Cấp vật tư'),
-        },
-        {
+        }] : []),
+        ...(canAccessProductionReceiptRoute ? [{
           key: '/production-receipts',
           label: renderMenuLabel('/production-receipts', 'Nhập thành phẩm'),
-        },
-        {
+        }] : []),
+        ...(canManageProduction ? [{
           key: '/production-costing',
           label: renderMenuLabel('/production-costing', 'Giá vốn sau sản xuất'),
-        },
+        }] : []),
       ],
     } : null,
     (canManageInventory || canManageStocktakeMenu) ? {
@@ -717,7 +735,7 @@ const MainLayout = () => {
           label: renderMenuLabel(
             '/advance-transactions',
             <span>
-              Tạm ứng {overdue90Count > 0 ? <Badge count={overdue90Count} size="small" overflowCount={99} /> : null}
+              Tạm ứng - quyết toán {overdue90Count > 0 ? <Badge count={overdue90Count} size="small" overflowCount={99} /> : null}
             </span>
           ),
         },
@@ -793,7 +811,7 @@ const MainLayout = () => {
         },
       ],
     } : null,
-    (canManageWorkflow || canViewWorkflow) ? {
+    (canManageWorkflow || canViewWorkflow || canManageOnboarding) ? {
       key: 'workflow-group',
       icon: <ApartmentOutlined />,
       label: 'Quy trình',
@@ -809,9 +827,13 @@ const MainLayout = () => {
           key: '/workflow-analytics',
           label: renderMenuLabel('/workflow-analytics', 'Phân tích quy trình'),
         }] : []),
+        ...(canManageOnboarding ? [{
+          key: '/admin/onboarding-studio',
+          label: renderMenuLabel('/admin/onboarding-studio', 'Trợ lý triển khai công việc'),
+        }] : []),
       ],
     } : null,
-    (canViewOpsLog || canViewApprovalTower || canViewAdminAudit || canViewAdminObservability || canViewAccessGovernance || canManageAccessExceptions || canManageAccessReviews || canManageLifecycle || canManageProvisioning || canManageOnboarding || canManageRoleTeams || canManageUsers || canManageModulePermissions || canViewRbacAudit) ? {
+    (canViewOpsLog || canViewApprovalTower || canViewAdminAudit || canViewAdminObservability || canViewAccessGovernance || canManageAccessExceptions || canManageAccessReviews || canManageLifecycle || canManageProvisioning || canManageRoleTeams || canManageUsers || canManageModulePermissions || canViewRbacAudit) ? {
       key: 'governance-group',
       icon: <SafetyOutlined />,
       label: 'Kiểm soát',
@@ -856,10 +878,6 @@ const MainLayout = () => {
         ...(canManageLifecycle ? [{
           key: '/admin/user-lifecycle',
           label: renderMenuLabel('/admin/user-lifecycle', 'Bàn kết thúc vòng đời'),
-        }] : []),
-        ...(canManageOnboarding ? [{
-          key: '/admin/onboarding-studio',
-          label: renderMenuLabel('/admin/onboarding-studio', 'Onboarding studio'),
         }] : []),
         ...(canManageRoleTeams ? [{
           key: '/admin/roles-teams',
@@ -1182,7 +1200,17 @@ const MainLayout = () => {
                 </>
               ) : null}
             </Button>
-            {!isMobile && <TaskQuickLauncher />}
+            <Button
+              type="text"
+              className="workspace-shell-action"
+              icon={<QrcodeOutlined />}
+              data-testid="header-qr-quick-button"
+              onClick={() => navigate('/shipments/scan')}
+              style={{ fontSize: isMobile ? '14px' : '15px', height: isMobile ? 40 : desktopControlSize }}
+            >
+              {isMobile ? null : 'Quét QR kiện'}
+            </Button>
+            <TaskQuickLauncher compact={isMobile} />
             <Popover content={notificationPopoverContent} placement="bottomRight" trigger="click">
               <Button
                 type="text"

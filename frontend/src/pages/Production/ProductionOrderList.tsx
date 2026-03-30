@@ -250,7 +250,7 @@ export default function ProductionOrderList() {
   const statusAlert = useMemo(() => {
     if (summary.overdue_plan_count > 0) return { type: 'error' as const, message: `${summary.overdue_plan_count} lệnh đang trễ kế hoạch, nên ưu tiên kiểm tra công đoạn và khả năng cấp vật tư.` };
     if (summary.pending_approval_count > 0) return { type: 'warning' as const, message: `${summary.pending_approval_count} lệnh đang chờ duyệt, phù hợp để trưởng bộ phận chốt trong ca này.` };
-    return { type: 'success' as const, message: 'Điều độ sản xuất đang ổn định, chưa có tín hiệu ùn tắc lớn trong bộ lọc hiện tại.' };
+    return { type: 'success' as const, message: 'Lệnh sản xuất đang ổn định, chưa có tín hiệu ùn tắc lớn trong bộ lọc hiện tại.' };
   }, [summary.overdue_plan_count, summary.pending_approval_count]);
 
   const buildCurrentSnapshot = (): ProductionOrderViewSnapshot => ({

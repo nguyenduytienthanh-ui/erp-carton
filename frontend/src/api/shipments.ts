@@ -1,6 +1,6 @@
 import axiosInstance from './axios';
 import { API_ENDPOINTS } from '../utils/constants';
-import type { PaginatedResponse } from '../types/sales';
+import type { PaginatedResponse, ShipmentScanResolveResponse } from '../types/sales';
 import type { OutboundShipment } from '../types/shipments';
 
 const SALES_SHIPMENTS = API_ENDPOINTS.SALES_SHIPMENTS;
@@ -16,6 +16,11 @@ export const shipmentsApi = {
 
   getShipment: async (id: number): Promise<OutboundShipment> => {
     const response = await axiosInstance.get<OutboundShipment>(`${SALES_SHIPMENTS}${id}/`);
+    return response.data;
+  },
+
+  resolveScan: async (data: { scan_value: string }): Promise<ShipmentScanResolveResponse> => {
+    const response = await axiosInstance.post<ShipmentScanResolveResponse>(`${SALES_SHIPMENTS}resolve_scan/`, data);
     return response.data;
   },
 

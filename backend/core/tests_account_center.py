@@ -249,6 +249,10 @@ class AccountCenterApiTests(TestCase):
         modules = {item['key']: item for item in body['access_summary']['modules']}
         self.assertTrue(modules['finance']['enabled'])
         self.assertTrue(modules['workflow']['enabled'])
+        self.assertEqual(modules['finance']['label'], 'Tài chính')
+        self.assertEqual(modules['finance']['description'], 'Công nợ, sổ cái, ngân sách và đối soát')
+        self.assertEqual(modules['workflow']['label'], 'Quy trình')
+        self.assertEqual(modules['workflow']['description'], 'Pipeline, nhiệm vụ và workflow analytics')
         self.assertIn('Finance Manager', modules['finance']['source_roles'])
         self.assertGreaterEqual(len(body['activity_preview']), 3)
 

@@ -7,7 +7,7 @@ import type { Product } from '../../types/product';
 import TaskWorkspaceModal from '../TaskWorkspaceModal/TaskWorkspaceModal';
 import QuickClearIcon from '../QuickClearIcon/QuickClearIcon';
 
-export default function TaskQuickLauncher() {
+export default function TaskQuickLauncher({ compact = false }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Product | null>(null);
@@ -29,8 +29,9 @@ export default function TaskQuickLauncher() {
           icon={<ProjectOutlined />}
           onClick={() => setOpen(true)}
           style={{ borderColor: '#91caff', color: '#0958d9' }}
+          data-testid="header-task-quick-button"
         >
-          Giao nhiệm vụ nhanh
+          {compact ? null : 'Giao nhiệm vụ nhanh'}
         </Button>
       </Tooltip>
 

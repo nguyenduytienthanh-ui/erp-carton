@@ -1,5 +1,6 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Button,
   Card,
   Descriptions,
@@ -23,6 +24,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, EyeOutlined, PaperClipOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { attachmentsApi, type AttachmentItem } from '../../api/attachments';
 import { customersApi } from '../../api/customers';
 import { inventoryApi } from '../../api/inventory';
@@ -688,6 +690,8 @@ function buildBatchReserveDraft(
 }
 
 export default function SalesOrderList() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState('');
@@ -712,6 +716,11 @@ export default function SalesOrderList() {
   const [shipmentPackages, setShipmentPackages] = useState<SalesOrderShipmentPackageItem[]>([]);
   const [selectedPackageIds, setSelectedPackageIds] = useState<number[]>([]);
   const [detailOrder, setDetailOrder] = useState<SalesOrder | null>(null);
+  const [dismissedFocusOrderId, setDismissedFocusOrderId] = useState<number | null>(null);
+  const deliveryPlanningRef = useRef<HTMLDivElement | null>(null);
+  const shipmentSectionRef = useRef<HTMLDivElement | null>(null);
+  const focusOrderId = Number(searchParams.get('focus_id') || 0) || null;
+  const focusSection = searchParams.get('section');
 
   // Cleanup on unmount to prevent hanging queries
   useEffect(() => {
@@ -1286,6 +1295,30 @@ export default function SalesOrderList() {
   );
 
   const rows = useMemo(() => orderQuery.data?.results ?? [], [orderQuery.data?.results]);
+
+  useEffect(() => {
+    if (!focusOrderId || dismissedFocusOrderId === focusOrderId || detailOrder) return;
+    const target = rows.find((row) => row.id === focusOrderId) ?? null;
+    if (target) {
+      const timer = window.setTimeout(() => {
+        setDetailOrder(target);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [detailOrder, dismissedFocusOrderId, focusOrderId, rows]);
+
+  useEffect(() => {
+    if (!detailOrder || !focusSection) return;
+    const targetRef = focusSection === 'delivery-planning'
+      ? deliveryPlanningRef
+      : focusSection === 'shipments'
+        ? shipmentSectionRef
+        : null;
+    if (!targetRef?.current) return;
+    window.setTimeout(() => {
+      targetRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 120);
+  }, [detailOrder, focusSection]);
   const stats = useMemo(() => getStatusStats(rows), [rows]);
   const fulfillmentStats = useMemo(
     () =>
@@ -3033,7 +3066,12 @@ export default function SalesOrderList() {
       <Drawer
         title={detailOrder ? `Chi tiết đơn hàng ${detailOrder.code}` : 'Chi tiết đơn hàng'}
         open={Boolean(detailOrder)}
-        onClose={() => setDetailOrder(null)}
+        onClose={() => {
+          setDetailOrder(null);
+          if (focusOrderId && detailOrder?.id === focusOrderId) {
+            setDismissedFocusOrderId(focusOrderId);
+          }
+        }}
         width={1100}
       >
         <Descriptions column={2} bordered size="small">
@@ -3079,6 +3117,17 @@ export default function SalesOrderList() {
             loading={traceLabelsMutation.isPending}
           >
             Tải tem QR PDF
+          </Button>
+          <Button
+            type="primary"
+            onClick={() => detailOrder && navigate(`/shipments/scan?order_id=${detailOrder.id}`)}
+          >
+            Mở QR nhanh
+          </Button>
+          <Button
+            onClick={() => detailOrder && navigate(`/shipments?order_id=${detailOrder.id}`)}
+          >
+            Mở Phiếu xuất
           </Button>
         </div>
         <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#fafafa', color: '#595959' }}>
@@ -3197,7 +3246,14 @@ export default function SalesOrderList() {
           scroll={{ x: 1950 }}
         />
 
+        <div ref={deliveryPlanningRef} />
         <Divider style={{ marginTop: 24 }}>Kế hoạch giao hàng</Divider>
+        <Alert
+          showIcon
+          type="info"
+          style={{ marginBottom: 12 }}
+          message="Đơn hàng xuất là nơi lập kế hoạch giao theo từng dòng. Từ đây có thể nhìn rõ đơn nào sắp tới hạn, còn thiếu xuất, hoặc đã quá hạn giao."
+        />
         <Table
           rowKey="delivery_plan_id"
           size="small"
@@ -3289,7 +3345,29 @@ export default function SalesOrderList() {
           scroll={{ x: 1000 }}
         />
 
+        <div ref={shipmentSectionRef} />
         <Divider style={{ marginTop: 24 }}>Phiếu xuất kho</Divider>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+          <Alert
+            showIcon
+            type="info"
+            style={{ flex: '1 1 420px' }}
+            message="Phiếu xuất là nơi điều phối giao hàng thực tế: xe, tài xế, đóng gói, quét kiện, bàn giao xe và xác nhận giao xong."
+          />
+          <Space wrap>
+            <Button
+              onClick={() => detailOrder && navigate(`/shipments?order_id=${detailOrder.id}`)}
+            >
+              Mở danh sách Phiếu xuất
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => detailOrder && navigate(`/shipments/scan?order_id=${detailOrder.id}`)}
+            >
+              Vào QR nhanh
+            </Button>
+          </Space>
+        </div>
         <Table
           rowKey="id"
           size="small"
@@ -3413,6 +3491,12 @@ export default function SalesOrderList() {
                     onClick={() => void openShipmentScanModal(row)}
                   >
                     Quét kiện
+                  </Button>
+                  <Button
+                    size="small"
+                    onClick={() => detailOrder && navigate(`/shipments/scan?order_id=${detailOrder.id}&shipment_id=${row.shipment_id}`)}
+                  >
+                    QR nhanh
                   </Button>
                   <Button
                     size="small"

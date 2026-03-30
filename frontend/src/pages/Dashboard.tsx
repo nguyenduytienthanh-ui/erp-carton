@@ -28,9 +28,10 @@ import { workforceApi } from '../api/workforce';
 import { useUserPreferences } from '../hooks/useUserPreferences';
 import {
   canAccessSalesOrders,
+  canAccessProductionCenter,
   canManageFinanceData,
   canManageInventoryData,
-  canManageProductionData,
+  canManageOnboardingStudio,
   canManagePurchasingData,
   canManageWorkforceData,
   canViewOpsHub,
@@ -162,10 +163,11 @@ export default function Dashboard() {
 
   const canViewSales = canAccessSalesOrders();
   const canManagePurchasing = canManagePurchasingData();
-  const canManageProduction = canManageProductionData();
+  const canAccessProduction = canAccessProductionCenter();
   const canManageInventory = canManageInventoryData();
   const canManageFinance = canManageFinanceData();
   const canManageWorkforce = canManageWorkforceData();
+  const canManageOnboarding = canManageOnboardingStudio();
   const canViewReports = canViewReportsCenter();
   const canViewOps = canViewOpsHub();
   const canViewWorkflow = canViewWorkflowData();
@@ -191,7 +193,7 @@ export default function Dashboard() {
   const productionSummaryQuery = useQuery({
     queryKey: ['dashboard-production-summary'],
     queryFn: () => productionApi.getOrderSummary(),
-    enabled: canManageProduction,
+    enabled: canAccessProduction,
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
@@ -425,6 +427,56 @@ export default function Dashboard() {
       },
     ];
 
+    cards.push({
+      key: 'shipment-scan',
+      title: 'Quét QR kiện',
+      badge: 'QR',
+      description: 'Mở nhanh khu vực quét kiện để tra cứu, xác minh, bốc xếp và bàn giao giao hàng trên điện thoại hoặc desktop.',
+      route: '/shipments/scan',
+      actionLabel: 'Mở QR nhanh',
+    });
+
+    if (canManageOnboarding) {
+      cards.push({
+        key: 'onboarding-studio',
+        title: 'Trợ lý triển khai công việc',
+        badge: 'Rollout',
+        description: 'Mở nhanh khu vực preset rollout, xem trước triển khai và kiểm tra lịch sử áp dụng theo từng người dùng.',
+        route: '/admin/onboarding-studio',
+        actionLabel: 'Mở trợ lý triển khai',
+      });
+    }
+
+    if (canViewSales) {
+      cards.push({
+        key: 'delivery-planning',
+        title: 'Kế hoạch giao hàng',
+        badge: formatNumber(salesSummary?.overdue_delivery_count),
+        description: 'Đi thẳng tới Đơn hàng xuất để rà kế hoạch giao theo từng dòng, nhất là đơn sắp tới hạn hoặc đã quá hạn.',
+        route: '/sales-orders?section=delivery-planning',
+        actionLabel: 'Rà kế hoạch giao',
+      });
+      cards.push({
+        key: 'shipments',
+        title: 'Phiếu xuất',
+        badge: formatNumber(salesSummary?.posted_count),
+        description: 'Vào khu vực điều phối giao hàng, xe, tài xế, đóng gói, bàn giao xe và xác nhận giao xong.',
+        route: '/shipments',
+        actionLabel: 'Mở điều phối giao hàng',
+      });
+    }
+
+    if (canAccessProduction) {
+      cards.push({
+        key: 'production-center',
+        title: 'Lệnh sản xuất',
+        badge: formatNumber(productionSummary?.active_count),
+        description: 'Theo dõi lệnh sản xuất, tiến độ phát lệnh, cấp vật tư và nhập thành phẩm trong cùng một command center.',
+        route: '/production-orders',
+        actionLabel: 'Mở lệnh sản xuất',
+      });
+    }
+
     if (canViewReports) {
       cards.push({
         key: 'reports',
@@ -458,12 +510,18 @@ export default function Dashboard() {
       });
     }
 
-    return cards.slice(0, 5);
+    return cards.slice(0, 7);
   }, [
+    canAccessProduction,
+    canManageOnboarding,
     canViewOps,
     canViewReports,
+    canViewSales,
     canViewWorkflow,
     operationsFailedCount,
+    productionSummary?.active_count,
+    salesSummary?.overdue_delivery_count,
+    salesSummary?.posted_count,
     taskSummary?.assigned_to_me,
     unreadCount,
   ]);
@@ -510,15 +568,15 @@ export default function Dashboard() {
       });
     }
 
-    if (canManageProduction) {
+    if (canAccessProduction) {
       const tone: Tone = (productionSummary?.overdue_plan_count ?? 0) > 0 ? 'critical' : (productionSummary?.active_count ?? 0) > 0 ? 'warning' : 'steady';
       cards.push({
         key: 'production',
-        title: 'Lệnh sản xuất đang chạy',
+        title: 'Lệnh sản xuất',
         value: formatNumber(productionSummary?.active_count),
         detail: `Quá hạn kế hoạch: ${formatNumber(productionSummary?.overdue_plan_count)} | Còn lại: ${formatNumber(productionSummary?.active_remaining_qty)}`,
         route: '/production-orders',
-        actionLabel: 'Mở production center',
+        actionLabel: 'Mở trung tâm lệnh sản xuất',
         tone,
         icon: <BuildOutlined style={{ color: theme.colors.info }} />,
         priority: (productionSummary?.overdue_plan_count ?? 0) * 4 + (productionSummary?.active_count ?? 0),
@@ -574,7 +632,7 @@ export default function Dashboard() {
   }, [
     canManageFinance,
     canManageInventory,
-    canManageProduction,
+    canAccessProduction,
     canManagePurchasing,
     canViewSales,
     payableSummary?.open_count,
@@ -625,7 +683,7 @@ export default function Dashboard() {
         detail: 'Đẩy theo nhà cung cấp hoặc điều chỉnh lại kế hoạch vật tư để tránh nghẽn sản xuất.',
       });
     }
-    if (canManageProduction && (productionSummary?.overdue_plan_count ?? 0) > 0) {
+    if (canAccessProduction && (productionSummary?.overdue_plan_count ?? 0) > 0) {
       items.push({
         tone: 'critical',
         title: `${formatNumber(productionSummary?.overdue_plan_count)} lệnh sản xuất quá hạn`,
@@ -666,7 +724,7 @@ export default function Dashboard() {
   }, [
     canManageFinance,
     canManageInventory,
-    canManageProduction,
+    canAccessProduction,
     canManagePurchasing,
     canViewSales,
     payableSummary?.overdue_count,
@@ -696,7 +754,7 @@ export default function Dashboard() {
         color: theme.colors.warning,
       });
     }
-    if (canManageProduction) {
+    if (canAccessProduction) {
       stats.push({
         label: 'Lệnh SX hoàn thành',
         value: `${formatNumber(productionSummary?.completed_count)}/${formatNumber(productionSummary?.total_orders)}`,
@@ -715,7 +773,7 @@ export default function Dashboard() {
     return stats;
   }, [
     canManageFinance,
-    canManageProduction,
+    canAccessProduction,
     canManagePurchasing,
     canViewSales,
     productionSummary?.completed_count,
