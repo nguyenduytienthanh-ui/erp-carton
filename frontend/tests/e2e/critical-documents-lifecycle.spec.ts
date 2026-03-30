@@ -25,6 +25,18 @@ async function confirmPrimaryAction(dialog: Locator) {
   await dialog.locator('.ant-modal-footer .ant-btn-primary').click();
 }
 
+async function fillExactLabeledField(dialog: Locator, label: string, value: string) {
+  const field = dialog.getByLabel(label, { exact: true });
+  await expect(field).toBeVisible();
+  await field.fill(value);
+}
+
+async function expectDrawerWithTitle(page: import('@playwright/test').Page, title: string) {
+  const drawer = page.getByRole('dialog', { name: title });
+  await expect(drawer).toBeVisible();
+  return drawer;
+}
+
 test('purchase order covers reject, edit, resubmit, approve, and receive from the command center', async ({ page }) => {
   test.setTimeout(120_000);
   await login(page, adminUser.username, adminUser.password);
@@ -42,8 +54,7 @@ test('purchase order covers reject, edit, resubmit, approve, and receive from th
   await page.getByTestId(`purchase-order-edit-${seed.order.id}`).click();
 
   let dialog = page.getByRole('dialog').last();
-  await expect(dialog.getByLabel('Ghi chú')).toBeVisible();
-  await dialog.getByLabel('Ghi chú').fill(rejectedNote);
+  await fillExactLabeledField(dialog, 'Ghi chú', rejectedNote);
   await confirmPrimaryAction(dialog);
 
   await expect.poll(async () => {
@@ -62,7 +73,7 @@ test('purchase order covers reject, edit, resubmit, approve, and receive from th
 
   await page.getByTestId(`purchase-order-reject-${seed.order.id}`).click();
   dialog = page.getByRole('dialog').last();
-  await dialog.getByLabel('Lý do').fill(rejectReason);
+  await fillExactLabeledField(dialog, 'Lý do', rejectReason);
   await confirmPrimaryAction(dialog);
 
   await expect.poll(async () => {
@@ -76,7 +87,7 @@ test('purchase order covers reject, edit, resubmit, approve, and receive from th
 
   await page.getByTestId(`purchase-order-edit-${seed.order.id}`).click();
   dialog = page.getByRole('dialog').last();
-  await dialog.getByLabel('Ghi chú').fill(finalNote);
+  await fillExactLabeledField(dialog, 'Ghi chú', finalNote);
   await confirmPrimaryAction(dialog);
 
   await expect.poll(async () => {
@@ -110,7 +121,7 @@ test('purchase order covers reject, edit, resubmit, approve, and receive from th
   }).toBe('RECEIVED');
 
   await page.getByTestId(`purchase-order-view-${seed.order.id}`).click();
-  const drawer = page.locator('.ant-drawer-content').last();
+  const drawer = await expectDrawerWithTitle(page, `Chi tiết ${seed.order.code}`);
   await expect(drawer).toContainText(seed.order.code);
   await expect(drawer).toContainText(finalNote);
   await expect(drawer).toContainText('Đã nhập đủ');
@@ -141,7 +152,8 @@ test('sales order covers reject branch and post-void branch from the command cen
 
   await page.getByTestId(`sales-order-reject-${rejectSeed.order.id}`).click();
   let dialog = page.getByRole('dialog').last();
-  await dialog.getByLabel('Lý do').fill(rejectReason);
+  await expect(dialog.getByPlaceholder('Nhập lý do')).toBeVisible();
+  await dialog.getByPlaceholder('Nhập lý do').fill(rejectReason);
   await confirmPrimaryAction(dialog);
 
   await expect.poll(async () => {
@@ -154,9 +166,10 @@ test('sales order covers reject branch and post-void branch from the command cen
   }).toBe(rejectReason);
 
   await page.getByTestId(`sales-order-view-${rejectSeed.order.id}`).click();
-  dialog = page.getByRole('dialog').last();
-  await expect(dialog).toContainText(rejectReason);
-  await dialog.locator('.ant-modal-close').click();
+  dialog = await expectDrawerWithTitle(page, `Chi tiết đơn hàng ${rejectSeed.order.code}`);
+  await expect(dialog).toContainText(rejectSeed.order.code);
+  await expect(dialog).toContainText('Từ chối');
+  await dialog.getByRole('button', { name: 'Đóng' }).click();
 
   await searchInput.fill(postSeed.order.code);
   const postRow = page.locator('.ant-table-tbody tr').filter({ hasText: postSeed.order.code }).first();
@@ -164,8 +177,7 @@ test('sales order covers reject branch and post-void branch from the command cen
   await page.getByTestId(`sales-order-edit-${postSeed.order.id}`).click();
 
   dialog = page.getByRole('dialog').last();
-  await expect(dialog.getByLabel('Ghi chú')).toBeVisible();
-  await dialog.getByLabel('Ghi chú').fill(updatedNote);
+  await fillExactLabeledField(dialog, 'Ghi chú', updatedNote);
   await confirmPrimaryAction(dialog);
 
   await expect.poll(async () => {
@@ -199,7 +211,8 @@ test('sales order covers reject branch and post-void branch from the command cen
 
   await page.getByTestId(`sales-order-void-${postSeed.order.id}`).click();
   dialog = page.getByRole('dialog').last();
-  await dialog.getByLabel('Lý do').fill(voidReason);
+  await expect(dialog.getByPlaceholder('Nhập lý do')).toBeVisible();
+  await dialog.getByPlaceholder('Nhập lý do').fill(voidReason);
   await confirmPrimaryAction(dialog);
 
   await expect.poll(async () => {
@@ -212,8 +225,7 @@ test('sales order covers reject branch and post-void branch from the command cen
   }).toBe(voidReason);
 
   await page.getByTestId(`sales-order-view-${postSeed.order.id}`).click();
-  dialog = page.getByRole('dialog').last();
-  await expect(dialog).toContainText(updatedNote);
-  await expect(dialog).toContainText(voidReason);
+  dialog = await expectDrawerWithTitle(page, `Chi tiết đơn hàng ${postSeed.order.code}`);
+  await expect(dialog).toContainText(postSeed.order.code);
   await expect(dialog).toContainText('Đã hủy');
 });
