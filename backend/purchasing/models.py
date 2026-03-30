@@ -348,11 +348,23 @@ class PurchaseOrderLine(models.Model):
     tax_amount = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
     line_total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
     note = models.CharField(max_length=255, blank=True, default='')
+    purchase_request_line = models.ForeignKey(
+        'PurchaseRequestLine',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='purchase_order_lines',
+    )
 
     class Meta:
         db_table = 'purchasing_purchase_order_lines'
         ordering = ['purchase_order_id', 'line_number']
         unique_together = [['purchase_order', 'line_number']]
+        indexes = [
+            models.Index(fields=['purchase_order', 'line_number']),
+            models.Index(fields=['product']),
+            models.Index(fields=['purchase_request_line']),
+        ]
 
     def __str__(self):
         return f'{self.purchase_order_id}#{self.line_number}'
@@ -379,6 +391,31 @@ class PurchaseOrderLine(models.Model):
         self.tax_amount = tax
         self.line_total = total
         super().save(*args, **kwargs)
+
+
+class PurchaseOrderLineMaterialAllocation(models.Model):
+    purchase_order_line = models.ForeignKey(
+        PurchaseOrderLine,
+        on_delete=models.CASCADE,
+        related_name='material_allocations',
+    )
+    plan_item_id = models.BigIntegerField(db_index=True)
+    allocated_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    note = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'purchasing_po_line_material_allocations'
+        ordering = ['purchase_order_line_id', 'id']
+        unique_together = [['purchase_order_line', 'plan_item_id']]
+        indexes = [
+            models.Index(fields=['purchase_order_line']),
+            models.Index(fields=['plan_item_id']),
+        ]
+
+    def __str__(self):
+        return f'{self.purchase_order_line_id}:{self.plan_item_id}'
 
 
 class PurchaseReceiptStatus:
@@ -548,6 +585,10 @@ class PurchaseReceiptLine(models.Model):
     quantity = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
     unit_cost = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
     line_total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    bundle_count = models.PositiveIntegerField(null=True, blank=True)
+    units_per_bundle = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    pallet_count = models.PositiveIntegerField(null=True, blank=True)
+    bundles_per_pallet = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
     note = models.CharField(max_length=255, blank=True, default='')
     inventory_transaction = models.ForeignKey(
         'inventory.InventoryTransaction',
@@ -572,6 +613,31 @@ class PurchaseReceiptLine(models.Model):
     def save(self, *args, **kwargs):
         self.line_total = round_money((self.quantity or Decimal('0')) * (self.unit_cost or Decimal('0')))
         super().save(*args, **kwargs)
+
+
+class PurchaseReceiptLineMaterialAllocation(models.Model):
+    purchase_receipt_line = models.ForeignKey(
+        PurchaseReceiptLine,
+        on_delete=models.CASCADE,
+        related_name='material_allocations',
+    )
+    plan_item_id = models.BigIntegerField(db_index=True)
+    allocated_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    note = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'purchasing_receipt_line_material_allocations'
+        ordering = ['purchase_receipt_line_id', 'id']
+        unique_together = [['purchase_receipt_line', 'plan_item_id']]
+        indexes = [
+            models.Index(fields=['purchase_receipt_line']),
+            models.Index(fields=['plan_item_id']),
+        ]
+
+    def __str__(self):
+        return f'{self.purchase_receipt_line_id}:{self.plan_item_id}'
 
 
 class MaterialPurchasePrice(models.Model):
@@ -667,11 +733,13 @@ class PurchaseRequestStatus:
     SUBMITTED = 'SUBMITTED'
     APPROVED = 'APPROVED'
     REJECTED = 'REJECTED'
+    CANCELLED = 'CANCELLED'
     CHOICES = [
         (DRAFT, 'Nháp'),
         (SUBMITTED, 'Đã gửi'),
         (APPROVED, 'Đã duyệt'),
         (REJECTED, 'Từ chối'),
+        (CANCELLED, 'Đã hủy'),
     ]
 
 
@@ -711,6 +779,15 @@ class PurchaseRequest(models.Model):
     )
     rejected_at = models.DateTimeField(null=True, blank=True)
     reject_reason = models.TextField(blank=True)
+    cancelled_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='purchase_requests_cancelled',
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancel_reason = models.TextField(blank=True, default='')
     created_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
@@ -756,6 +833,8 @@ class PurchaseRequestLine(models.Model):
         on_delete=models.PROTECT,
         related_name='purchase_request_lines',
     )
+    sales_material_plan_item_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+    source_snapshot = models.JSONField(blank=True, default=dict)
     qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('1'))
     note = models.CharField(max_length=255, blank=True)
 
@@ -763,6 +842,11 @@ class PurchaseRequestLine(models.Model):
         db_table = 'purchasing_request_lines'
         ordering = ['purchase_request_id', 'line_number']
         unique_together = [['purchase_request', 'line_number']]
+        indexes = [
+            models.Index(fields=['purchase_request', 'line_number']),
+            models.Index(fields=['product']),
+            models.Index(fields=['sales_material_plan_item_id']),
+        ]
         verbose_name = 'Purchase Request Line'
         verbose_name_plural = 'Purchase Request Lines'
 

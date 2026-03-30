@@ -124,6 +124,10 @@ def rebuild_production_operations(order):
             rate = Decimal('0')
         if rate <= 0:
             continue
+        planned_qty = round_qty(order.planned_qty or 0)
+        estimated_runtime_hours = Decimal('0')
+        if planned_qty > 0 and rate > 0:
+            estimated_runtime_hours = (planned_qty / rate).quantize(Decimal('0.01'))
         operations.append(
             ProductionOperation(
                 production_order=order,
@@ -132,7 +136,11 @@ def rebuild_production_operations(order):
                 step_name=step_name,
                 source_field=source_field,
                 rate_per_hour=round_qty(rate),
-                planned_qty=round_qty(order.planned_qty or 0),
+                planned_qty=planned_qty,
+                planned_date=order.planned_start_date,
+                priority_rank=sequence,
+                dispatch_sequence=sequence,
+                estimated_runtime_hours=estimated_runtime_hours,
                 status=ProductionOperationStatus.PENDING,
             )
         )

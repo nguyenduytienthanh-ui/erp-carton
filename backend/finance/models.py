@@ -761,6 +761,12 @@ class ReceivableDocument(SearchTextModelMixin):
         verbose_name='Khách hàng',
     )
     customer_snapshot = models.JSONField(default=dict, blank=True, verbose_name='Snapshot khách hàng')
+    document_type = models.CharField(
+        max_length=50,
+        default='RECEIVABLE',
+        db_index=True,
+        verbose_name='Loại chứng từ',
+    )
     document_date = models.DateField(verbose_name='Ngày ghi nhận')
     due_date = models.DateField(verbose_name='Ngày đến hạn')
     currency = models.CharField(max_length=3, default='VND', verbose_name='Tiền tệ')
@@ -814,6 +820,7 @@ class ReceivableDocument(SearchTextModelMixin):
         return [
             self.code,
             getattr(getattr(self, 'source_sales_order', None), 'code', None) or '',
+            self.document_type,
             snapshot.get('code'),
             snapshot.get('name'),
             snapshot.get('company_name'),
@@ -943,6 +950,12 @@ class PayableDocument(SearchTextModelMixin):
         verbose_name='Nhà cung cấp',
     )
     supplier_snapshot = models.JSONField(default=dict, blank=True, verbose_name='Snapshot nhà cung cấp')
+    document_type = models.CharField(
+        max_length=50,
+        default='PAYABLE',
+        db_index=True,
+        verbose_name='Loại chứng từ',
+    )
     document_date = models.DateField(verbose_name='Ngày ghi nhận')
     due_date = models.DateField(verbose_name='Ngày đến hạn')
     vendor_invoice_no = models.CharField(max_length=100, blank=True, default='', verbose_name='Số hóa đơn NCC')
@@ -1001,6 +1014,7 @@ class PayableDocument(SearchTextModelMixin):
             self.code,
             receipt_code,
             purchase_order_code,
+            self.document_type,
             snapshot.get('code'),
             snapshot.get('name'),
             snapshot.get('company_name'),

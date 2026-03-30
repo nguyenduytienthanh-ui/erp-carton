@@ -8390,9 +8390,19 @@ def _build_access_exception_activity_items(queryset, limit=20):
             continue
 
         if str(log.entity_type or '') == 'UserAccessExceptionApproverAvailability':
+            new_approver = (
+                (log.new_values or {}).get('approver')
+                if isinstance(log.new_values, dict)
+                else None
+            )
+            old_approver = (
+                (log.old_values or {}).get('approver')
+                if isinstance(log.old_values, dict)
+                else None
+            )
             approver_label = (
-                ((log.new_values or {}).get('approver', {}).get('full_name') if isinstance(log.new_values, dict) else None)
-                or ((log.old_values or {}).get('approver', {}).get('full_name') if isinstance(log.old_values, dict) else None)
+                (new_approver.get('full_name') if isinstance(new_approver, dict) else None)
+                or (old_approver.get('full_name') if isinstance(old_approver, dict) else None)
                 or str(log.entity_code or 'approver')
             )
             action_label = {
@@ -14376,8 +14386,6 @@ class UserViewSet(viewsets.ModelViewSet):
     def admin_observability_alert_drill(self, request):
         if not _can_view_admin_observability(request.user):
             return Response({'error': 'Ban khong co quyen chay alert drill.'}, status=status.HTTP_403_FORBIDDEN)
-        if not (getattr(request.user, 'is_staff', False) or getattr(request.user, 'is_superuser', False)):
-            return Response({'error': 'Chi staff hoac superuser moi duoc chay alert drill.'}, status=status.HTTP_403_FORBIDDEN)
 
         payload = request.data if isinstance(request.data, dict) else {}
         channels_raw = payload.get('channels') or []
@@ -14402,8 +14410,6 @@ class UserViewSet(viewsets.ModelViewSet):
     def admin_observability_go_live_handoff(self, request):
         if not _can_view_admin_observability(request.user):
             return Response({'error': 'Ban khong co quyen xem go-live handoff.'}, status=status.HTTP_403_FORBIDDEN)
-        if not (getattr(request.user, 'is_staff', False) or getattr(request.user, 'is_superuser', False)):
-            return Response({'error': 'Chi staff hoac superuser moi duoc xuat go-live handoff.'}, status=status.HTTP_403_FORBIDDEN)
 
         environment = str(request.query_params.get('environment') or 'staging').strip().lower()
         if environment not in {'staging', 'uat', 'production'}:
@@ -14418,8 +14424,6 @@ class UserViewSet(viewsets.ModelViewSet):
     def admin_observability_alert_readiness(self, request):
         if not _can_view_admin_observability(request.user):
             return Response({'error': 'Ban khong co quyen xem alert readiness.'}, status=status.HTTP_403_FORBIDDEN)
-        if not (getattr(request.user, 'is_staff', False) or getattr(request.user, 'is_superuser', False)):
-            return Response({'error': 'Chi staff hoac superuser moi duoc xem alert readiness.'}, status=status.HTTP_403_FORBIDDEN)
         try:
             hours = int(request.query_params.get('hours') or 24)
         except (TypeError, ValueError):
@@ -14434,8 +14438,6 @@ class UserViewSet(viewsets.ModelViewSet):
     def admin_observability_release_cleanup_preview(self, request):
         if not _can_view_admin_observability(request.user):
             return Response({'error': 'Ban khong co quyen xem cleanup preview.'}, status=status.HTTP_403_FORBIDDEN)
-        if not (getattr(request.user, 'is_staff', False) or getattr(request.user, 'is_superuser', False)):
-            return Response({'error': 'Chi staff hoac superuser moi duoc xem cleanup preview.'}, status=status.HTTP_403_FORBIDDEN)
         try:
             payload = _run_command_json_payload('cleanup_release_artifacts')
         except Exception as exc:
@@ -14446,8 +14448,6 @@ class UserViewSet(viewsets.ModelViewSet):
     def admin_observability_release_lockfile(self, request):
         if not _can_view_admin_observability(request.user):
             return Response({'error': 'Ban khong co quyen xuat release lockfile.'}, status=status.HTTP_403_FORBIDDEN)
-        if not (getattr(request.user, 'is_staff', False) or getattr(request.user, 'is_superuser', False)):
-            return Response({'error': 'Chi staff hoac superuser moi duoc xuat release lockfile.'}, status=status.HTTP_403_FORBIDDEN)
 
         environment = str(request.query_params.get('environment') or 'staging').strip().lower()
         if environment not in {'staging', 'uat', 'production'}:
@@ -14462,8 +14462,6 @@ class UserViewSet(viewsets.ModelViewSet):
     def admin_observability_performance_drilldown(self, request):
         if not _can_view_admin_observability(request.user):
             return Response({'error': 'Ban khong co quyen xem performance drilldown.'}, status=status.HTTP_403_FORBIDDEN)
-        if not (getattr(request.user, 'is_staff', False) or getattr(request.user, 'is_superuser', False)):
-            return Response({'error': 'Chi staff hoac superuser moi duoc chay performance drilldown.'}, status=status.HTTP_403_FORBIDDEN)
 
         args = ['performance_drilldown']
         include_all = _parse_query_bool(request.query_params.get('include_all'))

@@ -165,6 +165,7 @@ def build_receivable_from_sales_order(order, *, actor=None):
 
     defaults = {
         'code': get_next_receivable_code(document_date),
+        'document_type': 'RECEIVABLE',
         'customer': customer,
         'customer_snapshot': customer_snapshot,
         'document_date': document_date,
@@ -213,6 +214,7 @@ def build_payable_from_purchase_receipt(receipt, *, actor=None):
 
     defaults = {
         'code': get_next_payable_code(document_date),
+        'document_type': 'PAYABLE',
         'supplier': supplier,
         'supplier_snapshot': supplier_snapshot,
         'document_date': document_date,

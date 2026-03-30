@@ -396,7 +396,17 @@ class PurchaseRequestLineSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PurchaseRequestLine
-        fields = ['id', 'line_number', 'product', 'product_code', 'product_name', 'qty', 'note']
+        fields = [
+            'id',
+            'line_number',
+            'product',
+            'product_code',
+            'product_name',
+            'sales_material_plan_item_id',
+            'source_snapshot',
+            'qty',
+            'note',
+        ]
 
     def validate_qty(self, value):
         if value is not None and value <= 0:
@@ -414,9 +424,19 @@ class PurchaseRequestSerializer(serializers.ModelSerializer):
             'id', 'code', 'request_date', 'status', 'reference', 'notes',
             'requested_by', 'requested_by_name', 'approved_by', 'approved_at',
             'rejected_by', 'rejected_at', 'reject_reason',
+            'cancelled_by', 'cancelled_at', 'cancel_reason',
             'created_by', 'created_at', 'updated_by', 'updated_at', 'lines',
         ]
-        read_only_fields = ['code', 'created_by', 'created_at', 'updated_by', 'updated_at']
+        read_only_fields = [
+            'code',
+            'cancelled_by',
+            'cancelled_at',
+            'cancel_reason',
+            'created_by',
+            'created_at',
+            'updated_by',
+            'updated_at',
+        ]
 
     def get_requested_by_name(self, obj):
         user = getattr(obj, 'requested_by', None)

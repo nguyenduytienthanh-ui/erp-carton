@@ -419,6 +419,7 @@ class ReceivableDocumentSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'code',
+            'document_type',
             'source_sales_order',
             'source_sales_order_code',
             'customer',
@@ -507,6 +508,7 @@ class PayableDocumentSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'code',
+            'document_type',
             'source_purchase_receipt',
             'source_purchase_receipt_code',
             'source_purchase_order_code',

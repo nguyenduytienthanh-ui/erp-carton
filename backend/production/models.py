@@ -68,6 +68,47 @@ class ProductionOperationStatus:
     ]
 
 
+class ProductionOperationBlockReason:
+    WAIT_MATERIAL = 'WAIT_MATERIAL'
+    WAIT_PREVIOUS_STEP = 'WAIT_PREVIOUS_STEP'
+    WAIT_APPROVAL = 'WAIT_APPROVAL'
+    MACHINE_DOWN = 'MACHINE_DOWN'
+    OTHER = 'OTHER'
+    CHOICES = [
+        (WAIT_MATERIAL, 'Chờ vật tư/giấy/mực'),
+        (WAIT_PREVIOUS_STEP, 'Chờ công đoạn trước'),
+        (WAIT_APPROVAL, 'Chờ duyệt'),
+        (MACHINE_DOWN, 'Máy dừng/sự cố máy'),
+        (OTHER, 'Khác'),
+    ]
+
+
+class ProductionShift:
+    MORNING = 'MORNING'
+    AFTERNOON = 'AFTERNOON'
+    EVENING = 'EVENING'
+    NIGHT = 'NIGHT'
+    FULLDAY = 'FULLDAY'
+    CHOICES = [
+        (MORNING, 'Sáng'),
+        (AFTERNOON, 'Chiều'),
+        (EVENING, 'Tối'),
+        (NIGHT, 'Đêm'),
+        (FULLDAY, 'Cả ngày'),
+    ]
+
+
+class ProductionHandoverStatus:
+    ACTIVE = 'ACTIVE'
+    READY = 'READY'
+    ACCEPTED = 'ACCEPTED'
+    CHOICES = [
+        (ACTIVE, 'Đang thao tác'),
+        (READY, 'Sẵn sàng bàn giao'),
+        (ACCEPTED, 'Đã tiếp quản'),
+    ]
+
+
 class ProductionIssueStatus:
     POSTED = 'POSTED'
     CANCELLED = 'CANCELLED'
@@ -312,8 +353,43 @@ class ProductionOperation(models.Model):
         choices=ProductionOperationStatus.CHOICES,
         default=ProductionOperationStatus.PENDING,
     )
+    block_reason_code = models.CharField(
+        max_length=30,
+        choices=ProductionOperationBlockReason.CHOICES,
+        blank=True,
+        default='',
+        db_index=True,
+    )
+    block_reason_note = models.CharField(max_length=255, blank=True, default='')
+    planned_date = models.DateField(null=True, blank=True, db_index=True)
+    planned_shift = models.CharField(
+        max_length=20,
+        choices=ProductionShift.CHOICES,
+        blank=True,
+        default='',
+        db_index=True,
+    )
+    priority_rank = models.PositiveIntegerField(default=100)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    dispatch_owner = models.CharField(max_length=120, blank=True, default='')
+    handover_at = models.DateTimeField(null=True, blank=True)
+    handover_note = models.CharField(max_length=255, blank=True, default='')
+    handover_receiver = models.CharField(max_length=120, blank=True, default='')
+    handover_status = models.CharField(
+        max_length=20,
+        choices=ProductionHandoverStatus.CHOICES,
+        blank=True,
+        default='',
+        db_index=True,
+    )
+    dispatch_sequence = models.PositiveIntegerField(default=100)
+    estimated_runtime_hours = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0'))
+    machine_code = models.CharField(max_length=40, blank=True, default='', db_index=True)
+    machine_name = models.CharField(max_length=120, blank=True, default='')
+    setup_minutes = models.PositiveIntegerField(default=0)
+    work_center_code = models.CharField(max_length=40, blank=True, default='', db_index=True)
+    work_center_name = models.CharField(max_length=120, blank=True, default='')
     note = models.CharField(max_length=255, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -322,6 +398,14 @@ class ProductionOperation(models.Model):
         db_table = 'production_operations'
         ordering = ['production_order_id', 'sequence']
         unique_together = [['production_order', 'sequence']]
+        indexes = [
+            models.Index(fields=['planned_date']),
+            models.Index(fields=['planned_shift']),
+            models.Index(fields=['block_reason_code']),
+            models.Index(fields=['handover_status']),
+            models.Index(fields=['work_center_code']),
+            models.Index(fields=['machine_code']),
+        ]
 
     def __str__(self):
         return f'{self.production_order_id}#{self.sequence}-{self.step_code}'
@@ -688,6 +772,10 @@ class ProductionReceiptLine(models.Model):
     )
     unit_cost = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
     line_total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    bundle_count = models.PositiveIntegerField(null=True, blank=True)
+    units_per_bundle = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    pallet_count = models.PositiveIntegerField(null=True, blank=True)
+    bundles_per_pallet = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
     note = models.CharField(max_length=255, blank=True, default='')
     inventory_transaction = models.ForeignKey(
         'inventory.InventoryTransaction',
