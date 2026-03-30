@@ -25,6 +25,7 @@ class ReleaseReadinessCommandTests(TestCase):
         self.assertIn('uat_personas', payload)
         self.assertIn('release_hygiene', payload)
         self.assertIn('performance', payload)
+        self.assertIn('performance_drilldown', payload)
 
     def test_release_readiness_reports_backup_and_alert_context(self):
         with TemporaryDirectory() as tmpdir:
@@ -66,4 +67,5 @@ class ReleaseReadinessCommandTests(TestCase):
         self.assertGreaterEqual(payload['alert_delivery']['status_counts']['SUCCESS'], 1)
         self.assertIn(payload['release_hygiene']['status'], {'ok', 'warning'})
         self.assertIn(payload['performance']['status'], {'ok', 'warning'})
+        self.assertIn(payload['performance_drilldown']['status'], {'ok', 'warning'})
         self.assertIn(payload['preflight']['checks']['audit_controls']['status'], {'ok', 'warning'})

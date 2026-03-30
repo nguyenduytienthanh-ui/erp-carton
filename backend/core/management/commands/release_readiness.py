@@ -1,5 +1,7 @@
 import json
+from io import StringIO
 
+from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
@@ -47,6 +49,11 @@ class Command(BaseCommand):
             'audit_controls': preflight._check_audit_controls(),
         }
 
+    def _build_performance_drilldown(self):
+        stdout = StringIO()
+        call_command('performance_drilldown', '--json', stdout=stdout)
+        return json.loads(stdout.getvalue())
+
     def _build_recommendations(self, payload):
         recommendations = []
         if int(payload['migrations']['pending_count']) > 0:
@@ -65,8 +72,10 @@ class Command(BaseCommand):
             recommendations.append('Investigate recent mail delivery failures and confirm notification paths.')
         if payload['release_hygiene']['status'] != 'ok':
             recommendations.append('Clean the release branch, lock the migration list, and remove generated artifacts before tagging.')
-        if payload['performance']['status'] != 'ok':
+        if payload['performance_drilldown']['status'] != 'ok':
             recommendations.append('Run large-data rehearsal on the flagged command centers and review query/index behavior.')
+        elif payload['performance']['status'] != 'ok':
+            recommendations.append('Capture current performance drilldown output in the release packet for the flagged command centers.')
         return recommendations
 
     def handle(self, *args, **options):
@@ -90,6 +99,7 @@ class Command(BaseCommand):
             'uat_personas': get_uat_user_matrix_snapshot(),
             'release_hygiene': get_release_hygiene_payload(),
             'performance': get_performance_readiness_payload(),
+            'performance_drilldown': self._build_performance_drilldown(),
         }
         payload['recommendations'] = self._build_recommendations(payload)
 
@@ -103,7 +113,7 @@ class Command(BaseCommand):
                 self._status_rank(payload['alert_delivery']['status']),
                 self._status_rank(payload['email_delivery']['status']),
                 self._status_rank(payload['release_hygiene']['status']),
-                self._status_rank(payload['performance']['status']),
+                self._status_rank(payload['performance_drilldown']['status']),
             ]
         )
         payload['overall_status'] = 'ok' if worst == 0 else 'warning' if worst == 1 else 'error'
@@ -122,6 +132,7 @@ class Command(BaseCommand):
             self.stdout.write(f"- missing UAT personas: {payload['uat_personas']['missing_count']}")
             self.stdout.write(f"- release hygiene: {payload['release_hygiene']['status'].upper()}")
             self.stdout.write(f"- performance rehearsal: {payload['performance']['status'].upper()}")
+            self.stdout.write(f"- performance drilldown: {payload['performance_drilldown']['status'].upper()}")
             if payload['recommendations']:
                 self.stdout.write('Recommendations:')
                 for item in payload['recommendations']:
