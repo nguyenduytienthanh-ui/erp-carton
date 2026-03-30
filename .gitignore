@@ -10,6 +10,10 @@ debug.log
 backend-dev.log
 frontend-dev.log
 .tmp.driveupload/
+.tmp-playwright*.png
+.tmp-*-out.log
+.tmp-*-err.log
+artifacts/
 frontend/playwright-report/
 frontend/test-results/
 frontend/dist/

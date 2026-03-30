@@ -23,6 +23,17 @@
 - Mẫu deploy hiện có vẫn đang thiên về chạy theo cùng một cụm dịch vụ; điều đó có nghĩa là repo đã đi đúng hướng để tách lớp, nhưng chưa được coi là mô hình hybrid hoàn chỉnh.
 - Nguồn sự thật kỹ thuật luôn là code và config đang có thật trong repo, không phải mô tả kỳ vọng hay tài liệu cũ.
 
+## Pattern dùng chung đang còn hiệu lực
+
+- Khi cần lưu cấu hình theo người dùng cho một màn hình, dùng `UserPreferences` ở backend và hook `useUserPreferences(page)` ở frontend; không tạo model hoặc hook riêng chỉ cho một màn hình.
+- Khi làm search/filter cho màn danh sách, ưu tiên dùng `useSearchFilterIntent`:
+  - input đổi ngay để người dùng gõ mượt
+  - intent mới là phần debounce để gọi API, sync URL hoặc export
+  - không bind ngược dữ liệu từ query về ô nhập theo cách làm nhảy chữ
+- Khi màn hình đã dùng `QuickClearIcon`, tiếp tục dùng chuẩn đó cho ô nhập/search/filter; không quay lại `allowClear` của Ant Design.
+- Với màn danh sách có tìm kiếm toàn cột, ưu tiên giữ hướng backend gom dữ liệu tìm kiếm trên các cột hiển thị thay vì chỉ tìm một cột đơn lẻ.
+- Nếu một form hoặc bộ lọc đã có quy tắc nhập nhanh bằng bàn phím, hãy giữ hành vi Tab, Enter, Esc và luồng focus nhất quán với màn hình hiện có; không tự ý đổi sang hành vi khác khi chưa có lý do rõ ràng.
+
 ## Đích triển khai hybrid cuối cùng
 
 - Frontend chạy public qua tên miền.
