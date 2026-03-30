@@ -5,6 +5,27 @@ import { useQuery } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
 
 import { reportsApi } from '../../api/reports';
+import type { CustomReportGeneratedResult } from '../../types/reports';
+
+type EmployeePerformanceRow = {
+  employee_code: string;
+  employee_name: string;
+  department: string;
+  position: string;
+  standard_days: number;
+  actual_days: number;
+  attendance_rate_pct: number;
+  overtime_hours: number;
+  bonus_amount: number;
+  penalty_amount: number;
+  performance_score: number;
+};
+
+type EmployeePerformanceSummary = {
+  employees: number;
+  avg_performance_score: number;
+  avg_attendance_rate_pct: number;
+};
 
 export default function EmployeePerformanceReport() {
   const [monthValue, setMonthValue] = useState<Dayjs>(dayjs());
@@ -21,8 +42,9 @@ export default function EmployeePerformanceReport() {
     }),
   });
 
-  const rows = Array.isArray((data as any)?.rows) ? (data as any).rows : [];
-  const summary = ((data as any)?.summary || {}) as Record<string, number>;
+  const report = data as CustomReportGeneratedResult | undefined;
+  const rows = Array.isArray(report?.rows) ? (report.rows as EmployeePerformanceRow[]) : [];
+  const summary = (report?.summary ?? {}) as Partial<EmployeePerformanceSummary>;
 
   const columns = [
     { title: 'Mã NV', dataIndex: 'employee_code', key: 'employee_code', width: 120 },

@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import {
-  Table, Button, Space, Card, Row, Col, Statistic, DatePicker, Empty, Skeleton, message, Tag, Tabs,
+  Table, Button, Card, Row, Col, Statistic, DatePicker, Empty, Skeleton, message, Tabs,
 } from 'antd';
 import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 
 import { accountsReceivableApi } from '../../api/accountsReceivable';
+import type { ReceivableDocument } from '../../types/accountsReceivable';
 import { downloadCSV } from '../../utils/csvExport';
 
 const AgingAnalysis: React.FC = () => {
@@ -29,31 +30,29 @@ const AgingAnalysis: React.FC = () => {
     message.success('Cập nhật dữ liệu phân tích thành công');
   };
 
-  // Phân tích quá hạn theo từng bucket
-  const today = dayjs(dateAs);
   const receivables = data?.results || [];
 
-  const bucket0_30 = receivables.filter((doc: any) => {
+  const bucket0_30 = receivables.filter((doc) => {
     const daysOverdue = doc.days_overdue || 0;
     return daysOverdue >= 0 && daysOverdue <= 30;
   });
 
-  const bucket30_60 = receivables.filter((doc: any) => {
+  const bucket30_60 = receivables.filter((doc) => {
     const daysOverdue = doc.days_overdue || 0;
     return daysOverdue > 30 && daysOverdue <= 60;
   });
 
-  const bucket60_90 = receivables.filter((doc: any) => {
+  const bucket60_90 = receivables.filter((doc) => {
     const daysOverdue = doc.days_overdue || 0;
     return daysOverdue > 60 && daysOverdue <= 90;
   });
 
-  const bucket90Plus = receivables.filter((doc: any) => {
+  const bucket90Plus = receivables.filter((doc) => {
     const daysOverdue = doc.days_overdue || 0;
     return daysOverdue > 90;
   });
 
-  const calculateBucketStats = (docs: any[]) => {
+  const calculateBucketStats = (docs: ReceivableDocument[]) => {
     return {
       count: docs.length,
       total: docs.reduce((sum, doc) => sum + doc.outstanding_amount, 0),
@@ -66,7 +65,7 @@ const AgingAnalysis: React.FC = () => {
   const stats60_90 = calculateBucketStats(bucket60_90);
   const stats90Plus = calculateBucketStats(bucket90Plus);
 
-  const totalOutstanding = receivables.reduce((sum: number, doc: any) => sum + doc.outstanding_amount, 0);
+  const totalOutstanding = receivables.reduce((sum, doc) => sum + doc.outstanding_amount, 0);
 
   const handleExportCSV = () => {
     const csvData = [

@@ -193,7 +193,7 @@ export default function WarehouseTransferList() {
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
-  const rows = transfersQuery.data?.results ?? [];
+  const rows = useMemo(() => transfersQuery.data?.results ?? [], [transfersQuery.data?.results]);
 
   const summary = useMemo(() => {
     const draftCount = rows.filter((item) => item.status === 'DRAFT').length;

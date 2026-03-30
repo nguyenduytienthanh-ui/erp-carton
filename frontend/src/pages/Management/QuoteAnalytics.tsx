@@ -7,7 +7,21 @@ import dayjs, { Dayjs } from 'dayjs';
 import { useQuery } from '@tanstack/react-query';
 
 import { salesApi } from '../../api/sales';
+import type { Quote } from '../../types/sales';
 import { downloadCSV } from '../../utils/csvExport';
+
+type QuoteAnalyticsRecord = Quote & { sales_order_code?: string | null };
+
+type ConversionRow = {
+  id: number;
+  quote_code: string;
+  order_code: string;
+  customer_name: string;
+  quote_value: number;
+  order_value: number;
+  conversion_date: string;
+  conversion_rate: number;
+};
 
 const QuoteAnalytics: React.FC = () => {
   const [startDate, setStartDate] = useState<Dayjs>(dayjs().startOf('month'));
@@ -24,19 +38,19 @@ const QuoteAnalytics: React.FC = () => {
   });
 
   const { metrics, conversions } = useMemo(() => {
-    const results = quotesResponse?.results ?? [];
-    const totalValue = results.reduce((sum: number, q: any) => sum + Number(q.total || 0), 0);
-    const accepted = results.filter((q: any) => q.status === 'ACCEPTED');
+    const results = (quotesResponse?.results ?? []) as QuoteAnalyticsRecord[];
+    const totalValue = results.reduce((sum, q) => sum + Number(q.total || 0), 0);
+    const accepted = results.filter((q) => q.status === 'ACCEPTED');
     const convertedCount = accepted.length;
     const totalCount = results.length;
     const conversionRate = totalCount > 0 ? (convertedCount / totalCount) * 100 : 0;
-    const rejectedCount = results.filter((q: any) => q.status === 'REJECTED').length;
+    const rejectedCount = results.filter((q) => q.status === 'REJECTED').length;
     const expiredCount = results.filter(
-      (q: any) => q.valid_until && dayjs(q.valid_until).isBefore(dayjs()) && q.status !== 'ACCEPTED' && q.status !== 'REJECTED'
+      (q) => q.valid_until && dayjs(q.valid_until).isBefore(dayjs()) && q.status !== 'ACCEPTED' && q.status !== 'REJECTED'
     ).length;
     const avgDeal = convertedCount > 0 ? totalValue / convertedCount : 0;
 
-    const conversionsList = accepted.map((q: any) => ({
+    const conversionsList: ConversionRow[] = accepted.map((q) => ({
       id: q.id,
       quote_code: q.code,
       order_code: q.sales_order_code ?? '—',
@@ -62,7 +76,7 @@ const QuoteAnalytics: React.FC = () => {
   }, [quotesResponse]);
 
   const handleExportCSV = () => {
-    const csvData = conversions.map((c: any) => ({
+    const csvData = conversions.map((c) => ({
       'Mã báo giá': c.quote_code,
       'Mã đơn bán': c.order_code,
       'Khách hàng': c.customer_name,

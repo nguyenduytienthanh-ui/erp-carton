@@ -70,6 +70,25 @@ type WorkflowAnalyticsSchedulerHistoryMode = 'ALL' | 'MANUAL_PROFILE' | 'SCHEDUL
 type WorkflowAnalyticsSchedulerIncidentStatus = 'ALL' | 'SUCCESS' | 'FAILED' | 'SKIPPED_LOCKED';
 type WorkflowAnalyticsProfileKey = 'MORNING' | 'MIDDAY' | 'EOD' | 'CUSTOM';
 
+const PROFILE_LABELS: Record<WorkflowAnalyticsProfileKey, string> = {
+  MORNING: 'Đầu ngày',
+  MIDDAY: 'Giữa ngày',
+  EOD: 'Cuối ngày',
+  CUSTOM: 'Tùy chỉnh',
+};
+
+const SCHEDULER_STATUS_LABELS: Record<'SUCCESS' | 'FAILED' | 'SKIPPED_LOCKED', string> = {
+  SUCCESS: 'Thành công',
+  FAILED: 'Thất bại',
+  SKIPPED_LOCKED: 'Bị khóa',
+};
+
+const INSIGHT_SEVERITY_LABELS: Record<string, string> = {
+  HIGH: 'Cao',
+  MEDIUM: 'Trung bình',
+  LOW: 'Thấp',
+};
+
 type WorkflowAnalyticsViewSnapshot = {
   entityType: string;
   trigger: WftTrigger;
@@ -198,22 +217,6 @@ function getAutomationRunModeLabel(value: string | null | undefined) {
 }
 
 export default function WorkflowAnalyticsDashboard() {
-  const PROFILE_LABELS: Record<WorkflowAnalyticsProfileKey, string> = {
-    MORNING: 'Đầu ngày',
-    MIDDAY: 'Giữa ngày',
-    EOD: 'Cuối ngày',
-    CUSTOM: 'Tùy chỉnh',
-  };
-  const SCHEDULER_STATUS_LABELS: Record<'SUCCESS' | 'FAILED' | 'SKIPPED_LOCKED', string> = {
-    SUCCESS: 'Thành công',
-    FAILED: 'Thất bại',
-    SKIPPED_LOCKED: 'Bị khóa',
-  };
-  const INSIGHT_SEVERITY_LABELS: Record<string, string> = {
-    HIGH: 'Cao',
-    MEDIUM: 'Trung bình',
-    LOW: 'Thấp',
-  };
   const [entityType, setEntityType] = useState<string>('SalesOrder');
   const [trigger, setTrigger] = useState<WftTrigger>('SUBMIT');
   const [days, setDays] = useState<number>(30);
@@ -748,7 +751,7 @@ export default function WorkflowAnalyticsDashboard() {
 
   const dashboardSummary = useMemo(() => ({
     breachSteps: (analyticsQuery.data?.step_metrics ?? []).filter((item) => item.breach_rate_percent >= 10).length,
-    highSeverityInsights: insights.filter((item) => item.severity === 'HIGH').length,
+    highSeverityInsights: (analyticsQuery.data?.insights ?? []).filter((item) => item.severity === 'HIGH').length,
     activeProfiles: profiles
       ? (Object.keys(profiles) as WorkflowAnalyticsProfileKey[]).filter((key) => {
         const profile = profiles[key];
@@ -758,7 +761,7 @@ export default function WorkflowAnalyticsDashboard() {
     activeScheduleSlots: schedulerDraft.slots.filter((slot) => slot.active).length,
     schedulerFailures: schedulerHealthQuery.data?.status_counts.FAILED ?? 0,
     schedulerLocked: schedulerHealthQuery.data?.status_counts.SKIPPED_LOCKED ?? 0,
-  }), [analyticsQuery.data?.step_metrics, insights, profiles, schedulerDraft.slots, schedulerHealthQuery.data?.status_counts.FAILED, schedulerHealthQuery.data?.status_counts.SKIPPED_LOCKED]);
+  }), [analyticsQuery.data?.insights, analyticsQuery.data?.step_metrics, profiles, schedulerDraft.slots, schedulerHealthQuery.data?.status_counts.FAILED, schedulerHealthQuery.data?.status_counts.SKIPPED_LOCKED]);
 
   const dashboardAlert = useMemo(() => {
     if (!summary) {
@@ -821,8 +824,6 @@ export default function WorkflowAnalyticsDashboard() {
     schedulerHistoryMode,
     schedulerIncidentStatus,
     selectedProfileKey,
-    PROFILE_LABELS,
-    SCHEDULER_STATUS_LABELS,
   ]);
 
   const buildCurrentSnapshot = (): WorkflowAnalyticsViewSnapshot => ({

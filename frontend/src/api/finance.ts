@@ -21,6 +21,8 @@ import type {
   CrossModuleBootstrapResponse,
   CrossModuleBootstrapHistoryResponse,
   CrossModuleReadinessResponse,
+  BankReconciliationPayload,
+  BankReconciliationRecord,
   AdvanceOverdueReportResponse,
   ArApSummaryResponse,
   AdvanceSettlement,
@@ -606,19 +608,19 @@ export const financeApi = {
   },
 
   // Bank Reconciliation
-  getBankReconciliations: async (params?: Record<string, unknown>): Promise<PaginatedResponse<any>> => {
+  getBankReconciliations: async (params?: Record<string, unknown>): Promise<PaginatedResponse<BankReconciliationRecord>> => {
     const response = await axiosInstance.get('/finance/bank-reconciliations/', { params });
     return response.data;
   },
-  getBankReconciliation: async (id: number): Promise<any> => {
+  getBankReconciliation: async (id: number): Promise<BankReconciliationRecord> => {
     const response = await axiosInstance.get(`/finance/bank-reconciliations/${id}/`);
     return response.data;
   },
-  createBankReconciliation: async (payload: Record<string, unknown>): Promise<any> => {
+  createBankReconciliation: async (payload: BankReconciliationPayload): Promise<BankReconciliationRecord> => {
     const response = await axiosInstance.post('/finance/bank-reconciliations/', payload);
     return response.data;
   },
-  updateBankReconciliation: async (id: number, payload: Record<string, unknown>): Promise<any> => {
+  updateBankReconciliation: async (id: number, payload: Partial<BankReconciliationPayload>): Promise<BankReconciliationRecord> => {
     const response = await axiosInstance.patch(`/finance/bank-reconciliations/${id}/`, payload);
     return response.data;
   },

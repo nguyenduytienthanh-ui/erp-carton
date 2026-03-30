@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   Alert,
@@ -189,23 +189,23 @@ export default function UserProvisioningDesk() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [messageApi, contextHolder] = message.useMessage();
+  const focusUserId = Number(searchParams.get('focus_user_id') || 0) || null;
+  const focusSearch = searchParams.get('focus') || searchParams.get('search') || '';
   const [previewData, setPreviewData] = useState<UserProvisioningPreviewResponse | null>(null);
   const [createdResult, setCreatedResult] = useState<UserProvisioningResponse | null>(null);
-  const [watchlistSearch, setWatchlistSearch] = useState('');
+  const [watchlistSearch, setWatchlistSearch] = useState(focusSearch);
   const [watchlistState, setWatchlistState] = useState<WatchlistStateFilter>('all');
-  const [activitySearch, setActivitySearch] = useState('');
+  const [activitySearch, setActivitySearch] = useState(focusSearch);
   const [activityPasswordFilter, setActivityPasswordFilter] = useState<ActivityPasswordFilter>('all');
   const [selectedViewPresetId, setSelectedViewPresetId] = useState('NONE');
   const [isViewPresetModalOpen, setIsViewPresetModalOpen] = useState(false);
   const [viewPresetName, setViewPresetName] = useState('');
   const [selectedWatchlistUserId, setSelectedWatchlistUserId] = useState<number | null>(null);
-  const [focusHandled, setFocusHandled] = useState(false);
+  const [dismissedFocusWatchlistId, setDismissedFocusWatchlistId] = useState<number | null>(null);
   const [form] = Form.useForm<ProvisioningFormValues>();
   const passwordMode = Form.useWatch('password_mode', form) ?? 'generated';
   const deferredWatchlistSearch = useMemo(() => normalizeSearch(watchlistSearch), [watchlistSearch]);
   const deferredActivitySearch = useMemo(() => normalizeSearch(activitySearch), [activitySearch]);
-  const focusUserId = Number(searchParams.get('focus_user_id') || 0) || null;
-  const focusSearch = searchParams.get('focus') || searchParams.get('search') || '';
   const { config: savedConfig, saveConfig } = useUserPreferences(PAGES.ADMIN_USER_PROVISIONING);
   const namedPresets = useMemo(() => {
     const raw = savedConfig?.saved_views;
@@ -461,31 +461,35 @@ export default function UserProvisioningDesk() {
       messageApi.error('Không thể xóa mẫu lọc provisioning.');
     }
   };
-  const selectedWatchlistItem = filteredWatchlist.find((item) => item.id === selectedWatchlistUserId)
-    ?? (workspaceQuery.data?.watchlist ?? []).find((item) => item.id === selectedWatchlistUserId)
-    ?? null;
-
-  useEffect(() => {
-    if (focusHandled || !workspaceQuery.data) return;
-    if (!focusUserId && !focusSearch) {
-      setFocusHandled(true);
-      return;
-    }
-    if (focusSearch) {
-      setWatchlistSearch(focusSearch);
-      setActivitySearch(focusSearch);
-    }
+  const focusedWatchlistUserId = useMemo(() => {
+    if (!workspaceQuery.data || (!focusUserId && !focusSearch)) return null;
     const normalizedFocus = normalizeSearch(focusSearch);
     const matched = (workspaceQuery.data.watchlist ?? []).find((item) => {
       if (focusUserId && item.id === focusUserId) return true;
       if (!normalizedFocus) return false;
       return normalizeSearch([item.username, item.full_name, item.email].join(' ')).includes(normalizedFocus);
     });
-    if (matched) {
-      setSelectedWatchlistUserId(matched.id);
+    if (!matched) return null;
+    return dismissedFocusWatchlistId === matched.id ? null : matched.id;
+  }, [dismissedFocusWatchlistId, focusSearch, focusUserId, workspaceQuery.data]);
+  const effectiveSelectedWatchlistUserId = selectedWatchlistUserId ?? focusedWatchlistUserId;
+  const selectedWatchlistItem = filteredWatchlist.find((item) => item.id === effectiveSelectedWatchlistUserId)
+    ?? (workspaceQuery.data?.watchlist ?? []).find((item) => item.id === effectiveSelectedWatchlistUserId)
+    ?? null;
+
+  const openWatchlistItem = (userId: number) => {
+    setSelectedWatchlistUserId(userId);
+    if (dismissedFocusWatchlistId === userId) {
+      setDismissedFocusWatchlistId(null);
     }
-    setFocusHandled(true);
-  }, [focusHandled, focusSearch, focusUserId, workspaceQuery.data]);
+  };
+
+  const closeWatchlistDrawer = () => {
+    if (focusedWatchlistUserId && focusedWatchlistUserId === effectiveSelectedWatchlistUserId) {
+      setDismissedFocusWatchlistId(focusedWatchlistUserId);
+    }
+    setSelectedWatchlistUserId(null);
+  };
 
   const handlePreview = async () => {
     const values = await form.validateFields();
@@ -996,7 +1000,7 @@ export default function UserProvisioningDesk() {
                             {item.has_security_followup ? <Tag color="gold">Đổi mật khẩu</Tag> : null}
                           </Space>
                           <Space size={[8, 8]} wrap>
-                            <Button size="small" onClick={() => setSelectedWatchlistUserId(item.id)}>
+                            <Button size="small" onClick={() => openWatchlistItem(item.id)}>
                               Xem chi tiết
                             </Button>
                             {item.preset_key ? (
@@ -1175,7 +1179,7 @@ export default function UserProvisioningDesk() {
         open={Boolean(selectedWatchlistItem)}
         title="Chi tiết danh sách ưu tiên cấp tài khoản"
         width={480}
-        onClose={() => setSelectedWatchlistUserId(null)}
+        onClose={closeWatchlistDrawer}
       >
         {selectedWatchlistItem ? (
           <div data-testid="user-provisioning-watchlist-drawer">
@@ -1220,7 +1224,7 @@ export default function UserProvisioningDesk() {
                   Nạp preset vào biểu mẫu
                 </Button>
               ) : null}
-              <Button onClick={() => setSelectedWatchlistUserId(null)}>Đóng</Button>
+              <Button onClick={closeWatchlistDrawer}>Đóng</Button>
             </Space>
           </Space>
           </div>

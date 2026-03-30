@@ -78,24 +78,8 @@ function visibleDialog(page: Page, title: string): Locator {
   return page.getByRole('dialog').filter({ hasText: title }).last();
 }
 
-async function findShipmentByReference(page: Page, token: string, reference: string): Promise<ShipmentRecord | null> {
-  const payload = await apiGet<PaginatedResponse<ShipmentRecord>>(page, token, '/sales/shipments/', {
-    search: reference,
-    page_size: 20,
-  });
-  return payload.results.find((item) => item.reference === reference) ?? null;
-}
-
 async function getShipment(page: Page, token: string, id: number): Promise<ShipmentRecord> {
   return apiGet<ShipmentRecord>(page, token, `/sales/shipments/${id}/`);
-}
-
-async function findWarehouseTransferByReference(page: Page, token: string, reference: string): Promise<WarehouseTransferRecord | null> {
-  const payload = await apiGet<PaginatedResponse<WarehouseTransferRecord>>(page, token, '/inventory/warehouse-transfers/', {
-    search: reference,
-    page_size: 20,
-  });
-  return payload.results.find((item) => item.reference === reference) ?? null;
 }
 
 async function getWarehouseTransfer(page: Page, token: string, id: number): Promise<WarehouseTransferRecord> {

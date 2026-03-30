@@ -554,6 +554,7 @@ export default function ExecutiveCockpit() {
     bootstrapHistoryDays,
     bootstrapHistoryUsername,
     bootstrapHistoryDryRun,
+    cockpitConfigObj,
     prefsHydrated,
     saveCockpitConfig,
   ]);

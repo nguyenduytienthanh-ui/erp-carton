@@ -182,7 +182,7 @@ export default function ModulePermissionHistory() {
     [historyMetaQuery.data?.changed_types]
   );
 
-  const rows = listQuery.data?.results ?? [];
+  const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
   const total = listQuery.data?.count ?? 0;
   const summary = listQuery.data?.summary;
   const trendItems = useMemo(() => summary?.trend_12m ?? [], [summary?.trend_12m]);

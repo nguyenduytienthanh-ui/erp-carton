@@ -1,4 +1,4 @@
-import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Col, Drawer, Empty, Input, List, Modal, Row, Segmented, Select, Space, Spin, Statistic, Switch, Tag, message } from 'antd';
 import { ReloadOutlined, ProjectOutlined, SwapRightOutlined, WarningOutlined, HistoryOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -570,7 +570,7 @@ export default function WorkflowPipelineBoard() {
     live_sync: liveSync,
   });
 
-  const parseFilterSnapshot = (value: unknown): PipelineFilterSnapshot | null => {
+  const parseFilterSnapshot = useCallback((value: unknown): PipelineFilterSnapshot | null => {
     if (!value || typeof value !== 'object') return null;
     const obj = value as Record<string, unknown>;
     const entityTypeValue = obj.entity_type;
@@ -596,13 +596,13 @@ export default function WorkflowPipelineBoard() {
       team_filter: typeof obj.team_filter === 'string' ? obj.team_filter : 'ALL',
       live_sync: obj.live_sync !== false,
     };
-  };
+  }, []);
 
   const savedViewSnapshot = useMemo(() => {
     const directSnapshot = parseFilterSnapshot((savedConfig as Record<string, unknown>)?.saved_view_snapshot);
     if (directSnapshot) return directSnapshot;
     return parseFilterSnapshot(savedConfig);
-  }, [savedConfig]);
+  }, [parseFilterSnapshot, savedConfig]);
 
   const resetBoardFilters = () => {
     setSearch('');

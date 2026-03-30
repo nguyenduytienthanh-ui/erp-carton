@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import {
   Alert,
   Button,
@@ -292,7 +292,8 @@ export default function AdvanceTransactionList() {
   const [openSettlementModal, setOpenSettlementModal] = useState(false);
   const [advanceSelectSearch, setAdvanceSelectSearch] = useState('');
   const [editingAdvance, setEditingAdvance] = useState<AdvanceTransaction | null>(null);
-  const [detailAdvance, setDetailAdvance] = useState<AdvanceTransaction | null>(null);
+  const [detailAdvanceId, setDetailAdvanceId] = useState<number | null>(null);
+  const [dismissedFocusKey, setDismissedFocusKey] = useState('');
   const [editingSettlement, setEditingSettlement] = useState<AdvanceSettlement | null>(null);
   const [advanceForm] = Form.useForm<AdvanceForm>();
   const [settlementForm] = Form.useForm<SettlementForm>();
@@ -394,11 +395,7 @@ export default function AdvanceTransactionList() {
     queryKey: ['finance-advance-approval-sla-policy'],
     queryFn: () => financeApi.getAdvanceApprovalSlaPolicy(),
   });
-  const approvalHistoryQuery = useQuery({
-    queryKey: ['finance-advance-approval-history', detailAdvance?.id],
-    queryFn: () => financeApi.getAdvanceApprovalHistory(detailAdvance!.id),
-    enabled: Boolean(detailAdvance?.id),
-  });
+  const focusKey = `${initialFocusId ?? ''}:${initialFocusCode ?? ''}`;
 
   const invalidateAdvanceWorkspace = async () => {
     await Promise.all([
@@ -607,19 +604,22 @@ export default function AdvanceTransactionList() {
   });
 
   const advances = useMemo(() => advancesQuery.data?.results ?? [], [advancesQuery.data?.results]);
-  const detailAdvanceData = useMemo(
-    () => advances.find((item) => item.id === detailAdvance?.id) ?? detailAdvance,
-    [advances, detailAdvance]
+  const focusedAdvance = useMemo(
+    () => advances.find(
+      (item) => (initialFocusId ? item.id === initialFocusId : false) || (initialFocusCode ? item.code === initialFocusCode : false),
+    ) ?? null,
+    [advances, initialFocusCode, initialFocusId],
   );
-  useEffect(() => {
-    if (!initialFocusCode && !initialFocusId) return;
-    const matched = advances.find(
-      (item) => (initialFocusId ? item.id === initialFocusId : false) || (initialFocusCode ? item.code === initialFocusCode : false)
-    );
-    if (matched && detailAdvance?.id !== matched.id) {
-      setDetailAdvance(matched);
-    }
-  }, [advances, detailAdvance?.id, initialFocusCode, initialFocusId]);
+  const activeDetailAdvanceId = detailAdvanceId ?? (dismissedFocusKey === focusKey ? null : focusedAdvance?.id ?? null);
+  const detailAdvanceData = useMemo(
+    () => advances.find((item) => item.id === activeDetailAdvanceId) ?? focusedAdvance,
+    [activeDetailAdvanceId, advances, focusedAdvance]
+  );
+  const approvalHistoryQuery = useQuery({
+    queryKey: ['finance-advance-approval-history', activeDetailAdvanceId],
+    queryFn: () => financeApi.getAdvanceApprovalHistory(activeDetailAdvanceId as number),
+    enabled: activeDetailAdvanceId !== null,
+  });
   const settlements = useMemo(() => settlementsQuery.data?.results ?? [], [settlementsQuery.data?.results]);
   const advanceTotal = advancesQuery.data?.count ?? 0;
   const settlementTotal = settlementsQuery.data?.count ?? 0;
@@ -875,7 +875,7 @@ export default function AdvanceTransactionList() {
       fixed: 'right',
       render: (_, row) => (
         <Space>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailAdvance(row)}>
+          <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailAdvanceId(row.id)}>
             Xem
           </Button>
           {canManage && (
@@ -1716,8 +1716,13 @@ export default function AdvanceTransactionList() {
 
       <Modal
         title={detailAdvanceData ? `Chi tiết phiếu tạm ứng - ${detailAdvanceData.code}` : 'Chi tiết phiếu tạm ứng'}
-        open={Boolean(detailAdvance)}
-        onCancel={() => setDetailAdvance(null)}
+        open={activeDetailAdvanceId !== null}
+        onCancel={() => {
+          setDetailAdvanceId(null);
+          if (focusedAdvance?.id === activeDetailAdvanceId) {
+            setDismissedFocusKey(focusKey);
+          }
+        }}
         footer={null}
         width={980}
       >

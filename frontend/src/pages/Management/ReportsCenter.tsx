@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Button,
@@ -359,7 +359,7 @@ export default function ReportsCenter() {
     [config],
   );
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSizeOverride, setPageSizeOverride] = useState<number | null>(null);
   const [searchInput, setSearchInput] = useState('');
   const [filters, setFilters] = useState<ReportFilters>({
     report_type: '',
@@ -402,13 +402,8 @@ export default function ReportsCenter() {
     () => namedPresets.find((item) => item.id === selectedViewPresetId) ?? null,
     [namedPresets, selectedViewPresetId],
   );
-
-  useEffect(() => {
-    const configuredPageSize = Number(configRecord.pageSize ?? 10);
-    if (Number.isFinite(configuredPageSize) && configuredPageSize > 0) {
-      setPageSize((current) => (current === configuredPageSize ? current : configuredPageSize));
-    }
-  }, [configRecord.pageSize]);
+  const configuredPageSize = Number(configRecord.pageSize ?? 10);
+  const pageSize = pageSizeOverride ?? (Number.isFinite(configuredPageSize) && configuredPageSize > 0 ? configuredPageSize : 10);
 
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
@@ -609,7 +604,7 @@ export default function ReportsCenter() {
   const applySnapshot = (snapshot: ReportsCenterViewSnapshot) => {
     setSearchInput(snapshot.searchInput);
     setFilters(snapshot.filters);
-    setPageSize(snapshot.pageSize);
+    setPageSizeOverride(snapshot.pageSize);
     setPage(1);
   };
 
@@ -1326,7 +1321,7 @@ export default function ReportsCenter() {
                 pageSizeOptions: ['10', '20', '50'],
                 onChange: (nextPage, nextPageSize) => {
                   if (nextPageSize && nextPageSize !== pageSize) {
-                    setPageSize(nextPageSize);
+                    setPageSizeOverride(nextPageSize);
                     setPage(1);
                     return;
                   }

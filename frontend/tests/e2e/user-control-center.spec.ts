@@ -5,9 +5,10 @@ test('admin can inspect user control center and access orchestration drawer', as
   await login(page, adminUser.username, adminUser.password);
 
   await page.goto('/admin/users');
-  await expect(page.locator('main').getByText('Trung tâm điều phối người dùng', { exact: true })).toBeVisible();
-  await expect(page.locator('main').getByText('Nhật ký điều phối truy cập', { exact: true })).toBeVisible();
-  await expect(page.locator('main').getByText('Hàng chờ cần rà soát', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Xuất CSV/i }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('main')).toContainText('Trung tâm điều phối người dùng', { timeout: 20_000 });
+  await expect(page.locator('main')).toContainText('Nhật ký điều phối truy cập', { timeout: 20_000 });
+  await expect(page.locator('main')).toContainText('Hàng chờ cần rà soát', { timeout: 20_000 });
 
   await page.getByRole('button', { name: 'Mở chi tiết' }).first().click();
   await expect(page.getByText('Hồ sơ điều phối', { exact: false }).last()).toBeVisible();

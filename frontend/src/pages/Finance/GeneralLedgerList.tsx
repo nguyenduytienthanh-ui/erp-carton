@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 
 import { generalLedgerApi } from '../../api/generalLedger';
-import type { GeneralLedgerEntry } from '../../types/generalLedger';
+import type { GeneralLedgerAccount, GeneralLedgerEntry } from '../../types/generalLedger';
 import { downloadCSV } from '../../utils/csvExport';
 
 const GeneralLedgerList: React.FC = () => {
@@ -160,7 +160,7 @@ const GeneralLedgerList: React.FC = () => {
           onChange={(val) => { setAccount(val); setPage(1); }}
           allowClear
           style={{ width: '200px' }}
-          options={accounts.map((a: any) => ({
+          options={accounts.map((a: GeneralLedgerAccount) => ({
             value: a.id,
             label: `${a.code} - ${a.name}`,
           }))}

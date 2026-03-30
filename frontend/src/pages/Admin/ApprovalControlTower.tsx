@@ -163,7 +163,7 @@ export default function ApprovalControlTower() {
   const workspace = workspaceQuery.data;
   const approvalAudit = workspace?.approval_audit;
   const domainCards = approvalAudit?.domains ?? [];
-  const hotItems = approvalAudit?.hot_items ?? [];
+  const hotItems = useMemo(() => approvalAudit?.hot_items ?? [], [approvalAudit?.hot_items]);
   const queueSummary = approvalAudit?.queue_summary;
   const timeline7d = approvalAudit?.timeline_7d ?? [];
 

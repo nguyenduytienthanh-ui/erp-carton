@@ -63,6 +63,7 @@ export interface CashTransaction {
   category_name?: string;
   transaction_date: string;
   amount: string;
+  reference?: string;
   object_name: string;
   reason: string;
   note: string;
@@ -322,6 +323,32 @@ export interface PayrollReconciliationResponse {
   posted_count: number;
   delta: string;
   is_balanced: boolean;
+}
+
+export interface BankReconciliationRecord {
+  id: number;
+  code: string;
+  statement_date: string;
+  statement_balance: string;
+  bank_account: number;
+  bank_account_code?: string;
+  bank_account_name?: string;
+  book_balance: string;
+  delta: string;
+  status: string;
+  reference: string;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BankReconciliationPayload {
+  statement_date: string;
+  bank_account: number;
+  statement_balance: number;
+  book_balance: number;
+  reference?: string;
+  note?: string;
 }
 
 export interface FinanceMonthCloseCheckItem {

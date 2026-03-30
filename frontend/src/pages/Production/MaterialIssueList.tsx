@@ -252,7 +252,7 @@ export default function MaterialIssueList() {
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
-  const rows = listQuery.data?.results ?? [];
+  const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
   const detailData = detailQuery.data ?? detailIssue;
 
   const orderOptions = useMemo(

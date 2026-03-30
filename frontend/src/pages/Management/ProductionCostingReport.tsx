@@ -5,6 +5,25 @@ import { useQuery } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
 
 import { reportsApi } from '../../api/reports';
+import type { CustomReportGeneratedResult } from '../../types/reports';
+
+type ProductionCostingRow = {
+  order_code: string;
+  product_code: string;
+  product_name: string;
+  planned_qty: number;
+  produced_qty: number;
+  estimated_unit_cost: number;
+  actual_material_cost: number;
+  actual_unit_cost: number;
+  variance_per_unit: number;
+};
+
+type ProductionCostingSummary = {
+  orders: number;
+  total_actual_material_cost: number;
+  avg_actual_unit_cost: number;
+};
 
 export default function ProductionCostingReport() {
   const [startDate, setStartDate] = useState<Dayjs>(dayjs().startOf('month'));
@@ -19,8 +38,9 @@ export default function ProductionCostingReport() {
     }),
   });
 
-  const rows = Array.isArray((data as any)?.rows) ? (data as any).rows : [];
-  const summary = ((data as any)?.summary || {}) as Record<string, number>;
+  const report = data as CustomReportGeneratedResult | undefined;
+  const rows = Array.isArray(report?.rows) ? (report.rows as ProductionCostingRow[]) : [];
+  const summary = (report?.summary ?? {}) as Partial<ProductionCostingSummary>;
 
   const columns = [
     { title: 'Lệnh SX', dataIndex: 'order_code', key: 'order_code', width: 140 },

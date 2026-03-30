@@ -46,9 +46,12 @@ test('admin can save and re-apply preset in reports center', async ({ page }) =>
   await expect(page.getByTestId('reports-center-search')).toHaveValue(searchValue);
 
   await page.getByTestId('reports-center-open-preset-modal').click();
+  const reportsPresetModal = page.getByRole('dialog', { name: /Lưu mẫu lọc báo cáo/i });
+  await expect(reportsPresetModal).toBeVisible();
   await page.getByTestId('reports-center-preset-name').fill(presetName);
-  await page.locator('.ant-modal-root').getByRole('button', { name: /Luu mau/i }).click();
-  await expect(page.getByTestId('reports-center-preset-name')).toBeHidden();
+  await reportsPresetModal.getByRole('button', { name: /Lưu mẫu|Luu mau/i }).click();
+  await expect(page.getByText('Đã lưu mẫu lọc báo cáo.')).toBeVisible({ timeout: 20_000 });
+  await expect(reportsPresetModal).toBeHidden({ timeout: 20_000 });
   await page.getByTestId('reports-center-search').fill('sau-khi-luu-reports-center');
   await chooseVisibleAntdOptionByLabel(page, page.getByTestId('reports-center-preset-select').locator('.ant-select'), presetName);
   await page.getByTestId('reports-center-apply-preset').click();
@@ -85,9 +88,12 @@ test('admin can save and re-apply preset in notification center', async ({ page 
   await expect(page.getByTestId('notification-center-read-filter')).toContainText(unreadLabel);
 
   await page.getByTestId('notification-center-open-preset-modal').click();
+  const notificationPresetModal = page.getByRole('dialog', { name: /Lưu mẫu lọc thông báo/i });
+  await expect(notificationPresetModal).toBeVisible();
   await page.getByTestId('notification-center-preset-name').fill(presetName);
-  await page.locator('.ant-modal-root').getByRole('button', { name: /Lưu mẫu|Luu mau/i }).click();
-  await expect(page.getByTestId('notification-center-preset-name')).toBeHidden();
+  await notificationPresetModal.getByRole('button', { name: /Lưu mẫu|Luu mau/i }).click();
+  await expect(page.getByText('Đã lưu mẫu lọc thông báo.')).toBeVisible({ timeout: 20_000 });
+  await expect(notificationPresetModal).toBeHidden({ timeout: 20_000 });
   await page.getByTestId('notification-center-search').fill('sau-khi-luu-notification-center');
   await chooseVisibleAntdOptionByIndex(
     page,

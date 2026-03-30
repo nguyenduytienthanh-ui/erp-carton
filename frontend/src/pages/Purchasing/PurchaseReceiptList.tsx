@@ -219,8 +219,8 @@ export default function PurchaseReceiptList() {
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
-  const rows = receiptsQuery.data?.results ?? [];
-  const supplierOptions: Supplier[] = suppliersQuery.data?.results ?? [];
+  const rows = useMemo(() => receiptsQuery.data?.results ?? [], [receiptsQuery.data?.results]);
+  const supplierOptions = useMemo<Supplier[]>(() => suppliersQuery.data?.results ?? [], [suppliersQuery.data?.results]);
   const detail = receiptDetailQuery.data ?? drawerReceipt;
   const summary = useMemo(() => {
     const postedCount = rows.filter((row) => row.status === 'POSTED').length;

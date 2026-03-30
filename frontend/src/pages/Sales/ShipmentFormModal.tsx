@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
 import {
@@ -122,6 +122,7 @@ export default function ShipmentFormModal({
 }: ShipmentFormModalProps) {
   const [messageApi, contextHolder] = message.useMessage();
   const [form] = Form.useForm<ShipmentFormValues>();
+  const initialValues = useMemo(() => buildInitialValues(shipment), [shipment]);
   const [lines, setLines] = useState<EditableShipmentLine[]>(() => buildInitialLines(shipment));
 
   const customersQuery = useQuery({
@@ -175,16 +176,6 @@ export default function ShipmentFormModal({
       })),
     [productsQuery.data?.results],
   );
-
-  useEffect(() => {
-    if (!open) {
-      form.resetFields();
-      setLines([]);
-      return;
-    }
-    form.setFieldsValue(buildInitialValues(shipment));
-    setLines(buildInitialLines(shipment));
-  }, [form, open, shipment]);
 
   const addLine = () => {
     setLines((current) => [...current, createEmptyLine(current.length)]);
@@ -347,7 +338,7 @@ export default function ShipmentFormModal({
         <Form
           form={form}
           layout="vertical"
-          initialValues={buildInitialValues(shipment)}
+          initialValues={initialValues}
         >
           <Form.Item
             label="Khách hàng"

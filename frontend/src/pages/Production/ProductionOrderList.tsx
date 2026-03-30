@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Alert, Button, Card, Empty, Form, Input, Modal, Progress, Select, Space, Statistic, Table, Tag, Typography, message, Skeleton } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, InboxOutlined, PlusOutlined, StopOutlined, ToolOutlined, UploadOutlined } from '@ant-design/icons';
@@ -98,7 +98,8 @@ export default function ProductionOrderList() {
   const [filters, setFilters] = useState<Filters>(initialStatus ? { status: initialStatus } : {});
   const [laneFilter, setLaneFilter] = useState<ProductionOrderLaneFilter>('ALL');
   const [page, setPage] = useState(1);
-  const [detailOrder, setDetailOrder] = useState<ProductionOrder | null>(null);
+  const [detailOrderId, setDetailOrderId] = useState<number | null>(null);
+  const [dismissedFocusKey, setDismissedFocusKey] = useState('');
   const [editingOrder, setEditingOrder] = useState<ProductionOrder | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [actionModal, setActionModal] = useState<ActionModalState>(null);
@@ -170,11 +171,7 @@ export default function ProductionOrderList() {
   const warehousesQuery = useQuery({ queryKey: ['production-form-warehouses'], queryFn: () => inventoryApi.getWarehouses({ page_size: 200, ordering: 'code' }) });
   const locationsQuery = useQuery({ queryKey: ['production-form-locations'], queryFn: () => inventoryApi.getLocations({ page_size: 400, ordering: 'code' }) });
   const salesOrdersQuery = useQuery({ queryKey: ['production-form-sales-orders'], queryFn: () => salesApi.getOrders({ page_size: 200, ordering: '-order_date' }) });
-  const detailQuery = useQuery({ queryKey: ['production-order-detail', detailOrder?.id], queryFn: () => productionApi.getOrder(detailOrder!.id), enabled: Boolean(detailOrder?.id) });
-  const issueOverviewQuery = useQuery({ queryKey: ['production-order-issues', detailOrder?.id], queryFn: () => productionApi.getOrderIssueOverview(detailOrder!.id), enabled: Boolean(detailOrder?.id) });
-  const receiptOverviewQuery = useQuery({ queryKey: ['production-order-receipts', detailOrder?.id], queryFn: () => productionApi.getOrderReceiptOverview(detailOrder!.id), enabled: Boolean(detailOrder?.id) });
-  const approvalHistoryQuery = useQuery({ queryKey: ['production-order-approval-history', detailOrder?.id], queryFn: () => productionApi.getOrderApprovalHistory(detailOrder!.id), enabled: Boolean(detailOrder?.id) });
-  const nextStatesQuery = useQuery({ queryKey: ['production-order-next-states', detailOrder?.id], queryFn: () => productionApi.getOrderNextStates(detailOrder!.id), enabled: Boolean(detailOrder?.id) });
+  const focusKey = `${focusId ?? ''}:${focusCode ?? ''}`;
 
   const invalidateOrders = async () => {
     await queryClient.invalidateQueries({ queryKey: ['production-orders'] });
@@ -197,7 +194,21 @@ export default function ProductionOrderList() {
   const receiveMutation = useMutation({ mutationFn: (id: number) => productionApi.receiveOutput(id, {}), onSuccess: async () => { await invalidateOrders(); messageApi.success('Đã nhập kho thành phẩm'); }, onError: (error) => messageApi.error(getToastMessage(error)) });
   const cancelMutation = useMutation({ mutationFn: ({ id, reason }: { id: number; reason: string }) => productionApi.cancelOrder(id, reason), onSuccess: async () => { await invalidateOrders(); messageApi.success('Đã hủy lệnh sản xuất'); setActionModal(null); actionForm.resetFields(); }, onError: (error) => messageApi.error(getToastMessage(error)) });
 
-  const rows = listQuery.data?.results ?? [];
+  const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
+  const focusedDetailOrder = useMemo(
+    () => rows.find((row) => (focusId ? row.id === focusId : false) || (focusCode ? row.code === focusCode : false)) ?? null,
+    [focusCode, focusId, rows],
+  );
+  const activeDetailOrderId = detailOrderId ?? (dismissedFocusKey === focusKey ? null : focusedDetailOrder?.id ?? null);
+  const activeDetailOrder = useMemo(
+    () => rows.find((row) => row.id === activeDetailOrderId) ?? focusedDetailOrder,
+    [activeDetailOrderId, focusedDetailOrder, rows],
+  );
+  const detailQuery = useQuery({ queryKey: ['production-order-detail', activeDetailOrderId], queryFn: () => productionApi.getOrder(activeDetailOrderId as number), enabled: activeDetailOrderId !== null });
+  const issueOverviewQuery = useQuery({ queryKey: ['production-order-issues', activeDetailOrderId], queryFn: () => productionApi.getOrderIssueOverview(activeDetailOrderId as number), enabled: activeDetailOrderId !== null });
+  const receiptOverviewQuery = useQuery({ queryKey: ['production-order-receipts', activeDetailOrderId], queryFn: () => productionApi.getOrderReceiptOverview(activeDetailOrderId as number), enabled: activeDetailOrderId !== null });
+  const approvalHistoryQuery = useQuery({ queryKey: ['production-order-approval-history', activeDetailOrderId], queryFn: () => productionApi.getOrderApprovalHistory(activeDetailOrderId as number), enabled: activeDetailOrderId !== null });
+  const nextStatesQuery = useQuery({ queryKey: ['production-order-next-states', activeDetailOrderId], queryFn: () => productionApi.getOrderNextStates(activeDetailOrderId as number), enabled: activeDetailOrderId !== null });
   const summary = useMemo(() => summaryQuery.data ?? {
     total_orders: rows.length,
     draft_count: rows.filter((item) => item.status === 'DRAFT').length,
@@ -370,7 +381,7 @@ export default function ProductionOrderList() {
       fixed: 'right',
       render: (_, row) => (
         <Space wrap size="small">
-          <Button data-testid={`production-order-view-${row.id}`} size="small" icon={<EyeOutlined />} onClick={() => setDetailOrder(row)}>Xem</Button>
+          <Button data-testid={`production-order-view-${row.id}`} size="small" icon={<EyeOutlined />} onClick={() => setDetailOrderId(row.id)}>Xem</Button>
           {canEditOrder(row) ? <Button data-testid={`production-order-edit-${row.id}`} size="small" icon={<EditOutlined />} onClick={() => { setEditingOrder(row); setFormOpen(true); }}>Sửa</Button> : null}
           {row.status === 'DRAFT' ? <>
             <Button data-testid={`production-order-delete-${row.id}`} size="small" danger icon={<DeleteOutlined />} onClick={() => Modal.confirm({ title: 'Xóa lệnh sản xuất', content: `Xóa lệnh ${row.code}?`, okText: 'Xóa', cancelText: 'Đóng', okButtonProps: { danger: true }, onOk: () => deleteMutation.mutate(row.id) })}>Xóa</Button>
@@ -413,14 +424,6 @@ export default function ProductionOrderList() {
   const detailData = detailQuery.data;
   const detailIssues = issueOverviewQuery.data?.results ?? [];
   const detailReceipts = receiptOverviewQuery.data?.results ?? [];
-
-  useEffect(() => {
-    if (!focusCode && !focusId) return;
-    const matched = rows.find((row) => (focusId ? row.id === focusId : false) || (focusCode ? row.code === focusCode : false));
-    if (matched && detailOrder?.id !== matched.id) {
-      setDetailOrder(matched);
-    }
-  }, [detailOrder?.id, focusCode, focusId, rows]);
 
   if (listQuery.isLoading && !listQuery.data) return <Skeleton active paragraph={{ rows: 10 }} />;
 
@@ -543,7 +546,18 @@ export default function ProductionOrderList() {
         </Form>
       </Modal>
 
-      <Modal title={detailOrder ? `Chi tiết lệnh sản xuất - ${detailOrder.code}` : 'Chi tiết lệnh sản xuất'} open={Boolean(detailOrder)} onCancel={() => setDetailOrder(null)} footer={null} width={1120}>
+      <Modal
+        title={activeDetailOrder ? `Chi tiết lệnh sản xuất - ${activeDetailOrder.code}` : detailData ? `Chi tiết lệnh sản xuất - ${detailData.code}` : 'Chi tiết lệnh sản xuất'}
+        open={activeDetailOrderId !== null}
+        onCancel={() => {
+          setDetailOrderId(null);
+          if (focusedDetailOrder?.id === activeDetailOrderId) {
+            setDismissedFocusKey(focusKey);
+          }
+        }}
+        footer={null}
+        width={1120}
+      >
         {detailQuery.isLoading ? <Skeleton active paragraph={{ rows: 10 }} /> : detailData ? <div data-testid="production-order-detail-panel" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
             <Card size="small" style={TILE_STYLE}><Statistic title="Tiến độ" value={getProgressPercent(detailData)} suffix="%" /></Card>

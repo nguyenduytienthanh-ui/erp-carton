@@ -172,38 +172,29 @@ export default function RoleTeamGovernance() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const [searchText, setSearchText] = useState('');
+  const [searchState, setSearchState] = useState<{ sourceKey: string; value: string }>({ sourceKey: '', value: '' });
   const [catalogStatus, setCatalogStatus] = useState<CatalogStatus>('all');
   const [activityKind, setActivityKind] = useState<ActivityKind>('all');
   const [roleDrawerOpen, setRoleDrawerOpen] = useState(false);
   const [teamDrawerOpen, setTeamDrawerOpen] = useState(false);
-  const [focusHandled, setFocusHandled] = useState(false);
-  const focusRecoveryAttempted = useRef(false);
+  const [dismissedFocusKey, setDismissedFocusKey] = useState<string | null>(null);
+  const roleFocusRecoveryKeyRef = useRef<string | null>(null);
+  const teamFocusRecoveryKeyRef = useRef<string | null>(null);
+  const roleFormSeedKeyRef = useRef('');
+  const teamFormSeedKeyRef = useRef('');
   const [editingRole, setEditingRole] = useState<GovernanceRoleItem | null>(null);
   const [editingTeam, setEditingTeam] = useState<GovernanceTeamItem | null>(null);
   const [roleCloneSourceId, setRoleCloneSourceId] = useState<number | undefined>(undefined);
   const [roleForm] = Form.useForm();
   const [teamForm] = Form.useForm();
-  const deferredSearch = useDeferredValue(searchText.trim().toLowerCase());
   const focusKind = searchParams.get('focus_kind');
   const focusId = Number(searchParams.get('focus_id') || 0) || null;
   const focusSearch = searchParams.get('q') || searchParams.get('search') || '';
+  const focusSignature = `${focusKind ?? ''}:${focusId ?? ''}:${focusSearch.trim().toLowerCase()}`;
+  const searchText = searchState.sourceKey === focusSignature ? searchState.value : focusSearch;
+  const deferredSearch = useDeferredValue(searchText.trim().toLowerCase());
   const roleSelection = useRowSelection<GovernanceRoleItem>();
   const teamSelection = useRowSelection<GovernanceTeamItem>();
-
-  useEffect(() => {
-    setFocusHandled(false);
-    focusRecoveryAttempted.current = false;
-    if (focusKind === 'role') {
-      setTeamDrawerOpen(false);
-      setEditingTeam(null);
-    }
-    if (focusKind === 'team') {
-      setRoleDrawerOpen(false);
-      setEditingRole(null);
-      setRoleCloneSourceId(undefined);
-    }
-  }, [focusId, focusKind, focusSearch]);
 
   const summaryQuery = useQuery({
     queryKey: ['admin-role-governance-summary'],
@@ -222,12 +213,12 @@ export default function RoleTeamGovernance() {
     queryFn: () => adminApi.getRoleGovernanceActivity({ kind: activityKind, limit: 24 }),
   });
 
-  const permissionCatalog = summaryQuery.data?.permissions ?? [];
-  const roleTemplates = summaryQuery.data?.role_templates ?? [];
-  const teamPresets = summaryQuery.data?.team_presets ?? [];
+  const permissionCatalog = useMemo(() => summaryQuery.data?.permissions ?? [], [summaryQuery.data?.permissions]);
+  const roleTemplates = useMemo(() => summaryQuery.data?.role_templates ?? [], [summaryQuery.data?.role_templates]);
+  const teamPresets = useMemo(() => summaryQuery.data?.team_presets ?? [], [summaryQuery.data?.team_presets]);
   const permissionOptions = useMemo(() => buildPermissionOptions(permissionCatalog), [permissionCatalog]);
-  const roles = rolesQuery.data ?? [];
-  const teams = teamsQuery.data ?? [];
+  const roles = useMemo(() => rolesQuery.data ?? [], [rolesQuery.data]);
+  const teams = useMemo(() => teamsQuery.data ?? [], [teamsQuery.data]);
   const focusedRole = roles.find((item) => item.id === focusId || item.code === focusSearch || item.name === focusSearch) ?? null;
   const focusedTeam = teams.find((item) => item.id === focusId || item.code === focusSearch || item.name === focusSearch) ?? null;
   const focusedRoleQuery = useQuery({
@@ -242,6 +233,20 @@ export default function RoleTeamGovernance() {
   });
   const resolvedFocusedRole = focusedRole ?? focusedRoleQuery.data ?? null;
   const resolvedFocusedTeam = focusedTeam ?? focusedTeamQuery.data ?? null;
+  const isRolesFetching = rolesQuery.isFetching;
+  const isTeamsFetching = teamsQuery.isFetching;
+  const refetchRoles = rolesQuery.refetch;
+  const refetchTeams = teamsQuery.refetch;
+  const isFocusedRoleDrawerActive = focusKind === 'role'
+    && dismissedFocusKey !== focusSignature
+    && Boolean(resolvedFocusedRole);
+  const isFocusedTeamDrawerActive = focusKind === 'team'
+    && dismissedFocusKey !== focusSignature
+    && Boolean(resolvedFocusedTeam);
+  const activeEditingRole = (isFocusedRoleDrawerActive ? resolvedFocusedRole : null) ?? editingRole;
+  const activeEditingTeam = (isFocusedTeamDrawerActive ? resolvedFocusedTeam : null) ?? editingTeam;
+  const effectiveRoleDrawerOpen = roleDrawerOpen || isFocusedRoleDrawerActive;
+  const effectiveTeamDrawerOpen = teamDrawerOpen || isFocusedTeamDrawerActive;
 
   const invalidateGovernance = async () => {
     await Promise.all([
@@ -270,10 +275,8 @@ export default function RoleTeamGovernance() {
       return adminApi.createRole(payload);
     },
     onSuccess: async () => {
-      message.success(editingRole ? 'Đã cập nhật vai trò.' : 'Đã tạo vai trò mới.');
-      setRoleDrawerOpen(false);
-      setEditingRole(null);
-      setRoleCloneSourceId(undefined);
+      message.success(activeEditingRole ? 'Đã cập nhật vai trò.' : 'Đã tạo vai trò mới.');
+      closeRoleDrawer();
       roleForm.resetFields();
       await invalidateGovernance();
     },
@@ -298,9 +301,8 @@ export default function RoleTeamGovernance() {
       return adminApi.createTeam(payload);
     },
     onSuccess: async () => {
-      message.success(editingTeam ? 'Đã cập nhật nhóm.' : 'Đã tạo nhóm mới.');
-      setTeamDrawerOpen(false);
-      setEditingTeam(null);
+      message.success(activeEditingTeam ? 'Đã cập nhật nhóm.' : 'Đã tạo nhóm mới.');
+      closeTeamDrawer();
       teamForm.resetFields();
       await invalidateGovernance();
     },
@@ -414,97 +416,163 @@ export default function RoleTeamGovernance() {
     );
   };
 
-  const openCreateRoleDrawer = () => {
+  const dismissFocusedDrawer = () => {
+    if (focusKind === 'role' || focusKind === 'team') {
+      setDismissedFocusKey(focusSignature);
+    }
+  };
+
+  const closeRoleDrawer = () => {
+    if (isFocusedRoleDrawerActive) {
+      setDismissedFocusKey(focusSignature);
+    }
+    setRoleDrawerOpen(false);
     setEditingRole(null);
     setRoleCloneSourceId(undefined);
-    roleForm.setFieldsValue({ code: '', name: '', description: '', is_active: true, sort_order: 10, permission_ids: [] });
+    roleFormSeedKeyRef.current = '';
+  };
+
+  const closeTeamDrawer = () => {
+    if (isFocusedTeamDrawerActive) {
+      setDismissedFocusKey(focusSignature);
+    }
+    setTeamDrawerOpen(false);
+    setEditingTeam(null);
+    teamFormSeedKeyRef.current = '';
+  };
+
+  const openCreateRoleDrawer = () => {
+    dismissFocusedDrawer();
+    setTeamDrawerOpen(false);
+    setEditingTeam(null);
+    teamFormSeedKeyRef.current = '';
+    setEditingRole(null);
+    setRoleCloneSourceId(undefined);
+    roleFormSeedKeyRef.current = '';
     setRoleDrawerOpen(true);
   };
 
   const openEditRoleDrawer = (role: GovernanceRoleItem) => {
+    dismissFocusedDrawer();
+    setTeamDrawerOpen(false);
+    setEditingTeam(null);
+    teamFormSeedKeyRef.current = '';
     setEditingRole(role);
     setRoleCloneSourceId(undefined);
-    roleForm.setFieldsValue({
-      code: role.code,
-      name: role.name,
-      description: role.description,
-      is_active: role.is_active,
-      sort_order: role.sort_order,
-      permission_ids: role.permissions.map((permission) => permission.id),
-    });
+    roleFormSeedKeyRef.current = '';
     setRoleDrawerOpen(true);
   };
 
   const openCreateTeamDrawer = () => {
+    dismissFocusedDrawer();
+    setRoleDrawerOpen(false);
+    setEditingRole(null);
+    setRoleCloneSourceId(undefined);
+    roleFormSeedKeyRef.current = '';
     setEditingTeam(null);
-    teamForm.setFieldsValue({ code: '', name: '', description: '', is_active: true, sort_order: 10 });
+    teamFormSeedKeyRef.current = '';
     setTeamDrawerOpen(true);
   };
 
   const openEditTeamDrawer = (team: GovernanceTeamItem) => {
+    dismissFocusedDrawer();
+    setRoleDrawerOpen(false);
+    setEditingRole(null);
+    setRoleCloneSourceId(undefined);
+    roleFormSeedKeyRef.current = '';
     setEditingTeam(team);
-    teamForm.setFieldsValue({
-      code: team.code,
-      name: team.name,
-      description: team.description,
-      is_active: team.is_active,
-      sort_order: team.sort_order,
-    });
+    teamFormSeedKeyRef.current = '';
     setTeamDrawerOpen(true);
   };
 
   useEffect(() => {
-    if (focusHandled) return;
-    if (focusKind === 'role' && rolesQuery.isLoading) return;
-    if (focusKind === 'team' && teamsQuery.isLoading) return;
-    if (!focusKind && (rolesQuery.isLoading || teamsQuery.isLoading)) return;
-    if (!focusId && !focusSearch && focusKind !== 'role' && focusKind !== 'team') {
-      setFocusHandled(true);
+    if (focusKind !== 'role' || !focusId || resolvedFocusedRole || focusedRoleQuery.isFetching || isRolesFetching) {
       return;
     }
-    if (focusSearch) {
-      setSearchText(focusSearch);
-    }
-    const matchedRole = focusKind === 'role' ? resolvedFocusedRole : null;
-    const matchedTeam = focusKind === 'team' ? resolvedFocusedTeam : null;
-    if (focusKind === 'role' && focusId && !matchedRole && !focusedRoleQuery.isFetching) {
-      if (!focusRecoveryAttempted.current && !rolesQuery.isFetching) {
-        focusRecoveryAttempted.current = true;
-        void rolesQuery.refetch();
-      }
+    const recoveryKey = `${focusSignature}:role`;
+    if (roleFocusRecoveryKeyRef.current === recoveryKey) {
       return;
     }
-    if (focusKind === 'team' && focusId && !matchedTeam && !focusedTeamQuery.isFetching) {
-      if (!focusRecoveryAttempted.current && !teamsQuery.isFetching) {
-        focusRecoveryAttempted.current = true;
-        void teamsQuery.refetch();
-      }
-      return;
-    }
-    if (matchedRole) {
-      openEditRoleDrawer(matchedRole);
-    }
-    if (matchedTeam) {
-      openEditTeamDrawer(matchedTeam);
-    }
-    setFocusHandled(true);
-  }, [focusHandled, focusId, focusKind, focusSearch, focusedRoleQuery.isFetching, focusedTeamQuery.isFetching, resolvedFocusedRole, resolvedFocusedTeam, rolesQuery.isFetching, rolesQuery.isLoading, rolesQuery.refetch, teamsQuery.isFetching, teamsQuery.isLoading, teamsQuery.refetch]);
+    roleFocusRecoveryKeyRef.current = recoveryKey;
+    void refetchRoles();
+  }, [
+    focusId,
+    focusKind,
+    focusSignature,
+    focusedRoleQuery.isFetching,
+    isRolesFetching,
+    refetchRoles,
+    resolvedFocusedRole,
+  ]);
 
   useEffect(() => {
-    if (focusKind !== 'role' || !focusId || rolesQuery.isLoading) return;
-    const matchedRole = resolvedFocusedRole;
-    if (matchedRole && (!editingRole || editingRole.id !== matchedRole.id || !roleDrawerOpen)) {
-      openEditRoleDrawer(matchedRole);
+    if (focusKind !== 'team' || !focusId || resolvedFocusedTeam || focusedTeamQuery.isFetching || isTeamsFetching) {
+      return;
     }
-  }, [editingRole, focusId, focusKind, resolvedFocusedRole, roleDrawerOpen, rolesQuery.isLoading]);
+    const recoveryKey = `${focusSignature}:team`;
+    if (teamFocusRecoveryKeyRef.current === recoveryKey) {
+      return;
+    }
+    teamFocusRecoveryKeyRef.current = recoveryKey;
+    void refetchTeams();
+  }, [
+    focusId,
+    focusKind,
+    focusSignature,
+    focusedTeamQuery.isFetching,
+    isTeamsFetching,
+    refetchTeams,
+    resolvedFocusedTeam,
+  ]);
 
   useEffect(() => {
-    if (focusKind !== 'team' || !focusId || teamsQuery.isLoading) return;
-    const matchedTeam = resolvedFocusedTeam;
-    if (matchedTeam && (!editingTeam || editingTeam.id !== matchedTeam.id || !teamDrawerOpen)) {
-      openEditTeamDrawer(matchedTeam);
+    if (!effectiveRoleDrawerOpen) {
+      roleFormSeedKeyRef.current = '';
+      return;
     }
-  }, [editingTeam, focusId, focusKind, resolvedFocusedTeam, teamDrawerOpen, teamsQuery.isLoading]);
+    const nextSeedKey = activeEditingRole ? `edit:${activeEditingRole.id}` : 'create';
+    if (roleFormSeedKeyRef.current === nextSeedKey) {
+      return;
+    }
+    roleFormSeedKeyRef.current = nextSeedKey;
+    roleForm.resetFields();
+    if (activeEditingRole) {
+      roleForm.setFieldsValue({
+        code: activeEditingRole.code,
+        name: activeEditingRole.name,
+        description: activeEditingRole.description,
+        is_active: activeEditingRole.is_active,
+        sort_order: activeEditingRole.sort_order,
+        permission_ids: activeEditingRole.permissions.map((permission) => permission.id),
+      });
+      return;
+    }
+    roleForm.setFieldsValue({ code: '', name: '', description: '', is_active: true, sort_order: 10, permission_ids: [] });
+  }, [activeEditingRole, effectiveRoleDrawerOpen, roleForm]);
+
+  useEffect(() => {
+    if (!effectiveTeamDrawerOpen) {
+      teamFormSeedKeyRef.current = '';
+      return;
+    }
+    const nextSeedKey = activeEditingTeam ? `edit:${activeEditingTeam.id}` : 'create';
+    if (teamFormSeedKeyRef.current === nextSeedKey) {
+      return;
+    }
+    teamFormSeedKeyRef.current = nextSeedKey;
+    teamForm.resetFields();
+    if (activeEditingTeam) {
+      teamForm.setFieldsValue({
+        code: activeEditingTeam.code,
+        name: activeEditingTeam.name,
+        description: activeEditingTeam.description,
+        is_active: activeEditingTeam.is_active,
+        sort_order: activeEditingTeam.sort_order,
+      });
+      return;
+    }
+    teamForm.setFieldsValue({ code: '', name: '', description: '', is_active: true, sort_order: 10 });
+  }, [activeEditingTeam, effectiveTeamDrawerOpen, teamForm]);
 
   const applyRoleTemplate = (template: GovernanceRoleTemplate) => {
     roleForm.setFieldsValue({
@@ -536,7 +604,7 @@ export default function RoleTeamGovernance() {
   const handleRoleSubmit = async () => {
     const values = await roleForm.validateFields();
     saveRoleMutation.mutate({
-      id: editingRole?.id,
+      id: activeEditingRole?.id,
       code: String(values.code || '').trim(),
       name: String(values.name || '').trim(),
       description: String(values.description || '').trim(),
@@ -549,7 +617,7 @@ export default function RoleTeamGovernance() {
   const handleTeamSubmit = async () => {
     const values = await teamForm.validateFields();
     saveTeamMutation.mutate({
-      id: editingTeam?.id,
+      id: activeEditingTeam?.id,
       code: String(values.code || '').trim(),
       name: String(values.name || '').trim(),
       description: String(values.description || '').trim(),
@@ -704,7 +772,7 @@ export default function RoleTeamGovernance() {
             allowClear
             placeholder="Tìm vai trò hoặc nhóm theo mã, tên, mô tả"
             value={searchText}
-            onChange={(event) => setSearchText(event.target.value)}
+            onChange={(event) => setSearchState({ sourceKey: focusSignature, value: event.target.value })}
             style={{ width: 320 }}
           />
           <Select<CatalogStatus>
@@ -730,11 +798,11 @@ export default function RoleTeamGovernance() {
       {(focusId || focusSearch || focusKind === 'role' || focusKind === 'team') ? (
         <Alert
           data-testid="role-governance-focus-banner"
-          type={editingRole || editingTeam ? 'info' : 'warning'}
+          type={activeEditingRole || activeEditingTeam ? 'info' : 'warning'}
           showIcon
           style={{ marginBottom: 16 }}
           message={`Đang tập trung theo drilldown: ${focusSearch || focusKind || `#${focusId}`}`}
-          description={editingRole || editingTeam
+          description={activeEditingRole || activeEditingTeam
             ? 'Drawer chỉnh sửa đã được mở sẵn để bạn tiếp tục rà soát governance theo đúng ngữ cảnh.'
             : 'Danh mục đang được thu hẹp theo tín hiệu drilldown. Nếu chưa thấy bản ghi cần mở, hãy kiểm tra bộ lọc hoặc dữ liệu hiện hành.'}
         />
@@ -928,17 +996,17 @@ export default function RoleTeamGovernance() {
       </Card>
 
       <Drawer
-        title={editingRole ? `Xưởng vai trò: ${editingRole.code}` : 'Xưởng vai trò'}
+        title={activeEditingRole ? `Xưởng vai trò: ${activeEditingRole.code}` : 'Xưởng vai trò'}
         width={720}
-        open={roleDrawerOpen}
-        onClose={() => { setRoleDrawerOpen(false); setEditingRole(null); setRoleCloneSourceId(undefined); }}
-        extra={<Space><Button onClick={() => setRoleDrawerOpen(false)}>Hủy</Button><Button type="primary" loading={saveRoleMutation.isPending} onClick={() => void handleRoleSubmit()}>Lưu vai trò</Button></Space>}
+        open={effectiveRoleDrawerOpen}
+        onClose={closeRoleDrawer}
+        extra={<Space><Button onClick={closeRoleDrawer}>Hủy</Button><Button type="primary" loading={saveRoleMutation.isPending} onClick={() => void handleRoleSubmit()}>Lưu vai trò</Button></Space>}
       >
         <div data-testid="role-governance-role-drawer">
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Card size="small" style={{ borderRadius: 16 }}>
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
-              {!editingRole ? (
+              {!activeEditingRole ? (
                 <Select<number>
                   allowClear
                   showSearch
@@ -978,11 +1046,11 @@ export default function RoleTeamGovernance() {
       </Drawer>
 
       <Drawer
-        title={editingTeam ? `Xưởng nhóm: ${editingTeam.code}` : 'Xưởng nhóm'}
+        title={activeEditingTeam ? `Xưởng nhóm: ${activeEditingTeam.code}` : 'Xưởng nhóm'}
         width={540}
-        open={teamDrawerOpen}
-        onClose={() => { setTeamDrawerOpen(false); setEditingTeam(null); }}
-        extra={<Space><Button onClick={() => setTeamDrawerOpen(false)}>Hủy</Button><Button type="primary" loading={saveTeamMutation.isPending} onClick={() => void handleTeamSubmit()}>Lưu nhóm</Button></Space>}
+        open={effectiveTeamDrawerOpen}
+        onClose={closeTeamDrawer}
+        extra={<Space><Button onClick={closeTeamDrawer}>Hủy</Button><Button type="primary" loading={saveTeamMutation.isPending} onClick={() => void handleTeamSubmit()}>Lưu nhóm</Button></Space>}
       >
         <div data-testid="role-governance-team-drawer">
         <Space direction="vertical" size={16} style={{ width: '100%' }}>

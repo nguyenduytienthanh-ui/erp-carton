@@ -236,7 +236,7 @@ export default function AccountsReceivableList() {
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
-  const rows = listQuery.data?.results ?? [];
+  const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
   const detail = detailQuery.data ?? detailReceivable;
 
   const summary = useMemo(() => {

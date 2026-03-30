@@ -704,20 +704,22 @@ const ProductList = () => {
   }, [searchInput, setFilterValues, setIntentImmediate]);
 
   // Sync effect: bỏ qua lần đầu; sau đó chỉ sync khi user KHÔNG đang focus trong ô lọc → tránh re-render gây mất focus/đơ.
+  const [hasUserInteractedWithFilters, setHasUserInteractedWithFilters] = useState(false);
+  const [mountedAt] = useState(() => Date.now());
   const isFirstSyncRunRef = useRef(true);
   useEffect(() => {
     if (isFirstSyncRunRef.current) {
       isFirstSyncRunRef.current = false;
       return;
     }
-    if (!userHasInteractedWithFiltersRef.current) return;
+    if (!hasUserInteractedWithFilters) return;
     const t = setTimeout(() => {
       // Đang focus trong vùng filter thì không sync (chỉ sync khi blur hoặc lần sau).
       if (document.activeElement?.closest('[data-filter-panel]')) return;
       startTransition(() => syncLocalToContext());
     }, FILTER_INTENT_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [localFilterInput, searchInput, syncLocalToContext]);
+  }, [hasUserInteractedWithFilters, localFilterInput, searchInput, syncLocalToContext]);
 
   const {
     selectedRowKeys,
@@ -822,10 +824,47 @@ const ProductList = () => {
   );
 
   // Ref set đồng bộ trong onChange — tránh config load đúng lúc gõ ghi đè (ô lọc nhập liên tục).
-  const userHasInteractedWithFiltersRef = useRef(false);
-  const mountTimeRef = useRef(Date.now());
   /** Chỉ áp dụng filters từ config trong 800ms đầu; sau đó không ghi đè (tránh config load trễ). */
   const INITIAL_APPLY_WINDOW_MS = 800;
+  const applyPreferencesBootstrap = useCallback((nextConfig: PreferencesConfig) => {
+    const withinWindow = Date.now() - mountedAt <= INITIAL_APPLY_WINDOW_MS;
+    if (withinWindow && !hasUserInteractedWithFilters) {
+      if (nextConfig.filters && typeof nextConfig.filters === 'object') {
+        const parsedFilters = nextConfig.filters as { filterValues?: FilterValues; activeFilters?: FilterKey[] };
+        if (parsedFilters.filterValues && typeof parsedFilters.filterValues === 'object') {
+          setFilterValues(parsedFilters.filterValues);
+          setLocalFilterInput(filterValuesToLocalInput(parsedFilters.filterValues));
+          setIntentImmediate(searchInput ?? '', parsedFilters.filterValues);
+        }
+        if (Array.isArray(parsedFilters.activeFilters)) {
+          setActiveFilters(parsedFilters.activeFilters);
+        }
+      }
+    }
+    if (nextConfig.pageSize != null) {
+      const nextPageSize = Number(nextConfig.pageSize);
+      if (nextPageSize >= 1 && nextPageSize <= 1000) {
+        setPagination((previous) => ({ ...previous, pageSize: nextPageSize }));
+      }
+    }
+    if (nextConfig.sort && typeof nextConfig.sort === 'object' && nextConfig.sort.field && nextConfig.sort.order) {
+      const nextSort = nextConfig.sort as { field: string; order: 'asc' | 'desc' };
+      setSortField(nextSort.field);
+      setSortOrder(nextSort.order);
+    }
+    const savedMode = nextConfig.mobileListViewMode as ListViewMode | undefined;
+    if (savedMode === 'table' || savedMode === 'cards') {
+      setViewMode(savedMode);
+    }
+    const savedDensity = nextConfig.mobileCardDensity as CardDensity | undefined;
+    if (savedDensity === 'comfortable' || savedDensity === 'compact') {
+      setCardDensity(savedDensity);
+    }
+    const savedDesktopDensity = nextConfig.desktopTableDensity as DesktopTableDensity | undefined;
+    if (savedDesktopDensity === 'comfortable' || savedDesktopDensity === 'compact') {
+      setDesktopTableDensity(savedDesktopDensity);
+    }
+  }, [hasUserInteractedWithFilters, mountedAt, searchInput, setActiveFilters, setFilterValues, setIntentImmediate, setPagination]);
 
   // Áp dụng filters từ preferences: chỉ một lần, khi user chưa tương tác và config load sớm (trong 800ms).
   const appliedInitialPreferencesRef = useRef(false);
@@ -833,44 +872,10 @@ const ProductList = () => {
     if (appliedInitialPreferencesRef.current) return;
     if (!config || Object.keys(config).length === 0) return;
     appliedInitialPreferencesRef.current = true;
-    const withinWindow = Date.now() - mountTimeRef.current <= INITIAL_APPLY_WINDOW_MS;
-    if (withinWindow && !userHasInteractedWithFiltersRef.current) {
-      if (config.filters && typeof config.filters === 'object') {
-        const f = config.filters as { filterValues?: FilterValues; activeFilters?: FilterKey[] };
-        if (f.filterValues && typeof f.filterValues === 'object') {
-          setFilterValues(f.filterValues);
-          setLocalFilterInput(filterValuesToLocalInput(f.filterValues));
-          setIntentImmediate(searchInput ?? '', f.filterValues);
-        }
-        if (Array.isArray(f.activeFilters)) {
-          setActiveFilters(f.activeFilters);
-        }
-      }
-    }
-    if (config.pageSize != null) {
-      const n = Number(config.pageSize);
-      if (n >= 1 && n <= 1000) {
-        setPagination((p) => ({ ...p, pageSize: n }));
-      }
-    }
-    if (config.sort && typeof config.sort === 'object' && config.sort.field && config.sort.order) {
-      const s = config.sort as { field: string; order: 'asc' | 'desc' };
-      setSortField(s.field);
-      setSortOrder(s.order);
-    }
-    const savedMode = config.mobileListViewMode as ListViewMode | undefined;
-    if (savedMode === 'table' || savedMode === 'cards') {
-      setViewMode(savedMode);
-    }
-    const savedDensity = config.mobileCardDensity as CardDensity | undefined;
-    if (savedDensity === 'comfortable' || savedDensity === 'compact') {
-      setCardDensity(savedDensity);
-    }
-    const savedDesktopDensity = config.desktopTableDensity as DesktopTableDensity | undefined;
-    if (savedDesktopDensity === 'comfortable' || savedDesktopDensity === 'compact') {
-      setDesktopTableDensity(savedDesktopDensity);
-    }
-  }, [config, searchInput, setActiveFilters, setFilterValues, setIntentImmediate, setPagination]);
+    queueMicrotask(() => {
+      applyPreferencesBootstrap(config);
+    });
+  }, [applyPreferencesBootstrap, config]);
 
   const handleViewModeChange = useCallback((mode: ListViewMode) => {
     setViewMode(mode);
@@ -889,7 +894,7 @@ const ProductList = () => {
 
   /** Cập nhật ô lọc: chỉ đổi local (merge prev), không parse/validate trong onChange. */
   const applyFilterChange = useCallback((update: (prev: LocalFilterInput) => LocalFilterInput) => {
-    userHasInteractedWithFiltersRef.current = true;
+    setHasUserInteractedWithFilters(true);
     setLocalFilterInput(update);
   }, []);
 
@@ -940,6 +945,20 @@ const ProductList = () => {
   const skipNextUrlWrite = useRef(false);
   /** Thứ tự key cố định để chuẩn hóa URL khi so sánh — tránh nhảy chữ khi gõ nhanh (phải trùng với params ghi ra). */
   const [exactSearch, setExactSearch] = useState(false);
+  const applyUrlState = useCallback((parsed: ReturnType<typeof parseProductListParams>) => {
+    setSearchInput(parsed.searchInput);
+    setSearch(parsed.search);
+    setExactSearch(parsed.exactSearch);
+    setFilterValues(parsed.filterValues);
+    setLocalFilterInput(filterValuesToLocalInput(parsed.filterValues));
+    setIntentImmediate(parsed.search, parsed.filterValues);
+    setActiveFilters(parsed.activeFilters);
+    setPagination((previous) => ({
+      ...previous,
+      current: parsed.page,
+      pageSize: parsed.pageSize,
+    }));
+  }, [setActiveFilters, setFilterValues, setIntentImmediate, setPagination, setSearch, setSearchInput]);
 
   // Nếu URL có params thì ưu tiên URL (vd: bookmark, chia sẻ link) — trừ khi URL vừa do mình ghi (tránh nhảy chữ khi gõ nhanh)
   useLayoutEffect(() => {
@@ -952,20 +971,11 @@ const ProductList = () => {
     const parsed = parseProductListParams(searchParams);
     const writtenParams = productListParamsToSearch(parsed.search, parsed.filterValues, parsed.activeFilters, parsed.page, parsed.pageSize, parsed.exactSearch);
     lastWrittenParams.current = normalizeParamsToOrderedString(writtenParams, PRODUCT_LIST_ORDERED_URL_KEYS);
-    setSearchInput(parsed.searchInput);
-    setSearch(parsed.search);
-    setExactSearch(parsed.exactSearch);
-    setFilterValues(parsed.filterValues);
-    setLocalFilterInput(filterValuesToLocalInput(parsed.filterValues));
-    setIntentImmediate(parsed.search, parsed.filterValues);
-    setActiveFilters(parsed.activeFilters);
     skipNextUrlWrite.current = true;
-    setPagination((p) => ({
-      ...p,
-      current: parsed.page,
-      pageSize: parsed.pageSize,
-    }));
-  }, [searchParams, setActiveFilters, setFilterValues, setIntentImmediate, setPagination, setSearch, setSearchInput]);
+    queueMicrotask(() => {
+      applyUrlState(parsed);
+    });
+  }, [applyUrlState, searchParams]);
 
   // Query layer: chỉ intent (đã debounce) ghi ra URL + localStorage; không đụng input.
   useEffect(() => {
@@ -1122,7 +1132,7 @@ const ProductList = () => {
   const units = unitsData?.results ?? [];
   const waves = wavesData?.results ?? [];
   const boxTypes = boxTypesData?.results ?? [];
-  const rawProducts = productsData?.results ?? [];
+  const rawProducts = useMemo(() => productsData?.results ?? [], [productsData?.results]);
   const productCommandSummary = useMemo(() => {
     const activeCount = rawProducts.filter((item) => item.status === 'ACTIVE').length;
     const discontinuedCount = rawProducts.filter((item) => item.status === 'DISCONTINUED').length;
@@ -1202,12 +1212,6 @@ const ProductList = () => {
     },
   }), [rowSelection, selectedRowKeys, setSelectedRowKeys]);
 
-  useEffect(() => {
-    if (selectedIds.length === 0) {
-      setSelectedProductMap({});
-    }
-  }, [selectedIds]);
-
   const mergedActivity = useMemo<ActivityItem[]>(() => {
     const unique = new Map<string, ActivityItem>();
     activityStream.forEach((item) => {
@@ -1241,7 +1245,7 @@ const ProductList = () => {
 
   const handleClearAllFilters = useCallback(() => {
     setActiveFilters([]);
-    userHasInteractedWithFiltersRef.current = true;
+    setHasUserInteractedWithFilters(true);
     setLocalFilterInput({ ...EMPTY_LOCAL_FILTER_INPUT });
     setFilterValues(EMPTY_FILTER_VALUES);
     setIntentImmediate(searchInput ?? '', EMPTY_FILTER_VALUES);
@@ -1251,7 +1255,7 @@ const ProductList = () => {
   const handleToggleFilter = useCallback((key: FilterKey) => {
     if (activeFilters.includes(key)) {
       setActiveFilters((prev) => prev.filter((k) => k !== key));
-      userHasInteractedWithFiltersRef.current = true;
+      setHasUserInteractedWithFilters(true);
       if (key === 'cost_price') {
         setLocalFilterInput((v) => ({ ...v, min_cost_price: null, max_cost_price: null }));
       } else if (key === 'sale_price') {
@@ -1260,6 +1264,7 @@ const ProductList = () => {
         setLocalFilterInput((v) => ({ ...v, [key]: null } as LocalFilterInput));
       }
     } else {
+      setHasUserInteractedWithFilters(true);
       setActiveFilters((prev) => [...prev, key]);
     }
   }, [activeFilters, setActiveFilters]);

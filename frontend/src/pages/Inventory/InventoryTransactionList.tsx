@@ -225,7 +225,7 @@ export default function InventoryTransactionList() {
     [warehouseQuery.data?.results],
   );
 
-  const rows = listQuery.data?.results ?? [];
+  const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
 
   const summary = useMemo(() => {
     const postedCount = rows.filter((item) => item.status === 'POSTED').length;

@@ -371,12 +371,15 @@ export default function OnboardingStudio() {
     },
   });
 
-  const presets = summaryQuery.data?.presets ?? [];
-  const roles = rolesQuery.data ?? [];
-  const teams = teamsQuery.data ?? [];
-  const workflowTemplates = templatesQuery.data ?? [];
-  const notificationTypeOptions = summaryQuery.data?.notification_type_options ?? [];
-  const users = userSearchQuery.data ?? [];
+  const presets = useMemo(() => summaryQuery.data?.presets ?? [], [summaryQuery.data?.presets]);
+  const roles = useMemo(() => rolesQuery.data ?? [], [rolesQuery.data]);
+  const teams = useMemo(() => teamsQuery.data ?? [], [teamsQuery.data]);
+  const workflowTemplates = useMemo(() => templatesQuery.data ?? [], [templatesQuery.data]);
+  const notificationTypeOptions = useMemo(
+    () => summaryQuery.data?.notification_type_options ?? [],
+    [summaryQuery.data?.notification_type_options],
+  );
+  const users = useMemo(() => userSearchQuery.data ?? [], [userSearchQuery.data]);
   const namedPresets = useMemo(() => {
     const raw = savedConfig?.saved_views;
     if (!Array.isArray(raw)) return [] as OnboardingNamedPreset[];
@@ -566,7 +569,7 @@ export default function OnboardingStudio() {
     });
   };
 
-  const presetColumns = useMemo<ColumnsType<OnboardingStudioPreset>>(() => [
+  const presetColumns: ColumnsType<OnboardingStudioPreset> = [
     {
       title: 'Preset',
       dataIndex: 'name',
@@ -638,11 +641,14 @@ export default function OnboardingStudio() {
         </Space>
       ),
     },
-  ], [deletePresetMutation.isPending]);
+  ];
 
   const previewSummary = previewData?.summary;
   const previewPreset = previewData?.preset ?? selectedPreset;
-  const previewActivity = activityQuery.data?.items ?? summaryQuery.data?.recent_activity ?? [];
+  const previewActivity = useMemo(
+    () => activityQuery.data?.items ?? summaryQuery.data?.recent_activity ?? [],
+    [activityQuery.data?.items, summaryQuery.data?.recent_activity],
+  );
   const filteredActivity = useMemo(
     () => previewActivity.filter((item) => activityKindFilter === 'all' || item.kind === activityKindFilter),
     [activityKindFilter, previewActivity],

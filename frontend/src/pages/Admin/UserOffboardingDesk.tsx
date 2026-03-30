@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   Alert,
@@ -165,17 +165,20 @@ export default function UserOffboardingDesk() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [messageApi, contextHolder] = message.useMessage();
+  const focusUserId = Number(searchParams.get('focus_user_id') || 0) || null;
+  const focusSearch = searchParams.get('focus') || searchParams.get('search') || '';
   const [previewData, setPreviewData] = useState<UserOffboardingPreviewResponse | null>(null);
   const [result, setResult] = useState<UserOffboardingResponse | null>(null);
-  const [watchlistSearch, setWatchlistSearch] = useState('');
+  const [watchlistSearch, setWatchlistSearch] = useState(focusSearch);
   const [watchlistState, setWatchlistState] = useState<WatchlistStateFilter>('all');
-  const [activitySearch, setActivitySearch] = useState('');
+  const [activitySearch, setActivitySearch] = useState(focusSearch);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
   const [selectedViewPresetId, setSelectedViewPresetId] = useState('NONE');
   const [isViewPresetModalOpen, setIsViewPresetModalOpen] = useState(false);
   const [viewPresetName, setViewPresetName] = useState('');
   const [selectedWatchlistUserId, setSelectedWatchlistUserId] = useState<number | null>(null);
-  const [focusHandled, setFocusHandled] = useState(false);
+  const [dismissedFocusWatchlistId, setDismissedFocusWatchlistId] = useState<number | null>(null);
+  const focusHandledRef = useRef(false);
   const [form] = Form.useForm<OffboardingFormValues>();
   const selectedUserId = Form.useWatch('user_id', form);
   const transferTaskOwnerId = Form.useWatch('transfer_task_owner_id', form);
@@ -185,8 +188,6 @@ export default function UserOffboardingDesk() {
   const revokeSessions = Form.useWatch('revoke_sessions', form);
   const watchlistSearchValue = useMemo(() => normalizeSearch(watchlistSearch), [watchlistSearch]);
   const activitySearchValue = useMemo(() => normalizeSearch(activitySearch), [activitySearch]);
-  const focusUserId = Number(searchParams.get('focus_user_id') || 0) || null;
-  const focusSearch = searchParams.get('focus') || searchParams.get('search') || '';
   const { config: savedConfig, saveConfig } = useUserPreferences(PAGES.ADMIN_USER_LIFECYCLE);
   const namedPresets = useMemo(() => {
     const raw = savedConfig?.saved_views;
@@ -462,36 +463,49 @@ export default function UserOffboardingDesk() {
       messageApi.error('Không thể xóa mẫu lọc offboarding.');
     }
   };
-  const selectedWatchlistItem = filteredWatchlist.find((item) => item.id === selectedWatchlistUserId)
-    ?? (workspaceQuery.data?.watchlist ?? []).find((item) => item.id === selectedWatchlistUserId)
-    ?? null;
-
-  useEffect(() => {
-    if (focusHandled || !workspaceQuery.data) return;
-    if (!focusUserId && !focusSearch) {
-      setFocusHandled(true);
-      return;
-    }
-    if (focusSearch) {
-      setWatchlistSearch(focusSearch);
-      setActivitySearch(focusSearch);
-    }
-    if (focusUserId && (workspaceQuery.data.candidates ?? []).some((item) => item.id === focusUserId)) {
-      form.setFieldValue('user_id', focusUserId);
-    }
+  const focusedWatchlistUserId = useMemo(() => {
+    if (!workspaceQuery.data || (!focusUserId && !focusSearch)) return null;
     const normalizedFocus = normalizeSearch(focusSearch);
     const matched = (workspaceQuery.data.watchlist ?? []).find((item) => {
       if (focusUserId && item.id === focusUserId) return true;
       if (!normalizedFocus) return false;
       return normalizeSearch([item.username, item.full_name, item.email].join(' ')).includes(normalizedFocus);
     });
-    if (matched) {
-      setSelectedWatchlistUserId(matched.id);
-    }
-    setFocusHandled(true);
-  }, [focusHandled, focusSearch, focusUserId, form, workspaceQuery.data]);
+    if (!matched) return null;
+    return dismissedFocusWatchlistId === matched.id ? null : matched.id;
+  }, [dismissedFocusWatchlistId, focusSearch, focusUserId, workspaceQuery.data]);
+  const effectiveSelectedWatchlistUserId = selectedWatchlistUserId ?? focusedWatchlistUserId;
+  const selectedWatchlistItem = filteredWatchlist.find((item) => item.id === effectiveSelectedWatchlistUserId)
+    ?? (workspaceQuery.data?.watchlist ?? []).find((item) => item.id === effectiveSelectedWatchlistUserId)
+    ?? null;
 
-  const buildPreviewPayload = () => {
+  useEffect(() => {
+    if (focusHandledRef.current || !workspaceQuery.data) return;
+    if (!focusUserId && !focusSearch) {
+      focusHandledRef.current = true;
+      return;
+    }
+    if (focusUserId && (workspaceQuery.data.candidates ?? []).some((item) => item.id === focusUserId)) {
+      form.setFieldValue('user_id', focusUserId);
+    }
+    focusHandledRef.current = true;
+  }, [focusSearch, focusUserId, form, workspaceQuery.data]);
+
+  const openWatchlistItem = (userId: number) => {
+    setSelectedWatchlistUserId(userId);
+    if (dismissedFocusWatchlistId === userId) {
+      setDismissedFocusWatchlistId(null);
+    }
+  };
+
+  const closeWatchlistDrawer = () => {
+    if (focusedWatchlistUserId && focusedWatchlistUserId === effectiveSelectedWatchlistUserId) {
+      setDismissedFocusWatchlistId(focusedWatchlistUserId);
+    }
+    setSelectedWatchlistUserId(null);
+  };
+
+  const buildPreviewPayload = useCallback(() => {
     if (!selectedUserId) return null;
     return {
       user_id: selectedUserId,
@@ -501,7 +515,18 @@ export default function UserOffboardingDesk() {
       revoke_access: revokeAccess ?? workspaceQuery.data?.policy.default_revoke_access ?? true,
       revoke_sessions: revokeSessions ?? workspaceQuery.data?.policy.default_revoke_sessions ?? true,
     };
-  };
+  }, [
+    deactivateAccount,
+    lockAccount,
+    revokeAccess,
+    revokeSessions,
+    selectedUserId,
+    transferTaskOwnerId,
+    workspaceQuery.data?.policy.default_deactivate_account,
+    workspaceQuery.data?.policy.default_lock_account,
+    workspaceQuery.data?.policy.default_revoke_access,
+    workspaceQuery.data?.policy.default_revoke_sessions,
+  ]);
 
   useEffect(() => {
     if (!workspaceQuery.data) return;
@@ -516,6 +541,7 @@ export default function UserOffboardingDesk() {
     revokeSessions,
     selectedUserId,
     transferTaskOwnerId,
+    buildPreviewPayload,
     workspaceQuery.data,
   ]);
 
@@ -547,7 +573,7 @@ export default function UserOffboardingDesk() {
 
   const focusUser = (userId: number) => {
     form.setFieldValue('user_id', userId);
-    setSelectedWatchlistUserId(userId);
+    openWatchlistItem(userId);
     setResult(null);
     messageApi.success('Đã đưa tài khoản vào bàn xử lý offboarding.');
   };
@@ -912,7 +938,7 @@ export default function UserOffboardingDesk() {
                           <Button size="small" onClick={() => focusUser(item.id)}>
                             Đưa vào bàn xử lý
                           </Button>
-                          <Button size="small" onClick={() => setSelectedWatchlistUserId(item.id)}>
+                          <Button size="small" onClick={() => openWatchlistItem(item.id)}>
                             Xem chi tiết
                           </Button>
                         </Space>
@@ -1030,7 +1056,7 @@ export default function UserOffboardingDesk() {
         open={Boolean(selectedWatchlistItem)}
         title="Chi tiết danh sách ưu tiên kết thúc vòng đời"
         width={460}
-        onClose={() => setSelectedWatchlistUserId(null)}
+        onClose={closeWatchlistDrawer}
       >
         {selectedWatchlistItem ? (
           <div data-testid="user-offboarding-watchlist-drawer">
@@ -1074,7 +1100,7 @@ export default function UserOffboardingDesk() {
               <Button type="primary" onClick={() => focusUser(selectedWatchlistItem.id)}>
                 Đưa vào bàn xử lý
               </Button>
-              <Button onClick={() => setSelectedWatchlistUserId(null)}>Đóng</Button>
+              <Button onClick={closeWatchlistDrawer}>Đóng</Button>
             </Space>
           </Space>
           </div>

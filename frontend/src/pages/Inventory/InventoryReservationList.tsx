@@ -124,7 +124,7 @@ export default function InventoryReservationList() {
     () => (listQuery.data?.results ?? []).filter((row) => selectedRowKeys.includes(row.id) && row.status === 'OPEN'),
     [listQuery.data?.results, selectedRowKeys]
   );
-  const rows = listQuery.data?.results ?? [];
+  const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
   const selectedWarehouseLabel = useMemo(() => {
     if (!intentFilters.warehouse) return 'Tất cả kho';
     const warehouse = (warehouseQuery.data?.results ?? []).find((item) => item.id === intentFilters.warehouse);

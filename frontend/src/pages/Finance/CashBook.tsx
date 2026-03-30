@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import dayjs, { Dayjs } from 'dayjs';
 
 import { financeApi } from '../../api/finance';
+import type { CashTransaction } from '../../types/finance';
 import { downloadCSV } from '../../utils/csvExport';
 
 const CashBook: React.FC = () => {
@@ -42,7 +43,7 @@ const CashBook: React.FC = () => {
       message.warning('Không có dữ liệu để xuất');
       return;
     }
-    const csvData = txData.results.map((tx: any) => ({
+    const csvData = txData.results.map((tx: CashTransaction) => ({
       'Ngày': tx.transaction_date,
       'Mã': tx.reference || '',
       'Loại': tx.transaction_type === 'INCOME' ? 'Thu' : 'Chi',
@@ -80,7 +81,7 @@ const CashBook: React.FC = () => {
       key: 'amount',
       width: 130,
       align: 'right' as const,
-      render: (val: string | number, row: any) => {
+      render: (val: string | number, row: CashTransaction) => {
         const n = Number(val || 0);
         return (
           <span style={{ color: row.transaction_type === 'INCOME' ? '#52c41a' : '#ff4d4f' }}>

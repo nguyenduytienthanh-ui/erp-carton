@@ -271,11 +271,11 @@ export default function AdminAuditCenter() {
   });
 
   const workspace = auditWorkspaceQuery.data;
-  const domains = workspace?.domains ?? [];
-  const topActors = workspace?.top_actors ?? [];
-  const hotEntities = workspace?.hot_entities ?? [];
-  const timeline = workspace?.timeline_7d ?? [];
-  const recentActivity = workspace?.recent_activity ?? [];
+  const domains = useMemo(() => workspace?.domains ?? [], [workspace?.domains]);
+  const topActors = useMemo(() => workspace?.top_actors ?? [], [workspace?.top_actors]);
+  const hotEntities = useMemo(() => workspace?.hot_entities ?? [], [workspace?.hot_entities]);
+  const timeline = useMemo(() => workspace?.timeline_7d ?? [], [workspace?.timeline_7d]);
+  const recentActivity = useMemo(() => workspace?.recent_activity ?? [], [workspace?.recent_activity]);
   const retentionPolicy = workspace?.retention_policy;
   const exportOptions = workspace?.export_options;
   const incidentResponse = workspace?.incident_response;

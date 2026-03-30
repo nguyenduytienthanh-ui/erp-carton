@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   Alert,
@@ -335,30 +335,63 @@ export default function UserControlCenter() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [messageApi, contextHolder] = message.useMessage();
-  const hydratedPreferencesRef = useRef(false);
   const lastSavedPreferenceKeyRef = useRef('');
-  const focusAppliedRef = useRef(false);
   const focusUserId = Number(searchParams.get('focus_id') || searchParams.get('focus_user_id') || 0) || null;
   const focusSearch = searchParams.get('focus') || searchParams.get('search') || '';
+  const { config, isLoading: preferencesLoading, saveConfig } = useUserPreferences(PAGES.ADMIN_USER_DIRECTORY);
+  const normalizedPreferences = useMemo(
+    () => normalizePreferences((config && typeof config === 'object' ? config : {}) as Record<string, unknown>),
+    [config],
+  );
+  const focusDefaultsActive = Boolean(focusUserId || focusSearch);
 
-  const [searchInput, setSearchInput] = useState('');
-  const [filters, setFilters] = useState<AdminUserCenterFilters>(DEFAULT_FILTERS);
+  const [searchInputOverride, setSearchInputOverride] = useState<string | null>(null);
+  const [filtersOverride, setFiltersOverride] = useState<AdminUserCenterFilters | null>(null);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSizeOverride, setPageSizeOverride] = useState<number | null>(null);
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  const [dismissedFocusUserId, setDismissedFocusUserId] = useState<number | null>(null);
   const [bulkAccessModalOpen, setBulkAccessModalOpen] = useState(false);
   const [bulkAccessStrategy, setBulkAccessStrategy] = useState<'add' | 'replace' | 'remove'>('add');
   const [bulkRoleIds, setBulkRoleIds] = useState<number[]>([]);
   const [bulkTeamIds, setBulkTeamIds] = useState<number[]>([]);
-  const [accessDraft, setAccessDraft] = useState<{ role_ids: number[]; team_ids: number[] }>({ role_ids: [], team_ids: [] });
-  const { selectedIds, rowSelection, clearSelection, setSelectedRowKeys } = useRowSelection<AdminUserDirectoryItem>();
-  const { config, isLoading: preferencesLoading, saveConfig } = useUserPreferences(PAGES.ADMIN_USER_DIRECTORY);
+  const [accessDraftOverride, setAccessDraftOverride] = useState<{
+    userId: number;
+    role_ids: number[];
+    team_ids: number[];
+  } | null>(null);
+  const { selectedIds, rowSelection, clearSelection } = useRowSelection<AdminUserDirectoryItem>();
+  const searchInput = searchInputOverride ?? (focusDefaultsActive ? focusSearch : normalizedPreferences.search);
+  const filters = filtersOverride ?? (focusDefaultsActive ? DEFAULT_FILTERS : normalizedPreferences.filters);
+  const pageSize = pageSizeOverride ?? normalizedPreferences.pageSize;
+  const selectedActivityUserId = selectedUserId ?? (focusUserId !== dismissedFocusUserId ? focusUserId : null);
+
+  const updateSearchInput = useCallback((value: string) => {
+    setSearchInputOverride(value);
+    setPage(1);
+  }, []);
+
+  const updateFilters = useCallback(
+    (
+      next:
+        | AdminUserCenterFilters
+        | ((previous: AdminUserCenterFilters) => AdminUserCenterFilters),
+    ) => {
+      setFiltersOverride((previous) => {
+        const current = previous ?? (focusDefaultsActive ? DEFAULT_FILTERS : normalizedPreferences.filters);
+        return typeof next === 'function'
+          ? (next as (previous: AdminUserCenterFilters) => AdminUserCenterFilters)(current)
+          : next;
+      });
+      setPage(1);
+    },
+    [focusDefaultsActive, normalizedPreferences.filters],
+  );
 
   const {
     intentSearch,
     intentFilters,
     intentFilterStableString,
-    setIntentImmediate,
   } = useSearchFilterIntent({
     searchInput,
     filterValues: filters,
@@ -369,32 +402,6 @@ export default function UserControlCenter() {
   });
 
   useEffect(() => {
-    if (preferencesLoading || hydratedPreferencesRef.current) return;
-    const normalized = normalizePreferences(config);
-    setSearchInput(normalized.search);
-    setFilters(normalized.filters);
-    setPageSize(normalized.pageSize);
-    setIntentImmediate(normalized.search, normalized.filters);
-    hydratedPreferencesRef.current = true;
-  }, [config, preferencesLoading, setIntentImmediate]);
-
-  useEffect(() => {
-    if (preferencesLoading || !hydratedPreferencesRef.current || focusAppliedRef.current) return;
-    focusAppliedRef.current = true;
-    if (!focusUserId && !focusSearch) return;
-    setSearchInput(focusSearch);
-    setFilters(DEFAULT_FILTERS);
-    setPage(1);
-    setIntentImmediate(focusSearch, DEFAULT_FILTERS);
-  }, [focusSearch, focusUserId, preferencesLoading, setIntentImmediate]);
-
-  useEffect(() => {
-    if (!hydratedPreferencesRef.current) return;
-    setPage(1);
-  }, [intentSearch, intentFilterStableString]);
-
-  useEffect(() => {
-    if (!hydratedPreferencesRef.current) return;
     const nextKey = JSON.stringify({
       search: intentSearch,
       pageSize,
@@ -446,9 +453,9 @@ export default function UserControlCenter() {
     enabled: !preferencesLoading,
   });
   const selectedAccessActivityQuery = useQuery({
-    queryKey: ['admin-user-access-activity', selectedUserId],
-    queryFn: () => usersApi.getAccessActivity({ user_id: selectedUserId ?? undefined, limit: 8 }),
-    enabled: Boolean(selectedUserId),
+    queryKey: ['admin-user-access-activity', selectedActivityUserId],
+    queryFn: () => usersApi.getAccessActivity({ user_id: selectedActivityUserId ?? undefined, limit: 8 }),
+    enabled: Boolean(selectedActivityUserId),
   });
 
   const refreshDirectoryData = async () => {
@@ -485,7 +492,8 @@ export default function UserControlCenter() {
     mutationFn: ({ userId, payload }: { userId: number; payload: { role_ids: number[]; team_ids: number[] } }) =>
       usersApi.updateAccessProfile(userId, payload),
     onSuccess: async (result) => {
-      setAccessDraft({
+      setAccessDraftOverride({
+        userId: result.user.id,
         role_ids: (result.user.roles ?? []).map((role) => role.id),
         team_ids: (result.user.teams ?? []).map((team) => team.id),
       });
@@ -513,10 +521,15 @@ export default function UserControlCenter() {
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
-  const directoryItems = listQuery.data?.results ?? [];
+  const directoryItems = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
+  const autoSelectedFocusUserId = useMemo(() => {
+    if (!focusUserId || dismissedFocusUserId === focusUserId) return null;
+    return directoryItems.some((item) => item.id === focusUserId) ? focusUserId : null;
+  }, [directoryItems, dismissedFocusUserId, focusUserId]);
+  const effectiveSelectedUserId = selectedUserId ?? autoSelectedFocusUserId;
   const selectedUser = useMemo(
-    () => directoryItems.find((item) => item.id === selectedUserId) ?? null,
-    [directoryItems, selectedUserId],
+    () => directoryItems.find((item) => item.id === effectiveSelectedUserId) ?? null,
+    [directoryItems, effectiveSelectedUserId],
   );
   const summary = summaryQuery.data;
   const selectedUserAttention = useMemo(
@@ -537,48 +550,22 @@ export default function UserControlCenter() {
     [selectedUser],
   );
 
-  useEffect(() => {
-    if (!selectedUserId) return;
-    if (listQuery.isLoading) return;
-    if (!directoryItems.some((item) => item.id === selectedUserId)) {
-      setSelectedUserId(null);
+  const baseAccessDraft = useMemo(
+    () => ({
+      role_ids: (selectedUser?.roles ?? []).map((role) => role.id),
+      team_ids: (selectedUser?.teams ?? []).map((team) => team.id),
+    }),
+    [selectedUser],
+  );
+  const accessDraft = useMemo(() => {
+    if (selectedUser && accessDraftOverride?.userId === selectedUser.id) {
+      return {
+        role_ids: accessDraftOverride.role_ids,
+        team_ids: accessDraftOverride.team_ids,
+      };
     }
-  }, [directoryItems, listQuery.isLoading, selectedUserId]);
-
-  useEffect(() => {
-    if (!focusUserId || listQuery.isLoading) return;
-    if (selectedUserId === focusUserId) return;
-    const matched = directoryItems.find((item) => item.id === focusUserId);
-    if (matched) {
-      setSelectedUserId(matched.id);
-    }
-  }, [directoryItems, focusUserId, listQuery.isLoading, selectedUserId]);
-
-  useEffect(() => {
-    if (!directoryItems.length) {
-      setSelectedRowKeys((current) => (current.length ? [] : current));
-      return;
-    }
-    const validIds = new Set(directoryItems.map((item) => item.id));
-    setSelectedRowKeys((current) => {
-      const next = current.filter((key) => validIds.has(Number(key)));
-      if (next.length === current.length && next.every((value, index) => value === current[index])) {
-        return current;
-      }
-      return next;
-    });
-  }, [directoryItems, setSelectedRowKeys]);
-
-  useEffect(() => {
-    if (!selectedUser) {
-      setAccessDraft({ role_ids: [], team_ids: [] });
-      return;
-    }
-    setAccessDraft({
-      role_ids: (selectedUser.roles ?? []).map((role) => role.id),
-      team_ids: (selectedUser.teams ?? []).map((team) => team.id),
-    });
-  }, [selectedUser]);
+    return baseAccessDraft;
+  }, [accessDraftOverride, baseAccessDraft, selectedUser]);
 
   const summaryHealthMessage = useMemo(() => {
     if (!summary) return 'Đang tải tổng quan điều phối người dùng.';
@@ -637,13 +624,13 @@ export default function UserControlCenter() {
 
   const accessDraftChanged = useMemo(() => {
     if (!selectedUser) return false;
-    const currentRoleIds = (selectedUser.roles ?? []).map((role) => role.id).sort((a, b) => a - b);
-    const currentTeamIds = (selectedUser.teams ?? []).map((team) => team.id).sort((a, b) => a - b);
+    const currentRoleIds = [...baseAccessDraft.role_ids].sort((a, b) => a - b);
+    const currentTeamIds = [...baseAccessDraft.team_ids].sort((a, b) => a - b);
     const draftRoleIds = [...accessDraft.role_ids].sort((a, b) => a - b);
     const draftTeamIds = [...accessDraft.team_ids].sort((a, b) => a - b);
     return JSON.stringify(currentRoleIds) !== JSON.stringify(draftRoleIds)
       || JSON.stringify(currentTeamIds) !== JSON.stringify(draftTeamIds);
-  }, [accessDraft.role_ids, accessDraft.team_ids, selectedUser]);
+  }, [accessDraft.role_ids, accessDraft.team_ids, baseAccessDraft.role_ids, baseAccessDraft.team_ids, selectedUser]);
 
   const columns: ColumnsType<AdminUserDirectoryItem> = [
     {
@@ -733,7 +720,7 @@ export default function UserControlCenter() {
       width: 130,
       fixed: 'right',
       render: (_, record) => (
-        <Button type="link" onClick={() => setSelectedUserId(record.id)}>
+        <Button type="link" onClick={() => openSelectedUser(record.id)}>
           Mở chi tiết
         </Button>
       ),
@@ -750,36 +737,58 @@ export default function UserControlCenter() {
     await bulkLockMutation.mutateAsync({ ids, is_locked: isLocked });
   };
 
+  const openSelectedUser = useCallback((userId: number) => {
+    setSelectedUserId(userId);
+    if (dismissedFocusUserId === userId) {
+      setDismissedFocusUserId(null);
+    }
+  }, [dismissedFocusUserId]);
+
+  const closeSelectedUser = useCallback(() => {
+    if (effectiveSelectedUserId && effectiveSelectedUserId === focusUserId) {
+      setDismissedFocusUserId(focusUserId);
+    }
+    setSelectedUserId(null);
+  }, [effectiveSelectedUserId, focusUserId]);
+
+  const updateAccessDraft = useCallback(
+    (next: Partial<{ role_ids: number[]; team_ids: number[] }>) => {
+      if (!effectiveSelectedUserId) return;
+      setAccessDraftOverride({
+        userId: effectiveSelectedUserId,
+        role_ids: next.role_ids ?? accessDraft.role_ids,
+        team_ids: next.team_ids ?? accessDraft.team_ids,
+      });
+    },
+    [accessDraft.role_ids, accessDraft.team_ids, effectiveSelectedUserId],
+  );
+
   const applyFocusPreset = (preset: 'dormant' | 'unassigned' | 'locked' | 'online' | 'clear') => {
     if (preset === 'clear') {
-      setSearchInput('');
-      setFilters(DEFAULT_FILTERS);
-      setPage(1);
+      updateSearchInput('');
+      updateFilters(DEFAULT_FILTERS);
       return;
     }
     if (preset === 'online') {
-      setFilters((previous) => ({
+      updateFilters((previous: AdminUserCenterFilters) => ({
         ...previous,
         sessionState: 'online',
       }));
-      setPage(1);
       return;
     }
-    setFilters((previous) => ({
+    updateFilters((previous: AdminUserCenterFilters) => ({
       ...previous,
       attention: preset,
       sessionState: previous.sessionState === 'online' ? 'all' : previous.sessionState,
     }));
-    setPage(1);
   };
 
   const openFocusItem = (item: AdminUserDirectoryFocusItem) => {
-    setSearchInput(item.username);
-    setFilters((previous) => ({
+    updateSearchInput(item.username);
+    updateFilters((previous: AdminUserCenterFilters) => ({
       ...previous,
       attention: 'review',
     }));
-    setPage(1);
   };
 
   const exportCurrentScope = () => {
@@ -981,7 +990,7 @@ export default function UserControlCenter() {
                   renderItem={(item) => (
                     <List.Item
                       actions={[
-                        <Button key={`open-hotspot-${item.id}`} type="link" onClick={() => setSelectedUserId(item.id)}>
+                        <Button key={`open-hotspot-${item.id}`} type="link" onClick={() => openSelectedUser(item.id)}>
                           Mở hồ sơ
                         </Button>,
                       ]}
@@ -1050,7 +1059,7 @@ export default function UserControlCenter() {
             <div data-testid="admin-user-control-search">
               <Input
                 value={searchInput}
-                onChange={(event) => setSearchInput(event.target.value)}
+                onChange={(event) => updateSearchInput(event.target.value)}
                 allowClear
                 placeholder="Tìm username, họ tên, email hoặc số điện thoại"
               />
@@ -1060,7 +1069,7 @@ export default function UserControlCenter() {
             <Select
               value={filters.status}
               style={{ width: '100%' }}
-              onChange={(value) => setFilters((previous) => ({ ...previous, status: value }))}
+              onChange={(value) => updateFilters((previous: AdminUserCenterFilters) => ({ ...previous, status: value }))}
               options={[
                 { label: 'Tất cả trạng thái', value: 'all' },
                 { label: 'Đang hoạt động', value: 'active' },
@@ -1072,7 +1081,7 @@ export default function UserControlCenter() {
             <Select
               value={filters.lockState}
               style={{ width: '100%' }}
-              onChange={(value) => setFilters((previous) => ({ ...previous, lockState: value }))}
+              onChange={(value) => updateFilters((previous: AdminUserCenterFilters) => ({ ...previous, lockState: value }))}
               options={[
                 { label: 'Khóa và mở', value: 'all' },
                 { label: 'Đang bị khóa', value: 'locked' },
@@ -1084,7 +1093,7 @@ export default function UserControlCenter() {
             <Select
               value={filters.attention}
               style={{ width: '100%' }}
-              onChange={(value) => setFilters((previous) => ({ ...previous, attention: value }))}
+              onChange={(value) => updateFilters((previous: AdminUserCenterFilters) => ({ ...previous, attention: value }))}
               options={[
                 { label: 'Tất cả ưu tiên', value: 'all' },
                 { label: 'Cần rà soát', value: 'review' },
@@ -1099,7 +1108,7 @@ export default function UserControlCenter() {
             <Select
               value={filters.sessionState}
               style={{ width: '100%' }}
-              onChange={(value) => setFilters((previous) => ({ ...previous, sessionState: value }))}
+              onChange={(value) => updateFilters((previous: AdminUserCenterFilters) => ({ ...previous, sessionState: value }))}
               options={[
                 { label: 'Phiên bất kỳ', value: 'all' },
                 { label: 'Đang trực tuyến', value: 'online' },
@@ -1113,7 +1122,7 @@ export default function UserControlCenter() {
               allowClear
               style={{ width: '100%' }}
               placeholder="Lọc theo vai trò"
-              onChange={(value) => setFilters((previous) => ({ ...previous, role: value }))}
+              onChange={(value) => updateFilters((previous: AdminUserCenterFilters) => ({ ...previous, role: value }))}
               options={(rolesQuery.data ?? []).map((role) => ({
                 label: role.name,
                 value: role.id,
@@ -1126,7 +1135,7 @@ export default function UserControlCenter() {
               allowClear
               style={{ width: '100%' }}
               placeholder="Lọc theo nhóm"
-              onChange={(value) => setFilters((previous) => ({ ...previous, team: value }))}
+              onChange={(value) => updateFilters((previous: AdminUserCenterFilters) => ({ ...previous, team: value }))}
               options={(teamsQuery.data ?? []).map((team) => ({
                 label: team.name,
                 value: team.id,
@@ -1202,7 +1211,7 @@ export default function UserControlCenter() {
             pageSizeOptions: ['10', '20', '50', '100'],
             onChange: (nextPage, nextPageSize) => {
               if (nextPageSize !== pageSize) {
-                setPageSize(nextPageSize);
+                setPageSizeOverride(nextPageSize);
                 setPage(1);
                 return;
               }
@@ -1218,7 +1227,7 @@ export default function UserControlCenter() {
             ),
           }}
           onRow={(record) => ({
-            onClick: () => setSelectedUserId(record.id),
+            onClick: () => openSelectedUser(record.id),
           })}
         />
       </Card>
@@ -1293,7 +1302,7 @@ export default function UserControlCenter() {
         title={selectedUser ? `Hồ sơ điều phối: ${selectedUser.full_name || selectedUser.username}` : 'Hồ sơ điều phối'}
         width={520}
         open={Boolean(selectedUser)}
-        onClose={() => setSelectedUserId(null)}
+        onClose={closeSelectedUser}
       >
         {selectedUser ? (
           <div data-testid="admin-user-control-drawer">
@@ -1384,7 +1393,7 @@ export default function UserControlCenter() {
                     allowClear
                     style={{ width: '100%', marginTop: 6 }}
                     placeholder="Chọn vai trò cho người dùng"
-                    onChange={(value) => setAccessDraft((previous) => ({ ...previous, role_ids: value }))}
+                    onChange={(value) => updateAccessDraft({ role_ids: value })}
                     options={accessRoleOptions}
                   />
                 </div>
@@ -1396,7 +1405,7 @@ export default function UserControlCenter() {
                     allowClear
                     style={{ width: '100%', marginTop: 6 }}
                     placeholder="Chọn nhóm cho người dùng"
-                    onChange={(value) => setAccessDraft((previous) => ({ ...previous, team_ids: value }))}
+                    onChange={(value) => updateAccessDraft({ team_ids: value })}
                     options={accessTeamOptions}
                   />
                 </div>

@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Button, Form, Input, Modal, Space, Table, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import type { DataNode } from 'antd/es/tree';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { productsApi } from '../../api/products';
@@ -41,18 +40,18 @@ export default function CategoryList() {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState('');
-  const [filters, setFilters] = useState<CategoryFilters>({ activeOnly: true });
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<ProductCategory | null>(null);
   const [openModal, setOpenModal] = useState(false);
   const [form] = Form.useForm<CategoryForm>();
   const { config, saveConfig } = useUserPreferences(PAGES.PRODUCTS_CATEGORIES);
   const canManage = canManageProductData();
+  const defaultFilters = useMemo<CategoryFilters>(() => ({ activeOnly: true }), []);
 
   const pageSize = Number((config as Record<string, unknown>)?.pageSize ?? 20);
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
-    filterValues: filters,
+    filterValues: defaultFilters,
     searchDebounceMs: 650,
     filterDebounceMs: 300,
     serializeFilters,
@@ -105,15 +104,6 @@ export default function CategoryList() {
 
   const rows = listQuery.data?.results ?? [];
   const total = listQuery.data?.count ?? 0;
-
-  const buildTreeData = (categories: ProductCategory[]): DataNode[] => {
-    const rootCategories = categories.filter((c) => !c.parent);
-    return rootCategories.map((cat) => ({
-      title: `${cat.code} - ${cat.name}`,
-      key: cat.id,
-      children: buildTreeData(categories.filter((c) => c.parent === cat.id)),
-    }));
-  };
 
   const columns: ColumnsType<ProductCategory> = [
     { title: 'Mã', dataIndex: 'code', width: 120 },

@@ -5,6 +5,24 @@ import { useQuery } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
 
 import { reportsApi } from '../../api/reports';
+import type { CustomReportGeneratedResult } from '../../types/reports';
+
+type ProfitRow = {
+  order_code: string;
+  order_date: string;
+  customer_name: string;
+  revenue: number;
+  cost_of_goods_sold: number;
+  gross_profit: number;
+  gross_margin_pct: number;
+};
+
+type ProfitSummary = {
+  orders: number;
+  total_revenue: number;
+  total_cost_of_goods_sold: number;
+  gross_margin_pct: number;
+};
 
 export default function ProfitReport() {
   const [startDate, setStartDate] = useState<Dayjs>(dayjs().startOf('month'));
@@ -19,8 +37,9 @@ export default function ProfitReport() {
     }),
   });
 
-  const rows = Array.isArray((data as any)?.rows) ? (data as any).rows : [];
-  const summary = ((data as any)?.summary || {}) as Record<string, number>;
+  const report = data as CustomReportGeneratedResult | undefined;
+  const rows = Array.isArray(report?.rows) ? (report.rows as ProfitRow[]) : [];
+  const summary = (report?.summary ?? {}) as Partial<ProfitSummary>;
 
   const columns = [
     { title: 'Đơn bán', dataIndex: 'order_code', key: 'order_code', width: 140 },

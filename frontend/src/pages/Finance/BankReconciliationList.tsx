@@ -31,6 +31,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { getToastMessage } from '../../shared/apiError';
+import type { BankReconciliationPayload } from '../../types/finance';
 import { downloadCSV } from '../../utils/csvExport';
 
 const { Text, Title } = Typography;
@@ -215,7 +216,7 @@ export default function BankReconciliationList() {
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
-  const rows = listQuery.data?.results ?? [];
+  const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
   const detail = detailQuery.data ?? detailRecon;
 
   const summary = useMemo(() => {
@@ -895,7 +896,7 @@ function BankReconciliationFormModal({
   }, [form, open, record]);
 
   const createMutation = useMutation({
-    mutationFn: (payload: Record<string, unknown>) => financeApi.createBankReconciliation(payload),
+    mutationFn: (payload: BankReconciliationPayload) => financeApi.createBankReconciliation(payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['finance-bank-reconciliations'] });
       messageApi.success('Đã tạo phiếu đối soát mới');

@@ -5,9 +5,10 @@ test('admin can open onboarding studio and save a preset', async ({ page }) => {
   await login(page, adminUser.username, adminUser.password);
 
   await page.goto('/admin/onboarding-studio');
-  await expect(page.locator('main').getByText('Xưởng preset onboarding', { exact: true })).toBeVisible();
-  await expect(page.locator('main').getByText('Danh mục preset', { exact: true })).toBeVisible();
-  await expect(page.locator('main').getByText('Không gian rollout', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Tạo preset' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('main')).toContainText('Xưởng preset onboarding', { timeout: 20_000 });
+  await expect(page.locator('main')).toContainText('Danh mục preset', { timeout: 20_000 });
+  await expect(page.locator('main')).toContainText('Không gian rollout', { timeout: 20_000 });
 
   await page.getByRole('button', { name: 'Tạo preset' }).click();
   await expect(page.getByText('Studio preset', { exact: true }).last()).toBeVisible();

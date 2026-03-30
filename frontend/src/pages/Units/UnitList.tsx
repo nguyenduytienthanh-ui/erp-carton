@@ -39,18 +39,18 @@ export default function UnitList() {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState('');
-  const [filters, setFilters] = useState<UnitFilters>({ activeOnly: true });
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<ProductUnit | null>(null);
   const [openModal, setOpenModal] = useState(false);
   const [form] = Form.useForm<UnitForm>();
   const { config, saveConfig } = useUserPreferences(PAGES.PRODUCTS_UNITS);
   const canManage = canManageProductData();
+  const defaultFilters = useMemo<UnitFilters>(() => ({ activeOnly: true }), []);
 
   const pageSize = Number((config as Record<string, unknown>)?.pageSize ?? 20);
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
-    filterValues: filters,
+    filterValues: defaultFilters,
     searchDebounceMs: 650,
     filterDebounceMs: 300,
     serializeFilters,

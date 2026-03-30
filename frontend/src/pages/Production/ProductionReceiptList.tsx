@@ -177,7 +177,7 @@ export default function ProductionReceiptList() {
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
-  const rows = listQuery.data?.results ?? [];
+  const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
   const detailData = detailQuery.data ?? detailReceipt;
   const summary = useMemo(() => ({
     postedCount: rows.filter((item) => item.status === 'POSTED').length,

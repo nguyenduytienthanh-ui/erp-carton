@@ -608,10 +608,7 @@ export default function ShipmentList() {
     },
   ];
 
-  const visibleRows = useMemo(
-    () => rows.filter((item) => matchesShipmentLane(item, laneFilter)),
-    [laneFilter, rows],
-  );
+  const visibleRows = rows.filter((item) => matchesShipmentLane(item, laneFilter));
 
   const laneTiles = useMemo(
     () => [

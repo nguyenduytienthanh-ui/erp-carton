@@ -323,7 +323,7 @@ function summarizeHealthCheck(name: string, payload: Record<string, unknown>): s
     return `${payload.queued_items ?? 0} job chờ`;
   }
   if (name === 'media') {
-    return Boolean(payload.writable) ? 'Có thể ghi' : 'Chưa ghi được';
+    return payload.writable === true ? 'Có thể ghi' : 'Chưa ghi được';
   }
   if (name === 'database') {
     return 'Kết nối khả dụng';
