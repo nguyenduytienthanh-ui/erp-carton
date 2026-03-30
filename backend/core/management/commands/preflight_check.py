@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 from pathlib import Path
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
@@ -21,6 +22,15 @@ class Command(BaseCommand):
 
     def _status_rank(self, value):
         return {'ok': 0, 'warning': 1, 'error': 2}.get(value, 2)
+
+    @staticmethod
+    def _tool_available(tool_name):
+        candidate = str(tool_name or '').strip()
+        if not candidate:
+            return False
+        if Path(candidate).is_file():
+            return True
+        return shutil.which(candidate) is not None
 
     def _check_env_vars(self):
         db_config = settings.DATABASES.get('default', {})
@@ -48,10 +58,22 @@ class Command(BaseCommand):
         return {'status': 'ok', 'message': f'Media directory is writable: {media_root}'}
 
     def _check_backup_tools(self):
-        missing = [tool for tool in ('pg_dump', 'psql') if shutil.which(tool) is None]
+        required_tools = ['pg_dump', 'psql']
+        deployment_mode = str(getattr(settings, 'DEPLOYMENT_MODE', 'colocated') or 'colocated').strip().lower()
+        tunnel_provider = str(getattr(settings, 'TUNNEL_PROVIDER', '') or '').strip().lower()
+        backup_cloud_enabled = bool(
+            getattr(settings, 'BACKUP_CLOUD_SYNC_ENABLED', False)
+            or str(getattr(settings, 'BACKUP_RCLONE_DESTINATION', '') or '').strip()
+            or str(getattr(settings, 'BACKUP_CLOUD_PROVIDER', '') or '').strip()
+        )
+        if backup_cloud_enabled:
+            required_tools.append(str(getattr(settings, 'BACKUP_RCLONE_BINARY', 'rclone') or 'rclone'))
+        if deployment_mode == 'hybrid' and tunnel_provider == 'cloudflared':
+            required_tools.append('cloudflared')
+        missing = [tool for tool in required_tools if not self._tool_available(tool)]
         if missing:
             return {'status': 'warning', 'message': f'Missing backup/restore tools in PATH: {", ".join(missing)}'}
-        return {'status': 'ok', 'message': 'Backup/restore tools are available'}
+        return {'status': 'ok', 'message': f'Backup/restore tools are available ({", ".join(required_tools)})'}
 
     def _check_q_cluster(self):
         workers = int(settings.Q_CLUSTER.get('workers') or 0)
@@ -187,6 +209,9 @@ class Command(BaseCommand):
     def _check_backup_and_logging(self):
         backup_root = Path(getattr(settings, 'BACKUP_ROOT', Path(settings.BASE_DIR) / 'backups'))
         retention_days = int(getattr(settings, 'BACKUP_RETENTION_DAYS', 0) or 0)
+        cloud_sync_enabled = bool(getattr(settings, 'BACKUP_CLOUD_SYNC_ENABLED', False))
+        cloud_provider = str(getattr(settings, 'BACKUP_CLOUD_PROVIDER', '') or '').strip().lower()
+        cloud_destination = str(getattr(settings, 'BACKUP_RCLONE_DESTINATION', '') or '').strip()
         log_to_file = bool(getattr(settings, 'LOG_TO_FILE', False))
         log_backup_count = int(getattr(settings, 'LOG_FILE_BACKUP_COUNT', 0) or 0)
 
@@ -201,6 +226,12 @@ class Command(BaseCommand):
         if retention_days <= 0:
             status = 'warning'
             issues.append('BACKUP_RETENTION_DAYS should be greater than 0')
+        if cloud_sync_enabled and not cloud_provider:
+            status = 'warning'
+            issues.append('BACKUP_CLOUD_PROVIDER is empty while BACKUP_CLOUD_SYNC_ENABLED is on')
+        if cloud_sync_enabled and not cloud_destination:
+            status = 'warning'
+            issues.append('BACKUP_RCLONE_DESTINATION is empty while BACKUP_CLOUD_SYNC_ENABLED is on')
         if log_to_file and log_backup_count <= 0:
             status = 'warning'
             issues.append('LOG_FILE_BACKUP_COUNT should be greater than 0 when LOG_TO_FILE is enabled')
@@ -210,16 +241,103 @@ class Command(BaseCommand):
                 'status': 'ok',
                 'message': (
                     f'Backup/logging settings look acceptable '
-                    f'(backup_root={backup_root}, retention_days={retention_days}, log_to_file={log_to_file})'
+                    f'(backup_root={backup_root}, retention_days={retention_days}, '
+                    f'cloud_sync={cloud_sync_enabled}, log_to_file={log_to_file})'
                 ),
             }
         return {'status': status, 'message': '; '.join(issues)}
 
     def _check_frontend_env_template(self):
         env_example = Path(settings.BASE_DIR).parent / 'frontend' / '.env.example'
+        public_env_example = Path(settings.BASE_DIR).parent / 'frontend' / '.env.public.example'
+        backend_hybrid_env = Path(settings.BASE_DIR) / '.env.hybrid.example'
+        missing = []
         if not env_example.exists():
-            return {'status': 'warning', 'message': 'frontend/.env.example is missing'}
-        return {'status': 'ok', 'message': 'frontend/.env.example exists'}
+            missing.append('frontend/.env.example')
+        if not public_env_example.exists():
+            missing.append('frontend/.env.public.example')
+        if not backend_hybrid_env.exists():
+            missing.append('backend/.env.hybrid.example')
+        if missing:
+            return {'status': 'warning', 'message': f'Missing env templates: {", ".join(missing)}'}
+        return {'status': 'ok', 'message': 'Frontend/backend env templates for local and hybrid deploy exist'}
+
+    def _check_hybrid_deploy(self):
+        app_env = str(getattr(settings, 'APP_ENV', 'development') or 'development').strip().lower()
+        deployment_mode = str(getattr(settings, 'DEPLOYMENT_MODE', 'colocated') or 'colocated').strip().lower()
+        frontend_public_url = str(getattr(settings, 'FRONTEND_PUBLIC_URL', '') or '').strip()
+        frontend_url = str(getattr(settings, 'FRONTEND_URL', '') or '').strip()
+        api_public_url = str(getattr(settings, 'API_PUBLIC_URL', '') or '').strip()
+        tunnel_provider = str(getattr(settings, 'TUNNEL_PROVIDER', '') or '').strip().lower()
+        cloudflare_tunnel_id = str(getattr(settings, 'CLOUDFLARED_TUNNEL_ID', '') or '').strip()
+        cloudflare_config_path = str(getattr(settings, 'CLOUDFLARED_CONFIG_PATH', '') or '').strip()
+        backup_cloud_enabled = bool(getattr(settings, 'BACKUP_CLOUD_SYNC_ENABLED', False))
+        backup_cloud_provider = str(getattr(settings, 'BACKUP_CLOUD_PROVIDER', '') or '').strip().lower()
+        backup_cloud_destination = str(getattr(settings, 'BACKUP_RCLONE_DESTINATION', '') or '').strip()
+        proxy_enabled = bool(getattr(settings, 'SECURE_PROXY_SSL_HEADER', None))
+
+        issues = []
+        status = 'ok'
+        if deployment_mode not in {'colocated', 'hybrid'}:
+            status = 'warning'
+            issues.append(f'DEPLOYMENT_MODE is not recognized: {deployment_mode}')
+        if deployment_mode != 'hybrid':
+            return {'status': 'ok', 'message': f'Deployment mode is {deployment_mode}; hybrid checks are informational only'}
+
+        if not frontend_public_url:
+            status = 'warning'
+            issues.append('FRONTEND_PUBLIC_URL is empty')
+        if not api_public_url:
+            status = 'warning'
+            issues.append('API_PUBLIC_URL is empty')
+
+        parsed_frontend = urlparse(frontend_public_url) if frontend_public_url else None
+        parsed_api = urlparse(api_public_url) if api_public_url else None
+        if frontend_public_url and frontend_url and frontend_public_url.rstrip('/') != frontend_url.rstrip('/'):
+            status = 'warning'
+            issues.append('FRONTEND_URL and FRONTEND_PUBLIC_URL should match in hybrid mode')
+        if app_env == 'production' and frontend_public_url and parsed_frontend and parsed_frontend.scheme != 'https':
+            status = 'warning'
+            issues.append('FRONTEND_PUBLIC_URL should use https in production hybrid mode')
+        if app_env == 'production' and api_public_url and parsed_api and parsed_api.scheme != 'https':
+            status = 'warning'
+            issues.append('API_PUBLIC_URL should use https in production hybrid mode')
+        if api_public_url and not api_public_url.rstrip('/').endswith('/api/v1'):
+            status = 'warning'
+            issues.append('API_PUBLIC_URL should end with /api/v1')
+        if not proxy_enabled:
+            status = 'warning'
+            issues.append('USE_X_FORWARDED_PROTO should be enabled for hybrid https/public traffic')
+        if tunnel_provider != 'cloudflared':
+            status = 'warning'
+            issues.append('TUNNEL_PROVIDER should be cloudflared for the default hybrid setup')
+        if tunnel_provider == 'cloudflared' and not cloudflare_tunnel_id:
+            status = 'warning'
+            issues.append('CLOUDFLARED_TUNNEL_ID is empty')
+        if tunnel_provider == 'cloudflared' and not cloudflare_config_path:
+            status = 'warning'
+            issues.append('CLOUDFLARED_CONFIG_PATH is empty')
+        if not backup_cloud_enabled:
+            status = 'warning'
+            issues.append('BACKUP_CLOUD_SYNC_ENABLED should be on for hybrid mode')
+        if backup_cloud_enabled and backup_cloud_provider != 'rclone':
+            status = 'warning'
+            issues.append('BACKUP_CLOUD_PROVIDER should be rclone for the default Google Drive sync setup')
+        if backup_cloud_enabled and not backup_cloud_destination:
+            status = 'warning'
+            issues.append('BACKUP_RCLONE_DESTINATION is empty')
+
+        if not issues:
+            frontend_host = parsed_frontend.netloc if parsed_frontend else frontend_public_url
+            api_host = parsed_api.netloc if parsed_api else api_public_url
+            return {
+                'status': 'ok',
+                'message': (
+                    f'Hybrid deploy looks ready '
+                    f'(frontend={frontend_host}, api={api_host}, tunnel={tunnel_provider}, backup_sync={backup_cloud_provider})'
+                ),
+            }
+        return {'status': status, 'message': '; '.join(issues)}
 
     def _check_monitoring(self):
         app_env = getattr(settings, 'APP_ENV', 'development')
@@ -334,6 +452,7 @@ class Command(BaseCommand):
             'jwt_sessions': self._check_jwt_and_sessions(),
             'backup_logging': self._check_backup_and_logging(),
             'frontend_env': self._check_frontend_env_template(),
+            'hybrid_deploy': self._check_hybrid_deploy(),
             'monitoring': self._check_monitoring(),
             'audit_controls': self._check_audit_controls(),
         }

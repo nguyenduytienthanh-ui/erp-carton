@@ -21,6 +21,8 @@ backend/.pytest_cache/
 backend/backups/
 backend/backups/*/restore_dry_run.json
 backend/backups/*/restore_last_run.json
+deploy/cloudflared/*.json
+deploy/rclone/*.conf
 docs/GO_LIVE_HANDOFF_LATEST.json
 docs/RELEASE_LOCK_LATEST.json
 screenshots/

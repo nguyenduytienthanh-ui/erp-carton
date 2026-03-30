@@ -48,6 +48,7 @@ DEBUG = _bool_config('DEBUG', default=False)
 
 APP_ENV = str(config('APP_ENV', default='development')).strip().lower()
 IS_PRODUCTION = APP_ENV == 'production'
+DEPLOYMENT_MODE = str(config('DEPLOYMENT_MODE', default='colocated')).strip().lower()
 
 
 def _csv_config(name, default=''):
@@ -246,6 +247,15 @@ MEDIA_ROOT = Path(config('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
 BACKUP_ROOT = Path(config('BACKUP_ROOT', default=str(BASE_DIR / 'backups')))
 BACKUP_RETENTION_DAYS = config('BACKUP_RETENTION_DAYS', default=14 if IS_PRODUCTION else 7, cast=int)
 BACKUP_STALE_HOURS = config('BACKUP_STALE_HOURS', default=48 if IS_PRODUCTION else 168, cast=int)
+BACKUP_CLOUD_SYNC_ENABLED = _bool_config('BACKUP_CLOUD_SYNC_ENABLED', default=False)
+BACKUP_CLOUD_PROVIDER = str(config('BACKUP_CLOUD_PROVIDER', default='')).strip().lower()
+BACKUP_RCLONE_BINARY = config('BACKUP_RCLONE_BINARY', default='rclone')
+BACKUP_RCLONE_DESTINATION = config('BACKUP_RCLONE_DESTINATION', default='')
+BACKUP_CLOUD_SYNC_STALE_HOURS = config(
+    'BACKUP_CLOUD_SYNC_STALE_HOURS',
+    default=72 if IS_PRODUCTION else 168,
+    cast=int,
+)
 AUDIT_LOG_RETENTION_DAYS = config('AUDIT_LOG_RETENTION_DAYS', default=365 if IS_PRODUCTION else 90, cast=int)
 AUDIT_EXPORT_MAX_ROWS = config('AUDIT_EXPORT_MAX_ROWS', default=5000, cast=int)
 INCIDENT_RUNBOOK_URL = config('INCIDENT_RUNBOOK_URL', default='')
@@ -260,9 +270,16 @@ ALERT_HTTP_TIMEOUT_SECONDS = config('ALERT_HTTP_TIMEOUT_SECONDS', default=10, ca
 DB_SLOW_QUERY_THRESHOLD_MS = config('DB_SLOW_QUERY_THRESHOLD_MS', default=1500, cast=int)
 LARGE_DATA_WARNING_ROWS = config('LARGE_DATA_WARNING_ROWS', default=1000, cast=int)
 LARGE_DATA_CRITICAL_ROWS = config('LARGE_DATA_CRITICAL_ROWS', default=10000, cast=int)
+API_PUBLIC_URL = config('API_PUBLIC_URL', default='')
+CLOUDFLARED_TUNNEL_ID = config('CLOUDFLARED_TUNNEL_ID', default='')
+CLOUDFLARED_CONFIG_PATH = config('CLOUDFLARED_CONFIG_PATH', default='')
+TUNNEL_PROVIDER = str(config('TUNNEL_PROVIDER', default='')).strip().lower()
 
 # Email
-FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
+FRONTEND_PUBLIC_URL = config('FRONTEND_PUBLIC_URL', default='')
+FRONTEND_URL = config('FRONTEND_URL', default=FRONTEND_PUBLIC_URL or 'http://localhost:5173')
+if not FRONTEND_PUBLIC_URL:
+    FRONTEND_PUBLIC_URL = FRONTEND_URL
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='ERP Carton <noreply@localhost>')
 SERVER_EMAIL = config('SERVER_EMAIL', default=DEFAULT_FROM_EMAIL)
 EMAIL_BACKEND = config(

@@ -1,0 +1,12 @@
+[Unit]
+Description=ERP Carton Backup Cycle
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/erp-carton/backend
+EnvironmentFile=/opt/erp-carton/backend/.env
+ExecStart=/opt/erp-carton/backend/.venv/bin/python manage.py backup_cycle --json
+
+[Install]
+WantedBy=multi-user.target

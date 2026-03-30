@@ -28,7 +28,7 @@ class Command(BaseCommand):
                 'key': 'backup_and_restore',
                 'label': 'Backup and restore drill',
                 'commands': [
-                    'python manage.py backup --json',
+                    'python manage.py backup_cycle --json',
                     f'python manage.py restore {restore_target} --dry-run --json',
                 ],
             },
@@ -78,6 +78,8 @@ class Command(BaseCommand):
             blockers.append('Latest backup is stale or missing.')
         if readiness['backups'].get('restore_drill_status') != 'ok':
             blockers.append('Latest backup has not passed a restore dry-run.')
+        if readiness['backups'].get('cloud_sync_required') and readiness['backups'].get('cloud_sync_status') != 'ok':
+            blockers.append('Latest backup has not been synced successfully to Google Drive.')
         if readiness['uat_personas']['missing_count'] > 0:
             blockers.append('Some expected UAT personas are missing.')
         if environment == 'production' and readiness['alerts']['status'] != 'ok':
@@ -99,6 +101,7 @@ class Command(BaseCommand):
                 'pending_migrations': readiness['migrations']['pending_count'],
                 'backup_status': readiness['backups']['status'],
                 'restore_drill_status': readiness['backups'].get('restore_drill_status', 'warning'),
+                'cloud_sync_status': readiness['backups'].get('cloud_sync_status', 'warning'),
                 'missing_uat_personas': readiness['uat_personas']['missing_count'],
                 'alert_status': readiness['alerts']['status'],
             },

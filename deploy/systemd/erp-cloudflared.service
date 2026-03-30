@@ -1,0 +1,12 @@
+[Unit]
+Description=ERP Carton Cloudflare Tunnel
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cloudflared --config /etc/cloudflared/erp-carton.yml tunnel run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

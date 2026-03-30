@@ -71,10 +71,14 @@ class GoLiveObservabilityApiTests(TestCase):
             backup_dir.mkdir(parents=True, exist_ok=True)
             (backup_dir / 'database.sql').write_text('-- backup --', encoding='utf-8')
             (backup_dir / 'backup_info.txt').write_text('created', encoding='utf-8')
+            (backup_dir / 'cloud_sync.json').write_text('{"status":"ok","mode":"sync"}', encoding='utf-8')
 
             with override_settings(
                 BACKUP_ROOT=Path(tmpdir),
                 BACKUP_STALE_HOURS=72,
+                BACKUP_CLOUD_SYNC_ENABLED=True,
+                BACKUP_CLOUD_PROVIDER='rclone',
+                BACKUP_RCLONE_DESTINATION='gdrive:erp-carton-backups',
                 ALERT_EMAIL_RECIPIENTS=['it@example.com'],
                 ALERT_SLACK_WEBHOOK_URL='https://hooks.slack.com/services/test',
                 INCIDENT_RUNBOOK_URL='https://runbooks.example.com/erp',
@@ -88,6 +92,7 @@ class GoLiveObservabilityApiTests(TestCase):
         monitoring = body['monitoring']
         self.assertEqual(monitoring['backup']['status'], 'ok')
         self.assertTrue(monitoring['backup']['latest_backup']['has_database_dump'])
+        self.assertEqual(monitoring['backup']['cloud_sync_status'], 'ok')
         self.assertEqual(monitoring['email_delivery']['status_counts']['FAILED'], 1)
         self.assertGreaterEqual(monitoring['alert_channels']['configured_count'], 2)
         self.assertIn('alert_delivery', monitoring)

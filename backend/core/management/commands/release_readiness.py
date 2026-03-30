@@ -45,6 +45,7 @@ class Command(BaseCommand):
             'jwt_sessions': preflight._check_jwt_and_sessions(),
             'backup_logging': preflight._check_backup_and_logging(),
             'frontend_env': preflight._check_frontend_env_template(),
+            'hybrid_deploy': preflight._check_hybrid_deploy(),
             'monitoring': preflight._check_monitoring(),
             'audit_controls': preflight._check_audit_controls(),
         }
@@ -62,6 +63,8 @@ class Command(BaseCommand):
             recommendations.append('Run a fresh backup and verify restore drill before go-live.')
         if payload['backups'].get('restore_drill_status') != 'ok':
             recommendations.append('Run a restore dry-run against the latest backup bundle and capture the verification result.')
+        if payload['backups'].get('cloud_sync_status') != 'ok':
+            recommendations.append('Sync the latest backup bundle to Google Drive via rclone and confirm cloud_sync.json reports success.')
         if payload['alerts']['status'] != 'ok':
             recommendations.append('Run alert channel readiness, then configure the missing monitored channels and escalation metadata.')
         if payload['alert_delivery']['status'] != 'ok':
@@ -109,6 +112,7 @@ class Command(BaseCommand):
                 1 if int(payload['migrations']['pending_count']) > 0 else 0,
                 self._status_rank(payload['backups']['status']),
                 self._status_rank(payload['backups'].get('restore_drill_status')),
+                self._status_rank(payload['backups'].get('cloud_sync_status')),
                 self._status_rank(payload['alerts']['status']),
                 self._status_rank(payload['alert_delivery']['status']),
                 self._status_rank(payload['email_delivery']['status']),
@@ -126,6 +130,7 @@ class Command(BaseCommand):
             self.stdout.write(f"- pending migrations: {payload['migrations']['pending_count']}")
             self.stdout.write(f"- latest backup status: {payload['backups']['status'].upper()}")
             self.stdout.write(f"- restore drill: {str(payload['backups'].get('restore_drill_status', 'warning')).upper()}")
+            self.stdout.write(f"- cloud sync: {str(payload['backups'].get('cloud_sync_status', 'warning')).upper()}")
             self.stdout.write(f"- alert channels: {payload['alerts']['configured_count']} configured")
             self.stdout.write(f"- alert delivery: {payload['alert_delivery']['status'].upper()}")
             self.stdout.write(f"- email failures ({hours}h): {payload['email_delivery']['status_counts']['FAILED']}")

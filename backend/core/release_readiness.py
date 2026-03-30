@@ -13,6 +13,32 @@ from django.utils import timezone
 from core.models import AuditLog, Customer, Notification, Task, User, UserSession, WorkflowPipelineEvent
 
 
+def _get_backup_cloud_sync_config():
+    deployment_mode = str(getattr(settings, 'DEPLOYMENT_MODE', 'colocated') or 'colocated').strip().lower()
+    app_env = str(getattr(settings, 'APP_ENV', 'development') or 'development').strip().lower()
+    enabled = bool(getattr(settings, 'BACKUP_CLOUD_SYNC_ENABLED', False))
+    provider = str(getattr(settings, 'BACKUP_CLOUD_PROVIDER', '') or '').strip().lower()
+    destination = str(getattr(settings, 'BACKUP_RCLONE_DESTINATION', '') or '').strip()
+    required = enabled or (deployment_mode == 'hybrid' and app_env == 'production')
+    return {
+        'deployment_mode': deployment_mode,
+        'app_env': app_env,
+        'enabled': enabled,
+        'required': required,
+        'provider': provider,
+        'destination': destination,
+        'stale_hours': int(getattr(settings, 'BACKUP_CLOUD_SYNC_STALE_HOURS', 0) or 0),
+    }
+
+
+def _normalize_command_status(value, *, allow_skipped=False):
+    allowed = {'ok', 'warning', 'error'}
+    if allow_skipped:
+        allowed = allowed | {'skipped'}
+    normalized = str(value or '').strip().lower()
+    return normalized if normalized in allowed else 'warning'
+
+
 def get_pending_migration_rows():
     executor = MigrationExecutor(connection)
     plan = executor.migration_plan(executor.loader.graph.leaf_nodes())
@@ -54,9 +80,12 @@ def _serialize_backup_dir(entry: Path):
     manifest_payload = _load_json_file(entry / 'backup_manifest.json')
     restore_dry_run_payload = _load_json_file(entry / 'restore_dry_run.json')
     restore_last_run_payload = _load_json_file(entry / 'restore_last_run.json')
+    cloud_sync_payload = _load_json_file(entry / 'cloud_sync.json')
     restore_drill_status = str((restore_dry_run_payload or {}).get('status') or '').strip().lower()
     if restore_drill_status not in {'ok', 'warning', 'error'}:
         restore_drill_status = 'warning'
+    cloud_sync_status = _normalize_command_status((cloud_sync_payload or {}).get('status'), allow_skipped=True)
+    cloud_sync_mode = str((cloud_sync_payload or {}).get('mode') or '').strip().lower()
     return {
         'path': str(entry),
         'name': entry.name,
@@ -70,6 +99,10 @@ def _serialize_backup_dir(entry: Path):
         'latest_restore_dry_run': restore_dry_run_payload,
         'latest_restore_run': restore_last_run_payload,
         'restore_drill_status': 'ok' if restore_drill_status == 'ok' else 'warning',
+        'latest_cloud_sync': cloud_sync_payload,
+        'cloud_sync_status': cloud_sync_status,
+        'cloud_sync_mode': cloud_sync_mode,
+        'cloud_sync_verified': bool(cloud_sync_payload and cloud_sync_mode == 'sync' and cloud_sync_status == 'ok'),
     }
 
 
@@ -86,12 +119,19 @@ def get_backup_inventory_payload():
     backup_root = Path(getattr(settings, 'BACKUP_ROOT', Path(settings.BASE_DIR) / 'backups'))
     retention_days = int(getattr(settings, 'BACKUP_RETENTION_DAYS', 0) or 0)
     stale_hours = int(getattr(settings, 'BACKUP_STALE_HOURS', 0) or 0)
+    cloud_sync_config = _get_backup_cloud_sync_config()
     if not backup_root.exists():
         return {
             'root': str(backup_root),
             'exists': False,
             'backup_count': 0,
             'latest_backup': None,
+            'cloud_sync_required': cloud_sync_config['required'],
+            'cloud_sync_enabled': cloud_sync_config['enabled'],
+            'cloud_sync_provider': cloud_sync_config['provider'],
+            'cloud_sync_destination': cloud_sync_config['destination'],
+            'cloud_sync_status': 'warning' if cloud_sync_config['required'] else 'ok',
+            'latest_cloud_sync': None,
             'retention_days': retention_days,
             'stale_hours': stale_hours,
             'status': 'warning',
@@ -109,6 +149,12 @@ def get_backup_inventory_payload():
         is_stale = True
     elif stale_hours > 0 and float(latest_backup['age_hours']) > stale_hours:
         is_stale = True
+    cloud_sync_status = 'ok'
+    if cloud_sync_config['required']:
+        if latest_backup is None:
+            cloud_sync_status = 'warning'
+        elif not latest_backup.get('cloud_sync_verified'):
+            cloud_sync_status = 'warning'
 
     return {
         'root': str(backup_root),
@@ -117,6 +163,13 @@ def get_backup_inventory_payload():
         'latest_backup': latest_backup,
         'latest_restore_dry_run': latest_backup.get('latest_restore_dry_run') if latest_backup else None,
         'restore_drill_status': latest_backup.get('restore_drill_status', 'warning') if latest_backup else 'warning',
+        'latest_cloud_sync': latest_backup.get('latest_cloud_sync') if latest_backup else None,
+        'cloud_sync_required': cloud_sync_config['required'],
+        'cloud_sync_enabled': cloud_sync_config['enabled'],
+        'cloud_sync_provider': cloud_sync_config['provider'],
+        'cloud_sync_destination': cloud_sync_config['destination'],
+        'cloud_sync_status': cloud_sync_status,
+        'cloud_sync_stale_hours': cloud_sync_config['stale_hours'],
         'retention_days': retention_days,
         'stale_hours': stale_hours,
         'status': 'warning' if is_stale else 'ok',

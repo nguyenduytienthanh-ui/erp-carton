@@ -2,6 +2,7 @@ import json
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from django.core.management import call_command
 from django.test import TestCase, override_settings
@@ -46,3 +47,51 @@ class BackupRestoreCommandTests(TestCase):
             report_payload = json.loads((backup_dir / 'restore_dry_run.json').read_text(encoding='utf-8'))
             self.assertEqual(report_payload['status'], 'ok')
             self.assertTrue(report_payload['checks']['has_backup_manifest'])
+
+    @patch('core.management.commands.backup_cloud_sync.subprocess.run')
+    @patch('core.management.commands.backup_cloud_sync.shutil.which')
+    @override_settings(
+        BACKUP_CLOUD_SYNC_ENABLED=True,
+        BACKUP_CLOUD_PROVIDER='rclone',
+        BACKUP_RCLONE_DESTINATION='gdrive:erp-carton-backups',
+    )
+    def test_backup_cloud_sync_writes_cloud_sync_report(self, mock_which, mock_run):
+        mock_which.return_value = '/usr/bin/rclone'
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = 'Transferred: 1 / 1'
+        mock_run.return_value.stderr = ''
+
+        with TemporaryDirectory() as tmpdir:
+            backup_dir = Path(tmpdir) / '20260322_120000'
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            (backup_dir / 'database.sql').write_text('-- dump --', encoding='utf-8')
+
+            stdout = StringIO()
+            call_command('backup_cloud_sync', str(backup_dir), '--json', stdout=stdout)
+            payload = json.loads(stdout.getvalue())
+
+            report_payload = json.loads((backup_dir / 'cloud_sync.json').read_text(encoding='utf-8'))
+            self.assertEqual(payload['status'], 'ok')
+            self.assertEqual(payload['remote_path'], 'gdrive:erp-carton-backups/20260322_120000')
+            self.assertEqual(report_payload['status'], 'ok')
+            self.assertEqual(report_payload['mode'], 'sync')
+
+    @override_settings(BACKUP_CLOUD_SYNC_ENABLED=False)
+    def test_backup_cycle_runs_backup_and_restore_dry_run(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / 'media-source'
+            backup_root = Path(tmpdir) / 'backups'
+            media_root.mkdir(parents=True, exist_ok=True)
+            (media_root / 'sample.txt').write_text('seed-media', encoding='utf-8')
+
+            stdout = StringIO()
+            with override_settings(BACKUP_ROOT=backup_root, MEDIA_ROOT=media_root):
+                call_command('backup_cycle', '--json', stdout=stdout)
+
+            payload = json.loads(stdout.getvalue())
+            backup_dir = Path(payload['backup_dir'])
+            self.assertEqual(payload['backup']['status'], payload['status'])
+            self.assertEqual(payload['restore_dry_run']['status'], 'ok')
+            self.assertIn(payload['cloud_sync']['status'], {'skipped', 'warning'})
+            self.assertTrue((backup_dir / 'backup_manifest.json').exists())
+            self.assertTrue((backup_dir / 'restore_dry_run.json').exists())

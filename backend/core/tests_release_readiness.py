@@ -2,6 +2,7 @@ import json
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from django.core.management import call_command
 from django.test import TestCase, override_settings
@@ -35,6 +36,7 @@ class ReleaseReadinessCommandTests(TestCase):
             (backup_dir / 'backup_info.txt').write_text('created', encoding='utf-8')
             (backup_dir / 'backup_manifest.json').write_text('{"status":"ok"}', encoding='utf-8')
             (backup_dir / 'restore_dry_run.json').write_text('{"status":"ok"}', encoding='utf-8')
+            (backup_dir / 'cloud_sync.json').write_text('{"status":"ok","mode":"sync"}', encoding='utf-8')
             AuditLog.objects.create(
                 user=None,
                 action='DELIVER',
@@ -48,20 +50,43 @@ class ReleaseReadinessCommandTests(TestCase):
             )
 
             stdout = StringIO()
-            with override_settings(
-                BACKUP_ROOT=Path(tmpdir),
-                BACKUP_STALE_HOURS=72,
-                ALERT_EMAIL_RECIPIENTS=['it@example.com'],
-                INCIDENT_RUNBOOK_URL='https://runbooks.example.com/erp',
-            ):
-                call_command('release_readiness', '--json', stdout=stdout)
+            with patch('core.management.commands.preflight_check.shutil.which') as mock_which:
+                mock_which.side_effect = lambda tool: f'/usr/bin/{tool}'
+                with override_settings(
+                    APP_ENV='production',
+                    DEPLOYMENT_MODE='hybrid',
+                    BACKUP_ROOT=Path(tmpdir),
+                    BACKUP_STALE_HOURS=72,
+                    BACKUP_CLOUD_SYNC_ENABLED=True,
+                    BACKUP_CLOUD_PROVIDER='rclone',
+                    BACKUP_RCLONE_DESTINATION='gdrive:erp-carton-backups',
+                    FRONTEND_URL='https://erp.example.com',
+                    FRONTEND_PUBLIC_URL='https://erp.example.com',
+                    API_PUBLIC_URL='https://api.example.com/api/v1',
+                    ALLOWED_HOSTS=['api.example.com', 'erp.example.com'],
+                    CORS_ALLOWED_ORIGINS=['https://erp.example.com'],
+                    CSRF_TRUSTED_ORIGINS=['https://erp.example.com'],
+                    SESSION_COOKIE_SECURE=True,
+                    CSRF_COOKIE_SECURE=True,
+                    SECURE_HSTS_SECONDS=31_536_000,
+                    SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO', 'https'),
+                    TUNNEL_PROVIDER='cloudflared',
+                    CLOUDFLARED_TUNNEL_ID='cf-tunnel-id',
+                    CLOUDFLARED_CONFIG_PATH='/etc/cloudflared/erp-carton.yml',
+                    ALERT_EMAIL_RECIPIENTS=['it@example.com'],
+                    INCIDENT_RUNBOOK_URL='https://runbooks.example.com/erp',
+                    INCIDENT_CONTACT_EMAILS=['it@example.com'],
+                ):
+                    call_command('release_readiness', '--json', stdout=stdout)
             payload = json.loads(stdout.getvalue())
 
         self.assertEqual(payload['backups']['status'], 'ok')
         self.assertEqual(payload['backups']['restore_drill_status'], 'ok')
+        self.assertEqual(payload['backups']['cloud_sync_status'], 'ok')
         self.assertEqual(payload['backups']['backup_count'], 1)
         self.assertTrue(payload['backups']['latest_backup']['has_database_dump'])
         self.assertGreaterEqual(float(payload['backups']['latest_backup']['age_hours']), 0)
+        self.assertEqual(payload['preflight']['checks']['hybrid_deploy']['status'], 'ok')
         self.assertGreaterEqual(payload['alerts']['configured_count'], 1)
         self.assertEqual(payload['alert_delivery']['status'], 'ok')
         self.assertGreaterEqual(payload['alert_delivery']['status_counts']['SUCCESS'], 1)
