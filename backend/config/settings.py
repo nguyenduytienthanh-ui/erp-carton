@@ -56,7 +56,7 @@ def _csv_config(name, default=''):
 
 ALLOWED_HOSTS = _csv_config(
     'ALLOWED_HOSTS',
-    default='' if IS_PRODUCTION else '127.0.0.1,localhost,10.169.62.194',
+    default='' if IS_PRODUCTION else '127.0.0.1,localhost',
 )
 
 

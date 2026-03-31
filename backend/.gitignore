@@ -8,3 +8,7 @@ media/
 staticfiles/
 .DS_Store
 *.log
+.hypothesis/
+backups/
+*.sql
+*.bat
