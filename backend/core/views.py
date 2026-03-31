@@ -33,7 +33,7 @@ from django.utils.dateparse import parse_datetime
 from django.core.cache import cache
 from .alerting import send_operational_alert
 from .health import _compose_health
-from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, AuditLog, ApprovalHistory, UserSession, UserPreferences, ColumnPermission, Task, WorkflowTaskTemplate, TaskWatcher, WorkflowPipelineEvent
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, AuditLog, ApprovalHistory, UserSession, UserPreferences, ColumnPermission, Task, WorkflowTaskTemplate, TaskWatcher, WorkflowPipelineEvent, DocumentType, TaxRate, Shift, ExpenseCategory, NumberSequence
 from .release_readiness import (
     get_alert_readiness_payload,
     get_alert_delivery_health_payload,
@@ -57,6 +57,7 @@ from .serializers import (
     CurrentUserUpdateSerializer, ChangePasswordSerializer,
     CustomerSerializer, ExportTemplateSerializer, SavedViewSerializer, AttachmentSerializer, CommentSerializer, NotificationSerializer, UserSessionSerializer, UserPreferencesSerializer, ColumnPermissionSerializer, TaskSerializer,
     WorkflowTaskTemplateSerializer,
+    DocumentTypeSerializer, TaxRateSerializer, ShiftSerializer, ExpenseCategorySerializer, NumberSequenceSerializer,
 )
 from django.utils import timezone as django_timezone
 from .filters import CustomerFilter, TeamFilter, RoleFilter
@@ -19670,9 +19671,6 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
 
 
 # ── System Configuration ViewSets ─────────────────────────────────────────────
-
-from .models import DocumentType, TaxRate, Shift, ExpenseCategory, NumberSequence
-from .serializers import DocumentTypeSerializer, TaxRateSerializer, ShiftSerializer, ExpenseCategorySerializer, NumberSequenceSerializer
 
 
 class SystemConfigurationPermissionMixin:

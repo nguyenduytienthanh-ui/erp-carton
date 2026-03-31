@@ -1087,8 +1087,6 @@ class BundlePriceChange(models.Model):
 
 # ── Material Template models (tables already exist in DB) ─────────────────────
 
-_User = get_user_model()
-
 
 class ProductMaterialTemplate(models.Model):
     STATUS_DRAFT = 'DRAFT'
@@ -1114,11 +1112,11 @@ class ProductMaterialTemplate(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     created_by = models.ForeignKey(
-        _User, on_delete=models.SET_NULL, null=True, blank=True,
+        User, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='created_product_material_templates',
     )
     updated_by = models.ForeignKey(
-        _User, on_delete=models.SET_NULL, null=True, blank=True,
+        User, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='updated_product_material_templates',
     )
 

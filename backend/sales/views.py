@@ -34,8 +34,8 @@ from core.mixins import get_client_ip
 from core.models import AuditLog, ApprovalHistory, Attachment
 from core.permissions import check_action_permission
 from core.workflow_services import generate_tasks_for_entity
-from sales.models import SalesOrder, SalesOrderStatus, Quote, QuoteStatus, OutboundShipment, OutboundShipmentStatus, ShipmentLine
-from sales.serializers import SalesOrderSerializer, QuoteSerializer, OutboundShipmentSerializer, ShipmentLineSerializer
+from sales.models import SalesOrder, SalesOrderStatus, Quote, QuoteStatus, OutboundShipment, OutboundShipmentStatus, ShipmentLine, SalesLineMaterialPlan
+from sales.serializers import SalesOrderSerializer, QuoteSerializer, OutboundShipmentSerializer, ShipmentLineSerializer, SalesLineMaterialPlanSerializer
 from sales.filters import SalesOrderFilter, QuoteFilter
 from sales.services import (
     apply_delivery_plan_delivery,
@@ -49,6 +49,12 @@ from sales.services import (
     sync_sales_order_delivery_tasks,
     workflow_can_transition,
     workflow_get_next_states,
+)
+from sales.material_plan_services import (
+    build_sales_material_command_center_row,
+    set_sales_line_material_plan_selection,
+    summarize_sales_material_command_center,
+    sync_sales_line_material_plan_for_line,
 )
 from sales.permissions import (
     can_edit_sales_order,
@@ -2610,17 +2616,8 @@ class ShipmentViewSet(viewsets.ModelViewSet):
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-# ── Sales Fulfillment / Material Plan ViewSet ─────────────────────────────────
 
-from sales.material_plan_services import (
-    build_sales_material_command_center_row,
-    set_sales_line_material_plan_selection,
-    summarize_sales_material_command_center,
-    sync_sales_line_material_plan_for_line,
-)
-from sales.models import SalesLineMaterialPlan
-from sales.serializers import SalesLineMaterialPlanSerializer
-from django.db.models import Q as _Q
+# ── Sales Fulfillment / Material Plan ViewSet ─────────────────────────────────
 
 
 class SalesLineMaterialPlanViewSet(viewsets.ReadOnlyModelViewSet):
@@ -2652,9 +2649,9 @@ class SalesLineMaterialPlanViewSet(viewsets.ReadOnlyModelViewSet):
         if not user.is_superuser:
             team_ids = list(getattr(user, 'teams', user.__class__.objects.none()).values_list('id', flat=True))
             if team_ids:
-                qs = qs.filter(_Q(sales_order__owner=user) | _Q(sales_order__team_id__in=team_ids) | _Q(sales_order__owner__isnull=True))
+                qs = qs.filter(Q(sales_order__owner=user) | Q(sales_order__team_id__in=team_ids) | Q(sales_order__owner__isnull=True))
             else:
-                qs = qs.filter(_Q(sales_order__owner=user) | _Q(sales_order__owner__isnull=True))
+                qs = qs.filter(Q(sales_order__owner=user) | Q(sales_order__owner__isnull=True))
 
         params = self.request.query_params
         if so_id := params.get('sales_order'):

@@ -3,7 +3,7 @@ import uuid
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, UserSession, UserPreferences, ColumnPermission, Task, WorkflowTaskTemplate, TaskWatcher
+from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, UserSession, UserPreferences, ColumnPermission, Task, WorkflowTaskTemplate, TaskWatcher, DocumentType, TaxRate, Shift, ExpenseCategory, NumberSequence
 
 
 ROLE_MODULE_PERMISSION_LOOKUP = {
@@ -1617,8 +1617,6 @@ class WorkflowTaskTemplateSerializer(serializers.ModelSerializer):
 
 
 # ── System Configuration serializers ─────────────────────────────────────────
-
-from .models import DocumentType, TaxRate, Shift, ExpenseCategory, NumberSequence
 
 
 class DocumentTypeSerializer(serializers.ModelSerializer):
