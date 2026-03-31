@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0019_customer_approved_at_customer_approved_by_and_more.py
-# hypothesis_version: 6.151.5
-
-['0018_notification', 'APPROVED', 'Approval status', 'Approved', 'DRAFT', 'Draft', 'PENDING_APPROVAL', 'Pending Approval', 'REJECTED', 'Rejected', 'approved_at', 'approved_by', 'approved_customers', 'core', 'customer', 'rejected_at', 'rejected_by', 'rejected_customers', 'rejection_reason', 'status']

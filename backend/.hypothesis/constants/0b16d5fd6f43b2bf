@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\serializers.py
-# hypothesis_version: 6.151.5
-
-['Unknown', '__all__', 'actor', 'actor.username', 'allowed_roles', 'allowed_users_list', 'browser', 'code', 'column', 'column_label', 'columns', 'config', 'content_type', 'created_at', 'created_by', 'created_by.username', 'date_joined', 'deleted_at', 'deleted_by', 'description', 'email', 'entity_type', 'file', 'file_size', 'file_type', 'filename', 'first_name', 'headers', 'id', 'is_active', 'is_default', 'is_locked', 'is_restricted', 'is_staff', 'last_active', 'last_name', 'login_at', 'logout_at', 'mentions', 'name', 'os', 'page', 'permissions', 'phone', 'read_at', 'recipient', 'request', 'roles', 'sort_order', 'teams', 'updated_at', 'updated_by', 'updated_by.username', 'uploaded_at', 'uploaded_by', 'uploaded_by.username', 'user', 'user.username', 'username']

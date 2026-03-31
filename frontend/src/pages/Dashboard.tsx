@@ -29,6 +29,7 @@ import { useUserPreferences } from '../hooks/useUserPreferences';
 import {
   canAccessSalesOrders,
   canAccessProductionCenter,
+  canManageProductionData,
   canManageFinanceData,
   canManageInventoryData,
   canManageOnboardingStudio,
@@ -62,6 +63,10 @@ type ShortcutCard = {
   description: string;
   route: string;
   actionLabel: string;
+};
+
+type RestoredWorkspaceCard = ShortcutCard & {
+  testId: string;
 };
 
 type PlaybookItem = {
@@ -164,6 +169,7 @@ export default function Dashboard() {
   const canViewSales = canAccessSalesOrders();
   const canManagePurchasing = canManagePurchasingData();
   const canAccessProduction = canAccessProductionCenter();
+  const canManageProduction = canManageProductionData();
   const canManageInventory = canManageInventoryData();
   const canManageFinance = canManageFinanceData();
   const canManageWorkforce = canManageWorkforceData();
@@ -432,38 +438,21 @@ export default function Dashboard() {
       title: 'Quét QR kiện',
       badge: 'QR',
       description: 'Mở nhanh khu vực quét kiện để tra cứu, xác minh, bốc xếp và bàn giao giao hàng trên điện thoại hoặc desktop.',
-      route: '/shipments/scan',
-      actionLabel: 'Mở QR nhanh',
+      route: '/scan-center',
+      actionLabel: 'Mở trung tâm quét QR',
     });
 
-    if (canManageOnboarding) {
-      cards.push({
-        key: 'onboarding-studio',
-        title: 'Trợ lý triển khai công việc',
-        badge: 'Rollout',
-        description: 'Mở nhanh khu vực preset rollout, xem trước triển khai và kiểm tra lịch sử áp dụng theo từng người dùng.',
-        route: '/admin/onboarding-studio',
-        actionLabel: 'Mở trợ lý triển khai',
-      });
-    }
-
     if (canViewSales) {
-      cards.push({
-        key: 'delivery-planning',
-        title: 'Kế hoạch giao hàng',
-        badge: formatNumber(salesSummary?.overdue_delivery_count),
-        description: 'Đi thẳng tới Đơn hàng xuất để rà kế hoạch giao theo từng dòng, nhất là đơn sắp tới hạn hoặc đã quá hạn.',
-        route: '/sales-orders?section=delivery-planning',
-        actionLabel: 'Rà kế hoạch giao',
-      });
-      cards.push({
-        key: 'shipments',
-        title: 'Phiếu xuất',
-        badge: formatNumber(salesSummary?.posted_count),
-        description: 'Vào khu vực điều phối giao hàng, xe, tài xế, đóng gói, bàn giao xe và xác nhận giao xong.',
-        route: '/shipments',
-        actionLabel: 'Mở điều phối giao hàng',
-      });
+      cards.push(
+        {
+          key: 'shipments',
+          title: 'Phiếu xuất',
+          badge: formatNumber(salesSummary?.posted_count),
+          description: 'Vào khu vực điều phối giao hàng, xe, tài xế, đóng gói, bàn giao xe và xác nhận giao xong.',
+          route: '/shipments',
+          actionLabel: 'Mở điều phối giao hàng',
+        },
+      );
     }
 
     if (canAccessProduction) {
@@ -474,6 +463,17 @@ export default function Dashboard() {
         description: 'Theo dõi lệnh sản xuất, tiến độ phát lệnh, cấp vật tư và nhập thành phẩm trong cùng một command center.',
         route: '/production-orders',
         actionLabel: 'Mở lệnh sản xuất',
+      });
+    }
+
+    if (canManageProduction) {
+      cards.push({
+        key: 'production-planning',
+        title: 'Điều độ sản xuất',
+        badge: 'Planner',
+        description: 'Mở workspace điều độ công đoạn để xem tải theo ngày, ca, line, tình trạng bàn giao và điểm nghẽn giao hàng.',
+        route: '/production-planning',
+        actionLabel: 'Mở planner điều độ',
       });
     }
 
@@ -513,17 +513,100 @@ export default function Dashboard() {
     return cards.slice(0, 7);
   }, [
     canAccessProduction,
-    canManageOnboarding,
+    canManageProduction,
     canViewOps,
     canViewReports,
     canViewSales,
     canViewWorkflow,
     operationsFailedCount,
     productionSummary?.active_count,
-    salesSummary?.overdue_delivery_count,
     salesSummary?.posted_count,
     taskSummary?.assigned_to_me,
     unreadCount,
+  ]);
+
+  const restoredWorkspaceCards = useMemo<RestoredWorkspaceCard[]>(() => {
+    const cards: RestoredWorkspaceCard[] = [
+      {
+        key: 'scan-center',
+        testId: 'dashboard-restore-scan-center',
+        title: 'Trung tâm quét QR',
+        badge: 'QR',
+        description: 'Mở lại đầu mối quét QR gần khu vực tài khoản để tra cứu, quét kiện, bốc xếp và bàn giao nhanh hơn.',
+        route: '/scan-center',
+        actionLabel: 'Mở trung tâm quét QR',
+      },
+    ];
+
+    if (canViewSales) {
+      cards.push({
+        key: 'sales-fulfillment-center',
+        testId: 'dashboard-restore-sales-fulfillment-center',
+        title: 'Điều độ đơn hàng xuất',
+        badge: 'Vật tư',
+        description: 'Tổng quan kế hoạch vật tư, tình trạng thiếu hụt và sẵn sàng giao hàng.',
+        route: '/sales-fulfillment-center',
+        actionLabel: 'Mở điều độ đơn hàng xuất',
+      });
+    }
+
+    if (canManageProduction) {
+      cards.push({
+        key: 'production-planning',
+        testId: 'dashboard-restore-production-planning',
+        title: 'Điều độ sản xuất',
+        badge: 'Planner',
+        description: 'Mở riêng bàn điều độ công đoạn để rà tải theo ngày, ca, vật tư và các điểm nghẽn giao hàng.',
+        route: '/production-planning',
+        actionLabel: 'Mở điều độ sản xuất',
+      });
+    }
+
+    if (canManageOnboarding) {
+      cards.push({
+        key: 'onboarding-studio',
+        testId: 'dashboard-restore-onboarding-studio',
+        title: 'Trợ lý triển khai công việc',
+        badge: 'Rollout',
+        description: 'Đưa lại công cụ hỗ trợ triển khai ra mặt trước để không phải tìm trong cụm kiểm soát hay submenu sâu.',
+        route: '/admin/onboarding-studio',
+        actionLabel: 'Mở trợ lý triển khai',
+      });
+    }
+
+    if (canManageWorkforce) {
+      cards.push({
+        key: 'salary-advance',
+        testId: 'dashboard-restore-salary-advance',
+        title: 'Ứng lương',
+        badge: formatNumber(salaryAdvancePendingCount),
+        description: 'Giữ ứng lương là một luồng riêng, nhìn thấy ngay và không lẫn với tạm ứng - quyết toán.',
+        route: '/salary-advance',
+        actionLabel: 'Mở ứng lương',
+      });
+    }
+
+    if (canManageFinance) {
+      cards.push({
+        key: 'advance-transactions',
+        testId: 'dashboard-restore-advance-transactions',
+        title: 'Tạm ứng - quyết toán',
+        badge: formatNumber(overdue90Count),
+        description: 'Giữ command center tài chính này nổi riêng để theo dõi tạm ứng, quyết toán và hồ sơ quá hạn.',
+        route: '/advance-transactions',
+        actionLabel: 'Mở tạm ứng - quyết toán',
+      });
+    }
+
+    return cards;
+  }, [
+    canManageFinance,
+    canManageOnboarding,
+    canManageProduction,
+    canManageWorkforce,
+    canViewSales,
+    overdue90Count,
+    salaryAdvancePendingCount,
   ]);
 
   const moduleCards = useMemo<DashboardCard[]>(() => {
@@ -1077,6 +1160,36 @@ export default function Dashboard() {
             </>
           )}
         </section>
+      )}
+
+      {restoredWorkspaceCards.length > 0 && (
+        <PanelSection
+          kicker="Lối mở nhanh"
+          title="Các trung tâm cần nhìn thấy ngay"
+          subtitle="Kéo các workspace dễ bị chìm trong menu con ra mặt trước để mở trực tiếp chỉ với một lần chạm."
+        >
+          <div className="command-center-shortcuts">
+            {restoredWorkspaceCards.map((card) => (
+              <button
+                key={card.key}
+                type="button"
+                className="command-center-shortcut"
+                data-testid={card.testId}
+                onClick={() => navigate(card.route)}
+              >
+                <div className="command-center-shortcut-meta">
+                  <div className="command-center-shortcut-title">{card.title}</div>
+                  <div className="command-center-shortcut-badge">{card.badge}</div>
+                </div>
+                <div className="command-center-shortcut-description">{card.description}</div>
+                <div className="command-center-card-footer">
+                  <span>{card.actionLabel}</span>
+                  <ArrowRightOutlined />
+                </div>
+              </button>
+            ))}
+          </div>
+        </PanelSection>
       )}
 
       <div className="command-center-grid">

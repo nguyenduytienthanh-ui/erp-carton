@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0027_approvallevel.py
-# hypothesis_version: 6.151.5
-
-[100, '0026_passwordpolicy', 'Approval Level', 'Approval Levels', 'ApprovalLevel', 'ID', 'approval_levels', 'core', 'core.role', 'db_table', 'entity_type', 'id', 'is_active', 'is_required', 'level', 'min_amount', 'name', 'ordering', 'required_role', 'unique_together', 'verbose_name', 'verbose_name_plural']

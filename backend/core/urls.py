@@ -9,6 +9,7 @@ from .views import (
     ColumnPermissionViewSet,
     TaskViewSet,
     WorkflowTaskTemplateViewSet,
+    DocumentTypeViewSet, TaxRateViewSet, ShiftViewSet, ExpenseCategoryViewSet, NumberSequenceViewSet,
 )
 from products.views import (
     ProductCategoryViewSet,
@@ -28,7 +29,7 @@ from inventory.views import (
     OutboundShipmentViewSet,
     WarehouseTransferViewSet,
 )
-from sales.views import SalesOrderViewSet, QuoteViewSet, ShipmentViewSet
+from sales.views import SalesOrderViewSet, QuoteViewSet, ShipmentViewSet, SalesLineMaterialPlanViewSet
 from purchasing.views import (
     MaterialPurchasePriceViewSet,
     SupplierViewSet,
@@ -115,6 +116,7 @@ router.register(r'production/receipts', ProductionReceiptViewSet, basename='prod
 router.register(r'sales/orders', SalesOrderViewSet, basename='salesorder')
 router.register(r'sales/quotes', QuoteViewSet, basename='quote')
 router.register(r'sales/shipments', ShipmentViewSet, basename='sales-shipment')
+router.register(r'sales/material-plans', SalesLineMaterialPlanViewSet, basename='sales-material-plan')
 router.register(r'tasks', TaskViewSet, basename='task')
 router.register(r'workflow-task-templates', WorkflowTaskTemplateViewSet, basename='workflowtasktemplate')
 router.register(r'workforce/employees', EmployeeViewSet, basename='workforce-employee')
@@ -142,6 +144,12 @@ if _phase5_available:
     router.register(r'sales/discounts', SalesDiscountViewSet, basename='sales-discounts')
     router.register(r'finance/budgets', BudgetManagementViewSet, basename='finance-budgets')
     router.register(r'reports/custom', CustomReportViewSet, basename='custom-reports')
+
+router.register(r'config/document-types', DocumentTypeViewSet, basename='config-document-type')
+router.register(r'config/tax-rates', TaxRateViewSet, basename='config-tax-rate')
+router.register(r'config/shifts', ShiftViewSet, basename='config-shift')
+router.register(r'config/expense-categories', ExpenseCategoryViewSet, basename='config-expense-category')
+router.register(r'config/number-sequences', NumberSequenceViewSet, basename='config-number-sequence')
 
 urlpatterns = [
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),

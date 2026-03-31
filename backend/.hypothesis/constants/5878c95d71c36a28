@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0035_team_role_master_data_standard.py
-# hypothesis_version: 6.151.5
-
-[100, 'ACTIVATE', 'APPROVE', 'Activate', 'Approve', 'CREATE', 'Create', 'DEACTIVATE', 'DELETE', 'Deactivate', 'Delete', 'EXPORT', 'Export', 'IMPORT', 'Import', 'LOCK', 'Lock', 'Ngày xóa (soft)', 'Người cập nhật', 'Người tạo', 'Người xóa', 'POST', 'Post', 'REJECT', 'Reject', 'Role', 'Roles', 'Team', 'Team name', 'Teams', 'UPDATE', 'Update', 'action', 'auditlog', 'code', 'core', 'created_at', 'created_by', 'created_roles', 'created_teams', 'deleted_at', 'deleted_at__isnull', 'deleted_by', 'deleted_roles', 'deleted_teams', 'is_active', 'name', 'ordering', 'role', 'sort_order', 'team', 'updated_at', 'updated_by', 'updated_roles', 'updated_teams', 'verbose_name', 'verbose_name_plural']

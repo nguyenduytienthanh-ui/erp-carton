@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0016_comment.py
-# hypothesis_version: 6.151.5
-
-['0015_attachment', 'Comment', 'Comment text', 'Comments', 'ID', 'Record ID', 'comments', 'content', 'core', 'core.comment', 'created_at', 'created_by', 'db_table', 'deleted_at', 'entity_id', 'entity_type', 'id', 'indexes', 'is_deleted', 'mentions', 'ordering', 'parent', 'replies', 'updated_at', 'verbose_name', 'verbose_name_plural']

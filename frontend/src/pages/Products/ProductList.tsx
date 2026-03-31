@@ -2386,7 +2386,7 @@ const ProductList = () => {
               Không tải được danh sách sản phẩm.
             </div>
             <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
-              {parseApiError(error).generalMessage || 'Kiểm tra backend đã chạy chưa (Django tại http://127.0.0.1:8000).'}
+              {parseApiError(error).generalMessage || 'Kiểm tra kết nối API backend và thử lại.'}
             </div>
             <Button type="primary" onClick={refetchProducts}>
               Thử lại

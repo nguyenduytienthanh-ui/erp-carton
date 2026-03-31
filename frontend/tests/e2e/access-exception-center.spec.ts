@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { adminUser, login, salesUser } from './helpers/auth';
 
-const API_BASE_URL = 'http://127.0.0.1:8000/api';
+const API_BASE_URL = process.env.PLAYWRIGHT_API_BASE_URL || 'http://127.0.0.1:8000/api';
 
 async function getActiveUsers(page: Parameters<typeof login>[0], token: string) {
   const usersResponse = await page.request.get(`${API_BASE_URL}/users/`, {

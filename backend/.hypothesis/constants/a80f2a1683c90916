@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\config\urls.py
-# hypothesis_version: 6.151.5
-
-['RUN_MAIN', '[URLs] Loaded from:', '^export-excel/?$', 'admin/', 'admin:index', 'api/', 'api/auth/logout/', 'core.urls', 'health-check', 'health/', 'logout', 'product-export-data', 'true']

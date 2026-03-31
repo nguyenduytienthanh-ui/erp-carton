@@ -1,9 +1,10 @@
 import { useState, useCallback, useMemo } from 'react';
-import { Alert, Button, Modal, Space, Tooltip, Select, Table, Tag, message } from 'antd';
-import { LockOutlined, ProjectOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Alert, Button, Modal, Space, Tabs, Tooltip, Select, Table, Tag, message } from 'antd';
+import { BulbOutlined, LockOutlined, ProjectOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import TaskPanel from '../TaskPanel/TaskPanel';
+import AIWorkBrief from '../AIWorkBrief/AIWorkBrief';
 import {
   workflowTaskTemplatesApi,
   WFT_TRIGGER_LABELS,
@@ -374,11 +375,33 @@ export default function TaskWorkspaceModal({
           )}
 
           {entityId ? (
-            <TaskPanel
-              entityType={entityType}
-              entityId={entityId}
-              entityCode={entityCode}
-              onTasksChange={invalidateAll}
+            <Tabs
+              size="small"
+              items={[
+                {
+                  key: 'tasks',
+                  label: <Space size={4}><ThunderboltOutlined /><span>Nhiệm vụ</span></Space>,
+                  children: (
+                    <TaskPanel
+                      entityType={entityType}
+                      entityId={entityId}
+                      entityCode={entityCode}
+                      onTasksChange={invalidateAll}
+                    />
+                  ),
+                },
+                {
+                  key: 'ai-brief',
+                  label: <Space size={4}><BulbOutlined /><span>Trợ lý triển khai</span></Space>,
+                  children: (
+                    <AIWorkBrief
+                      entityType={entityType}
+                      entityId={entityId}
+                      entityCode={entityCode}
+                    />
+                  ),
+                },
+              ]}
             />
           ) : null}
         </div>

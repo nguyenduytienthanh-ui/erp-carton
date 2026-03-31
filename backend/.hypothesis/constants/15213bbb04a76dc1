@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0009_setting.py
-# hypothesis_version: 6.151.5
-
-[100, '0008_user_teams', 'Boolean', 'ID', 'Integer', 'JSON', 'Setting', 'Setting description', 'Settings', 'String', 'boolean', 'core', 'created_at', 'data_type', 'db_table', 'description', 'id', 'integer', 'is_active', 'json', 'key', 'ordering', 'settings', 'string', 'updated_at', 'value', 'verbose_name', 'verbose_name_plural']

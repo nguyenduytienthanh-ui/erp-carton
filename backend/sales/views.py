@@ -2608,3 +2608,108 @@ class ShipmentViewSet(viewsets.ModelViewSet):
             return Response(serializer.data)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ── Sales Fulfillment / Material Plan ViewSet ─────────────────────────────────
+
+from sales.material_plan_services import (
+    build_sales_material_command_center_row,
+    set_sales_line_material_plan_selection,
+    summarize_sales_material_command_center,
+    sync_sales_line_material_plan_for_line,
+)
+from sales.models import SalesLineMaterialPlan
+from sales.serializers import SalesLineMaterialPlanSerializer
+from django.db.models import Q as _Q
+
+
+class SalesLineMaterialPlanViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = SalesLineMaterialPlanSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = [
+        'sales_order__code',
+        'finished_product__code',
+        'finished_product__name',
+        'items__group_code_snapshot',
+        'items__group_name_snapshot',
+    ]
+    ordering_fields = ['sales_order__code', 'sales_order_line__line_number', 'status', 'created_at']
+    ordering = ['-created_at', '-id']
+
+    def get_queryset(self):
+        qs = SalesLineMaterialPlan.objects.select_related(
+            'sales_order', 'sales_order__customer',
+            'sales_order_line', 'finished_product', 'template', 'confirmed_by',
+        ).prefetch_related(
+            'items',
+            'items__template_group',
+            'items__material_product',
+            'sales_order_line__delivery_plans',
+            'sales_order_line__production_orders',
+        )
+        user = self.request.user
+        if not user.is_superuser:
+            team_ids = list(getattr(user, 'teams', user.__class__.objects.none()).values_list('id', flat=True))
+            if team_ids:
+                qs = qs.filter(_Q(sales_order__owner=user) | _Q(sales_order__team_id__in=team_ids) | _Q(sales_order__owner__isnull=True))
+            else:
+                qs = qs.filter(_Q(sales_order__owner=user) | _Q(sales_order__owner__isnull=True))
+
+        params = self.request.query_params
+        if so_id := params.get('sales_order'):
+            qs = qs.filter(sales_order_id=so_id)
+        if sol_id := params.get('sales_order_line'):
+            qs = qs.filter(sales_order_line_id=sol_id)
+        if so_code := params.get('sales_order_code', '').strip():
+            qs = qs.filter(sales_order__code__icontains=so_code)
+        if fp_code := params.get('finished_product_code', '').strip():
+            qs = qs.filter(finished_product__code__icontains=fp_code)
+        if status_val := params.get('status'):
+            qs = qs.filter(status=status_val)
+        return qs.distinct()
+
+    @action(detail=False, methods=['get'])
+    def command_center(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        only_shortage = str(request.query_params.get('only_shortage') or '').lower() in {'1', 'true', 'yes'}
+        only_overdue = str(request.query_params.get('only_overdue_delivery') or '').lower() in {'1', 'true', 'yes'}
+        only_ready = str(request.query_params.get('only_ready') or '').lower() in {'1', 'true', 'yes'}
+
+        rows = [build_sales_material_command_center_row(plan) for plan in queryset]
+        if only_shortage:
+            rows = [r for r in rows if r['has_shortage']]
+        if only_overdue:
+            rows = [r for r in rows if r['has_overdue_delivery']]
+        if only_ready:
+            rows = [r for r in rows if r['ready_for_delivery']]
+
+        return Response({
+            'count': len(rows),
+            'summary': summarize_sales_material_command_center(rows),
+            'results': rows,
+        })
+
+    @action(detail=True, methods=['post'])
+    def refresh_from_template(self, request, pk=None):
+        plan = self.get_object()
+        refreshed = sync_sales_line_material_plan_for_line(plan.sales_order_line, actor=request.user)
+        if refreshed is None:
+            return Response({'detail': 'Không còn template vật tư phù hợp cho dòng đơn hàng này.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(self.get_serializer(refreshed).data)
+
+    @action(detail=True, methods=['post'])
+    def set_selection(self, request, pk=None):
+        plan = self.get_object()
+        raw_ids = request.data.get('selected_item_ids', [])
+        if not isinstance(raw_ids, list):
+            return Response({'selected_item_ids': 'Phải là danh sách.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            selected_ids = [int(x) for x in raw_ids]
+        except (TypeError, ValueError):
+            return Response({'selected_item_ids': 'Danh sách chứa giá trị không hợp lệ.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            plan = set_sales_line_material_plan_selection(plan, selected_item_ids=selected_ids, actor=request.user)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(self.get_serializer(plan).data)

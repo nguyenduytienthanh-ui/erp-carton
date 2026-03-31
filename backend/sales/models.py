@@ -616,6 +616,137 @@ class ShipmentLine(models.Model):
         return f"{self.shipment.code} - Line {self.line_number}"
 
 
+
+
+# ── Material Plan models ──────────────────────────────────────────────────────
+
+class SalesLineMaterialPlanStatus:
+    DRAFT = 'DRAFT'
+    CONFIRMED = 'CONFIRMED'
+    PARTIAL_ORDERED = 'PARTIAL_ORDERED'
+    PARTIAL_RECEIVED = 'PARTIAL_RECEIVED'
+    READY = 'READY'
+    CHOICES = [
+        (DRAFT, 'Nháp'),
+        (CONFIRMED, 'Đã chốt vật tư'),
+        (PARTIAL_ORDERED, 'Đã đặt mua một phần'),
+        (PARTIAL_RECEIVED, 'Đã về một phần'),
+        (READY, 'Sẵn sàng'),
+    ]
+
+
+class SalesLineMaterialPlan(models.Model):
+    """Kế hoạch vật tư cho một dòng đơn hàng xuất."""
+    sales_order = models.ForeignKey(
+        SalesOrder,
+        on_delete=models.CASCADE,
+        related_name='material_plans',
+    )
+    sales_order_line = models.OneToOneField(
+        SalesOrderLine,
+        on_delete=models.CASCADE,
+        related_name='material_plan',
+    )
+    finished_product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.PROTECT,
+        related_name='sales_material_plans',
+    )
+    template = models.ForeignKey(
+        'products.ProductMaterialTemplate',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_line_plans',
+    )
+    ordered_finished_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    status = models.CharField(
+        max_length=20,
+        choices=SalesLineMaterialPlanStatus.CHOICES,
+        default=SalesLineMaterialPlanStatus.DRAFT,
+        db_index=True,
+    )
+    note = models.TextField(blank=True)
+    confirmed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_line_material_plans_confirmed',
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sales_line_material_plans'
+        ordering = ['sales_order_id', 'sales_order_line_id']
+        indexes = [
+            models.Index(fields=['sales_order']),
+            models.Index(fields=['sales_order_line']),
+            models.Index(fields=['finished_product']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.sales_order_id}#{self.sales_order_line_id}"
+
+
+class SalesLineMaterialPlanItem(models.Model):
+    """Một dòng vật tư trong kế hoạch của đơn hàng."""
+    plan = models.ForeignKey(
+        SalesLineMaterialPlan,
+        on_delete=models.CASCADE,
+        related_name='items',
+    )
+    template_group = models.ForeignKey(
+        'products.ProductMaterialGroup',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_plan_items',
+    )
+    template_option = models.ForeignKey(
+        'products.ProductMaterialOption',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_plan_items',
+    )
+    group_code_snapshot = models.CharField(max_length=50, blank=True, db_index=True)
+    group_name_snapshot = models.CharField(max_length=255, blank=True)
+    material_role = models.CharField(max_length=20, default='PRIMARY', db_index=True)
+    selection_rule = models.CharField(max_length=20, default='ONE_OF', db_index=True)
+    material_product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.PROTECT,
+        related_name='sales_material_plan_items',
+    )
+    spec_snapshot = models.JSONField(default=dict, blank=True)
+    is_selected = models.BooleanField(default=False, db_index=True)
+    required_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    ordered_qty_cache = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    received_qty_cache = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    available_qty_cache = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    short_qty_cache = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sales_line_material_plan_items'
+        ordering = ['plan_id', 'group_code_snapshot', 'id']
+        indexes = [
+            models.Index(fields=['plan']),
+            models.Index(fields=['material_product']),
+            models.Index(fields=['is_selected']),
+            models.Index(fields=['group_code_snapshot']),
+        ]
+
+    def __str__(self):
+        return f"plan:{self.plan_id} - {self.material_product_id}"
+
+
 class SalesDiscountRule(models.Model):
     TYPE_PERCENTAGE = 'PERCENTAGE'
     TYPE_FIXED = 'FIXED'

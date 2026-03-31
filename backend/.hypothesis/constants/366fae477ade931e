@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0002_role.py
-# hypothesis_version: 6.151.5
-
-[100, '0001_initial', 'ID', 'Is this role active?', 'Role', 'Role description', 'Role name', 'Roles', 'code', 'core', 'created_at', 'db_table', 'description', 'id', 'is_active', 'name', 'ordering', 'roles', 'updated_at', 'verbose_name', 'verbose_name_plural']

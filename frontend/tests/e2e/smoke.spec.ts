@@ -62,8 +62,9 @@ test('admin workflow pages expose new entity options', async ({ page }) => {
   await page.getByRole('button', { name: 'Áp dụng bộ mẫu' }).click();
   const playbookEntitySelect = page.locator('.ant-modal .ant-select').first();
   await playbookEntitySelect.click();
-  await expect(page.getByText('Đơn mua')).toBeVisible();
-  await expect(page.getByText('Lệnh sản xuất')).toBeVisible();
+  const playbookEntityOptions = page.locator('.ant-select-dropdown:visible').last();
+  await expect(playbookEntityOptions.getByText('Đơn mua', { exact: true })).toBeVisible();
+  await expect(playbookEntityOptions.getByText('Lệnh sản xuất', { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
 

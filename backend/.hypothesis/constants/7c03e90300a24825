@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\products\migrations\0008_unique_code_ignore_soft_deleted.py
-# hypothesis_version: 6.151.5
-
-['code', 'deleted_at__isnull', 'productboxtype', 'productcategory', 'products', 'productunit', 'productwave']

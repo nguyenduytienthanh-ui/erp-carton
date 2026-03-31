@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\sales\views.py
-# hypothesis_version: 6.151.5
-
-[500, '-created_at', '-id', '-order_date', 'APPROVE', 'HTTP_USER_AGENT', 'REJECT', 'SUBMIT', 'SalesOrder', 'VOID', 'action', 'approved_at', 'approved_by', 'code', 'comments', 'created_at', 'created_by', 'current', 'customer', 'error', 'get', 'id', 'lines', 'lines__product', 'message', 'next_states', 'notes', 'order_date', 'owner', 'post', 'post_number', 'posted_by', 'reason', 'reference', 'reject_reason', 'rejected_at', 'rejected_by', 'status', 'submitted_at', 'submitted_by', 'team', 'teams', 'total', 'updated_at', 'updated_by', 'user', 'void_reason', 'voided_at', 'voided_by']

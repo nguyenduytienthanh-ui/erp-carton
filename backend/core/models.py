@@ -1651,3 +1651,97 @@ class WorkflowPipelineEvent(models.Model):
 
 
 from .reporting_models import CustomReportDefinition, CustomReportRun  # noqa: E402,F401
+
+
+# ── System Configuration models (tables exist in DB) ─────────────────────────
+
+
+class DocumentType(models.Model):
+    code = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=120)
+    entity_type = models.CharField(max_length=80, unique=True)
+    prefix = models.CharField(max_length=20, blank=True, default='')
+    description = models.TextField(blank=True, default='')
+    sort_order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'document_types'
+        ordering = ['sort_order', 'name', 'code']
+        verbose_name = 'Document Type'
+        verbose_name_plural = 'Document Types'
+
+    def __str__(self):
+        return f"{self.code} — {self.name}"
+
+
+class TaxRate(models.Model):
+    APPLIES_TO_CHOICES = [
+        ('SALES', 'Sales'),
+        ('PURCHASE', 'Purchase'),
+        ('BOTH', 'Both'),
+    ]
+    code = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=120)
+    rate_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    applies_to = models.CharField(max_length=20, choices=APPLIES_TO_CHOICES, default='BOTH')
+    description = models.TextField(blank=True, default='')
+    sort_order = models.IntegerField(default=0)
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'tax_rates'
+        ordering = ['sort_order', 'rate_pct', 'code']
+        verbose_name = 'Tax Rate'
+        verbose_name_plural = 'Tax Rates'
+
+    def __str__(self):
+        return f"{self.code} {self.rate_pct}%"
+
+
+class Shift(models.Model):
+    code = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=120)
+    short_label = models.CharField(max_length=40, blank=True, default='')
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
+    capacity_hours = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    description = models.TextField(blank=True, default='')
+    sort_order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'shifts'
+        ordering = ['sort_order', 'name', 'code']
+        verbose_name = 'Shift'
+        verbose_name_plural = 'Shifts'
+
+    def __str__(self):
+        return f"{self.code} — {self.name}"
+
+
+class ExpenseCategory(models.Model):
+    code = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True, default='')
+    color = models.CharField(max_length=20, blank=True, default='')
+    sort_order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'expense_categories'
+        ordering = ['sort_order', 'name', 'code']
+        verbose_name = 'Expense Category'
+        verbose_name_plural = 'Expense Categories'
+
+    def __str__(self):
+        return f"{self.code} — {self.name}"

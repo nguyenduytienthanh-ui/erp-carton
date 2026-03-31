@@ -4,13 +4,14 @@ import type { ColumnsType } from 'antd/es/table';
 import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, InboxOutlined, PlusOutlined, StopOutlined, ToolOutlined, UploadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { productionApi } from '../../api/production';
 import { productsApi } from '../../api/products';
 import { inventoryApi } from '../../api/inventory';
 import { salesApi } from '../../api/sales';
 import type {
   ProductionApprovalHistoryItem,
+  ProductionPlannerDigest,
   ProductionOrder,
   ProductionOrderFormValues,
   ProductionOrderStatus,
@@ -50,6 +51,50 @@ const LANE_LABELS: Record<ProductionOrderLaneFilter, string> = {
   ACTIVE_EXECUTION: 'Đang chạy',
   OVERDUE_PLAN: 'Trễ kế hoạch',
 };
+const DEFAULT_PLANNER_DIGEST: ProductionPlannerDigest = {
+  overdue_operations: 0,
+  ready_to_run_count: 0,
+  wait_material_count: 0,
+  wait_previous_step_count: 0,
+  machine_down_count: 0,
+  over_capacity_count: 0,
+  at_limit_count: 0,
+  over_capacity_slot_count: 0,
+  unscheduled_count: 0,
+  blocked_count: 0,
+  handover_ready_count: 0,
+  handover_accepted_count: 0,
+  unassigned_machine_count: 0,
+  unassigned_work_center_count: 0,
+  affected_sales_order_count: 0,
+  hot_over_capacity_window: null,
+  hot_at_limit_window: null,
+  hot_machine_queue: null,
+  hot_dispatch_owner: null,
+  hot_sales_order: null,
+  hot_material_wait: null,
+  hot_work_center: null,
+  hot_machine: null,
+  hot_delivery_date: null,
+  hot_unscheduled_step: null,
+  hot_shift_watch: null,
+  hot_date_watch: null,
+  hot_owner_capacity: null,
+  hot_step_watch: null,
+  hot_rebalance_summary: null,
+};
+
+type PlannerShortcutCard = {
+  key: string;
+  title: string;
+  description: string;
+  actionLabel: string;
+  targetUrl: string;
+  actionTestId: string;
+  secondaryLabel?: string;
+  secondaryTargetUrl?: string;
+  secondaryTestId?: string;
+};
 
 const getProgressPercent = (order: ProductionOrder) => {
   const planned = Number(order.planned_qty || 0);
@@ -58,6 +103,17 @@ const getProgressPercent = (order: ProductionOrder) => {
 };
 const isOverdue = (order: ProductionOrder) => Boolean(order.planned_end_date && !['COMPLETED', 'CANCELLED'].includes(order.status) && dayjs(order.planned_end_date).isBefore(dayjs(), 'day'));
 const canEditOrder = (order: ProductionOrder) => order.status === 'DRAFT' || order.status === 'REJECTED';
+const normalizeInternalUrl = (targetUrl: string | undefined, fallbackUrl: string) => {
+  if (!targetUrl) {
+    return fallbackUrl;
+  }
+  try {
+    const parsed = new URL(targetUrl, window.location.origin);
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return targetUrl.startsWith('/') ? targetUrl : fallbackUrl;
+  }
+};
 const matchesProductionOrderLane = (order: ProductionOrder, laneFilter: ProductionOrderLaneFilter) => {
   switch (laneFilter) {
     case 'DRAFT_QUEUE':
@@ -76,6 +132,7 @@ const matchesProductionOrderLane = (order: ProductionOrder, laneFilter: Producti
 };
 
 export default function ProductionOrderList() {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const initialSearch = searchParams.get('q') || searchParams.get('search') || '';
   const initialStatusParam = searchParams.get('status');
@@ -223,7 +280,9 @@ export default function ProductionOrderList() {
     overdue_plan_count: rows.filter(isOverdue).length,
     active_remaining_qty: String(rows.filter((item) => ['RELEASED', 'IN_PROGRESS'].includes(item.status)).reduce((total, item) => total + Number(item.remaining_qty || 0), 0)),
     ready_operation_count: rows.reduce((total, item) => total + item.operations.filter((operation) => operation.status === 'READY').length, 0),
+    planner_digest: DEFAULT_PLANNER_DIGEST,
   }, [rows, summaryQuery.data]);
+  const plannerDigest = summary.planner_digest ?? DEFAULT_PLANNER_DIGEST;
   const visibleRows = useMemo(
     () => rows.filter((item) => matchesProductionOrderLane(item, laneFilter)),
     [laneFilter, rows],
@@ -252,6 +311,68 @@ export default function ProductionOrderList() {
     if (summary.pending_approval_count > 0) return { type: 'warning' as const, message: `${summary.pending_approval_count} lệnh đang chờ duyệt, phù hợp để trưởng bộ phận chốt trong ca này.` };
     return { type: 'success' as const, message: 'Lệnh sản xuất đang ổn định, chưa có tín hiệu ùn tắc lớn trong bộ lọc hiện tại.' };
   }, [summary.overdue_plan_count, summary.pending_approval_count]);
+  const plannerShortcutCards = useMemo<PlannerShortcutCard[]>(() => {
+    const cards: PlannerShortcutCard[] = [
+      {
+        key: 'planner-home',
+        title: 'Điều độ sản xuất',
+        description: `Sẵn chạy ${plannerDigest.ready_to_run_count} · Chờ vật tư ${plannerDigest.wait_material_count} · Quá hạn ${plannerDigest.overdue_operations}`,
+        actionLabel: 'Mở điều độ',
+        targetUrl: '/production-planning',
+        actionTestId: 'production-orders-open-planning',
+      },
+    ];
+
+    if (plannerDigest.hot_material_wait) {
+      cards.push({
+        key: 'material-wait',
+        title: 'Điểm nghẽn vật tư',
+        description: `${plannerDigest.hot_material_wait.material_product_code} · ${plannerDigest.hot_material_wait.wait_material_operations} công đoạn đang chờ · Còn thiếu ${Number(plannerDigest.hot_material_wait.remaining_issue_qty || 0).toLocaleString('vi-VN')}`,
+        actionLabel: 'Xem chờ vật tư',
+        targetUrl: plannerDigest.hot_material_wait.focus_url,
+        actionTestId: 'production-orders-open-planning-material-wait',
+        secondaryLabel: 'Mở cấp vật tư',
+        secondaryTargetUrl: plannerDigest.hot_material_wait.material_issue_url,
+        secondaryTestId: 'production-orders-open-planning-material-issue',
+      });
+    }
+
+    if (plannerDigest.hot_sales_order) {
+      cards.push({
+        key: 'sales-hot',
+        title: 'Cam kết giao hàng nóng',
+        description: `${plannerDigest.hot_sales_order.sales_order_code} · Quá hạn ${plannerDigest.hot_sales_order.overdue_count} · Chờ vật tư ${plannerDigest.hot_sales_order.wait_material_count}`,
+        actionLabel: 'Mở điều độ theo SO',
+        targetUrl: plannerDigest.hot_sales_order.focus_url,
+        actionTestId: 'production-orders-open-planning-sales-hotspot',
+        secondaryLabel: 'Về điều phối đơn hàng',
+        secondaryTargetUrl: plannerDigest.hot_sales_order.sales_fulfillment_url,
+        secondaryTestId: 'production-orders-open-sales-fulfillment',
+      });
+    }
+
+    if (plannerDigest.hot_over_capacity_window) {
+      cards.push({
+        key: 'capacity-hot',
+        title: 'Ca đang quá tải',
+        description: `${plannerDigest.hot_over_capacity_window.date_label} · ${plannerDigest.hot_over_capacity_window.shift_label} · Tải ${plannerDigest.hot_over_capacity_window.load_ratio ?? '0'}`,
+        actionLabel: 'Mở điểm nóng công suất',
+        targetUrl: plannerDigest.hot_over_capacity_window.focus_url,
+        actionTestId: 'production-orders-open-planning-capacity-hotspot',
+      });
+    } else if (plannerDigest.hot_machine_queue) {
+      cards.push({
+        key: 'machine-hot',
+        title: 'Máy đang ùn tải',
+        description: `${plannerDigest.hot_machine_queue.machine_code} · ${plannerDigest.hot_machine_queue.total_operations} công đoạn · Sẵn chạy ${plannerDigest.hot_machine_queue.ready_to_run_count}`,
+        actionLabel: 'Mở hàng chờ máy',
+        targetUrl: plannerDigest.hot_machine_queue.focus_url,
+        actionTestId: 'production-orders-open-planning-machine-hotspot',
+      });
+    }
+
+    return cards.slice(0, 4);
+  }, [plannerDigest]);
 
   const buildCurrentSnapshot = (): ProductionOrderViewSnapshot => ({
     search_input: searchInput,
@@ -424,6 +545,17 @@ export default function ProductionOrderList() {
   const detailData = detailQuery.data;
   const detailIssues = issueOverviewQuery.data?.results ?? [];
   const detailReceipts = receiptOverviewQuery.data?.results ?? [];
+  const detailPlannerFocusUrl = useMemo(() => {
+    if (!detailData?.id) {
+      return '/production-planning';
+    }
+    const readyOperation = detailData.operations.find((operation) => operation.status === 'READY' || operation.status === 'IN_PROGRESS');
+    const next = new URLSearchParams({ production_order_id: String(detailData.id) });
+    if (readyOperation?.id) {
+      next.set('focus_operation_id', String(readyOperation.id));
+    }
+    return `/production-planning?${next.toString()}`;
+  }, [detailData]);
 
   if (listQuery.isLoading && !listQuery.data) return <Skeleton active paragraph={{ rows: 10 }} />;
 
@@ -448,6 +580,40 @@ export default function ProductionOrderList() {
           <Card size="small" style={TILE_STYLE}><Statistic title="Đang chạy" value={summary.active_count} valueStyle={{ color: '#1677ff' }} /></Card>
           <Card size="small" style={TILE_STYLE}><Statistic title="SL còn lại" value={Number(summary.active_remaining_qty || 0)} precision={2} /></Card>
         </div>
+        <Card
+          size="small"
+          title="Điểm nóng điều độ cần mở nhanh"
+          data-testid="production-orders-planning-shortcuts"
+          styles={{ body: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 } }}
+        >
+          {plannerShortcutCards.map((card) => (
+            <Card key={card.key} size="small" style={TILE_STYLE}>
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                <div>
+                  <Text strong>{card.title}</Text>
+                  <div><Text type="secondary">{card.description}</Text></div>
+                </div>
+                <Space wrap>
+                  <Button
+                    type="primary"
+                    data-testid={card.actionTestId}
+                    onClick={() => navigate(normalizeInternalUrl(card.targetUrl, '/production-planning'))}
+                  >
+                    {card.actionLabel}
+                  </Button>
+                  {card.secondaryLabel && card.secondaryTargetUrl ? (
+                    <Button
+                      data-testid={card.secondaryTestId}
+                      onClick={() => navigate(normalizeInternalUrl(card.secondaryTargetUrl, '/production-planning'))}
+                    >
+                      {card.secondaryLabel}
+                    </Button>
+                  ) : null}
+                </Space>
+              </Space>
+            </Card>
+          ))}
+        </Card>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           {laneTiles.map((lane) => (
             <Button
@@ -559,6 +725,16 @@ export default function ProductionOrderList() {
         width={1120}
       >
         {detailQuery.isLoading ? <Skeleton active paragraph={{ rows: 10 }} /> : detailData ? <div data-testid="production-order-detail-panel" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+            <Text type="secondary">Giữ lệnh sản xuất ở đây, nhưng mở điều độ sản xuất theo đúng ngữ cảnh lệnh để chốt công đoạn, công suất và bàn giao ca.</Text>
+            <Button
+              type="primary"
+              data-testid={`production-order-open-planning-${detailData.id}`}
+              onClick={() => navigate(detailPlannerFocusUrl)}
+            >
+              Mở điều độ sản xuất
+            </Button>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
             <Card size="small" style={TILE_STYLE}><Statistic title="Tiến độ" value={getProgressPercent(detailData)} suffix="%" /></Card>
             <Card size="small" style={TILE_STYLE}><Statistic title="SL kế hoạch" value={Number(detailData.planned_qty || 0)} precision={2} /></Card>

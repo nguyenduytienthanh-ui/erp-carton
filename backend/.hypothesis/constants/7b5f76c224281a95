@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\urls.py
-# hypothesis_version: 6.151.5
-
-['activity', 'attachment', 'attachments', 'auth/login/', 'auth/refresh/', 'boxtype', 'column-permission', 'column-permissions', 'comment', 'comments', 'customer', 'customers', 'delete', 'export-templates', 'get', 'notification', 'notifications', 'page_config', 'permissions', 'post', 'product', 'product-salesorder', 'productcategory', 'products/box-types', 'products/categories', 'products/products', 'products/units', 'products/waves', 'productunit', 'roles', 'sales-orders', 'sales/orders', 'salesorder', 'saved-views', 'savedview', 'session', 'sessions', 'settings', 'teams', 'token_obtain_pair', 'token_refresh', 'users', 'wave']

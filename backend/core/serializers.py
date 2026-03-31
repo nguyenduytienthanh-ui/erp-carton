@@ -1614,3 +1614,38 @@ class WorkflowTaskTemplateSerializer(serializers.ModelSerializer):
             return {'type': 'role', 'value': role_code}
 
         raise serializers.ValidationError("assign_rule.type chỉ hỗ trợ 'user' hoặc 'role'.")
+
+
+# ── System Configuration serializers ─────────────────────────────────────────
+
+from .models import DocumentType, TaxRate, Shift, ExpenseCategory, NumberSequence
+
+
+class DocumentTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DocumentType
+        fields = ['id', 'code', 'name', 'entity_type', 'prefix', 'description', 'sort_order', 'is_active', 'created_at', 'updated_at']
+
+
+class TaxRateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaxRate
+        fields = ['id', 'code', 'name', 'rate_pct', 'applies_to', 'description', 'sort_order', 'is_default', 'is_active', 'created_at', 'updated_at']
+
+
+class ShiftSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Shift
+        fields = ['id', 'code', 'name', 'short_label', 'start_time', 'end_time', 'capacity_hours', 'description', 'sort_order', 'is_active', 'created_at', 'updated_at']
+
+
+class ExpenseCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExpenseCategory
+        fields = ['id', 'code', 'name', 'description', 'color', 'sort_order', 'is_active', 'created_at', 'updated_at']
+
+
+class NumberSequenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NumberSequence
+        fields = '__all__'

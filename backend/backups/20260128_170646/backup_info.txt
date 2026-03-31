@@ -1,2 +1,0 @@
-Backup: 2026-01-28 17:06:48.274125
-Database: erp_dev

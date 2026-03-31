@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0004_role_permissions.py
-# hypothesis_version: 6.151.5
-
-['0003_permission', 'core', 'core.permission', 'permissions', 'role', 'roles']

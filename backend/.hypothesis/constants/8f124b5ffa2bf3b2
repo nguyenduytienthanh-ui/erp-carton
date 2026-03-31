@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0018_notification.py
-# hypothesis_version: 6.151.5
-
-[255, '-created_at', '0017_commentreaction', 'ID', 'Model name', 'Notification', 'Notifications', 'Record ID', 'actor', 'approval_approved', 'approval_rejected', 'approval_request', 'assignment', 'comment', 'core', 'created_at', 'db_table', 'due_date', 'entity_id', 'entity_type', 'id', 'indexes', 'is_read', 'mention', 'message', 'notification_type', 'notifications', 'ordering', 'read_at', 'recipient', 'system', 'title', 'verbose_name', 'verbose_name_plural', '⏰ Due date reminder', '✅ Approved', '❌ Rejected', '👤 Assigned to you', '💬 New comment', '📝 Approval request']

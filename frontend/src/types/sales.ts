@@ -537,4 +537,109 @@ export interface PaginatedResponse<T> {
   results: T[];
 }
 
+// ── Material Plan types ────────────────────────────────────────────────────────
+
+export type SalesLineMaterialPlanStatus =
+  | 'DRAFT'
+  | 'CONFIRMED'
+  | 'PARTIAL_ORDERED'
+  | 'PARTIAL_RECEIVED'
+  | 'READY';
+
+export interface SalesLineMaterialPlanItem {
+  id: number;
+  template_group: number | null;
+  template_option: number | null;
+  group_code_snapshot: string;
+  group_name_snapshot: string;
+  material_role: string;
+  selection_rule: string;
+  material_product: number;
+  material_product_code: string;
+  material_product_name: string;
+  material_product_unit_name: string | null;
+  spec_snapshot: Record<string, unknown>;
+  is_selected: boolean;
+  required_qty: string;
+  ordered_qty_cache: string;
+  received_qty_cache: string;
+  available_qty_cache: string;
+  short_qty_cache: string;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SalesLineMaterialPlan {
+  id: number;
+  sales_order: number;
+  sales_order_code: string;
+  sales_order_line: number;
+  sales_order_line_number: number;
+  finished_product: number;
+  finished_product_code: string;
+  finished_product_name: string;
+  template: number | null;
+  ordered_finished_qty: string;
+  status: SalesLineMaterialPlanStatus;
+  note: string;
+  confirmed_by: number | null;
+  confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  items: SalesLineMaterialPlanItem[];
+}
+
+export interface SalesMaterialCommandCenterRow {
+  plan_id: number;
+  sales_order_id: number;
+  sales_order_code: string;
+  sales_order_line_id: number;
+  sales_order_line_number: number;
+  customer_name: string;
+  finished_product_code: string;
+  finished_product_name: string;
+  ordered_finished_qty: string;
+  plan_status: SalesLineMaterialPlanStatus;
+  has_shortage: boolean;
+  has_overdue_delivery: boolean;
+  ready_for_delivery: boolean;
+  delivery_plans: Array<{
+    delivery_date: string;
+    qty: string;
+    is_overdue: boolean;
+    days_until_due: number | null;
+  }>;
+  material_groups: Array<{
+    group_code: string;
+    group_name: string;
+    material_role: string;
+    selection_rule: string;
+    selected_option: SalesLineMaterialPlanItem | null;
+    options: SalesLineMaterialPlanItem[];
+    is_shortage: boolean;
+    short_qty: string;
+  }>;
+  production_summary: {
+    has_production_order: boolean;
+    active_count: number;
+    completed_count: number;
+    overdue_plan_count: number;
+  };
+}
+
+export interface SalesMaterialCommandCenterSummary {
+  total: number;
+  has_shortage: number;
+  has_overdue_delivery: number;
+  ready_for_delivery: number;
+  status_breakdown: Record<SalesLineMaterialPlanStatus, number>;
+}
+
+export interface SalesMaterialCommandCenterResponse {
+  count: number;
+  summary: SalesMaterialCommandCenterSummary;
+  results: SalesMaterialCommandCenterRow[];
+}
+
 export type { ProductCategory, ProductUnit } from './product';

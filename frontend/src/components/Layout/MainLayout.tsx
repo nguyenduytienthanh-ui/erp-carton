@@ -29,6 +29,7 @@ import {
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
+import { isEditableElement, prefersDesktopScannerUi } from '../../utils/inputDevices';
 import { authApi } from '../../api/auth';
 import { storage } from '../../utils/storage';
 import TaskQuickLauncher from '../TaskQuickLauncher/TaskQuickLauncher';
@@ -74,12 +75,12 @@ import {
   canViewReportsCenter,
   canViewWorkflowData,
   canManageWorkflowData,
-  canUseShipmentExecutionWorkspace,
 } from '../../utils/authz';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
 const { Header, Sider, Content } = Layout;
 const SIDEBAR_OPEN_KEYS_STORAGE_KEY = 'erp-carton.sidebar-open-keys';
+const DEFAULT_OPEN_MENU_KEYS = ['sales-group', 'production-group', 'workflow-group', 'workforce-group', 'finance-group'];
 
 type ConnectionLike = {
   saveData?: boolean;
@@ -98,8 +99,10 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/account': () => import('../../pages/Account/AccountCenter'),
   '/products': () => import('../../pages/Products/ProductList'),
   '/sales-orders': () => import('../../pages/Sales/SalesOrderList'),
+  '/sales-fulfillment-center': () => import('../../pages/Management/SalesFulfillmentCenter'),
   '/shipments': () => import('../../pages/Sales/ShipmentList'),
-  '/shipments/scan': () => import('../../pages/Sales/ShipmentScanCenter'),
+  '/scan-center': () => import('../../pages/Inventory/ScanCenter'),
+  '/shipments/scan': () => import('../../pages/Inventory/ScanCenter'),
   '/quotes': () => import('../../pages/Sales/QuoteListNew'),
   '/quote-analytics': () => import('../../pages/Management/QuoteAnalytics'),
   '/sales-analytics': () => import('../../pages/Sales/SalesAnalyticsDashboard'),
@@ -117,6 +120,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/purchase-requests': () => import('../../pages/Purchasing/PurchaseRequestList'),
   '/purchase-returns': () => import('../../pages/Purchasing/PurchaseReturnList'),
   '/production-orders': () => import('../../pages/Production/ProductionOrderList'),
+  '/production-planning': () => import('../../pages/Production/ProductionPlanningBoard'),
   '/material-issues': () => import('../../pages/Production/MaterialIssueList'),
   '/production-receipts': () => import('../../pages/Production/ProductionReceiptList'),
   '/production-costing': () => import('../../pages/Management/ProductionCostingReport'),
@@ -178,20 +182,31 @@ type WorkspaceHeaderSignal = {
   path: string;
 };
 
+type RestoredHeaderShortcut = {
+  key: string;
+  label: string;
+  description: string;
+  path: string;
+  testId: string;
+  badge?: string;
+};
+
 const MainLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenuVisible, setMobileMenuVisible] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [favoriteCommandPaths, setFavoriteCommandPaths] = useState<string[]>(() => getCommandPaletteFavoritePaths());
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [preferDesktopScanUi, setPreferDesktopScanUi] = useState(() => prefersDesktopScannerUi());
+  const globalScannerBufferRef = useRef({ value: '', startedAt: 0, lastAt: 0 });
   const [openMenuKeys, setOpenMenuKeys] = useState<string[]>(() => {
     try {
       const raw = window.localStorage.getItem(SIDEBAR_OPEN_KEYS_STORAGE_KEY);
-      if (!raw) return ['workforce-group', 'finance-group'];
+      if (!raw) return DEFAULT_OPEN_MENU_KEYS;
       const parsed = JSON.parse(raw) as string[];
-      return Array.isArray(parsed) && parsed.length > 0 ? parsed : ['inventory-group', 'workforce-group', 'finance-group'];
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_OPEN_MENU_KEYS;
     } catch {
-      return ['inventory-group', 'workforce-group', 'finance-group'];
+      return DEFAULT_OPEN_MENU_KEYS;
     }
   });
   const navigate = useNavigate();
@@ -215,7 +230,8 @@ const MainLayout = () => {
   const canAccessMaterialIssueRoute = canAccessMaterialIssues();
   const canAccessProductionReceiptRoute = canAccessProductionReceipts();
   const canManageWorkforce = canManageWorkforceData();
-  const canUseShipmentExecution = canUseShipmentExecutionWorkspace();
+  const canUseScanCenter = canManageInventory || canViewSalesOrders || canManagePurchasing || canManageProduction;
+  const canViewSalesFulfillmentCenter = canViewSalesOrders || canManagePurchasing || canManageProduction || canViewReports;
   const canViewApprovalTower = canViewApprovalControlTower();
   const canManageModulePermissions = canManageModulePermissionSettings();
   const canManageAccessExceptions = canManageUserAccessExceptions();
@@ -306,12 +322,13 @@ const MainLayout = () => {
       const mobile = window.innerWidth <= 768;
       setIsMobile(mobile);
       if (mobile) {
-        setCollapsed(true); // Auto-collapse on mobile
+        setCollapsed(true);
       }
+      setPreferDesktopScanUi(prefersDesktopScannerUi());
     };
 
     window.addEventListener('resize', handleResize);
-    handleResize(); // Initial check
+    handleResize();
 
     return () => window.removeEventListener('resize', handleResize);
   }, []);
@@ -355,7 +372,6 @@ const MainLayout = () => {
   const commandPaletteCommands = useMemo(() => buildCommandPaletteCatalog({
     canViewReports,
     canViewSalesOrders,
-    canUseShipmentExecutionWorkspace: canUseShipmentExecution,
     canManagePurchasing,
     canAccessProductionCenter: canAccessProduction,
     canAccessMaterialIssues: canAccessMaterialIssueRoute,
@@ -416,7 +432,6 @@ const MainLayout = () => {
     canViewReports,
     canViewSalesOrders,
     canViewWorkflow,
-    canUseShipmentExecution,
     operationsFailedCount,
     overdue90Count,
     rbacAnomalyCount,
@@ -491,6 +506,85 @@ const MainLayout = () => {
     salaryAdvancePendingCount,
     unreadCount,
   ]);
+  const restoredHeaderShortcuts = useMemo<RestoredHeaderShortcut[]>(() => {
+    const shortcuts: RestoredHeaderShortcut[] = [
+      {
+        key: 'scan-center',
+        label: 'Trung tâm quét QR',
+        description: 'Mở khu quét QR nhanh để tra cứu và thao tác giao nhận.',
+        path: '/scan-center',
+        testId: 'header-restore-shortcut-scan-center',
+        badge: 'QR',
+      },
+    ];
+
+    if (canViewSalesOrders) {
+      shortcuts.push(
+        {
+          key: 'sales-fulfillment-center',
+          label: 'Điều độ đơn hàng xuất',
+          description: 'Tổng quan kế hoạch vật tư, thiếu hụt và sẵn sàng giao hàng.',
+          path: '/sales-fulfillment-center',
+          testId: 'header-restore-shortcut-sales-fulfillment-center',
+        },
+        {
+          key: 'shipments',
+          label: 'Phiếu xuất',
+          description: 'Điều phối xe, tài xế, bàn giao và giao xong trong một nơi.',
+          path: '/shipments',
+          testId: 'header-restore-shortcut-shipments',
+        },
+      );
+    }
+
+    if (canManageProduction) {
+      shortcuts.push({
+        key: 'production-planning',
+        label: 'Điều độ sản xuất',
+        description: 'Mở planner công đoạn để rà tải theo ngày, ca và điểm nghẽn.',
+        path: '/production-planning',
+        testId: 'header-restore-shortcut-production-planning',
+      });
+    }
+
+    if (canManageOnboarding) {
+      shortcuts.push({
+        key: 'onboarding-studio',
+        label: 'Trợ lý triển khai công việc',
+        description: 'Mở nhanh công cụ rollout và preset triển khai công việc.',
+        path: '/admin/onboarding-studio',
+        testId: 'header-restore-shortcut-onboarding-studio',
+      });
+    }
+
+    if (canManageWorkforce) {
+      shortcuts.push({
+        key: 'salary-advance',
+        label: 'Ứng lương',
+        description: 'Theo dõi riêng hồ sơ ứng lương, không lẫn với tạm ứng.',
+        path: '/salary-advance',
+        testId: 'header-restore-shortcut-salary-advance',
+      });
+    }
+
+    if (canManageFinance) {
+      shortcuts.push({
+        key: 'advance-transactions',
+        label: 'Tạm ứng - quyết toán',
+        description: 'Mở command center tài chính cho tạm ứng và quyết toán.',
+        path: '/advance-transactions',
+        testId: 'header-restore-shortcut-advance-transactions',
+      });
+    }
+
+    return shortcuts;
+  }, [
+    canManageFinance,
+    canManageOnboarding,
+    canManageProduction,
+    canManageWorkforce,
+    canViewSalesOrders,
+  ]);
   const workspaceSummary = useMemo(() => {
     const fragments: string[] = [];
     if (unreadCount > 0) fragments.push(`${unreadCount} thông báo mới`);
@@ -529,6 +623,73 @@ const MainLayout = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  const quickScanPath = useMemo(() => (
+    preferDesktopScanUi
+      ? '/scan-center?role=operator&preset=overview&focus=batch&device=desktop'
+      : '/scan-center?role=operator&preset=overview&focus=batch'
+  ), [preferDesktopScanUi]);
+
+  const buildScannerRoute = useCallback((scanValue: string) => {
+    const normalizedValue = scanValue.trim();
+    if (!normalizedValue) {
+      return quickScanPath;
+    }
+    if (location.pathname === '/scan-center') {
+      const nextParams = new URLSearchParams(location.search);
+      nextParams.set('device', 'desktop');
+      nextParams.set('q', normalizedValue);
+      return `/scan-center?${nextParams.toString()}`;
+    }
+    return `${quickScanPath}&q=${encodeURIComponent(normalizedValue)}`;
+  }, [location.pathname, location.search, quickScanPath]);
+
+  useEffect(() => {
+    if (!canUseScanCenter || isMobile) {
+      return;
+    }
+    const resetScannerBuffer = () => {
+      globalScannerBufferRef.current = { value: '', startedAt: 0, lastAt: 0 };
+    };
+    const handleKeyPress = (event: KeyboardEvent) => {
+      if (commandPaletteOpen) return;
+      if (isEditableElement(event.target)) return;
+
+      const now = Date.now();
+      let buffer = globalScannerBufferRef.current;
+      const gap = buffer.lastAt > 0 ? now - buffer.lastAt : 0;
+      if (gap > 90) {
+        resetScannerBuffer();
+        buffer = globalScannerBufferRef.current;
+      }
+
+      if (event.key === 'Enter') {
+        if (buffer.value.length < 6) {
+          resetScannerBuffer();
+          return;
+        }
+        const duration = now - buffer.startedAt;
+        const averageInterval = buffer.value.length > 1 ? duration / (buffer.value.length - 1) : 0;
+        const looksLikeScannerBurst = buffer.value.length >= 6 && duration <= 900 && averageInterval <= 45;
+        if (looksLikeScannerBurst) {
+          event.preventDefault();
+          navigate(buildScannerRoute(buffer.value));
+        }
+        resetScannerBuffer();
+        return;
+      }
+
+      if (event.key.length === 1) {
+        if (buffer.value.length === 0) {
+          buffer.startedAt = now;
+        }
+        buffer.value += event.key;
+        buffer.lastAt = now;
+      }
+    };
+    window.addEventListener('keydown', handleKeyPress, true);
+    return () => window.removeEventListener('keydown', handleKeyPress, true);
+  }, [buildScannerRoute, canUseScanCenter, commandPaletteOpen, isMobile, navigate]);
+
   const menuItems: MenuProps['items'] = [
     {
       key: '/',
@@ -550,10 +711,20 @@ const MainLayout = () => {
       icon: <ShoppingCartOutlined />,
       label: renderMenuLabel('/sales-orders', 'Đơn hàng xuất'),
     } : null,
+    canViewSalesFulfillmentCenter ? {
+      key: '/sales-fulfillment-center',
+      icon: <ControlOutlined />,
+      label: renderMenuLabel('/sales-fulfillment-center', 'Điều độ đơn hàng xuất'),
+    } : null,
     canViewSalesOrders ? {
       key: '/shipments',
       icon: <CarOutlined />,
       label: renderMenuLabel('/shipments', 'Phiếu xuất'),
+    } : null,
+    canUseScanCenter ? {
+      key: '/scan-center',
+      icon: <QrcodeOutlined />,
+      label: renderMenuLabel('/scan-center', 'Trung tâm quét QR'),
     } : null,
     canViewSalesOrders ? {
       key: '/quotes',
@@ -642,6 +813,10 @@ const MainLayout = () => {
         ...(canAccessProduction ? [{
           key: '/production-orders',
           label: renderMenuLabel('/production-orders', 'Lệnh sản xuất'),
+        }] : []),
+        ...(canManageProduction ? [{
+          key: '/production-planning',
+          label: renderMenuLabel('/production-planning', 'Điều độ sản xuất'),
         }] : []),
         ...(canAccessMaterialIssueRoute ? [{
           key: '/material-issues',
@@ -811,7 +986,7 @@ const MainLayout = () => {
         },
       ],
     } : null,
-    (canManageWorkflow || canViewWorkflow || canManageOnboarding) ? {
+    (canManageWorkflow || canViewWorkflow) ? {
       key: 'workflow-group',
       icon: <ApartmentOutlined />,
       label: 'Quy trình',
@@ -827,13 +1002,9 @@ const MainLayout = () => {
           key: '/workflow-analytics',
           label: renderMenuLabel('/workflow-analytics', 'Phân tích quy trình'),
         }] : []),
-        ...(canManageOnboarding ? [{
-          key: '/admin/onboarding-studio',
-          label: renderMenuLabel('/admin/onboarding-studio', 'Trợ lý triển khai công việc'),
-        }] : []),
       ],
     } : null,
-    (canViewOpsLog || canViewApprovalTower || canViewAdminAudit || canViewAdminObservability || canViewAccessGovernance || canManageAccessExceptions || canManageAccessReviews || canManageLifecycle || canManageProvisioning || canManageRoleTeams || canManageUsers || canManageModulePermissions || canViewRbacAudit) ? {
+    (canViewOpsLog || canViewApprovalTower || canViewAdminAudit || canViewAdminObservability || canViewAccessGovernance || canManageAccessExceptions || canManageAccessReviews || canManageLifecycle || canManageProvisioning || canManageOnboarding || canManageRoleTeams || canManageUsers || canManageModulePermissions || canViewRbacAudit) ? {
       key: 'governance-group',
       icon: <SafetyOutlined />,
       label: 'Kiểm soát',
@@ -875,21 +1046,28 @@ const MainLayout = () => {
           key: '/admin/user-provisioning',
           label: renderMenuLabel('/admin/user-provisioning', 'Bàn cấp tài khoản'),
         }] : []),
+        ...(canManageOnboarding ? [{
+          key: '/admin/onboarding-studio',
+          label: renderMenuLabel('/admin/onboarding-studio', 'Trợ lý triển khai công việc'),
+        }] : []),
         ...(canManageLifecycle ? [{
           key: '/admin/user-lifecycle',
           label: renderMenuLabel('/admin/user-lifecycle', 'Bàn kết thúc vòng đời'),
         }] : []),
         ...(canManageRoleTeams ? [{
           key: '/admin/roles-teams',
-          label: renderMenuLabel('/admin/roles-teams', 'Role va team'),
+          label: renderMenuLabel('/admin/roles-teams', 'Vai trò và nhóm'),
         }] : []),
         ...(canManageUsers ? [{
           key: '/admin/users',
-          label: renderMenuLabel('/admin/users', 'Quan tri nguoi dung'),
+          label: renderMenuLabel('/admin/users', 'Quản trị người dùng'),
         }] : []),
         ...(canManageModulePermissions ? [{
           key: '/admin/module-permissions',
           label: renderMenuLabel('/admin/module-permissions', 'Phân quyền module'),
+        }, {
+          key: '/admin/system-configuration',
+          label: renderMenuLabel('/admin/system-configuration', 'Cấu hình hệ thống'),
         }] : []),
         ...(canViewRbacAudit ? [{
           key: '/admin/module-permissions-history',
@@ -1000,6 +1178,55 @@ const MainLayout = () => {
       <Button type="primary" block onClick={() => navigate('/notifications')}>
         Xem tất cả thông báo
       </Button>
+    </div>
+  );
+  const restoredShortcutPopoverContent = (
+    <div style={{ width: isMobile ? 288 : 320, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <strong>Lối tắt khôi phục</strong>
+        <span style={{ color: '#64748b', fontSize: 12 }}>
+          Kéo các chức năng dễ bị chìm trong menu con lên gần khu vực thao tác nhanh để mở ngay.
+        </span>
+      </div>
+      {restoredHeaderShortcuts.map((shortcut) => (
+        <Button
+          key={shortcut.key}
+          type="text"
+          block
+          data-testid={shortcut.testId}
+          style={{
+            height: 'auto',
+            padding: '10px 12px',
+            border: '1px solid #e2e8f0',
+            borderRadius: 12,
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            textAlign: 'left',
+          }}
+          onMouseEnter={() => prefetchRouteChunk(shortcut.path)}
+          onFocus={() => prefetchRouteChunk(shortcut.path)}
+          onClick={() => navigate(shortcut.path)}
+        >
+          <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ fontWeight: 600, color: '#0f172a' }}>{shortcut.label}</span>
+            <span style={{ color: '#64748b', fontSize: 12, whiteSpace: 'normal' }}>{shortcut.description}</span>
+          </span>
+          <span
+            style={{
+              border: '1px solid #dbeafe',
+              background: '#eff6ff',
+              color: '#2563eb',
+              borderRadius: 999,
+              padding: shortcut.badge ? '2px 8px' : '2px 10px',
+              fontSize: 11,
+              fontWeight: 700,
+              lineHeight: '18px',
+            }}
+          >
+            {shortcut.badge ?? 'Mở'}
+          </span>
+        </Button>
+      ))}
     </div>
   );
 
@@ -1200,16 +1427,60 @@ const MainLayout = () => {
                 </>
               ) : null}
             </Button>
-            <Button
-              type="text"
-              className="workspace-shell-action"
-              icon={<QrcodeOutlined />}
-              data-testid="header-qr-quick-button"
-              onClick={() => navigate('/shipments/scan')}
-              style={{ fontSize: isMobile ? '14px' : '15px', height: isMobile ? 40 : desktopControlSize }}
-            >
-              {isMobile ? null : 'Quét QR kiện'}
-            </Button>
+            {canUseScanCenter ? (
+              <Button
+                type="primary"
+                className="workspace-shell-action"
+                icon={<QrcodeOutlined />}
+                data-testid="workspace-scan-center-button"
+                onMouseEnter={() => prefetchRouteChunk('/scan-center')}
+                onFocus={() => prefetchRouteChunk('/scan-center')}
+                onClick={() => navigate(quickScanPath)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  height: isMobile ? 40 : desktopControlSize,
+                  paddingInline: isMobile ? 12 : 14,
+                  borderRadius: 999,
+                  boxShadow: '0 10px 24px rgba(37, 99, 235, 0.18)',
+                }}
+              >
+                {!isMobile ? (
+                  <>
+                    <span>Quét QR</span>
+                    <span
+                      style={{
+                        border: '1px solid rgba(255,255,255,0.45)',
+                        background: 'rgba(255,255,255,0.16)',
+                        color: '#fff',
+                        borderRadius: 999,
+                        padding: '1px 8px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {preferDesktopScanUi ? 'Máy tính' : 'Di động'}
+                    </span>
+                  </>
+                ) : null}
+              </Button>
+            ) : null}
+            {restoredHeaderShortcuts.length > 0 ? (
+              <Popover content={restoredShortcutPopoverContent} placement="bottomRight" trigger="click">
+                <Button
+                  type="text"
+                  className="workspace-shell-action"
+                  icon={<AppstoreOutlined />}
+                  data-testid="header-restored-shortcuts-button"
+                  aria-label="Lối tắt khôi phục"
+                  title="Lối tắt khôi phục"
+                  style={{ fontSize: isMobile ? '14px' : '15px', height: isMobile ? 40 : desktopControlSize }}
+                >
+                  {isMobile ? null : 'Lối tắt'}
+                </Button>
+              </Popover>
+            ) : null}
             <TaskQuickLauncher compact={isMobile} />
             <Popover content={notificationPopoverContent} placement="bottomRight" trigger="click">
               <Button

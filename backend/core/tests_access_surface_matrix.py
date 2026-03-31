@@ -71,6 +71,7 @@ class AccessSurfaceMatrixApiTests(TestCase):
         self.assertEqual(body['user']['username'], 'uat_ops')
         self.assertTrue(routes['purchase_orders']['allowed'])
         self.assertTrue(routes['production_orders']['allowed'])
+        self.assertTrue(routes['production_planning']['allowed'])
         self.assertTrue(routes['warehouse_transfers']['allowed'])
         self.assertTrue(routes['workflow_analytics']['allowed'])
         self.assertTrue(routes['operations_log']['allowed'])
@@ -170,3 +171,10 @@ class AccessSurfaceMatrixApiTests(TestCase):
 
         with self.assertRaises(CommandError):
             call_command('uat_access_matrix', '--strict')
+
+    def test_production_planning_route_uses_planner_label(self):
+        self._login('uat_admin')
+        body = self._matrix()
+        routes = self._route_map(body)
+
+        self.assertEqual(routes['production_planning']['label'], 'Điều độ sản xuất')

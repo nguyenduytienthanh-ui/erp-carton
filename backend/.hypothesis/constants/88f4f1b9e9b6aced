@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\products\migrations\0007_master_data_audit_soft_delete_indexes.py
-# hypothesis_version: 6.151.5
-
-['Kiểu thùng', 'Loại sóng', 'Ngày xóa (soft)', 'Người cập nhật', 'Người tạo', 'Người xóa', 'Product Categories', 'Product Category', 'Product Unit', 'Product Units', 'Thứ tự', 'Thứ tự sắp xếp', 'code', 'core', 'created_at', 'created_by', 'deleted_at', 'deleted_by', 'is_active', 'name', 'ordering', 'product', 'product_categories', 'product_units', 'productboxtype', 'productcategory', 'products', 'productunit', 'productwave', 'sort_order', 'team', 'updated_by', 'verbose_name', 'verbose_name_plural']

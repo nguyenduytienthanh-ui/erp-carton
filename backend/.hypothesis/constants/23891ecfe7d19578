@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\sales\models.py
-# hypothesis_version: 6.151.5
-
-[200, '-id', '-order_date', '-posted_at', '0', '1', 'APPROVED', 'DRAFT', 'Hủy', 'Nháp', 'POSTED', 'Period Sequence', 'Period Sequences', 'REJECTED', 'SO', 'SO, INV, PO...', 'SUBMITTED', 'Sales Order', 'Sales Order Line', 'Sales Order Lines', 'Sales Orders', 'Từ chối', 'VND', 'VOID', 'YYYYMM', 'code', 'core.Customer', 'core.Team', 'disc', 'discount_amount', 'discount_total', 'doc_type', 'line_number', 'line_subtotal', 'line_total', 'lines', 'order_date', 'period', 'post_number', 'posted_at', 'posting_logs', 'products.Product', 'reversals', 'sales_order', 'sales_order_lines', 'sales_orders', 'sales_orders_created', 'sales_orders_owned', 'sales_orders_posted', 'sales_orders_updated', 'sales_orders_voided', 'self', 'status', 'sub', 'subtotal', 'tax', 'tax_amount', 'tax_total', 'team', 'total', 'updated_at', 'Đã duyệt', 'Đã gửi', 'Đã vào sổ']

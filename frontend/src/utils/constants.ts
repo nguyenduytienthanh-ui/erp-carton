@@ -42,6 +42,7 @@ export const PAGES = {
   PURCHASING_RETURNS: 'purchasing-returns',
   PURCHASING_ORDER_FORECAST: 'purchasing-order-forecast',
   PRODUCTION_ORDERS: 'production-orders',
+  PRODUCTION_PLANNING: 'production-planning',
   PRODUCTION_ISSUES: 'production-issues',
   PRODUCTION_RECEIPTS: 'production-receipts',
   INVENTORY_WAREHOUSES: 'inventory-warehouses',

@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\sales\admin.py
-# hypothesis_version: 6.151.5
-
-['APPROVE', 'Duyệt', 'Gửi duyệt', 'Hủy', 'Phân quyền & Audit', 'SUBMIT', 'SalesOrder', 'Thông tin chung', 'Tiền tệ & Số tiền', 'Vào sổ', 'Vào sổ (idempotent)', 'approve_selected', 'approved_at', 'approved_by', 'code', 'created_at', 'created_by', 'currency', 'customer', 'discount_pct', 'discount_total', 'doc_type', 'exchange_rate', 'fields', 'line_number', 'line_total', 'lines', 'lines__product', 'note', 'notes', 'order_date', 'owner', 'post_number', 'post_selected', 'posted_at', 'posted_by', 'posted_snapshot', 'product', 'qty', 'reference', 'reject_reason', 'rejected_at', 'rejected_by', 'sales_order', 'sales_order_id', 'snapshot_saved', 'status', 'submit_selected', 'submitted_at', 'submitted_by', 'subtotal', 'tax_pct', 'tax_total', 'team', 'total', 'unit_price', 'uom', 'updated_at', 'updated_by', 'version', 'void_reason', 'voided_at', 'voided_by', 'warning', 'Đã duyệt.', 'Đã gửi duyệt.']

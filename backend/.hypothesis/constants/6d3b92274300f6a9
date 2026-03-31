@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\products\serializers_sales_order.py
-# hypothesis_version: 6.151.5
-
-['Version conflict', 'approved_at', 'approved_by', 'code', 'created_at', 'created_by', 'currency', 'customer', 'date', 'discount', 'discount_total', 'doc_type', 'exchange_rate', 'id', 'line_number', 'line_total', 'lines', 'note', 'notes', 'order', 'owner', 'posted_at', 'posted_by', 'price', 'price must be >= 0', 'product', 'qty', 'qty must be > 0', 'reject_reason', 'rejected_at', 'rejected_by', 'required', 'status', 'submitted_at', 'submitted_by', 'subtotal', 'tax', 'tax must be >= 0', 'tax_total', 'team', 'total', 'uom', 'updated_at', 'updated_by', 'version', 'void_reason', 'voided_at', 'voided_by']

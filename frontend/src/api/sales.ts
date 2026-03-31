@@ -351,3 +351,28 @@ export const salesApi = {
     return response.data;
   },
 };
+
+// ── Material Plan / Fulfillment Center API ─────────────────────────────────────
+
+import type { SalesMaterialCommandCenterResponse } from '../types/sales';
+
+const SALES_MATERIAL_PLANS = '/sales/material-plans/';
+
+export const salesFulfillmentApi = {
+  getCommandCenter: async (params?: Record<string, unknown>): Promise<SalesMaterialCommandCenterResponse> => {
+    const response = await axiosInstance.get(`${SALES_MATERIAL_PLANS}command_center/`, { params });
+    return response.data;
+  },
+
+  refreshFromTemplate: async (planId: number): Promise<unknown> => {
+    const response = await axiosInstance.post(`${SALES_MATERIAL_PLANS}${planId}/refresh_from_template/`);
+    return response.data;
+  },
+
+  setSelection: async (planId: number, selectedItemIds: number[]): Promise<unknown> => {
+    const response = await axiosInstance.post(`${SALES_MATERIAL_PLANS}${planId}/set_selection/`, {
+      selected_item_ids: selectedItemIds,
+    });
+    return response.data;
+  },
+};

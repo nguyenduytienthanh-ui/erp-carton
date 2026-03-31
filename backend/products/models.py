@@ -1084,3 +1084,118 @@ class BundlePriceChange(models.Model):
             ).quantize(Decimal('0.01'))
         if save:
             self.save(update_fields=['delta_cost_percent', 'delta_sale_percent', 'updated_at'])
+
+# ── Material Template models (tables already exist in DB) ─────────────────────
+
+_User = get_user_model()
+
+
+class ProductMaterialTemplate(models.Model):
+    STATUS_DRAFT = 'DRAFT'
+    STATUS_ACTIVE = 'ACTIVE'
+    STATUS_INACTIVE = 'INACTIVE'
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Nháp'),
+        (STATUS_ACTIVE, 'Đang áp dụng'),
+        (STATUS_INACTIVE, 'Ngưng áp dụng'),
+    ]
+
+    finished_product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.CASCADE,
+        related_name='material_templates',
+    )
+    version_no = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT, db_index=True)
+    effective_from = models.DateField(null=True, blank=True)
+    effective_to = models.DateField(null=True, blank=True)
+    is_default = models.BooleanField(default=False)
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        _User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='created_product_material_templates',
+    )
+    updated_by = models.ForeignKey(
+        _User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='updated_product_material_templates',
+    )
+
+    class Meta:
+        db_table = 'product_material_templates'
+        ordering = ['finished_product_id', '-is_default', '-version_no']
+        unique_together = [['finished_product', 'version_no']]
+
+    def __str__(self):
+        return f"{self.finished_product_id} v{self.version_no}"
+
+
+class ProductMaterialGroup(models.Model):
+    ROLE_PRIMARY = 'PRIMARY'
+    ROLE_SHARED = 'SHARED'
+    MATERIAL_ROLE_CHOICES = [
+        (ROLE_PRIMARY, 'Nguyên liệu chính'),
+        (ROLE_SHARED, 'Vật tư dùng chung'),
+    ]
+    RULE_ONE_OF = 'ONE_OF'
+    RULE_ALL_REQUIRED = 'ALL_REQUIRED'
+    SELECTION_RULE_CHOICES = [
+        (RULE_ONE_OF, 'Chọn 1 trong nhiều'),
+        (RULE_ALL_REQUIRED, 'Bắt buộc tất cả'),
+    ]
+
+    template = models.ForeignKey(ProductMaterialTemplate, on_delete=models.CASCADE, related_name='groups')
+    group_code = models.CharField(max_length=50)
+    group_name = models.CharField(max_length=255)
+    material_role = models.CharField(max_length=20, choices=MATERIAL_ROLE_CHOICES, default=ROLE_PRIMARY, db_index=True)
+    selection_rule = models.CharField(max_length=20, choices=SELECTION_RULE_CHOICES, default=RULE_ONE_OF, db_index=True)
+    is_required = models.BooleanField(default=True)
+    include_in_summary = models.BooleanField(default=True)
+    sort_order = models.IntegerField(default=0)
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'product_material_groups'
+        ordering = ['template_id', 'sort_order', 'id']
+        unique_together = [['template', 'group_code']]
+
+    def __str__(self):
+        return f"{self.template_id}:{self.group_code}"
+
+    def save(self, *args, **kwargs):
+        if self.group_code:
+            self.group_code = str(self.group_code).strip().upper()
+        super().save(*args, **kwargs)
+
+
+class ProductMaterialOption(models.Model):
+    group = models.ForeignKey(ProductMaterialGroup, on_delete=models.CASCADE, related_name='options')
+    material_product = models.ForeignKey(
+        'products.Product', on_delete=models.PROTECT, related_name='material_template_options',
+    )
+    spec_snapshot = models.JSONField(default=dict, blank=True)
+    qty_per_unit = models.DecimalField(
+        max_digits=18, decimal_places=4, default=Decimal('0'),
+        validators=[MinValueValidator(Decimal('0'))],
+    )
+    waste_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('0'),
+        validators=[MinValueValidator(Decimal('0'))],
+    )
+    priority_no = models.IntegerField(default=0)
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'product_material_options'
+        ordering = ['group_id', 'priority_no', 'id']
+        unique_together = [['group', 'material_product']]
+
+    def __str__(self):
+        return f"{self.group_id}:{self.material_product_id}"

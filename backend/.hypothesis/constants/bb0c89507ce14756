@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0034_customer_indexes.py
-# hypothesis_version: 6.151.5
-
-['code', 'core', 'created_at', 'customer', 'is_active', 'name', 'team']

@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0001_initial.py
-# hypothesis_version: 6.151.5
-
-[128, 150, 254, 'Account is locked', 'ID', 'User', 'active', 'auth', 'auth.group', 'auth.permission', 'avatar', 'avatars/', 'date joined', 'date_joined', 'db_table', 'email', 'email address', 'first name', 'first_name', 'groups', 'id', 'is_active', 'is_locked', 'is_staff', 'is_superuser', 'last login', 'last name', 'last_login', 'last_name', 'locked_at', 'locked_by', 'locked_users', 'objects', 'ordering', 'password', 'phone', 'staff status', 'superuser status', 'unique', 'user', 'user permissions', 'user_permissions', 'user_set', 'username', 'users']

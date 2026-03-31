@@ -15,6 +15,8 @@ from sales.models import (
     QuoteLine,
     OutboundShipment,
     ShipmentLine,
+    SalesLineMaterialPlan,
+    SalesLineMaterialPlanItem,
 )
 from sales.services import (
     build_sales_order_line_trace_code,
@@ -564,3 +566,49 @@ class OutboundShipmentSerializer(serializers.ModelSerializer):
                 )
         
         return instance
+
+
+# ── Material Plan serializers ─────────────────────────────────────────────────
+
+class SalesLineMaterialPlanItemSerializer(serializers.ModelSerializer):
+    material_product_code = serializers.CharField(source='material_product.code', read_only=True)
+    material_product_name = serializers.CharField(source='material_product.name', read_only=True)
+    material_product_unit_name = serializers.SerializerMethodField()
+
+    def get_material_product_unit_name(self, obj):
+        unit = getattr(getattr(obj, 'material_product', None), 'unit', None)
+        return getattr(unit, 'name', None)
+
+    class Meta:
+        model = SalesLineMaterialPlanItem
+        fields = [
+            'id', 'template_group', 'template_option',
+            'group_code_snapshot', 'group_name_snapshot',
+            'material_role', 'selection_rule',
+            'material_product', 'material_product_code', 'material_product_name', 'material_product_unit_name',
+            'spec_snapshot', 'is_selected',
+            'required_qty', 'ordered_qty_cache', 'received_qty_cache',
+            'available_qty_cache', 'short_qty_cache',
+            'note', 'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+
+class SalesLineMaterialPlanSerializer(serializers.ModelSerializer):
+    sales_order_code = serializers.CharField(source='sales_order.code', read_only=True)
+    sales_order_line_number = serializers.IntegerField(source='sales_order_line.line_number', read_only=True)
+    finished_product_code = serializers.CharField(source='finished_product.code', read_only=True)
+    finished_product_name = serializers.CharField(source='finished_product.name', read_only=True)
+    items = SalesLineMaterialPlanItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SalesLineMaterialPlan
+        fields = [
+            'id', 'sales_order', 'sales_order_code',
+            'sales_order_line', 'sales_order_line_number',
+            'finished_product', 'finished_product_code', 'finished_product_name',
+            'template', 'ordered_finished_qty', 'status',
+            'note', 'confirmed_by', 'confirmed_at',
+            'created_at', 'updated_at', 'items',
+        ]
+        read_only_fields = fields

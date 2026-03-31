@@ -46,8 +46,9 @@ const AccountCenter = lazy(() => import('./pages/Account/AccountCenter'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const ProductList = lazy(() => import('./pages/Products/ProductList'));
 const SalesOrderList = lazy(() => import('./pages/Sales/SalesOrderList'));
+const SalesFulfillmentCenter = lazy(() => import('./pages/Management/SalesFulfillmentCenter'));
 const ShipmentList = lazy(() => import('./pages/Sales/ShipmentList'));
-const ShipmentScanCenter = lazy(() => import('./pages/Sales/ShipmentScanCenter'));
+const ScanCenter = lazy(() => import('./pages/Inventory/ScanCenter'));
 const QuoteList = lazy(() => import('./pages/Sales/QuoteListNew'));
 const QuoteAnalytics = lazy(() => import('./pages/Management/QuoteAnalytics'));
 const SalesAnalyticsDashboard = lazy(() => import('./pages/Sales/SalesAnalyticsDashboard'));
@@ -65,6 +66,7 @@ const PurchaseReturnList = lazy(() => import('./pages/Purchasing/PurchaseReturnL
 const PurchaseOrderForecast = lazy(() => import('./pages/Purchasing/PurchaseOrderForecast'));
 const SupplierPerformanceAnalytics = lazy(() => import('./pages/Purchasing/SupplierPerformanceAnalytics'));
 const ProductionOrderList = lazy(() => import('./pages/Production/ProductionOrderList'));
+const ProductionPlanningBoard = lazy(() => import('./pages/Production/ProductionPlanningBoard'));
 const MaterialIssueList = lazy(() => import('./pages/Production/MaterialIssueList'));
 const ProductionReceiptList = lazy(() => import('./pages/Production/ProductionReceiptList'));
 const ExecutiveCockpit = lazy(() => import('./pages/Management/ExecutiveCockpit'));
@@ -107,6 +109,7 @@ const WarehouseTransferList = lazy(() => import('./pages/Inventory/WarehouseTran
 const InventoryTransactionList = lazy(() => import('./pages/Inventory/InventoryTransactionList'));
 const InventoryReservationList = lazy(() => import('./pages/Inventory/InventoryReservationList'));
 const ModulePermissionSettings = lazy(() => import('./pages/Admin/ModulePermissionSettings'));
+const SystemConfigurationCenter = lazy(() => import('./pages/Admin/SystemConfigurationCenter'));
 const ModulePermissionHistory = lazy(() => import('./pages/Admin/ModulePermissionHistory'));
 const AdminObservabilityCenter = lazy(() => import('./pages/Admin/AdminObservabilityCenter'));
 const AdminAuditCenter = lazy(() => import('./pages/Admin/AdminAuditCenter'));
@@ -163,6 +166,7 @@ export default function AppRouter() {
   const canAccessProductionReceiptRoute = canAccessProductionReceipts();
   const canManageWorkforce = canManageWorkforceData();
   const canViewApprovalTower = canViewApprovalControlTower();
+  const canViewSalesFulfillmentCenter = canViewSalesOrders || canManagePurchasing || canManageProduction || canViewReports;
   const [antdLocale, setAntdLocale] = useState<Locale | undefined>(undefined);
 
   useEffect(() => {
@@ -237,8 +241,10 @@ export default function AppRouter() {
                 )}
               />
               <Route path="sales-orders" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<SalesOrderList />)}</FeatureRoute>} />
+              <Route path="sales-fulfillment-center" element={<FeatureRoute allow={canViewSalesFulfillmentCenter} fallbackTo="/sales-orders">{withAsyncBoundary(<SalesFulfillmentCenter />)}</FeatureRoute>} />
               <Route path="shipments" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<ShipmentList />)}</FeatureRoute>} />
-              <Route path="shipments/scan" element={withAsyncBoundary(<ShipmentScanCenter />)} />
+              <Route path="scan-center" element={withAsyncBoundary(<ScanCenter />)} />
+              <Route path="shipments/scan" element={withAsyncBoundary(<ScanCenter />)} />
               <Route path="quotes" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<QuoteList />)}</FeatureRoute>} />
               <Route path="sales-analytics" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<SalesAnalyticsDashboard />)}</FeatureRoute>} />
               <Route path="discount-management" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<DiscountManagement />)}</FeatureRoute>} />
@@ -255,6 +261,7 @@ export default function AppRouter() {
               <Route path="purchase-order-forecast" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseOrderForecast />)}</FeatureRoute>} />
               <Route path="supplier-analytics" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<SupplierPerformanceAnalytics />)}</FeatureRoute>} />
               <Route path="production-orders" element={<FeatureRoute allow={canAccessProduction} fallbackTo="/">{withAsyncBoundary(<ProductionOrderList />)}</FeatureRoute>} />
+              <Route path="production-planning" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionPlanningBoard />)}</FeatureRoute>} />
               <Route path="material-issues" element={<FeatureRoute allow={canAccessMaterialIssueRoute} fallbackTo="/">{withAsyncBoundary(<MaterialIssueList />)}</FeatureRoute>} />
               <Route path="production-receipts" element={<FeatureRoute allow={canAccessProductionReceiptRoute} fallbackTo="/">{withAsyncBoundary(<ProductionReceiptList />)}</FeatureRoute>} />
               <Route path="warehouses" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseList />)}</FeatureRoute>} />
@@ -398,6 +405,14 @@ export default function AppRouter() {
                 element={(
                   <FeatureRoute allow={canViewModulePermissionAudit} fallbackTo="/">
                     {withAsyncBoundary(<ModulePermissionHistory />)}
+                  </FeatureRoute>
+                )}
+              />
+              <Route
+                path="admin/system-configuration"
+                element={(
+                  <FeatureRoute allow={canManageModulePermissions} fallbackTo="/">
+                    {withAsyncBoundary(<SystemConfigurationCenter />)}
                   </FeatureRoute>
                 )}
               />

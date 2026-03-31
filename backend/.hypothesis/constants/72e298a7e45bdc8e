@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\sales\filters.py
-# hypothesis_version: 6.151.5
-
-['%Y-%m-%d', 'USE_TZ', 'code', 'customer', 'customer_id', 'date', 'filter_date_gte', 'filter_date_lte', 'icontains', 'order_date__gte', 'order_date__lte', 'owner', 'owner_id', 'status', 'team', 'team_id']

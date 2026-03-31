@@ -846,6 +846,7 @@ ACCESS_SURFACE_ROUTE_DEFINITIONS = [
     {'key': 'purchase_requests', 'label': 'Purchase requests', 'path': '/purchase-requests', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_returns', 'label': 'Purchase returns', 'path': '/purchase-returns', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'production_orders', 'label': 'Lệnh sản xuất', 'path': '/production-orders', 'capability': 'production', 'group': 'production'},
+    {'key': 'production_planning', 'label': 'Điều độ sản xuất', 'path': '/production-planning', 'capability': 'production_planning', 'group': 'production'},
     {'key': 'material_issues', 'label': 'Material issues', 'path': '/material-issues', 'capability': 'production', 'group': 'production'},
     {'key': 'production_receipts', 'label': 'Production receipts', 'path': '/production-receipts', 'capability': 'production', 'group': 'production'},
     {'key': 'warehouses', 'label': 'Warehouses', 'path': '/warehouses', 'capability': 'inventory', 'group': 'inventory'},
@@ -958,6 +959,7 @@ def _build_access_capability_map(user):
         'sales_orders': _can_access_sales_orders(user),
         'purchasing': _can_manage_purchasing_data(user),
         'production': _can_access_production_center(user),
+        'production_planning': _can_manage_production_data(user),
         'inventory': _can_manage_inventory_data(user),
         'stocktake': _can_manage_stocktake(user),
         'ops_hub': _can_view_ops_hub(user),
@@ -19665,3 +19667,59 @@ class WorkflowTaskTemplateViewSet(viewsets.ModelViewSet):
         if not result.get('success'):
             return Response({'error': result.get('error') or 'Không thể thao tác hàng loạt.'}, status=status.HTTP_400_BAD_REQUEST)
         return Response(result)
+
+
+# ── System Configuration ViewSets ─────────────────────────────────────────────
+
+from .models import DocumentType, TaxRate, Shift, ExpenseCategory, NumberSequence
+from .serializers import DocumentTypeSerializer, TaxRateSerializer, ShiftSerializer, ExpenseCategorySerializer, NumberSequenceSerializer
+
+
+class SystemConfigurationPermissionMixin:
+    permission_classes = [IsAuthenticated]
+
+    def check_permissions(self, request):
+        super().check_permissions(request)
+        if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+            if not (request.user.is_staff or request.user.is_superuser):
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied('Chỉ admin mới có thể thay đổi cấu hình hệ thống.')
+
+
+class DocumentTypeViewSet(SystemConfigurationPermissionMixin, viewsets.ModelViewSet):
+    queryset = DocumentType.objects.all().order_by('sort_order', 'name', 'code')
+    serializer_class = DocumentTypeSerializer
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['code', 'name', 'entity_type', 'prefix']
+    ordering_fields = ['sort_order', 'code', 'name']
+
+
+class TaxRateViewSet(SystemConfigurationPermissionMixin, viewsets.ModelViewSet):
+    queryset = TaxRate.objects.all().order_by('sort_order', 'rate_pct', 'code')
+    serializer_class = TaxRateSerializer
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['code', 'name']
+    ordering_fields = ['sort_order', 'code', 'rate_pct']
+
+
+class ShiftViewSet(SystemConfigurationPermissionMixin, viewsets.ModelViewSet):
+    queryset = Shift.objects.all().order_by('sort_order', 'name', 'code')
+    serializer_class = ShiftSerializer
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['code', 'name', 'short_label']
+    ordering_fields = ['sort_order', 'code', 'name']
+
+
+class ExpenseCategoryViewSet(SystemConfigurationPermissionMixin, viewsets.ModelViewSet):
+    queryset = ExpenseCategory.objects.all().order_by('sort_order', 'name', 'code')
+    serializer_class = ExpenseCategorySerializer
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['code', 'name']
+    ordering_fields = ['sort_order', 'code', 'name']
+
+
+class NumberSequenceViewSet(SystemConfigurationPermissionMixin, viewsets.ModelViewSet):
+    queryset = NumberSequence.objects.all().order_by('entity_type')
+    serializer_class = NumberSequenceSerializer
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['entity_type', 'prefix']

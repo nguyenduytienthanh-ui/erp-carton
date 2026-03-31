@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\products\models_sales_order.py
-# hypothesis_version: 6.151.5
-
-[500, '-created_at', '-date', '0', '1', 'APPROVED', 'Approved', 'DRAFT', 'Draft', 'POSTED', 'Posted', 'Product', 'REJECTED', 'Rejected', 'SO', 'SO Period Sequence', 'SUBMITTED', 'Sales Order Posting', 'Submitted', 'VND', 'VOID', 'Void', 'YYYYMM', 'core.Customer', 'core.Team', 'date', 'deleted_at', 'line_number', 'lines', 'order', 'owned_sales_orders', 'posting', 'product', 'product_sales_orders', 'product_so_lines', 'products_sales_order', 'so_approved', 'so_created', 'so_deleted', 'so_posted', 'so_rejected', 'so_submitted', 'so_updated', 'so_voided', 'status', 'uq_so_line_number']

@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0028_emailtemplate.py
-# hypothesis_version: 6.151.5
-
-[100, 200, '0027_approvallevel', 'Email Template', 'Email Templates', 'EmailTemplate', 'ID', 'available_variables', 'body_html', 'body_text', 'core', 'created_at', 'db_table', 'email_templates', 'id', 'is_active', 'name', 'notification_type', 'subject', 'updated_at', 'verbose_name', 'verbose_name_plural']

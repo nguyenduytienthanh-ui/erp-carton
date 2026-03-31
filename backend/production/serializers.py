@@ -16,12 +16,36 @@ from production.models import (
 from production.services import (
     build_default_material_requirements,
     build_material_product_snapshot,
+    build_operation_planning_snapshot,
     build_production_product_snapshot,
+    build_production_order_trace_code,
     rebuild_production_operations,
 )
 
 
+def _format_packaging_number(value):
+    if value in (None, ''):
+        return ''
+    text = format(value, 'f') if isinstance(value, Decimal) else str(value)
+    if '.' in text:
+        text = text.rstrip('0').rstrip('.')
+    return text
+
+
 class ProductionOperationSerializer(serializers.ModelSerializer):
+    planned_shift_label = serializers.SerializerMethodField()
+    block_reason_label = serializers.SerializerMethodField()
+    handover_status_label = serializers.SerializerMethodField()
+    material_readiness = serializers.SerializerMethodField()
+    dependency_state = serializers.SerializerMethodField()
+    risk_state = serializers.SerializerMethodField()
+    previous_step_code = serializers.SerializerMethodField()
+    previous_step_name = serializers.SerializerMethodField()
+    next_step_code = serializers.SerializerMethodField()
+    next_step_name = serializers.SerializerMethodField()
+    remaining_issue_qty = serializers.SerializerMethodField()
+    remaining_issue_line_count = serializers.SerializerMethodField()
+
     class Meta:
         model = ProductionOperation
         fields = [
@@ -34,14 +58,87 @@ class ProductionOperationSerializer(serializers.ModelSerializer):
             'planned_qty',
             'completed_qty',
             'scrap_qty',
+            'planned_date',
+            'planned_shift',
+            'planned_shift_label',
+            'priority_rank',
+            'dispatch_sequence',
+            'work_center_code',
+            'work_center_name',
+            'machine_code',
+            'machine_name',
+            'estimated_runtime_hours',
+            'setup_minutes',
+            'block_reason_code',
+            'block_reason_label',
+            'block_reason_note',
+            'dispatch_owner',
+            'handover_status',
+            'handover_status_label',
+            'handover_receiver',
+            'handover_note',
+            'handover_at',
             'status',
             'started_at',
             'finished_at',
             'note',
+            'material_readiness',
+            'dependency_state',
+            'risk_state',
+            'previous_step_code',
+            'previous_step_name',
+            'next_step_code',
+            'next_step_name',
+            'remaining_issue_qty',
+            'remaining_issue_line_count',
             'created_at',
             'updated_at',
         ]
         read_only_fields = fields
+
+    def _get_planning_snapshot(self, obj):
+        snapshot = getattr(obj, '_planning_snapshot', None)
+        if snapshot is None:
+            order = getattr(obj, 'production_order', None)
+            snapshot = build_operation_planning_snapshot(obj, order=order)
+            setattr(obj, '_planning_snapshot', snapshot)
+        return snapshot
+
+    def get_planned_shift_label(self, obj):
+        return self._get_planning_snapshot(obj).get('planned_shift_label', '')
+
+    def get_block_reason_label(self, obj):
+        return self._get_planning_snapshot(obj).get('block_reason_label', '')
+
+    def get_handover_status_label(self, obj):
+        return getattr(obj, 'get_handover_status_display', lambda: '')() or ''
+
+    def get_material_readiness(self, obj):
+        return self._get_planning_snapshot(obj).get('material_readiness', '')
+
+    def get_dependency_state(self, obj):
+        return self._get_planning_snapshot(obj).get('dependency_state', '')
+
+    def get_risk_state(self, obj):
+        return self._get_planning_snapshot(obj).get('risk_state', '')
+
+    def get_previous_step_code(self, obj):
+        return self._get_planning_snapshot(obj).get('previous_step_code')
+
+    def get_previous_step_name(self, obj):
+        return self._get_planning_snapshot(obj).get('previous_step_name')
+
+    def get_next_step_code(self, obj):
+        return self._get_planning_snapshot(obj).get('next_step_code')
+
+    def get_next_step_name(self, obj):
+        return self._get_planning_snapshot(obj).get('next_step_name')
+
+    def get_remaining_issue_qty(self, obj):
+        return self._get_planning_snapshot(obj).get('remaining_issue_qty')
+
+    def get_remaining_issue_line_count(self, obj):
+        return self._get_planning_snapshot(obj).get('remaining_issue_line_count', 0)
 
 
 class ProductionMaterialRequirementSerializer(serializers.ModelSerializer):
@@ -104,6 +201,8 @@ class ProductionOrderSerializer(serializers.ModelSerializer):
     material_requirements = ProductionMaterialRequirementSerializer(many=True, required=False)
     product_code = serializers.CharField(source='product.code', read_only=True)
     product_name = serializers.CharField(source='product.name', read_only=True)
+    trace_code = serializers.SerializerMethodField()
+    qr_value = serializers.SerializerMethodField()
     sales_order_code = serializers.CharField(source='sales_order.code', read_only=True)
     sales_order_line_number = serializers.IntegerField(source='sales_order_line.line_number', read_only=True)
     target_warehouse_name = serializers.CharField(source='target_warehouse.name', read_only=True)
@@ -128,6 +227,8 @@ class ProductionOrderSerializer(serializers.ModelSerializer):
             'product',
             'product_code',
             'product_name',
+            'trace_code',
+            'qr_value',
             'product_snapshot',
             'planned_qty',
             'produced_qty',
@@ -196,6 +297,12 @@ class ProductionOrderSerializer(serializers.ModelSerializer):
             'team',
             'operations',
         ]
+
+    def get_trace_code(self, obj):
+        return build_production_order_trace_code(obj, getattr(obj, 'product', None))
+
+    def get_qr_value(self, obj):
+        return self.get_trace_code(obj)
 
     def validate_planned_qty(self, value):
         if value is None or value <= 0:
@@ -386,6 +493,9 @@ class ProductionIssueSerializer(serializers.ModelSerializer):
 class ProductionReceiptLineSerializer(serializers.ModelSerializer):
     product_code = serializers.SerializerMethodField()
     product_name = serializers.SerializerMethodField()
+    trace_code = serializers.SerializerMethodField()
+    qr_value = serializers.SerializerMethodField()
+    packaging_summary = serializers.SerializerMethodField()
     inventory_transaction_code = serializers.CharField(source='inventory_transaction.code', read_only=True)
 
     class Meta:
@@ -396,6 +506,13 @@ class ProductionReceiptLineSerializer(serializers.ModelSerializer):
             'product',
             'product_code',
             'product_name',
+            'trace_code',
+            'qr_value',
+            'bundle_count',
+            'units_per_bundle',
+            'pallet_count',
+            'bundles_per_pallet',
+            'packaging_summary',
             'product_snapshot',
             'quantity',
             'unit_cost',
@@ -411,6 +528,28 @@ class ProductionReceiptLineSerializer(serializers.ModelSerializer):
 
     def get_product_name(self, obj):
         return (obj.product_snapshot or {}).get('name') or getattr(getattr(obj, 'product', None), 'name', None)
+
+    def get_trace_code(self, obj):
+        order = getattr(getattr(obj, 'receipt', None), 'production_order', None)
+        product = getattr(obj, 'product', None)
+        if not order or not product:
+            return ''
+        return build_production_order_trace_code(order, product)
+
+    def get_qr_value(self, obj):
+        return self.get_trace_code(obj)
+
+    def get_packaging_summary(self, obj):
+        parts: list[str] = []
+        if obj.bundle_count:
+            parts.append(f'{_format_packaging_number(obj.bundle_count)} goi lon')
+        if obj.units_per_bundle:
+            parts.append(f'{_format_packaging_number(obj.units_per_bundle)} cai/goi')
+        if obj.pallet_count:
+            parts.append(f'{_format_packaging_number(obj.pallet_count)} pallet')
+        if obj.bundles_per_pallet:
+            parts.append(f'{_format_packaging_number(obj.bundles_per_pallet)} goi/pallet')
+        return ' | '.join(parts)
 
 
 class ProductionReceiptSerializer(serializers.ModelSerializer):

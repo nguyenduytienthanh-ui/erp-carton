@@ -12,7 +12,6 @@ export type CommandPaletteCommand = {
 type BuildCommandPaletteCatalogOptions = {
   canViewReports: boolean;
   canViewSalesOrders: boolean;
-  canUseShipmentExecutionWorkspace: boolean;
   canManagePurchasing: boolean;
   canAccessProductionCenter: boolean;
   canAccessMaterialIssues: boolean;
@@ -270,6 +269,15 @@ export function buildCommandPaletteCatalog(
       enabled: options.canViewSalesOrders,
     },
     {
+      key: 'sales-fulfillment-center',
+      path: '/sales-fulfillment-center',
+      title: 'Điều độ đơn hàng xuất',
+      group: 'Bán hàng',
+      description: 'Tổng quan kế hoạch vật tư, tình trạng thiếu hụt, quá hạn giao và sẵn sàng xuất hàng.',
+      keywords: ['dieu do don hang xuat', 'sales fulfillment', 'ke hoach vat tu', 'thieu vat tu', 'san sang giao'],
+      enabled: options.canViewSalesOrders,
+    },
+    {
       key: 'shipments',
       path: '/shipments',
       title: 'Phiếu xuất',
@@ -279,14 +287,14 @@ export function buildCommandPaletteCatalog(
       enabled: options.canViewSalesOrders,
     },
     {
-      key: 'shipments-scan',
-      path: '/shipments/scan',
-      title: 'Quét QR kiện',
-      group: 'Bán hàng',
-      description: 'Quét nhanh mã kiện để tra cứu, xác minh, bốc xếp và chốt bàn giao giao hàng ngay trên điện thoại.',
-      keywords: ['quet qr', 'qr', 'quet kien', 'ban giao xe', 'giao xong', 'boc xep'],
+      key: 'scan-center',
+      path: '/scan-center',
+      title: 'Trung tâm quét QR',
+      group: 'Điểm nóng',
+      description: 'Quét QR kiện hàng, tra cứu lệnh sản xuất và phiếu xuất. Hỗ trợ camera và máy quét cắm ngoài.',
+      keywords: ['quet qr', 'qr', 'scan center', 'quet kien', 'tra cuu kien', 'trung tam quet qr', 'scan'],
       enabled: true,
-      spotlight: options.canUseShipmentExecutionWorkspace,
+      spotlight: true,
     },
     {
       key: 'quotes',
@@ -407,6 +415,34 @@ export function buildCommandPaletteCatalog(
       keywords: ['lenh san xuat', 'trung tam lenh san xuat', 'production order', 'mo'],
       enabled: options.canAccessProductionCenter,
       spotlight: options.canAccessProductionCenter,
+    },
+    {
+      key: 'production-planning',
+      path: '/production-planning',
+      title: 'Điều độ sản xuất',
+      group: 'Sản xuất',
+      description: 'Mở bàn kế hoạch công đoạn để rà tải theo ngày, ca, điểm nghẽn vật tư và các cụm cần bàn giao nhanh.',
+      keywords: ['dieu do san xuat', 'ban ke hoach cong doan', 'production planning', 'planner', 'dieu do cong doan'],
+      enabled: options.canManageProduction,
+      spotlight: options.canManageProduction,
+    },
+    {
+      key: 'production-planning-ready',
+      path: '/production-planning?ready_to_run=1',
+      title: 'Điều độ sản xuất: Sẵn chạy',
+      group: 'Sản xuất',
+      description: 'Lọc nhanh các công đoạn đã đủ điều kiện để đẩy xuống line hoặc bàn giao ca.',
+      keywords: ['dieu do san xuat san chay', 'ready to run', 'san chay'],
+      enabled: options.canManageProduction,
+    },
+    {
+      key: 'production-planning-material-wait',
+      path: '/production-planning?has_material_wait=1&needs_attention=1',
+      title: 'Điều độ sản xuất: Chờ vật tư',
+      group: 'Sản xuất',
+      description: 'Đi thẳng tới các công đoạn đang nghẽn vật tư để phối hợp cấp phát và giữ cam kết giao hàng.',
+      keywords: ['dieu do san xuat cho vat tu', 'thieu vat tu', 'material wait'],
+      enabled: options.canManageProduction,
     },
     {
       key: 'material-issues',

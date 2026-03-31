@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0017_commentreaction.py
-# hypothesis_version: 6.151.5
-
-['0016_comment', 'Comment Reaction', 'Comment Reactions', 'CommentReaction', 'ID', 'angry', 'comment', 'comment_reactions', 'core', 'core.comment', 'created_at', 'db_table', 'id', 'laugh', 'like', 'love', 'reaction_type', 'reactions', 'sad', 'unique_together', 'user', 'verbose_name', 'verbose_name_plural', 'wow', '❤️ Love', '👍 Like', '😂 Laugh', '😠 Angry', '😢 Sad', '😮 Wow']

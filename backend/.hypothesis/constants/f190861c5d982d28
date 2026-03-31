@@ -1,4 +1,0 @@
-# file: D:\ERP-Carton\backend\core\migrations\0010_customer.py
-# hypothesis_version: 6.151.5
-
-[100, 200, 254, '0009_setting', 'Address', 'Company name', 'Contact person name', 'Contact person phone', 'Created by user', 'Credit limit', 'Customer', 'Customer code', 'Customer name', 'Customers', 'Email address', 'ID', 'Is customer active?', 'Phone number', 'Updated by user', 'address', 'code', 'company_name', 'contact_person', 'contact_phone', 'core', 'created_at', 'created_by', 'credit_limit', 'customers', 'customers_created', 'customers_updated', 'db_table', 'email', 'id', 'is_active', 'name', 'ordering', 'payment_terms', 'phone', 'tax_code', 'updated_at', 'updated_by', 'verbose_name', 'verbose_name_plural']
