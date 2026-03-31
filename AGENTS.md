@@ -15,12 +15,10 @@
 - `backend/`: Django + Django REST Framework.
 - `frontend/`: React + Vite + TypeScript + Ant Design.
 - ERP có nhiều màn hình nghiệp vụ; nếu màn hình đang dùng tiếng Việt thì giữ nguyên tiếng Việt cho label, placeholder, message, test và nội dung hướng dẫn liên quan.
-- Contract API mặc định hiện tại là `/api/v1`.
-- `/api` chỉ còn là alias tương thích tạm thời, không phải hướng mặc định cho phát triển mới.
-- Repo hiện đã hỗ trợ tách frontend và backend:
-  - frontend gọi API qua biến cấu hình
-  - backend đã có cấu hình `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS`, proxy header và các biến môi trường phục vụ việc tách lớp
-- Mẫu deploy hiện có vẫn đang thiên về chạy theo cùng một cụm dịch vụ; điều đó có nghĩa là repo đã đi đúng hướng để tách lớp, nhưng chưa được coi là mô hình hybrid hoàn chỉnh.
+- Contract API là `/api/` (không có `/v1` prefix). Backend mount tại `path('api/', ...)` trong `backend/config/urls.py`.
+- Repo đã đạt chuẩn hybrid hoàn chỉnh: deploy templates, nginx config, settings và env examples đều tách frontend/backend. Xem `deploy/` để biết cấu hình chi tiết.
+- Frontend gọi API qua `VITE_API_BASE_URL` (biến môi trường) — không hardcode URL trong source code.
+- Backend đã cấu hình đầy đủ `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS`, `USE_X_FORWARDED_HOST`, `SECURE_PROXY_SSL_HEADER` và các biến môi trường phục vụ tách lớp.
 - Nguồn sự thật kỹ thuật luôn là code và config đang có thật trong repo, không phải mô tả kỳ vọng hay tài liệu cũ.
 
 ## Pattern dùng chung đang còn hiệu lực
@@ -34,6 +32,46 @@
 - Với màn danh sách có tìm kiếm toàn cột, ưu tiên giữ hướng backend gom dữ liệu tìm kiếm trên các cột hiển thị thay vì chỉ tìm một cột đơn lẻ.
 - Nếu một form hoặc bộ lọc đã có quy tắc nhập nhanh bằng bàn phím, hãy giữ hành vi Tab, Enter, Esc và luồng focus nhất quán với màn hình hiện có; không tự ý đổi sang hành vi khác khi chưa có lý do rõ ràng.
 
+### Khi thêm page/route mới phải wire đủ 4 nơi
+
+Mỗi route mới phải được khai báo đồng bộ và nhất quán ở tất cả 4 nơi sau:
+
+1. **`frontend/src/AppRouter.tsx`** — thêm `<Route>` với `FeatureRoute allow={canXxx}`.
+2. **`frontend/src/components/Layout/MainLayout.tsx`** — thêm menu item với cùng điều kiện `canXxx ? {...} : null`.
+3. **`frontend/src/utils/commandPalette.ts`** — thêm seed với `enabled: options.canXxx`.
+4. **`frontend/src/pages/Dashboard.tsx`** — thêm shortcut card hoặc restored card nếu là chức năng quan trọng.
+
+Condition `allow` / `enabled` / gate phải **giống hệt nhau** ở cả 4 nơi. Nếu route cho phép `canA || canB || canC`, thì menu, palette và Dashboard cũng phải dùng cùng biểu thức đó, không dùng subset hẹp hơn.
+
+### Menu group mới phải có permission gate
+
+Mọi menu group mới trong `MainLayout.tsx` phải có điều kiện:
+```tsx
+canManageX ? {
+  key: 'x-group',
+  label: '...',
+  children: [...],
+} : null,
+```
+Không được tạo group không có điều kiện (unconditional). Ai không có quyền thì không nhìn thấy group đó trong sidebar.
+
+### Python import hygiene
+
+- Tất cả `import` và `from X import Y` phải đặt **ở đầu file**, không đặt inline bên trong hàm, class hay phần giữa/cuối file.
+- Khi thêm class/function mới vào file đã có, tích hợp import vào khối import hiện có ở đầu — không append thêm dòng import ở cuối file.
+- Khi thêm model Django vào file đã định nghĩa `User = get_user_model()`, dùng lại biến `User` đó; không tạo alias mới như `_User = get_user_model()`.
+
+### Fake migration pattern (khi bảng DB đã tồn tại)
+
+Khi bảng đã tồn tại trong DB (từ migration cũ đã bị xóa khỏi repo):
+1. Tạo migration bình thường bằng `makemigrations`.
+2. Chạy `python manage.py migrate <app> --fake` để đánh dấu đã áp dụng mà không tạo lại bảng.
+3. Ghi comment trong file migration: `# Tables already exist in DB; this migration is applied --fake.`
+
+### Đồng bộ .env.hybrid.example
+
+Mỗi khi thêm biến môi trường mới vào `backend/config/settings.py`, phải thêm luôn vào `backend/.env.hybrid.example` trong cùng commit. Không để `.env.hybrid.example` lạc hậu so với settings.
+
 ## Đích triển khai hybrid cuối cùng
 
 - Frontend chạy public qua tên miền.
@@ -42,9 +80,16 @@
 - Không mở database trực tiếp ra internet.
 - Có backup tại chỗ và backup lên Google Drive.
 - Mọi thay đổi mới phải giữ cho hệ thống tiếp tục đi đúng hướng này:
-  - không hardcode `localhost`
+  - không hardcode `localhost`, địa chỉ IP nội bộ, hay port cụ thể trong source code
   - không giả định frontend và backend luôn ở cùng một máy
   - không làm thay đổi khiến sau này phải quay lại sửa lớn chỉ để tách lớp triển khai
+
+### Quy tắc kỹ thuật bắt buộc cho hybrid
+
+- Mọi API call trong frontend phải đi qua `axiosInstance` từ `frontend/src/api/axios.ts`. Không dùng `fetch()` trực tiếp; không tạo `axios.create()` với URL hardcode.
+- `VITE_API_BASE_URL` là nguồn sự thật duy nhất cho API base URL. Giá trị fallback dev-only chỉ được đặt một lần tại `frontend/src/utils/constants.ts` — không đặt URL mặc định ở bất kỳ file API nào khác.
+- `frontend/Dockerfile` phải được build với **context là repo root** (`.`), không phải `context: ./frontend`, vì `COPY deploy/nginx/frontend.conf` cần đường dẫn từ root.
+- Khi thêm biến proxy/security mới vào settings (`USE_X_FORWARDED_*`, `SECURE_*`), phải thêm cả giá trị production vào `backend/.env.hybrid.example`.
 
 ## Nguyên tắc làm việc bắt buộc cho AI
 
@@ -81,7 +126,7 @@
 - Frontend: `cd frontend && npm run build`
 - Backend: `cd backend && python manage.py test core.tests_auth_smoke core.tests_module_permissions core.tests_operations_log`
 - Nếu thay đổi ảnh hưởng luồng chính hoặc end-to-end, ưu tiên chạy thêm:
-  - `cd backend && python manage.py smoke_http --backend-base http://127.0.0.1:8000 --frontend-base http://127.0.0.1:5173 --username uat_admin --password Demo123!`
+  - `cd backend && python manage.py smoke_http --backend-base http://127.0.0.1:8000 --frontend-base http://127.0.0.1:5174 --username uat_admin --password Demo123!`
   - `cd frontend && npm run e2e:smoke`
 - Nếu có bước không chạy được, phải nêu rõ blocker, phạm vi ảnh hưởng và phần chưa verify.
 
