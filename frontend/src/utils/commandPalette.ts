@@ -12,6 +12,7 @@ export type CommandPaletteCommand = {
 type BuildCommandPaletteCatalogOptions = {
   canViewReports: boolean;
   canViewSalesOrders: boolean;
+  canViewSalesFulfillmentCenter: boolean;
   canManagePurchasing: boolean;
   canAccessProductionCenter: boolean;
   canAccessMaterialIssues: boolean;
@@ -275,7 +276,7 @@ export function buildCommandPaletteCatalog(
       group: 'Bán hàng',
       description: 'Tổng quan kế hoạch vật tư, tình trạng thiếu hụt, quá hạn giao và sẵn sàng xuất hàng.',
       keywords: ['dieu do don hang xuat', 'sales fulfillment', 'ke hoach vat tu', 'thieu vat tu', 'san sang giao'],
-      enabled: options.canViewSalesOrders,
+      enabled: options.canViewSalesFulfillmentCenter,
     },
     {
       key: 'shipments',
@@ -917,6 +918,15 @@ export function buildCommandPaletteCatalog(
       group: 'Kiểm soát',
       description: 'Quản trị quyền theo module, vai trò nhạy cảm và độ phủ RBAC toàn hệ thống.',
       keywords: ['phan quyen', 'module permission', 'rbac'],
+      enabled: options.canManageModulePermissions,
+    },
+    {
+      key: 'system-configuration',
+      path: '/admin/system-configuration',
+      title: 'Cấu hình hệ thống',
+      group: 'Kiểm soát',
+      description: 'Quản lý loại chứng từ, thuế suất, ca làm việc, danh mục chi phí và số thứ tự tự động.',
+      keywords: ['cau hinh he thong', 'system configuration', 'loai chung tu', 'thue suat', 'ca lam viec'],
       enabled: options.canManageModulePermissions,
     },
     {

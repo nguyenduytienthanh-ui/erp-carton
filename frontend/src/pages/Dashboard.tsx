@@ -177,6 +177,7 @@ export default function Dashboard() {
   const canViewReports = canViewReportsCenter();
   const canViewOps = canViewOpsHub();
   const canViewWorkflow = canViewWorkflowData();
+  const canViewSalesFulfillmentCenter = canViewSales || canManagePurchasing || canManageProduction || canViewReports;
 
   const { config, saveConfig } = useUserPreferences(PAGES.DASHBOARD);
 
@@ -538,7 +539,7 @@ export default function Dashboard() {
       },
     ];
 
-    if (canViewSales) {
+    if (canViewSalesFulfillmentCenter) {
       cards.push({
         key: 'sales-fulfillment-center',
         testId: 'dashboard-restore-sales-fulfillment-center',
@@ -605,6 +606,7 @@ export default function Dashboard() {
     canManageProduction,
     canManageWorkforce,
     canViewSales,
+    canViewSalesFulfillmentCenter,
     overdue90Count,
     salaryAdvancePendingCount,
   ]);

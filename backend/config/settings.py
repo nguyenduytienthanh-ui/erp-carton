@@ -208,6 +208,7 @@ SECURE_PROXY_SSL_HEADER = (
     if _bool_config('USE_X_FORWARDED_PROTO', default=False)
     else None
 )
+USE_X_FORWARDED_HOST = _bool_config('USE_X_FORWARDED_HOST', default=False)
 
 # Custom User Model
 AUTH_USER_MODEL = 'core.User'

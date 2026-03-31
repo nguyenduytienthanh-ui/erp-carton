@@ -372,6 +372,7 @@ const MainLayout = () => {
   const commandPaletteCommands = useMemo(() => buildCommandPaletteCatalog({
     canViewReports,
     canViewSalesOrders,
+    canViewSalesFulfillmentCenter,
     canManagePurchasing,
     canAccessProductionCenter: canAccessProduction,
     canAccessMaterialIssues: canAccessMaterialIssueRoute,
@@ -431,6 +432,7 @@ const MainLayout = () => {
     canViewRbacAudit,
     canViewReports,
     canViewSalesOrders,
+    canViewSalesFulfillmentCenter,
     canViewWorkflow,
     operationsFailedCount,
     overdue90Count,
@@ -518,15 +520,18 @@ const MainLayout = () => {
       },
     ];
 
+    if (canViewSalesFulfillmentCenter) {
+      shortcuts.push({
+        key: 'sales-fulfillment-center',
+        label: 'Điều độ đơn hàng xuất',
+        description: 'Tổng quan kế hoạch vật tư, thiếu hụt và sẵn sàng giao hàng.',
+        path: '/sales-fulfillment-center',
+        testId: 'header-restore-shortcut-sales-fulfillment-center',
+      });
+    }
+
     if (canViewSalesOrders) {
       shortcuts.push(
-        {
-          key: 'sales-fulfillment-center',
-          label: 'Điều độ đơn hàng xuất',
-          description: 'Tổng quan kế hoạch vật tư, thiếu hụt và sẵn sàng giao hàng.',
-          path: '/sales-fulfillment-center',
-          testId: 'header-restore-shortcut-sales-fulfillment-center',
-        },
         {
           key: 'shipments',
           label: 'Phiếu xuất',
@@ -583,6 +588,7 @@ const MainLayout = () => {
     canManageOnboarding,
     canManageProduction,
     canManageWorkforce,
+    canViewSalesFulfillmentCenter,
     canViewSalesOrders,
   ]);
   const workspaceSummary = useMemo(() => {
@@ -852,7 +858,7 @@ const MainLayout = () => {
         ] : []),
       ],
     } : null,
-    {
+    canManageWorkforce ? {
       key: 'workforce-group',
       icon: <UserOutlined />,
       label: 'Nhân sự',
@@ -887,8 +893,8 @@ const MainLayout = () => {
           label: renderMenuLabel('/employee-performance', 'Đánh giá nhân viên'),
         },
       ],
-    },
-    {
+    } : null,
+    canManageFinance ? {
       key: 'finance-group',
       icon: <DollarOutlined />,
       label: 'Tài chính',
@@ -951,7 +957,7 @@ const MainLayout = () => {
           label: renderMenuLabel('/bank-reconciliation', 'Đối soát ngân hàng'),
         },
       ],
-    },
+    } : null,
     {
       key: '/task-inbox',
       icon: <InboxOutlined />,
