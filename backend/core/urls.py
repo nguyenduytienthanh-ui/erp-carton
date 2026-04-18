@@ -38,6 +38,7 @@ from purchasing.views import (
     PurchaseReturnViewSet,
 )
 from production.views import ProductionOrderViewSet, ProductionIssueViewSet, ProductionReceiptViewSet
+from paper_optimizer.views import PaperOptimizerRunViewSet, PaperOptimizerSupplierTemplateViewSet
 from workforce.views import (
     AttendanceRecordViewSet,
     BonusPenaltyRecordViewSet,
@@ -112,6 +113,8 @@ router.register(r'purchasing/returns', PurchaseReturnViewSet, basename='purchasi
 router.register(r'production/orders', ProductionOrderViewSet, basename='production-order')
 router.register(r'production/issues', ProductionIssueViewSet, basename='production-issue')
 router.register(r'production/receipts', ProductionReceiptViewSet, basename='production-receipt')
+router.register(r'production/paper-optimizer/templates', PaperOptimizerSupplierTemplateViewSet, basename='paper-optimizer-template')
+router.register(r'production/paper-optimizer/runs', PaperOptimizerRunViewSet, basename='paper-optimizer-run')
 router.register(r'sales/orders', SalesOrderViewSet, basename='salesorder')
 router.register(r'sales/quotes', QuoteViewSet, basename='quote')
 router.register(r'sales/shipments', ShipmentViewSet, basename='sales-shipment')

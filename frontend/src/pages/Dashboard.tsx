@@ -458,8 +458,20 @@ export default function Dashboard() {
       });
     }
 
-    return cards.slice(0, 5);
+    if (canManageProduction) {
+      cards.push({
+        key: 'paper-optimization',
+        title: 'Tối ưu ghép giấy',
+        badge: 'Baseline',
+        description: 'Mở ngay workspace ghép giấy để xem phương án mua cuối, so sánh 4 phương án và tải workbook chuẩn.',
+        route: '/paper-optimization',
+        actionLabel: 'Mở tối ưu ghép giấy',
+      });
+    }
+
+    return cards.slice(0, canManageProduction ? 6 : 5);
   }, [
+    canManageProduction,
     canViewOps,
     canViewReports,
     canViewWorkflow,

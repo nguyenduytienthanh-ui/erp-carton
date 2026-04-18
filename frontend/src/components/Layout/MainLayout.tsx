@@ -111,6 +111,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/purchase-requests': () => import('../../pages/Purchasing/PurchaseRequestList'),
   '/purchase-returns': () => import('../../pages/Purchasing/PurchaseReturnList'),
   '/production-orders': () => import('../../pages/Production/ProductionOrderList'),
+  '/paper-optimization': () => import('../../pages/Production/PaperOptimizationCenter'),
   '/material-issues': () => import('../../pages/Production/MaterialIssueList'),
   '/production-receipts': () => import('../../pages/Production/ProductionReceiptList'),
   '/production-costing': () => import('../../pages/Management/ProductionCostingReport'),
@@ -624,6 +625,10 @@ const MainLayout = () => {
         {
           key: '/production-orders',
           label: renderMenuLabel('/production-orders', 'Lệnh sản xuất'),
+        },
+        {
+          key: '/paper-optimization',
+          label: renderMenuLabel('/paper-optimization', 'Tối ưu ghép giấy'),
         },
         {
           key: '/material-issues',
