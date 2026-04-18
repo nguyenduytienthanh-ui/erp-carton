@@ -1,0 +1,2364 @@
+{
+  "baseline_guardrail_schema_version": 1,
+  "baseline_generated_from_run_code": "POPT-CANONICAL-V5000",
+  "baseline_generated_at": "2026-04-17T16:48:23+07:00",
+  "reference_code": "baseline-canonical-v5000-v1",
+  "reference_source": "internal_canonical_snapshot",
+  "reference_name": "Baseline canonical chuan v5000",
+  "note": "Baseline canonical duoc tai sinh theo rule NCC 5000cm tren tung quy cach mua cuoi.",
+  "line_count": 7,
+  "base_requested_quantity_total": 886,
+  "production_reserve_quantity_total": 14,
+  "target_requested_quantity_total": 900,
+  "config_fingerprint": "295bd3b83fec",
+  "input_lines": [
+    {
+      "id": "1",
+      "note": "",
+      "quantity": 160,
+      "width_cm": 52.0,
+      "length_cm": 112.0,
+      "source_row_number": 1
+    },
+    {
+      "id": "2",
+      "note": "",
+      "quantity": 147,
+      "width_cm": 52.0,
+      "length_cm": 142.5,
+      "source_row_number": 2
+    },
+    {
+      "id": "3",
+      "note": "",
+      "quantity": 134,
+      "width_cm": 52.0,
+      "length_cm": 173.0,
+      "source_row_number": 3
+    },
+    {
+      "id": "4",
+      "note": "",
+      "quantity": 121,
+      "width_cm": 52.0,
+      "length_cm": 203.5,
+      "source_row_number": 4
+    },
+    {
+      "id": "5",
+      "note": "",
+      "quantity": 108,
+      "width_cm": 55.5,
+      "length_cm": 115.0,
+      "source_row_number": 5
+    },
+    {
+      "id": "6",
+      "note": "",
+      "quantity": 108,
+      "width_cm": 55.5,
+      "length_cm": 145.5,
+      "source_row_number": 6
+    },
+    {
+      "id": "7",
+      "note": "",
+      "quantity": 108,
+      "width_cm": 55.5,
+      "length_cm": 176.0,
+      "source_row_number": 7
+    }
+  ],
+  "supplier_config": {
+    "trim_edge_cm": 2.0,
+    "max_combined_length_cm": null,
+    "min_purchase_length_cm": 5000.0,
+    "available_raw_widths_cm": [
+      115,
+      120,
+      125,
+      130,
+      135,
+      140,
+      145,
+      150,
+      155,
+      160,
+      165,
+      170,
+      175,
+      180,
+      185,
+      190,
+      195,
+      200,
+      205,
+      210,
+      215,
+      220,
+      225,
+      230,
+      235,
+      240,
+      245,
+      250
+    ],
+    "max_combination_width_cm": 250.0,
+    "allow_reuse_self_sufficient_patterns": true
+  },
+  "optimization_config": {
+    "max_length_delta_cm": null,
+    "top_candidates_keep": 2000,
+    "deep_optimization_mode": true,
+    "max_waste_rate_percent": 20.0,
+    "production_reserve_scope": "whole_order",
+    "fragmentation_cost_weight": 0.12,
+    "new_raw_width_cost_weight": 1.0,
+    "allow_exceed_target_demand": true,
+    "technical_waste_cost_weight": 1.0,
+    "max_multiplier_per_component": 4,
+    "allow_economic_overproduction": true,
+    "new_purchase_spec_cost_weight": 0.2,
+    "max_components_per_combination": 6,
+    "production_reserve_rate_percent": 1.5,
+    "production_reserve_rounding_mode": "ceil",
+    "economic_overproduction_cost_weight": 1.0,
+    "max_economic_overproduction_quantity_total": 12,
+    "max_economic_overproduction_quantity_per_line": 6,
+    "max_economic_overproduction_rate_percent_total": 2.0,
+    "acceptable_cost_increase_for_fewer_specs_percent": 0.5,
+    "acceptable_waste_increase_for_fewer_specs_percent": 0.3,
+    "max_economic_overproduction_rate_percent_per_line": 20.0,
+    "acceptable_cost_increase_for_fewer_raw_widths_percent": 1.0
+  },
+  "selected_plan_code": "LOWEST_TOTAL_COST",
+  "selected_scenario_code": "TARGET",
+  "selected_source_internal_plan_code": "BALANCED",
+  "public_alternatives": [
+    {
+      "plan_code": "EXACT_ORDER",
+      "plan_name": "Phương án đúng đơn hàng",
+      "public_plan_objective_code": "EXACT_ORDER",
+      "source_internal_plan_code": "BALANCED",
+      "source_internal_plan_name": "Phương án đúng đơn hàng",
+      "scenario_code": "TARGET",
+      "scenario_kind": "exact_target",
+      "base_requested_quantity_total": 886,
+      "production_reserve_quantity_total": 14,
+      "target_requested_quantity_total": 900,
+      "economic_overproduction_quantity_total": 0,
+      "economic_overproduction_rate_total": 0.0,
+      "allocated_quantity_total": 900,
+      "technical_waste_area": 1229755.0,
+      "technical_waste_rate": 0.14523738,
+      "technical_waste_cost": 0.14523738,
+      "economic_overproduction_cost": 0.0,
+      "raw_width_cost": 2.0,
+      "purchase_spec_cost": 0.8,
+      "fragmentation_cost": 0.72,
+      "total_converted_cost": 3.66523738,
+      "unique_raw_width_count": 2,
+      "raw_widths_used": [
+        115.0,
+        225.0
+      ],
+      "raw_width_usage_summary": [
+        {
+          "raw_width_cm": 115.0,
+          "group_count": 2,
+          "purchase_spec_count": 2,
+          "total_length_cm": 46263.0,
+          "used_once": false,
+          "single_use_purchase_spec_count": 0
+        },
+        {
+          "raw_width_cm": 225.0,
+          "group_count": 4,
+          "purchase_spec_count": 2,
+          "total_length_cm": 13986.5,
+          "used_once": false,
+          "single_use_purchase_spec_count": 0
+        }
+      ],
+      "unique_purchase_spec_count": 4,
+      "single_use_raw_width_count": 0,
+      "single_use_purchase_spec_count": 0,
+      "final_group_count": 6,
+      "total_purchase_area": 8467207.5,
+      "all_ncc_passed": true,
+      "meets_target_and_cap": true,
+      "purchase_spec_rows": [
+        {
+          "group_id": "115.0x142.5",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 104.0,
+          "total_sets_purchase_spec": 149,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 21232.5,
+          "purchase_area_cm2": 2441737.5,
+          "used_area_cm2": 1971866.0,
+          "waste_area_cm2": 469871.5,
+          "waste_rate": 0.192433,
+          "width_utilization_rate": 0.920354,
+          "area_utilization_rate": 0.807567,
+          "source_line_ids": [
+            "1",
+            "2"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 21232.5,
+          "supplier_min_length_passed": true,
+          "description": "1x 1 (112.0 x 52.0) + 1x 2 (142.5 x 52.0)"
+        },
+        {
+          "group_id": "115.0x203.5",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 104.0,
+          "total_sets_purchase_spec": 123,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 25030.5,
+          "purchase_area_cm2": 2878507.5,
+          "used_area_cm2": 2408094.0,
+          "waste_area_cm2": 470413.5,
+          "waste_rate": 0.163423,
+          "width_utilization_rate": 0.920354,
+          "area_utilization_rate": 0.836577,
+          "source_line_ids": [
+            "3",
+            "4"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 25030.5,
+          "supplier_min_length_passed": true,
+          "description": "1x 3 (173.0 x 52.0) + 1x 4 (203.5 x 52.0)"
+        },
+        {
+          "group_id": "225.0x145.5",
+          "raw_width_cm": 225.0,
+          "run_length_cm": 145.5,
+          "useful_width_cm": 223.0,
+          "used_width_cm": 222.0,
+          "total_sets_purchase_spec": 55,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 8002.5,
+          "purchase_area_cm2": 1800562.5,
+          "used_area_cm2": 1590352.5,
+          "waste_area_cm2": 210210.0,
+          "waste_rate": 0.116747,
+          "width_utilization_rate": 0.995516,
+          "area_utilization_rate": 0.883253,
+          "source_line_ids": [
+            "5",
+            "6"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 8002.5,
+          "supplier_min_length_passed": true,
+          "description": "2x 5 (115.0 x 55.5) + 2x 6 (145.5 x 55.5)"
+        },
+        {
+          "group_id": "225.0x176.0",
+          "raw_width_cm": 225.0,
+          "run_length_cm": 176.0,
+          "useful_width_cm": 223.0,
+          "used_width_cm": 219.3235,
+          "total_sets_purchase_spec": 34,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 5984.0,
+          "purchase_area_cm2": 1346400.0,
+          "used_area_cm2": 1267140.0,
+          "waste_area_cm2": 79260.0,
+          "waste_rate": 0.058868,
+          "width_utilization_rate": 0.983514,
+          "area_utilization_rate": 0.941132,
+          "source_line_ids": [
+            "1",
+            "3",
+            "7"
+          ],
+          "source_line_count": 3,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 5984.0,
+          "supplier_min_length_passed": true,
+          "description": "1x 1 (112.0 x 52.0) + 3x 7 (176.0 x 55.5) || 1x 3 (173.0 x 52.0) + 3x 7 (176.0 x 55.5) || 4x 7 (176.0 x 55.5)"
+        }
+      ],
+      "allocation_details": [
+        {
+          "line_id": "1",
+          "base_quantity": 160,
+          "reserve_quantity": 2,
+          "target_quantity": 162,
+          "line_allocated_sets": 149,
+          "purchase_spec_sets": 149,
+          "purchase_group_id": "N01",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5
+        },
+        {
+          "line_id": "2",
+          "base_quantity": 147,
+          "reserve_quantity": 2,
+          "target_quantity": 149,
+          "line_allocated_sets": 149,
+          "purchase_spec_sets": 149,
+          "purchase_group_id": "N01",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5
+        },
+        {
+          "line_id": "3",
+          "base_quantity": 134,
+          "reserve_quantity": 2,
+          "target_quantity": 136,
+          "line_allocated_sets": 123,
+          "purchase_spec_sets": 123,
+          "purchase_group_id": "N02",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5
+        },
+        {
+          "line_id": "4",
+          "base_quantity": 121,
+          "reserve_quantity": 2,
+          "target_quantity": 123,
+          "line_allocated_sets": 123,
+          "purchase_spec_sets": 123,
+          "purchase_group_id": "N02",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5
+        },
+        {
+          "line_id": "5",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 110,
+          "purchase_spec_sets": 55,
+          "purchase_group_id": "N03",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 225.0,
+          "run_length_cm": 145.5
+        },
+        {
+          "line_id": "6",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 110,
+          "purchase_spec_sets": 55,
+          "purchase_group_id": "N03",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 225.0,
+          "run_length_cm": 145.5
+        },
+        {
+          "line_id": "1",
+          "base_quantity": 160,
+          "reserve_quantity": 2,
+          "target_quantity": 162,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N04",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 225.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 39,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N04",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 225.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "3",
+          "base_quantity": 134,
+          "reserve_quantity": 2,
+          "target_quantity": 136,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N05",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 225.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 39,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N05",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 225.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 32,
+          "purchase_spec_sets": 8,
+          "purchase_group_id": "N06",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 225.0,
+          "run_length_cm": 176.0
+        }
+      ],
+      "reverse_check_rows": [
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "sum_line_allocated_sets": 149,
+          "total_sets_purchase_spec": 149,
+          "reverse_total_length_cm": 21232.5,
+          "spec_total_length_cm": 21232.5,
+          "line_count": 2,
+          "line_ids": [
+            "1",
+            "2"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "sum_line_allocated_sets": 123,
+          "total_sets_purchase_spec": 123,
+          "reverse_total_length_cm": 25030.5,
+          "spec_total_length_cm": 25030.5,
+          "line_count": 2,
+          "line_ids": [
+            "3",
+            "4"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 225.0,
+          "run_length_cm": 145.5,
+          "sum_line_allocated_sets": 55,
+          "total_sets_purchase_spec": 55,
+          "reverse_total_length_cm": 8002.5,
+          "spec_total_length_cm": 8002.5,
+          "line_count": 2,
+          "line_ids": [
+            "5",
+            "6"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 225.0,
+          "run_length_cm": 176.0,
+          "sum_line_allocated_sets": 34,
+          "total_sets_purchase_spec": 34,
+          "reverse_total_length_cm": 5984.0,
+          "spec_total_length_cm": 5984.0,
+          "line_count": 5,
+          "line_ids": [
+            "1",
+            "7",
+            "3",
+            "7",
+            "7"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        }
+      ],
+      "leftovers": [],
+      "final_plan": [
+        {
+          "description": "1x 1 (112.0 x 52.0) + 1x 2 (142.5 x 52.0)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "sets": 149,
+          "total_length_cm": 21232.5,
+          "waste_rate": 0.19243326,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "1",
+            "2"
+          ],
+          "components": [
+            {
+              "line_index": 0,
+              "line_id": "1",
+              "width_cm": 52.0,
+              "length_cm": 112.0,
+              "multiplier": 1,
+              "allocated_quantity": 149
+            },
+            {
+              "line_index": 1,
+              "line_id": "2",
+              "width_cm": 52.0,
+              "length_cm": 142.5,
+              "multiplier": 1,
+              "allocated_quantity": 149
+            }
+          ]
+        },
+        {
+          "description": "1x 3 (173.0 x 52.0) + 1x 4 (203.5 x 52.0)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "sets": 123,
+          "total_length_cm": 25030.5,
+          "waste_rate": 0.16342271,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "3",
+            "4"
+          ],
+          "components": [
+            {
+              "line_index": 2,
+              "line_id": "3",
+              "width_cm": 52.0,
+              "length_cm": 173.0,
+              "multiplier": 1,
+              "allocated_quantity": 123
+            },
+            {
+              "line_index": 3,
+              "line_id": "4",
+              "width_cm": 52.0,
+              "length_cm": 203.5,
+              "multiplier": 1,
+              "allocated_quantity": 123
+            }
+          ]
+        },
+        {
+          "description": "2x 5 (115.0 x 55.5) + 2x 6 (145.5 x 55.5)",
+          "raw_width_cm": 225.0,
+          "run_length_cm": 145.5,
+          "sets": 55,
+          "total_length_cm": 8002.5,
+          "waste_rate": 0.11674685,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "5",
+            "6"
+          ],
+          "components": [
+            {
+              "line_index": 4,
+              "line_id": "5",
+              "width_cm": 55.5,
+              "length_cm": 115.0,
+              "multiplier": 2,
+              "allocated_quantity": 110
+            },
+            {
+              "line_index": 5,
+              "line_id": "6",
+              "width_cm": 55.5,
+              "length_cm": 145.5,
+              "multiplier": 2,
+              "allocated_quantity": 110
+            }
+          ]
+        },
+        {
+          "description": "1x 1 (112.0 x 52.0) + 3x 7 (176.0 x 55.5)",
+          "raw_width_cm": 225.0,
+          "run_length_cm": 176.0,
+          "sets": 13,
+          "total_length_cm": 2288.0,
+          "waste_rate": 0.11292929,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "1",
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 0,
+              "line_id": "1",
+              "width_cm": 52.0,
+              "length_cm": 112.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            },
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 3,
+              "allocated_quantity": 39
+            }
+          ]
+        },
+        {
+          "description": "1x 3 (173.0 x 52.0) + 3x 7 (176.0 x 55.5)",
+          "raw_width_cm": 225.0,
+          "run_length_cm": 176.0,
+          "sets": 13,
+          "total_length_cm": 2288.0,
+          "waste_rate": 0.03282828,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "3",
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 2,
+              "line_id": "3",
+              "width_cm": 52.0,
+              "length_cm": 173.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            },
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 3,
+              "allocated_quantity": 39
+            }
+          ]
+        },
+        {
+          "description": "4x 7 (176.0 x 55.5)",
+          "raw_width_cm": 225.0,
+          "run_length_cm": 176.0,
+          "sets": 8,
+          "total_length_cm": 1408.0,
+          "waste_rate": 0.01333333,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 4,
+              "allocated_quantity": 32
+            }
+          ]
+        }
+      ],
+      "reused_raw_width_count": 2,
+      "reused_purchase_spec_count": 4,
+      "objective_candidate_count": 1,
+      "objective_distinct_candidate_count": 1,
+      "objective_best_signature_count": 1,
+      "objective_cost_allowance_percent": 0.0,
+      "public_plan_convergence_reason_code": "same_signature_wins_all_objectives",
+      "public_plan_selection_note": "Đã xét 1 candidate, 1 signature khác nhau, 1 signature frontier.",
+      "public_plan_tradeoff_note": "Đây là phương án gốc để so các objective còn lại."
+    },
+    {
+      "plan_code": "LOWEST_TOTAL_COST",
+      "plan_name": "Phương án chi phí thấp nhất",
+      "public_plan_objective_code": "LOWEST_TOTAL_COST",
+      "source_internal_plan_code": "BALANCED",
+      "source_internal_plan_name": "Phương án chi phí thấp nhất",
+      "scenario_code": "TARGET",
+      "scenario_kind": "target_only",
+      "base_requested_quantity_total": 886,
+      "production_reserve_quantity_total": 14,
+      "target_requested_quantity_total": 900,
+      "economic_overproduction_quantity_total": 0,
+      "economic_overproduction_rate_total": 0.0,
+      "allocated_quantity_total": 900,
+      "technical_waste_area": 1299687.5,
+      "technical_waste_rate": 0.15223922,
+      "technical_waste_cost": 0.15223922,
+      "economic_overproduction_cost": 0.0,
+      "raw_width_cost": 1.0,
+      "purchase_spec_cost": 0.8,
+      "fragmentation_cost": 0.72,
+      "total_converted_cost": 2.67223922,
+      "unique_raw_width_count": 1,
+      "raw_widths_used": [
+        115.0
+      ],
+      "raw_width_usage_summary": [
+        {
+          "raw_width_cm": 115.0,
+          "group_count": 6,
+          "purchase_spec_count": 4,
+          "total_length_cm": 74236.0,
+          "used_once": false,
+          "single_use_purchase_spec_count": 0
+        }
+      ],
+      "unique_purchase_spec_count": 4,
+      "single_use_raw_width_count": 0,
+      "single_use_purchase_spec_count": 0,
+      "final_group_count": 6,
+      "total_purchase_area": 8537140.0,
+      "all_ncc_passed": true,
+      "meets_target_and_cap": true,
+      "purchase_spec_rows": [
+        {
+          "group_id": "115.0x142.5",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 104.0,
+          "total_sets_purchase_spec": 149,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 21232.5,
+          "purchase_area_cm2": 2441737.5,
+          "used_area_cm2": 1971866.0,
+          "waste_area_cm2": 469871.5,
+          "waste_rate": 0.192433,
+          "width_utilization_rate": 0.920354,
+          "area_utilization_rate": 0.807567,
+          "source_line_ids": [
+            "1",
+            "2"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 21232.5,
+          "supplier_min_length_passed": true,
+          "description": "1x 1 (112.0 x 52.0) + 1x 2 (142.5 x 52.0)"
+        },
+        {
+          "group_id": "115.0x145.5",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 111.0,
+          "total_sets_purchase_spec": 110,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 16005.0,
+          "purchase_area_cm2": 1840575.0,
+          "used_area_cm2": 1590352.5,
+          "waste_area_cm2": 250222.5,
+          "waste_rate": 0.135948,
+          "width_utilization_rate": 0.982301,
+          "area_utilization_rate": 0.864052,
+          "source_line_ids": [
+            "5",
+            "6"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 16005.0,
+          "supplier_min_length_passed": true,
+          "description": "1x 5 (115.0 x 55.5) + 1x 6 (145.5 x 55.5)"
+        },
+        {
+          "group_id": "115.0x176.0",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 109.6618,
+          "total_sets_purchase_spec": 68,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 11968.0,
+          "purchase_area_cm2": 1376320.0,
+          "used_area_cm2": 1267140.0,
+          "waste_area_cm2": 109180.0,
+          "waste_rate": 0.079327,
+          "width_utilization_rate": 0.970458,
+          "area_utilization_rate": 0.920673,
+          "source_line_ids": [
+            "1",
+            "3",
+            "7"
+          ],
+          "source_line_count": 3,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 11968.0,
+          "supplier_min_length_passed": true,
+          "description": "1x 1 (112.0 x 52.0) + 1x 7 (176.0 x 55.5) || 1x 3 (173.0 x 52.0) + 1x 7 (176.0 x 55.5) || 2x 7 (176.0 x 55.5)"
+        },
+        {
+          "group_id": "115.0x203.5",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 104.0,
+          "total_sets_purchase_spec": 123,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 25030.5,
+          "purchase_area_cm2": 2878507.5,
+          "used_area_cm2": 2408094.0,
+          "waste_area_cm2": 470413.5,
+          "waste_rate": 0.163423,
+          "width_utilization_rate": 0.920354,
+          "area_utilization_rate": 0.836577,
+          "source_line_ids": [
+            "3",
+            "4"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 25030.5,
+          "supplier_min_length_passed": true,
+          "description": "1x 3 (173.0 x 52.0) + 1x 4 (203.5 x 52.0)"
+        }
+      ],
+      "allocation_details": [
+        {
+          "line_id": "1",
+          "base_quantity": 160,
+          "reserve_quantity": 2,
+          "target_quantity": 162,
+          "line_allocated_sets": 149,
+          "purchase_spec_sets": 149,
+          "purchase_group_id": "N01",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5
+        },
+        {
+          "line_id": "2",
+          "base_quantity": 147,
+          "reserve_quantity": 2,
+          "target_quantity": 149,
+          "line_allocated_sets": 149,
+          "purchase_spec_sets": 149,
+          "purchase_group_id": "N01",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5
+        },
+        {
+          "line_id": "3",
+          "base_quantity": 134,
+          "reserve_quantity": 2,
+          "target_quantity": 136,
+          "line_allocated_sets": 123,
+          "purchase_spec_sets": 123,
+          "purchase_group_id": "N02",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5
+        },
+        {
+          "line_id": "4",
+          "base_quantity": 121,
+          "reserve_quantity": 2,
+          "target_quantity": 123,
+          "line_allocated_sets": 123,
+          "purchase_spec_sets": 123,
+          "purchase_group_id": "N02",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5
+        },
+        {
+          "line_id": "5",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 110,
+          "purchase_spec_sets": 110,
+          "purchase_group_id": "N03",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5
+        },
+        {
+          "line_id": "6",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 110,
+          "purchase_spec_sets": 110,
+          "purchase_group_id": "N03",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5
+        },
+        {
+          "line_id": "1",
+          "base_quantity": 160,
+          "reserve_quantity": 2,
+          "target_quantity": 162,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N04",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N04",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "3",
+          "base_quantity": 134,
+          "reserve_quantity": 2,
+          "target_quantity": 136,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N05",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N05",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 84,
+          "purchase_spec_sets": 42,
+          "purchase_group_id": "N06",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        }
+      ],
+      "reverse_check_rows": [
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "sum_line_allocated_sets": 149,
+          "total_sets_purchase_spec": 149,
+          "reverse_total_length_cm": 21232.5,
+          "spec_total_length_cm": 21232.5,
+          "line_count": 2,
+          "line_ids": [
+            "1",
+            "2"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5,
+          "sum_line_allocated_sets": 110,
+          "total_sets_purchase_spec": 110,
+          "reverse_total_length_cm": 16005.0,
+          "spec_total_length_cm": 16005.0,
+          "line_count": 2,
+          "line_ids": [
+            "5",
+            "6"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sum_line_allocated_sets": 68,
+          "total_sets_purchase_spec": 68,
+          "reverse_total_length_cm": 11968.0,
+          "spec_total_length_cm": 11968.0,
+          "line_count": 5,
+          "line_ids": [
+            "1",
+            "7",
+            "3",
+            "7",
+            "7"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "sum_line_allocated_sets": 123,
+          "total_sets_purchase_spec": 123,
+          "reverse_total_length_cm": 25030.5,
+          "spec_total_length_cm": 25030.5,
+          "line_count": 2,
+          "line_ids": [
+            "3",
+            "4"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        }
+      ],
+      "leftovers": [],
+      "final_plan": [
+        {
+          "description": "1x 1 (112.0 x 52.0) + 1x 2 (142.5 x 52.0)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "sets": 149,
+          "total_length_cm": 21232.5,
+          "waste_rate": 0.19243326,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "1",
+            "2"
+          ],
+          "components": [
+            {
+              "line_index": 0,
+              "line_id": "1",
+              "width_cm": 52.0,
+              "length_cm": 112.0,
+              "multiplier": 1,
+              "allocated_quantity": 149
+            },
+            {
+              "line_index": 1,
+              "line_id": "2",
+              "width_cm": 52.0,
+              "length_cm": 142.5,
+              "multiplier": 1,
+              "allocated_quantity": 149
+            }
+          ]
+        },
+        {
+          "description": "1x 3 (173.0 x 52.0) + 1x 4 (203.5 x 52.0)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "sets": 123,
+          "total_length_cm": 25030.5,
+          "waste_rate": 0.16342271,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "3",
+            "4"
+          ],
+          "components": [
+            {
+              "line_index": 2,
+              "line_id": "3",
+              "width_cm": 52.0,
+              "length_cm": 173.0,
+              "multiplier": 1,
+              "allocated_quantity": 123
+            },
+            {
+              "line_index": 3,
+              "line_id": "4",
+              "width_cm": 52.0,
+              "length_cm": 203.5,
+              "multiplier": 1,
+              "allocated_quantity": 123
+            }
+          ]
+        },
+        {
+          "description": "1x 5 (115.0 x 55.5) + 1x 6 (145.5 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5,
+          "sets": 110,
+          "total_length_cm": 16005.0,
+          "waste_rate": 0.13594801,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "5",
+            "6"
+          ],
+          "components": [
+            {
+              "line_index": 4,
+              "line_id": "5",
+              "width_cm": 55.5,
+              "length_cm": 115.0,
+              "multiplier": 1,
+              "allocated_quantity": 110
+            },
+            {
+              "line_index": 5,
+              "line_id": "6",
+              "width_cm": 55.5,
+              "length_cm": 145.5,
+              "multiplier": 1,
+              "allocated_quantity": 110
+            }
+          ]
+        },
+        {
+          "description": "1x 1 (112.0 x 52.0) + 1x 7 (176.0 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sets": 13,
+          "total_length_cm": 2288.0,
+          "waste_rate": 0.22964427,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "1",
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 0,
+              "line_id": "1",
+              "width_cm": 52.0,
+              "length_cm": 112.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            },
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            }
+          ]
+        },
+        {
+          "description": "1x 3 (173.0 x 52.0) + 1x 7 (176.0 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sets": 13,
+          "total_length_cm": 2288.0,
+          "waste_rate": 0.0729249,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "3",
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 2,
+              "line_id": "3",
+              "width_cm": 52.0,
+              "length_cm": 173.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            },
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            }
+          ]
+        },
+        {
+          "description": "2x 7 (176.0 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sets": 42,
+          "total_length_cm": 7392.0,
+          "waste_rate": 0.03478261,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 2,
+              "allocated_quantity": 84
+            }
+          ]
+        }
+      ],
+      "reused_raw_width_count": 1,
+      "reused_purchase_spec_count": 4,
+      "objective_candidate_count": 2,
+      "objective_distinct_candidate_count": 1,
+      "objective_best_signature_count": 2,
+      "objective_cost_allowance_percent": 0.0,
+      "public_plan_convergence_reason_code": "same_signature_wins_all_objectives",
+      "public_plan_selection_note": "Đã xét 2 candidate, 1 signature khác nhau, 2 signature frontier.",
+      "public_plan_tradeoff_note": "Đây là phương án gốc để so các objective còn lại."
+    },
+    {
+      "plan_code": "MIN_RAW_WIDTHS",
+      "plan_name": "Phương án ít khổ giấy nhất",
+      "public_plan_objective_code": "MIN_RAW_WIDTHS",
+      "source_internal_plan_code": "REUSE_RAW_FIRST",
+      "source_internal_plan_name": "Phương án ít khổ giấy nhất",
+      "scenario_code": "TARGET",
+      "scenario_kind": "target_only",
+      "base_requested_quantity_total": 886,
+      "production_reserve_quantity_total": 14,
+      "target_requested_quantity_total": 900,
+      "economic_overproduction_quantity_total": 0,
+      "economic_overproduction_rate_total": 0.0,
+      "allocated_quantity_total": 900,
+      "technical_waste_area": 1299687.5,
+      "technical_waste_rate": 0.15223922,
+      "technical_waste_cost": 0.15223922,
+      "economic_overproduction_cost": 0.0,
+      "raw_width_cost": 1.0,
+      "purchase_spec_cost": 0.8,
+      "fragmentation_cost": 0.72,
+      "total_converted_cost": 2.67223922,
+      "unique_raw_width_count": 1,
+      "raw_widths_used": [
+        115.0
+      ],
+      "raw_width_usage_summary": [
+        {
+          "raw_width_cm": 115.0,
+          "group_count": 6,
+          "purchase_spec_count": 4,
+          "total_length_cm": 74236.0,
+          "used_once": false,
+          "single_use_purchase_spec_count": 0
+        }
+      ],
+      "unique_purchase_spec_count": 4,
+      "single_use_raw_width_count": 0,
+      "single_use_purchase_spec_count": 0,
+      "final_group_count": 6,
+      "total_purchase_area": 8537140.0,
+      "all_ncc_passed": true,
+      "meets_target_and_cap": true,
+      "purchase_spec_rows": [
+        {
+          "group_id": "115.0x142.5",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 104.0,
+          "total_sets_purchase_spec": 149,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 21232.5,
+          "purchase_area_cm2": 2441737.5,
+          "used_area_cm2": 1971866.0,
+          "waste_area_cm2": 469871.5,
+          "waste_rate": 0.192433,
+          "width_utilization_rate": 0.920354,
+          "area_utilization_rate": 0.807567,
+          "source_line_ids": [
+            "1",
+            "2"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 21232.5,
+          "supplier_min_length_passed": true,
+          "description": "1x 1 (112.0 x 52.0) + 1x 2 (142.5 x 52.0)"
+        },
+        {
+          "group_id": "115.0x145.5",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 111.0,
+          "total_sets_purchase_spec": 110,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 16005.0,
+          "purchase_area_cm2": 1840575.0,
+          "used_area_cm2": 1590352.5,
+          "waste_area_cm2": 250222.5,
+          "waste_rate": 0.135948,
+          "width_utilization_rate": 0.982301,
+          "area_utilization_rate": 0.864052,
+          "source_line_ids": [
+            "5",
+            "6"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 16005.0,
+          "supplier_min_length_passed": true,
+          "description": "1x 5 (115.0 x 55.5) + 1x 6 (145.5 x 55.5)"
+        },
+        {
+          "group_id": "115.0x176.0",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 109.6618,
+          "total_sets_purchase_spec": 68,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 11968.0,
+          "purchase_area_cm2": 1376320.0,
+          "used_area_cm2": 1267140.0,
+          "waste_area_cm2": 109180.0,
+          "waste_rate": 0.079327,
+          "width_utilization_rate": 0.970458,
+          "area_utilization_rate": 0.920673,
+          "source_line_ids": [
+            "1",
+            "3",
+            "7"
+          ],
+          "source_line_count": 3,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 11968.0,
+          "supplier_min_length_passed": true,
+          "description": "1x 1 (112.0 x 52.0) + 1x 7 (176.0 x 55.5) || 1x 3 (173.0 x 52.0) + 1x 7 (176.0 x 55.5) || 2x 7 (176.0 x 55.5)"
+        },
+        {
+          "group_id": "115.0x203.5",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 104.0,
+          "total_sets_purchase_spec": 123,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 25030.5,
+          "purchase_area_cm2": 2878507.5,
+          "used_area_cm2": 2408094.0,
+          "waste_area_cm2": 470413.5,
+          "waste_rate": 0.163423,
+          "width_utilization_rate": 0.920354,
+          "area_utilization_rate": 0.836577,
+          "source_line_ids": [
+            "3",
+            "4"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 25030.5,
+          "supplier_min_length_passed": true,
+          "description": "1x 3 (173.0 x 52.0) + 1x 4 (203.5 x 52.0)"
+        }
+      ],
+      "allocation_details": [
+        {
+          "line_id": "1",
+          "base_quantity": 160,
+          "reserve_quantity": 2,
+          "target_quantity": 162,
+          "line_allocated_sets": 149,
+          "purchase_spec_sets": 149,
+          "purchase_group_id": "N01",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5
+        },
+        {
+          "line_id": "2",
+          "base_quantity": 147,
+          "reserve_quantity": 2,
+          "target_quantity": 149,
+          "line_allocated_sets": 149,
+          "purchase_spec_sets": 149,
+          "purchase_group_id": "N01",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5
+        },
+        {
+          "line_id": "3",
+          "base_quantity": 134,
+          "reserve_quantity": 2,
+          "target_quantity": 136,
+          "line_allocated_sets": 123,
+          "purchase_spec_sets": 123,
+          "purchase_group_id": "N02",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5
+        },
+        {
+          "line_id": "4",
+          "base_quantity": 121,
+          "reserve_quantity": 2,
+          "target_quantity": 123,
+          "line_allocated_sets": 123,
+          "purchase_spec_sets": 123,
+          "purchase_group_id": "N02",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5
+        },
+        {
+          "line_id": "5",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 110,
+          "purchase_spec_sets": 110,
+          "purchase_group_id": "N03",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5
+        },
+        {
+          "line_id": "6",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 110,
+          "purchase_spec_sets": 110,
+          "purchase_group_id": "N03",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5
+        },
+        {
+          "line_id": "1",
+          "base_quantity": 160,
+          "reserve_quantity": 2,
+          "target_quantity": 162,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N04",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N04",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "3",
+          "base_quantity": 134,
+          "reserve_quantity": 2,
+          "target_quantity": 136,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N05",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N05",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 84,
+          "purchase_spec_sets": 42,
+          "purchase_group_id": "N06",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        }
+      ],
+      "reverse_check_rows": [
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "sum_line_allocated_sets": 149,
+          "total_sets_purchase_spec": 149,
+          "reverse_total_length_cm": 21232.5,
+          "spec_total_length_cm": 21232.5,
+          "line_count": 2,
+          "line_ids": [
+            "1",
+            "2"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5,
+          "sum_line_allocated_sets": 110,
+          "total_sets_purchase_spec": 110,
+          "reverse_total_length_cm": 16005.0,
+          "spec_total_length_cm": 16005.0,
+          "line_count": 2,
+          "line_ids": [
+            "5",
+            "6"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sum_line_allocated_sets": 68,
+          "total_sets_purchase_spec": 68,
+          "reverse_total_length_cm": 11968.0,
+          "spec_total_length_cm": 11968.0,
+          "line_count": 5,
+          "line_ids": [
+            "1",
+            "7",
+            "3",
+            "7",
+            "7"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "sum_line_allocated_sets": 123,
+          "total_sets_purchase_spec": 123,
+          "reverse_total_length_cm": 25030.5,
+          "spec_total_length_cm": 25030.5,
+          "line_count": 2,
+          "line_ids": [
+            "3",
+            "4"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        }
+      ],
+      "leftovers": [],
+      "final_plan": [
+        {
+          "description": "1x 1 (112.0 x 52.0) + 1x 2 (142.5 x 52.0)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "sets": 149,
+          "total_length_cm": 21232.5,
+          "waste_rate": 0.19243326,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "1",
+            "2"
+          ],
+          "components": [
+            {
+              "line_index": 0,
+              "line_id": "1",
+              "width_cm": 52.0,
+              "length_cm": 112.0,
+              "multiplier": 1,
+              "allocated_quantity": 149
+            },
+            {
+              "line_index": 1,
+              "line_id": "2",
+              "width_cm": 52.0,
+              "length_cm": 142.5,
+              "multiplier": 1,
+              "allocated_quantity": 149
+            }
+          ]
+        },
+        {
+          "description": "1x 3 (173.0 x 52.0) + 1x 4 (203.5 x 52.0)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "sets": 123,
+          "total_length_cm": 25030.5,
+          "waste_rate": 0.16342271,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "3",
+            "4"
+          ],
+          "components": [
+            {
+              "line_index": 2,
+              "line_id": "3",
+              "width_cm": 52.0,
+              "length_cm": 173.0,
+              "multiplier": 1,
+              "allocated_quantity": 123
+            },
+            {
+              "line_index": 3,
+              "line_id": "4",
+              "width_cm": 52.0,
+              "length_cm": 203.5,
+              "multiplier": 1,
+              "allocated_quantity": 123
+            }
+          ]
+        },
+        {
+          "description": "1x 5 (115.0 x 55.5) + 1x 6 (145.5 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5,
+          "sets": 110,
+          "total_length_cm": 16005.0,
+          "waste_rate": 0.13594801,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "5",
+            "6"
+          ],
+          "components": [
+            {
+              "line_index": 4,
+              "line_id": "5",
+              "width_cm": 55.5,
+              "length_cm": 115.0,
+              "multiplier": 1,
+              "allocated_quantity": 110
+            },
+            {
+              "line_index": 5,
+              "line_id": "6",
+              "width_cm": 55.5,
+              "length_cm": 145.5,
+              "multiplier": 1,
+              "allocated_quantity": 110
+            }
+          ]
+        },
+        {
+          "description": "1x 1 (112.0 x 52.0) + 1x 7 (176.0 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sets": 13,
+          "total_length_cm": 2288.0,
+          "waste_rate": 0.22964427,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "1",
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 0,
+              "line_id": "1",
+              "width_cm": 52.0,
+              "length_cm": 112.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            },
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            }
+          ]
+        },
+        {
+          "description": "1x 3 (173.0 x 52.0) + 1x 7 (176.0 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sets": 13,
+          "total_length_cm": 2288.0,
+          "waste_rate": 0.0729249,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "3",
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 2,
+              "line_id": "3",
+              "width_cm": 52.0,
+              "length_cm": 173.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            },
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            }
+          ]
+        },
+        {
+          "description": "2x 7 (176.0 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sets": 42,
+          "total_length_cm": 7392.0,
+          "waste_rate": 0.03478261,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 2,
+              "allocated_quantity": 84
+            }
+          ]
+        }
+      ],
+      "reused_raw_width_count": 1,
+      "reused_purchase_spec_count": 4,
+      "objective_candidate_count": 3,
+      "objective_distinct_candidate_count": 1,
+      "objective_best_signature_count": 3,
+      "objective_cost_allowance_percent": 1.0,
+      "public_plan_convergence_reason_code": "same_signature_wins_all_objectives",
+      "public_plan_selection_note": "Đã xét 3 candidate, 1 signature khác nhau, 3 signature frontier.",
+      "public_plan_tradeoff_note": "So với chi phí thấp nhất: chi phí +0.00000000, khổ giấy +0, quy cách +0, nhóm +0.",
+      "compared_to_lowest_total_cost_delta": {
+        "total_converted_cost_delta": 0.0,
+        "unique_raw_width_count_delta": 0,
+        "unique_purchase_spec_count_delta": 0,
+        "final_group_count_delta": 0,
+        "technical_waste_rate_delta": 0.0,
+        "economic_overproduction_quantity_total_delta": 0
+      }
+    },
+    {
+      "plan_code": "MIN_SPECS",
+      "plan_name": "Phương án ít quy cách mua nhất",
+      "public_plan_objective_code": "MIN_SPECS",
+      "source_internal_plan_code": "REUSE_SPEC_FIRST",
+      "source_internal_plan_name": "Phương án ít quy cách mua nhất",
+      "scenario_code": "TARGET",
+      "scenario_kind": "target_only",
+      "base_requested_quantity_total": 886,
+      "production_reserve_quantity_total": 14,
+      "target_requested_quantity_total": 900,
+      "economic_overproduction_quantity_total": 0,
+      "economic_overproduction_rate_total": 0.0,
+      "allocated_quantity_total": 900,
+      "technical_waste_area": 1299687.5,
+      "technical_waste_rate": 0.15223922,
+      "technical_waste_cost": 0.15223922,
+      "economic_overproduction_cost": 0.0,
+      "raw_width_cost": 1.0,
+      "purchase_spec_cost": 0.8,
+      "fragmentation_cost": 0.72,
+      "total_converted_cost": 2.67223922,
+      "unique_raw_width_count": 1,
+      "raw_widths_used": [
+        115.0
+      ],
+      "raw_width_usage_summary": [
+        {
+          "raw_width_cm": 115.0,
+          "group_count": 6,
+          "purchase_spec_count": 4,
+          "total_length_cm": 74236.0,
+          "used_once": false,
+          "single_use_purchase_spec_count": 0
+        }
+      ],
+      "unique_purchase_spec_count": 4,
+      "single_use_raw_width_count": 0,
+      "single_use_purchase_spec_count": 0,
+      "final_group_count": 6,
+      "total_purchase_area": 8537140.0,
+      "all_ncc_passed": true,
+      "meets_target_and_cap": true,
+      "purchase_spec_rows": [
+        {
+          "group_id": "115.0x142.5",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 104.0,
+          "total_sets_purchase_spec": 149,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 21232.5,
+          "purchase_area_cm2": 2441737.5,
+          "used_area_cm2": 1971866.0,
+          "waste_area_cm2": 469871.5,
+          "waste_rate": 0.192433,
+          "width_utilization_rate": 0.920354,
+          "area_utilization_rate": 0.807567,
+          "source_line_ids": [
+            "1",
+            "2"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 21232.5,
+          "supplier_min_length_passed": true,
+          "description": "1x 1 (112.0 x 52.0) + 1x 2 (142.5 x 52.0)"
+        },
+        {
+          "group_id": "115.0x145.5",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 111.0,
+          "total_sets_purchase_spec": 110,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 16005.0,
+          "purchase_area_cm2": 1840575.0,
+          "used_area_cm2": 1590352.5,
+          "waste_area_cm2": 250222.5,
+          "waste_rate": 0.135948,
+          "width_utilization_rate": 0.982301,
+          "area_utilization_rate": 0.864052,
+          "source_line_ids": [
+            "5",
+            "6"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 16005.0,
+          "supplier_min_length_passed": true,
+          "description": "1x 5 (115.0 x 55.5) + 1x 6 (145.5 x 55.5)"
+        },
+        {
+          "group_id": "115.0x176.0",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 109.6618,
+          "total_sets_purchase_spec": 68,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 11968.0,
+          "purchase_area_cm2": 1376320.0,
+          "used_area_cm2": 1267140.0,
+          "waste_area_cm2": 109180.0,
+          "waste_rate": 0.079327,
+          "width_utilization_rate": 0.970458,
+          "area_utilization_rate": 0.920673,
+          "source_line_ids": [
+            "1",
+            "3",
+            "7"
+          ],
+          "source_line_count": 3,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 11968.0,
+          "supplier_min_length_passed": true,
+          "description": "1x 1 (112.0 x 52.0) + 1x 7 (176.0 x 55.5) || 1x 3 (173.0 x 52.0) + 1x 7 (176.0 x 55.5) || 2x 7 (176.0 x 55.5)"
+        },
+        {
+          "group_id": "115.0x203.5",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "useful_width_cm": 113.0,
+          "used_width_cm": 104.0,
+          "total_sets_purchase_spec": 123,
+          "reserve_sets": 0,
+          "economic_sets_purchase_spec": 0,
+          "total_length_cm_purchase_spec": 25030.5,
+          "purchase_area_cm2": 2878507.5,
+          "used_area_cm2": 2408094.0,
+          "waste_area_cm2": 470413.5,
+          "waste_rate": 0.163423,
+          "width_utilization_rate": 0.920354,
+          "area_utilization_rate": 0.836577,
+          "source_line_ids": [
+            "3",
+            "4"
+          ],
+          "source_line_count": 2,
+          "supplier_min_length_required_cm": 5000.0,
+          "supplier_min_length_actual_cm": 25030.5,
+          "supplier_min_length_passed": true,
+          "description": "1x 3 (173.0 x 52.0) + 1x 4 (203.5 x 52.0)"
+        }
+      ],
+      "allocation_details": [
+        {
+          "line_id": "1",
+          "base_quantity": 160,
+          "reserve_quantity": 2,
+          "target_quantity": 162,
+          "line_allocated_sets": 149,
+          "purchase_spec_sets": 149,
+          "purchase_group_id": "N01",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5
+        },
+        {
+          "line_id": "2",
+          "base_quantity": 147,
+          "reserve_quantity": 2,
+          "target_quantity": 149,
+          "line_allocated_sets": 149,
+          "purchase_spec_sets": 149,
+          "purchase_group_id": "N01",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5
+        },
+        {
+          "line_id": "3",
+          "base_quantity": 134,
+          "reserve_quantity": 2,
+          "target_quantity": 136,
+          "line_allocated_sets": 123,
+          "purchase_spec_sets": 123,
+          "purchase_group_id": "N02",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5
+        },
+        {
+          "line_id": "4",
+          "base_quantity": 121,
+          "reserve_quantity": 2,
+          "target_quantity": 123,
+          "line_allocated_sets": 123,
+          "purchase_spec_sets": 123,
+          "purchase_group_id": "N02",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5
+        },
+        {
+          "line_id": "5",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 110,
+          "purchase_spec_sets": 110,
+          "purchase_group_id": "N03",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5
+        },
+        {
+          "line_id": "6",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 110,
+          "purchase_spec_sets": 110,
+          "purchase_group_id": "N03",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5
+        },
+        {
+          "line_id": "1",
+          "base_quantity": 160,
+          "reserve_quantity": 2,
+          "target_quantity": 162,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N04",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N04",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "3",
+          "base_quantity": 134,
+          "reserve_quantity": 2,
+          "target_quantity": 136,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N05",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 13,
+          "purchase_spec_sets": 13,
+          "purchase_group_id": "N05",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        },
+        {
+          "line_id": "7",
+          "base_quantity": 108,
+          "reserve_quantity": 2,
+          "target_quantity": 110,
+          "line_allocated_sets": 84,
+          "purchase_spec_sets": 42,
+          "purchase_group_id": "N06",
+          "economic_overproduction_quantity": 0,
+          "missing_quantity": 0,
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0
+        }
+      ],
+      "reverse_check_rows": [
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "sum_line_allocated_sets": 149,
+          "total_sets_purchase_spec": 149,
+          "reverse_total_length_cm": 21232.5,
+          "spec_total_length_cm": 21232.5,
+          "line_count": 2,
+          "line_ids": [
+            "1",
+            "2"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5,
+          "sum_line_allocated_sets": 110,
+          "total_sets_purchase_spec": 110,
+          "reverse_total_length_cm": 16005.0,
+          "spec_total_length_cm": 16005.0,
+          "line_count": 2,
+          "line_ids": [
+            "5",
+            "6"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sum_line_allocated_sets": 68,
+          "total_sets_purchase_spec": 68,
+          "reverse_total_length_cm": 11968.0,
+          "spec_total_length_cm": 11968.0,
+          "line_count": 5,
+          "line_ids": [
+            "1",
+            "7",
+            "3",
+            "7",
+            "7"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        },
+        {
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "sum_line_allocated_sets": 123,
+          "total_sets_purchase_spec": 123,
+          "reverse_total_length_cm": 25030.5,
+          "spec_total_length_cm": 25030.5,
+          "line_count": 2,
+          "line_ids": [
+            "3",
+            "4"
+          ],
+          "consistent": true,
+          "ncc_passed": true
+        }
+      ],
+      "leftovers": [],
+      "final_plan": [
+        {
+          "description": "1x 1 (112.0 x 52.0) + 1x 2 (142.5 x 52.0)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 142.5,
+          "sets": 149,
+          "total_length_cm": 21232.5,
+          "waste_rate": 0.19243326,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "1",
+            "2"
+          ],
+          "components": [
+            {
+              "line_index": 0,
+              "line_id": "1",
+              "width_cm": 52.0,
+              "length_cm": 112.0,
+              "multiplier": 1,
+              "allocated_quantity": 149
+            },
+            {
+              "line_index": 1,
+              "line_id": "2",
+              "width_cm": 52.0,
+              "length_cm": 142.5,
+              "multiplier": 1,
+              "allocated_quantity": 149
+            }
+          ]
+        },
+        {
+          "description": "1x 3 (173.0 x 52.0) + 1x 4 (203.5 x 52.0)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 203.5,
+          "sets": 123,
+          "total_length_cm": 25030.5,
+          "waste_rate": 0.16342271,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "3",
+            "4"
+          ],
+          "components": [
+            {
+              "line_index": 2,
+              "line_id": "3",
+              "width_cm": 52.0,
+              "length_cm": 173.0,
+              "multiplier": 1,
+              "allocated_quantity": 123
+            },
+            {
+              "line_index": 3,
+              "line_id": "4",
+              "width_cm": 52.0,
+              "length_cm": 203.5,
+              "multiplier": 1,
+              "allocated_quantity": 123
+            }
+          ]
+        },
+        {
+          "description": "1x 5 (115.0 x 55.5) + 1x 6 (145.5 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 145.5,
+          "sets": 110,
+          "total_length_cm": 16005.0,
+          "waste_rate": 0.13594801,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "5",
+            "6"
+          ],
+          "components": [
+            {
+              "line_index": 4,
+              "line_id": "5",
+              "width_cm": 55.5,
+              "length_cm": 115.0,
+              "multiplier": 1,
+              "allocated_quantity": 110
+            },
+            {
+              "line_index": 5,
+              "line_id": "6",
+              "width_cm": 55.5,
+              "length_cm": 145.5,
+              "multiplier": 1,
+              "allocated_quantity": 110
+            }
+          ]
+        },
+        {
+          "description": "1x 1 (112.0 x 52.0) + 1x 7 (176.0 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sets": 13,
+          "total_length_cm": 2288.0,
+          "waste_rate": 0.22964427,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "1",
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 0,
+              "line_id": "1",
+              "width_cm": 52.0,
+              "length_cm": 112.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            },
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            }
+          ]
+        },
+        {
+          "description": "1x 3 (173.0 x 52.0) + 1x 7 (176.0 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sets": 13,
+          "total_length_cm": 2288.0,
+          "waste_rate": 0.0729249,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "3",
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 2,
+              "line_id": "3",
+              "width_cm": 52.0,
+              "length_cm": 173.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            },
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 1,
+              "allocated_quantity": 13
+            }
+          ]
+        },
+        {
+          "description": "2x 7 (176.0 x 55.5)",
+          "raw_width_cm": 115.0,
+          "run_length_cm": 176.0,
+          "sets": 42,
+          "total_length_cm": 7392.0,
+          "waste_rate": 0.03478261,
+          "status_label": "Đạt NCC",
+          "source_line_ids": [
+            "7"
+          ],
+          "components": [
+            {
+              "line_index": 6,
+              "line_id": "7",
+              "width_cm": 55.5,
+              "length_cm": 176.0,
+              "multiplier": 2,
+              "allocated_quantity": 84
+            }
+          ]
+        }
+      ],
+      "reused_raw_width_count": 1,
+      "reused_purchase_spec_count": 4,
+      "objective_candidate_count": 3,
+      "objective_distinct_candidate_count": 1,
+      "objective_best_signature_count": 3,
+      "objective_cost_allowance_percent": 0.5,
+      "public_plan_convergence_reason_code": "same_signature_wins_all_objectives",
+      "public_plan_selection_note": "Đã xét 3 candidate, 1 signature khác nhau, 3 signature frontier.",
+      "public_plan_tradeoff_note": "So với chi phí thấp nhất: chi phí +0.00000000, khổ giấy +0, quy cách +0, nhóm +0.",
+      "compared_to_lowest_total_cost_delta": {
+        "total_converted_cost_delta": 0.0,
+        "unique_raw_width_count_delta": 0,
+        "unique_purchase_spec_count_delta": 0,
+        "final_group_count_delta": 0,
+        "technical_waste_rate_delta": 0.0,
+        "economic_overproduction_quantity_total_delta": 0
+      }
+    }
+  ]
+}

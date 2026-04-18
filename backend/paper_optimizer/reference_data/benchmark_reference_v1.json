@@ -1,0 +1,27 @@
+{
+  "benchmark_schema_version": 1,
+  "reference_code": "benchmark-manual-v1",
+  "reference_name": "Moc tham chieu van hanh chuan v5000",
+  "reference_source": "internal_benchmark_snapshot",
+  "source_workbook": "backend/paper_optimizer/reference_data/paper_optimizer_canonical_guardrail_v1.xlsx",
+  "base_requested_quantity_total": 886,
+  "production_reserve_quantity_total": 14,
+  "target_requested_quantity_total": 900,
+  "economic_overproduction_quantity_total": 0,
+  "allocated_quantity_total": 900,
+  "technical_waste_area": 1299687.5,
+  "technical_waste_rate": 0.15223922,
+  "total_purchase_area": 8537140.0,
+  "total_used_area": 7237452.5,
+  "unique_raw_width_count": 1,
+  "raw_widths_used": [
+    115.0
+  ],
+  "single_use_raw_width_count": 0,
+  "reused_raw_width_count": 1,
+  "unique_purchase_spec_count": 4,
+  "single_use_purchase_spec_count": 0,
+  "final_group_count": 6,
+  "public_plan_selection_note": "Moc tham chieu van hanh duoc tai sinh tu canonical chuan v5000 de doi chieu voi run hien tai.",
+  "public_plan_tradeoff_note": "Benchmark nay dung de so truc tiep cac chi so cost, widths, specs, groups va waste sau khi da khoa NCC 5000cm/spec."
+}

@@ -43,6 +43,8 @@ class Command(BaseCommand):
             'jwt_sessions': preflight._check_jwt_and_sessions(),
             'backup_logging': preflight._check_backup_and_logging(),
             'frontend_env': preflight._check_frontend_env_template(),
+            'paper_optimizer_assets': preflight._check_paper_optimizer_assets(),
+            'paper_optimizer_guardrail': preflight._check_paper_optimizer_guardrail(),
             'monitoring': preflight._check_monitoring(),
             'audit_controls': preflight._check_audit_controls(),
         }
@@ -65,6 +67,8 @@ class Command(BaseCommand):
             recommendations.append('Investigate recent mail delivery failures and confirm notification paths.')
         if payload['release_hygiene']['status'] != 'ok':
             recommendations.append('Clean the release branch, lock the migration list, and remove generated artifacts before tagging.')
+        if payload['preflight']['checks']['paper_optimizer_guardrail']['status'] != 'ok':
+            recommendations.append('Regenerate or repair paper optimizer benchmark/workbook guardrails before promotion.')
         if payload['performance']['status'] != 'ok':
             recommendations.append('Run large-data rehearsal on the flagged command centers and review query/index behavior.')
         return recommendations

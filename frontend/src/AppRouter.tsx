@@ -61,6 +61,7 @@ const PurchaseReturnList = lazy(() => import('./pages/Purchasing/PurchaseReturnL
 const PurchaseOrderForecast = lazy(() => import('./pages/Purchasing/PurchaseOrderForecast'));
 const SupplierPerformanceAnalytics = lazy(() => import('./pages/Purchasing/SupplierPerformanceAnalytics'));
 const ProductionOrderList = lazy(() => import('./pages/Production/ProductionOrderList'));
+const PaperOptimizationCenter = lazy(() => import('./pages/Production/PaperOptimizationCenter'));
 const MaterialIssueList = lazy(() => import('./pages/Production/MaterialIssueList'));
 const ProductionReceiptList = lazy(() => import('./pages/Production/ProductionReceiptList'));
 const ExecutiveCockpit = lazy(() => import('./pages/Management/ExecutiveCockpit'));
@@ -247,6 +248,7 @@ export default function AppRouter() {
               <Route path="purchase-order-forecast" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseOrderForecast />)}</FeatureRoute>} />
               <Route path="supplier-analytics" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<SupplierPerformanceAnalytics />)}</FeatureRoute>} />
               <Route path="production-orders" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionOrderList />)}</FeatureRoute>} />
+              <Route path="paper-optimization" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<PaperOptimizationCenter />)}</FeatureRoute>} />
               <Route path="material-issues" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<MaterialIssueList />)}</FeatureRoute>} />
               <Route path="production-receipts" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionReceiptList />)}</FeatureRoute>} />
               <Route path="warehouses" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseList />)}</FeatureRoute>} />

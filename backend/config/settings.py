@@ -82,6 +82,7 @@ INSTALLED_APPS = [
     'production.apps.ProductionConfig',
     'workforce.apps.WorkforceConfig',
     'finance.apps.FinanceConfig',
+    'paper_optimizer.apps.PaperOptimizerConfig',
     'django_q',
 ]
 
@@ -176,17 +177,21 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS
 _local_frontend_origins = (
-    'http://localhost:5173,http://localhost:5174,'
-    'http://127.0.0.1:5173,http://127.0.0.1:5174,'
-    'http://10.169.62.194:5173,http://10.169.62.194:5174'
+    'http://localhost:5173,http://localhost:5174,http://localhost:5175,'
+    'http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175,'
+    'http://10.169.62.194:5173,http://10.169.62.194:5174,http://10.169.62.194:5175'
 )
 CORS_ALLOWED_ORIGINS = _csv_config(
     'CORS_ALLOWED_ORIGINS',
     default='' if IS_PRODUCTION else _local_frontend_origins,
 )
+CORS_ALLOW_ALL_ORIGINS = not IS_PRODUCTION
 CSRF_TRUSTED_ORIGINS = _csv_config(
     'CSRF_TRUSTED_ORIGINS',
-    default='' if IS_PRODUCTION else 'http://localhost:5173,http://127.0.0.1:5173',
+    default='' if IS_PRODUCTION else (
+        'http://localhost:5173,http://localhost:5174,http://localhost:5175,'
+        'http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175'
+    ),
 )
 CORS_ALLOW_CREDENTIALS = _bool_config('CORS_ALLOW_CREDENTIALS', default=not IS_PRODUCTION)
 SESSION_COOKIE_SECURE = _bool_config('SESSION_COOKIE_SECURE', default=IS_PRODUCTION)
