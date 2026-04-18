@@ -437,6 +437,16 @@ export function buildCommandPaletteCatalog(
       enabled: options.canManageProduction,
     },
     {
+      key: 'paper-optimization',
+      path: '/paper-optimization',
+      title: 'Tối ưu ghép giấy',
+      group: 'Sản xuất',
+      description: 'Mở baseline canonical đã chốt cho bài toán ghép giấy, xem 4 phương án công khai và tải workbook chuẩn để dùng ngay.',
+      keywords: ['toi uu ghep giay', 'paper optimization', 'baseline canonical', 'ghep giay'],
+      enabled: options.canManageProduction,
+      spotlight: options.canManageProduction,
+    },
+    {
       key: 'production-planning-material-wait',
       path: '/production-planning?has_material_wait=1&needs_attention=1',
       title: 'Điều độ sản xuất: Chờ vật tư',

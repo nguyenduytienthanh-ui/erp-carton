@@ -478,6 +478,17 @@ export default function Dashboard() {
       });
     }
 
+    if (canManageProduction) {
+      cards.push({
+        key: 'paper-optimization',
+        title: 'Tối ưu ghép giấy',
+        badge: 'Baseline',
+        description: 'Mở ngay baseline canonical đã chốt cho bài toán ghép giấy, xem 4 phương án công khai và tải workbook chuẩn.',
+        route: '/paper-optimization',
+        actionLabel: 'Mở tối ưu ghép giấy',
+      });
+    }
+
     if (canViewReports) {
       cards.push({
         key: 'reports',
@@ -560,6 +571,18 @@ export default function Dashboard() {
         description: 'Mở riêng bàn điều độ công đoạn để rà tải theo ngày, ca, vật tư và các điểm nghẽn giao hàng.',
         route: '/production-planning',
         actionLabel: 'Mở điều độ sản xuất',
+      });
+    }
+
+    if (canManageProduction) {
+      cards.push({
+        key: 'paper-optimization',
+        testId: 'dashboard-restore-paper-optimization',
+        title: 'Tối ưu ghép giấy',
+        badge: 'Baseline',
+        description: 'Quay lại baseline canonical đã chốt để xem phương án hiện đang dùng, so sánh 4 phương án công khai và tải workbook.',
+        route: '/paper-optimization',
+        actionLabel: 'Mở tối ưu ghép giấy',
       });
     }
 

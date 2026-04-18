@@ -83,6 +83,7 @@ INSTALLED_APPS = [
     'production.apps.ProductionConfig',
     'workforce.apps.WorkforceConfig',
     'finance.apps.FinanceConfig',
+    'paper_optimizer.apps.PaperOptimizerConfig',
     'django_q',
 ]
 

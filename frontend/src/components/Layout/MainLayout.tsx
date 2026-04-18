@@ -121,6 +121,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/purchase-returns': () => import('../../pages/Purchasing/PurchaseReturnList'),
   '/production-orders': () => import('../../pages/Production/ProductionOrderList'),
   '/production-planning': () => import('../../pages/Production/ProductionPlanningBoard'),
+  '/paper-optimization': () => import('../../pages/Production/PaperOptimizationCenter'),
   '/material-issues': () => import('../../pages/Production/MaterialIssueList'),
   '/production-receipts': () => import('../../pages/Production/ProductionReceiptList'),
   '/production-costing': () => import('../../pages/Management/ProductionCostingReport'),
@@ -823,6 +824,10 @@ const MainLayout = () => {
         ...(canManageProduction ? [{
           key: '/production-planning',
           label: renderMenuLabel('/production-planning', 'Điều độ sản xuất'),
+        }] : []),
+        ...(canManageProduction ? [{
+          key: '/paper-optimization',
+          label: renderMenuLabel('/paper-optimization', 'Tối ưu ghép giấy'),
         }] : []),
         ...(canAccessMaterialIssueRoute ? [{
           key: '/material-issues',

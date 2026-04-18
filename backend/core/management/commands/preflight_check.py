@@ -1,12 +1,17 @@
 import json
 import os
 import shutil
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
+from openpyxl import load_workbook
+
+from paper_optimizer.regression_corpus import build_regression_guardrail_report
+from paper_optimizer.services import load_canonical_workbook_bytes
 
 
 class Command(BaseCommand):
@@ -262,6 +267,167 @@ class Command(BaseCommand):
             return {'status': 'warning', 'message': f'Missing env templates: {", ".join(missing)}'}
         return {'status': 'ok', 'message': 'Frontend/backend env templates for local and hybrid deploy exist'}
 
+    def _check_paper_optimizer_assets(self):
+        backend_snapshot = Path(settings.BASE_DIR) / 'paper_optimizer' / 'reference_data' / 'baseline_guardrail_canonical_v1.json'
+        backend_workbook = Path(settings.BASE_DIR) / 'paper_optimizer' / 'reference_data' / 'paper_optimizer_canonical_guardrail_v1.xlsx'
+        frontend_snapshot = Path(settings.BASE_DIR).parent / 'frontend' / 'public' / 'paper-optimizer' / 'baseline_guardrail_canonical_v1.json'
+        frontend_workbook = Path(settings.BASE_DIR).parent / 'frontend' / 'public' / 'paper-optimizer' / 'paper_optimizer_canonical_guardrail_v1.xlsx'
+
+        missing = [
+            str(path.relative_to(Path(settings.BASE_DIR).parent))
+            for path in [backend_snapshot, backend_workbook, frontend_snapshot, frontend_workbook]
+            if not path.exists()
+        ]
+        if missing:
+            return {
+                'status': 'warning',
+                'message': f'Paper optimizer canonical assets are missing: {", ".join(missing)}',
+            }
+
+        try:
+            backend_payload = json.loads(backend_snapshot.read_text(encoding='utf-8'))
+            frontend_payload = json.loads(frontend_snapshot.read_text(encoding='utf-8'))
+        except Exception as exc:
+            return {
+                'status': 'warning',
+                'message': f'Paper optimizer canonical assets exist but snapshot JSON could not be parsed: {exc}',
+            }
+
+        mismatches = []
+        if backend_payload.get('config_fingerprint') != frontend_payload.get('config_fingerprint'):
+            mismatches.append('config_fingerprint')
+        if backend_payload.get('selected_plan_code') != frontend_payload.get('selected_plan_code'):
+            mismatches.append('selected_plan_code')
+        if backend_payload.get('selected_scenario_code') != frontend_payload.get('selected_scenario_code'):
+            mismatches.append('selected_scenario_code')
+        if backend_payload.get('selected_source_internal_plan_code') != frontend_payload.get('selected_source_internal_plan_code'):
+            mismatches.append('selected_source_internal_plan_code')
+
+        if mismatches:
+            return {
+                'status': 'warning',
+                'message': (
+                    'Paper optimizer canonical assets exist but frontend/backend baseline references diverge on: '
+                    + ', '.join(mismatches)
+                ),
+            }
+
+        return {
+            'status': 'ok',
+            'message': (
+                'Paper optimizer canonical assets are present and aligned '
+                f"(fingerprint={backend_payload.get('config_fingerprint')})"
+            ),
+        }
+
+    def _check_paper_optimizer_guardrail(self):
+        required_sheet_prefix = [
+            'Du_lieu_goc',
+            'To_hop_de_xuat',
+            'Phuong_an_mua_cuoi',
+            'Chi_tiet_phan_bo',
+            'Kiem_tra_phan_bo_nguoc',
+            'Con_lai_chua_phan_bo',
+            'So_sanh_phuong_an_cuoi',
+            'Thong_ke_kho_giay',
+            'Debug_engine',
+        ]
+        try:
+            report = build_regression_guardrail_report()
+        except Exception as exc:
+            return {
+                'status': 'warning',
+                'message': f'Paper optimizer benchmark guardrail could not run: {exc}',
+            }
+
+        if not report['passed']:
+            failing_cases = ', '.join(
+                f"{item['case']}:{item['decision_metric']}"
+                for item in report['failing_cases']
+            )
+            return {
+                'status': 'warning',
+                'message': f'Paper optimizer benchmark guardrail failed: {failing_cases}',
+            }
+
+        try:
+            workbook = load_workbook(BytesIO(load_canonical_workbook_bytes()), read_only=True, data_only=True)
+            if workbook.sheetnames[:len(required_sheet_prefix)] != required_sheet_prefix:
+                return {
+                    'status': 'warning',
+                    'message': 'Paper optimizer workbook guardrail failed: canonical sheet order does not match required prefix.',
+                }
+            sheet = workbook['Phuong_an_mua_cuoi']
+            headers = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+            required_headers = [
+                'Dài mua (cm)',
+                'Tổng số bộ mua thật',
+                'Tổng chiều dài (cm)',
+                'Min chiều dài NCC yêu cầu (cm)',
+                'Chiều dài thực tế (cm)',
+                'Đạt NCC',
+            ]
+            missing_headers = [header for header in required_headers if header not in headers]
+            if missing_headers:
+                return {
+                    'status': 'warning',
+                    'message': (
+                        'Paper optimizer workbook guardrail failed: missing Phuong_an_mua_cuoi headers '
+                        + ', '.join(missing_headers)
+                    ),
+                }
+
+            idx_dai = headers.index('Dài mua (cm)')
+            idx_sets = headers.index('Tổng số bộ mua thật')
+            idx_total = headers.index('Tổng chiều dài (cm)')
+            idx_required = headers.index('Min chiều dài NCC yêu cầu (cm)')
+            idx_actual = headers.index('Chiều dài thực tế (cm)')
+            idx_ncc = headers.index('Đạt NCC')
+            checked_rows = 0
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                if row[idx_dai] is None:
+                    break
+                checked_rows += 1
+                expected_total = round(float(row[idx_dai] or 0) * int(row[idx_sets] or 0), 2)
+                actual_total = round(float(row[idx_total] or 0), 2)
+                ncc_required = round(float(row[idx_required] or 0), 2)
+                ncc_actual = round(float(row[idx_actual] or 0), 2)
+                ncc_label = str(row[idx_ncc] or '').strip()
+                if expected_total != actual_total or actual_total != ncc_actual:
+                    return {
+                        'status': 'warning',
+                        'message': 'Paper optimizer workbook guardrail failed: total length formula drift detected.',
+                    }
+                expected_ncc = 'Đạt' if ncc_actual >= ncc_required else 'Chưa đạt'
+                if ncc_label != expected_ncc:
+                    return {
+                        'status': 'warning',
+                        'message': 'Paper optimizer workbook guardrail failed: NCC label does not match actual per-spec length.',
+                    }
+            if checked_rows == 0:
+                return {
+                    'status': 'warning',
+                    'message': 'Paper optimizer workbook guardrail failed: canonical workbook has no purchase-spec rows.',
+                }
+        except Exception as exc:
+            return {
+                'status': 'warning',
+                'message': f'Paper optimizer workbook guardrail could not be verified: {exc}',
+            }
+
+        canonical_case = next(
+            (item for item in report['results'] if item['case'] == 'canonical_locked'),
+            None,
+        )
+        return {
+            'status': 'ok',
+            'message': (
+                'Paper optimizer benchmark and workbook guardrails passed '
+                f"(canonical cost={canonical_case.get('total_converted_cost') if canonical_case else '-'}, "
+                f"widths={canonical_case.get('unique_raw_width_count') if canonical_case else '-'})"
+            ),
+        }
+
     def _check_hybrid_deploy(self):
         app_env = str(getattr(settings, 'APP_ENV', 'development') or 'development').strip().lower()
         deployment_mode = str(getattr(settings, 'DEPLOYMENT_MODE', 'colocated') or 'colocated').strip().lower()
@@ -303,12 +469,10 @@ class Command(BaseCommand):
             status = 'warning'
             issues.append('API_PUBLIC_URL should use https in production hybrid mode')
         normalized_api_public_url = api_public_url.rstrip('/')
-        if api_public_url and not (
-            normalized_api_public_url.endswith('/api')
-            or normalized_api_public_url.endswith('/api/v1')
-        ):
+        api_path = parsed_api.path.rstrip('/') if parsed_api else normalized_api_public_url
+        if api_public_url and api_path != '/api':
             status = 'warning'
-            issues.append('API_PUBLIC_URL should end with /api or /api/v1')
+            issues.append('API_PUBLIC_URL should end with /api')
         if not proxy_enabled:
             status = 'warning'
             issues.append('USE_X_FORWARDED_PROTO should be enabled for hybrid https/public traffic')
@@ -456,6 +620,8 @@ class Command(BaseCommand):
             'jwt_sessions': self._check_jwt_and_sessions(),
             'backup_logging': self._check_backup_and_logging(),
             'frontend_env': self._check_frontend_env_template(),
+            'paper_optimizer_assets': self._check_paper_optimizer_assets(),
+            'paper_optimizer_guardrail': self._check_paper_optimizer_guardrail(),
             'hybrid_deploy': self._check_hybrid_deploy(),
             'monitoring': self._check_monitoring(),
             'audit_controls': self._check_audit_controls(),

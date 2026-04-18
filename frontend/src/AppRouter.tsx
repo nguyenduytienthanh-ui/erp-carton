@@ -67,6 +67,7 @@ const PurchaseOrderForecast = lazy(() => import('./pages/Purchasing/PurchaseOrde
 const SupplierPerformanceAnalytics = lazy(() => import('./pages/Purchasing/SupplierPerformanceAnalytics'));
 const ProductionOrderList = lazy(() => import('./pages/Production/ProductionOrderList'));
 const ProductionPlanningBoard = lazy(() => import('./pages/Production/ProductionPlanningBoard'));
+const PaperOptimizationCenter = lazy(() => import('./pages/Production/PaperOptimizationCenter'));
 const MaterialIssueList = lazy(() => import('./pages/Production/MaterialIssueList'));
 const ProductionReceiptList = lazy(() => import('./pages/Production/ProductionReceiptList'));
 const ExecutiveCockpit = lazy(() => import('./pages/Management/ExecutiveCockpit'));
@@ -262,6 +263,7 @@ export default function AppRouter() {
               <Route path="supplier-analytics" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<SupplierPerformanceAnalytics />)}</FeatureRoute>} />
               <Route path="production-orders" element={<FeatureRoute allow={canAccessProduction} fallbackTo="/">{withAsyncBoundary(<ProductionOrderList />)}</FeatureRoute>} />
               <Route path="production-planning" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionPlanningBoard />)}</FeatureRoute>} />
+              <Route path="paper-optimization" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<PaperOptimizationCenter />)}</FeatureRoute>} />
               <Route path="material-issues" element={<FeatureRoute allow={canAccessMaterialIssueRoute} fallbackTo="/">{withAsyncBoundary(<MaterialIssueList />)}</FeatureRoute>} />
               <Route path="production-receipts" element={<FeatureRoute allow={canAccessProductionReceiptRoute} fallbackTo="/">{withAsyncBoundary(<ProductionReceiptList />)}</FeatureRoute>} />
               <Route path="warehouses" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseList />)}</FeatureRoute>} />
