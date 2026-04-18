@@ -1,0 +1,835 @@
+"""
+Chứng từ mẫu: SalesOrder (Header + Lines).
+Chuẩn Document: code theo kỳ, status workflow, snapshot khi Posted, version (optimistic lock),
+approval/posting/void fields, permission theo action+status.
+"""
+from decimal import Decimal
+from django.db import models
+from django.db.models import Q
+from django.conf import settings
+from django.utils import timezone
+
+from sales.document_policy import round_money, calc_line_totals
+
+User = settings.AUTH_USER_MODEL
+
+
+class PeriodSequence(models.Model):
+    """
+    NumberSequence theo doc_type + kỳ (YYYYMM).
+    Ví dụ: SO-202602-00015. Mỗi (doc_type, period) một sequence.
+    """
+    doc_type = models.CharField(max_length=20, help_text="SO, INV, PO...")
+    period = models.CharField(max_length=6, help_text="YYYYMM")
+    current_number = models.IntegerField(default=0)
+    padding = models.IntegerField(default=5, help_text="Số chữ số (5 = 00015)")
+
+    class Meta:
+        db_table = 'sales_period_sequences'
+        unique_together = [['doc_type', 'period']]
+        verbose_name = 'Period Sequence'
+        verbose_name_plural = 'Period Sequences'
+
+    def get_next_code(self):
+        from django.db import transaction
+        with transaction.atomic():
+            seq = PeriodSequence.objects.select_for_update().get(pk=self.pk)
+            seq.current_number += 1
+            seq.save()
+            n = str(seq.current_number).zfill(seq.padding)
+            return f"{seq.doc_type}-{seq.period}-{n}"
+
+
+# Trạng thái chứng từ (khớp WorkflowDefinition SalesOrder)
+class SalesOrderStatus:
+    DRAFT = 'DRAFT'
+    SUBMITTED = 'SUBMITTED'
+    APPROVED = 'APPROVED'
+    REJECTED = 'REJECTED'
+    POSTED = 'POSTED'
+    VOID = 'VOID'
+    CHOICES = [
+        (DRAFT, 'Nháp'),
+        (SUBMITTED, 'Đã gửi'),
+        (APPROVED, 'Đã duyệt'),
+        (REJECTED, 'Từ chối'),
+        (POSTED, 'Đã vào sổ'),
+        (VOID, 'Hủy'),
+    ]
+
+
+class SalesOrder(models.Model):
+    """
+    Header chứng từ Đơn bán hàng (Document chuẩn).
+    """
+    # Identity & period
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    doc_type = models.CharField(max_length=20, default='SO')
+    order_date = models.DateField()
+    delivery_date = models.DateField(null=True, blank=True, db_index=True)
+    status = models.CharField(
+        max_length=20,
+        choices=SalesOrderStatus.CHOICES,
+        default=SalesOrderStatus.DRAFT,
+        db_index=True,
+    )
+    # Reference (link chứng từ liên quan)
+    reference = models.CharField(max_length=200, blank=True)
+    # Customer
+    customer = models.ForeignKey(
+        'core.Customer',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='sales_orders',
+    )
+    # Currency
+    currency = models.CharField(max_length=3, default='VND')
+    exchange_rate = models.DecimalField(
+        max_digits=18, decimal_places=6, default=Decimal('1'),
+    )
+    # Amounts (tính từ lines + money policy)
+    subtotal = models.DecimalField(
+        max_digits=18, decimal_places=2, default=Decimal('0'),
+    )
+    discount_total = models.DecimalField(
+        max_digits=18, decimal_places=2, default=Decimal('0'),
+    )
+    tax_total = models.DecimalField(
+        max_digits=18, decimal_places=2, default=Decimal('0'),
+    )
+    total = models.DecimalField(
+        max_digits=18, decimal_places=2, default=Decimal('0'),
+    )
+    notes = models.TextField(blank=True)
+
+    # Approval
+    submitted_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sales_orders_submitted',
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sales_orders_approved',
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejected_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sales_orders_rejected',
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    reject_reason = models.TextField(blank=True)
+
+    # Confirmation (xác nhận đơn hàng với khách hàng)
+    confirmed_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sales_orders_confirmed',
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    # Posting
+    posted_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sales_orders_posted',
+    )
+    posted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    post_number = models.CharField(max_length=50, blank=True, db_index=True)
+
+    # Void
+    voided_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sales_orders_voided',
+    )
+    voided_at = models.DateTimeField(null=True, blank=True)
+    void_reason = models.TextField(blank=True)
+
+    # Snapshot khi Posted (customer/product/price...) để master đổi không ảnh hưởng chứng từ cũ
+    posted_snapshot = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Snapshot customer + lines at post time",
+    )
+
+    # Concurrency
+    version = models.IntegerField(default=0)
+
+    # Audit & scope
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sales_orders_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sales_orders_updated',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    owner = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sales_orders_owned',
+    )
+    team = models.ForeignKey(
+        'core.Team', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sales_orders',
+    )
+
+    # Reversal: nếu void sau khi đã post → có thể tạo chứng từ đảo
+    reversal_of = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='reversals',
+    )
+
+    class Meta:
+        db_table = 'sales_orders'
+        ordering = ['-order_date', '-id']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['order_date']),
+            models.Index(fields=['delivery_date']),
+            models.Index(fields=['status']),
+            models.Index(fields=['team']),
+            models.Index(fields=['posted_at']),
+            models.Index(fields=['post_number']),
+        ]
+        verbose_name = 'Sales Order'
+        verbose_name_plural = 'Sales Orders'
+
+    def __str__(self):
+        return f"{self.code} - {self.order_date}"
+
+    def recalc_totals(self):
+        """Tính lại subtotal/discount_total/tax_total/total từ lines (money policy)."""
+        from django.db.models import Sum
+        agg = self.lines.aggregate(
+            sub=Sum('line_subtotal'),
+            disc=Sum('discount_amount'),
+            tax=Sum('tax_amount'),
+            total=Sum('line_total'),
+        )
+        self.subtotal = round_money(agg['sub'] or 0)
+        self.discount_total = round_money(agg['disc'] or 0)
+        self.tax_total = round_money(agg['tax'] or 0)
+        self.total = round_money(agg['total'] or 0)
+        self.save(update_fields=['subtotal', 'discount_total', 'tax_total', 'total', 'updated_at'])
+
+    def is_editable(self):
+        return self.status == SalesOrderStatus.DRAFT
+
+    def is_posted(self):
+        return self.posted_at is not None
+
+
+class SalesOrderLine(models.Model):
+    """Line chứng từ: product, qty, price, discount, tax, line_total."""
+    sales_order = models.ForeignKey(
+        SalesOrder, on_delete=models.CASCADE, related_name='lines',
+    )
+    line_number = models.PositiveIntegerField()
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.PROTECT,
+        related_name='sales_order_lines',
+    )
+    internal_product_code = models.CharField(max_length=50, blank=True, db_index=True)
+    trace_code = models.CharField(max_length=150, blank=True, db_index=True)
+    product_snapshot = models.JSONField(default=dict, blank=True)
+    uom = models.CharField(max_length=20, blank=True)
+    qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('1'))
+    unit_price = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    discount_pct = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
+    tax_pct = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
+    line_subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    discount_amount = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    tax_amount = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    line_total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    note = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        db_table = 'sales_order_lines'
+        unique_together = [['sales_order', 'line_number']]
+        ordering = ['sales_order', 'line_number']
+        verbose_name = 'Sales Order Line'
+        verbose_name_plural = 'Sales Order Lines'
+
+    def __str__(self):
+        return f"{self.sales_order_id}#{self.line_number}"
+
+    def save(self, *args, **kwargs):
+        if self.product_id:
+            from sales.services import build_sales_order_line_product_snapshot, build_sales_order_line_trace_code
+
+            if not self.internal_product_code:
+                self.internal_product_code = getattr(self.product, 'code', '') or ''
+            if not self.product_snapshot:
+                as_of_datetime = getattr(self.sales_order, 'order_date', None) if self.sales_order_id else None
+                self.product_snapshot = build_sales_order_line_product_snapshot(
+                    self.product,
+                    as_of_datetime=as_of_datetime,
+                )
+            if self.sales_order_id and not self.trace_code:
+                self.trace_code = build_sales_order_line_trace_code(self.sales_order, self.product, self.line_number)
+            if not self.uom:
+                self.uom = getattr(getattr(self.product, 'unit', None), 'code', None) or self.uom
+        line_sub, disc, tax, total = calc_line_totals(
+            self.qty, self.unit_price, self.discount_pct, self.tax_pct,
+        )
+        self.line_subtotal = line_sub
+        self.discount_amount = disc
+        self.tax_amount = tax
+        self.line_total = total
+        super().save(*args, **kwargs)
+
+    @property
+    def planned_qty_total(self):
+        from django.db.models import Sum
+        agg = self.delivery_plans.aggregate(v=Sum('qty'))
+        return agg['v'] or Decimal('0')
+
+    @property
+    def unplanned_qty(self):
+        remaining = (self.qty or Decimal('0')) - self.planned_qty_total
+        return remaining if remaining > 0 else Decimal('0')
+
+
+class SalesOrderDeliveryPlan(models.Model):
+    """
+    Kế hoạch giao hàng theo từng dòng hàng.
+    - Một mã hàng có thể giao nhiều ngày khác nhau.
+    - Một mã hàng có thể tách nhiều lần theo số lượng.
+    """
+    line = models.ForeignKey(
+        SalesOrderLine,
+        on_delete=models.CASCADE,
+        related_name='delivery_plans',
+    )
+    delivery_date = models.DateField(db_index=True)
+    qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    shipped_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    delivered_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sales_order_delivery_plans'
+        ordering = ['delivery_date', 'id']
+        indexes = [
+            models.Index(fields=['delivery_date']),
+            models.Index(fields=['line', 'delivery_date']),
+        ]
+        verbose_name = 'Sales Order Delivery Plan'
+        verbose_name_plural = 'Sales Order Delivery Plans'
+
+    def __str__(self):
+        return f"{self.line.sales_order.code}#{self.line.line_number} {self.delivery_date} qty={self.qty}"
+
+    @property
+    def remaining_shipment_qty(self):
+        remain = (self.qty or Decimal('0')) - (self.shipped_qty or Decimal('0'))
+        return remain if remain > 0 else Decimal('0')
+
+    @property
+    def remaining_qty(self):
+        remain = (self.qty or Decimal('0')) - (self.delivered_qty or Decimal('0'))
+        return remain if remain > 0 else Decimal('0')
+
+    @property
+    def is_completed(self):
+        return self.remaining_qty <= 0
+
+
+# Posting log: ghi lại mỗi lần post (idempotent check bằng post_number / posted_at)
+class SalesOrderPostingLog(models.Model):
+    """Log mỗi lần post để idempotent + audit."""
+    sales_order = models.ForeignKey(
+        SalesOrder, on_delete=models.CASCADE, related_name='posting_logs',
+    )
+    posted_at = models.DateTimeField(auto_now_add=True)
+    posted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    post_number = models.CharField(max_length=50, db_index=True)
+    snapshot_saved = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'sales_order_posting_logs'
+        ordering = ['-posted_at']
+        verbose_name = 'Sales Order Posting Log'
+        verbose_name_plural = 'Sales Order Posting Logs'
+
+
+class QuoteStatus:
+    DRAFT = 'DRAFT'
+    SENT = 'SENT'
+    ACCEPTED = 'ACCEPTED'
+    REJECTED = 'REJECTED'
+    EXPIRED = 'EXPIRED'
+    CHOICES = [
+        (DRAFT, 'Nháp'),
+        (SENT, 'Đã gửi'),
+        (ACCEPTED, 'Khách chấp nhận'),
+        (REJECTED, 'Từ chối'),
+        (EXPIRED, 'Hết hạn'),
+    ]
+
+
+class Quote(models.Model):
+    """Báo giá (Quote) – chứng từ trước đơn hàng."""
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    quote_date = models.DateField(db_index=True)
+    valid_until = models.DateField(null=True, blank=True, db_index=True)
+    status = models.CharField(
+        max_length=20,
+        choices=QuoteStatus.CHOICES,
+        default=QuoteStatus.DRAFT,
+        db_index=True,
+    )
+    reference = models.CharField(max_length=200, blank=True)
+    customer = models.ForeignKey(
+        'core.Customer',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='quotes',
+    )
+    currency = models.CharField(max_length=3, default='VND')
+    subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    discount_total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    tax_total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='quotes_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='quotes_updated',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sales_quotes'
+        ordering = ['-quote_date', '-id']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['quote_date']),
+            models.Index(fields=['valid_until']),
+            models.Index(fields=['status']),
+        ]
+        verbose_name = 'Quote'
+        verbose_name_plural = 'Quotes'
+
+    def __str__(self):
+        return f"{self.code} - {self.quote_date}"
+
+    def recalc_totals(self):
+        from django.db.models import Sum
+        agg = self.lines.aggregate(
+            sub=Sum('line_subtotal'),
+            disc=Sum('discount_amount'),
+            tax=Sum('tax_amount'),
+            total=Sum('line_total'),
+        )
+        self.subtotal = round_money(agg['sub'] or 0)
+        self.discount_total = round_money(agg['disc'] or 0)
+        self.tax_total = round_money(agg['tax'] or 0)
+        self.total = round_money(agg['total'] or 0)
+        self.save(update_fields=['subtotal', 'discount_total', 'tax_total', 'total', 'updated_at'])
+
+
+class QuoteLine(models.Model):
+    """Dòng báo giá."""
+    quote = models.ForeignKey(Quote, on_delete=models.CASCADE, related_name='lines')
+    line_number = models.PositiveIntegerField()
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.PROTECT,
+        related_name='quote_lines',
+    )
+    qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('1'))
+    unit_price = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    discount_pct = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
+    tax_pct = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
+    line_subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    discount_amount = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    tax_amount = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    line_total = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    note = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        db_table = 'sales_quote_lines'
+        ordering = ['quote_id', 'line_number']
+        unique_together = [['quote', 'line_number']]
+        verbose_name = 'Quote Line'
+        verbose_name_plural = 'Quote Lines'
+
+    def __str__(self):
+        return f"{self.quote.code}-L{self.line_number}"
+
+
+# ============== OUTBOUND SHIPMENTS ==============
+class OutboundShipmentStatus:
+    DRAFT = 'DRAFT'
+    SUBMITTED = 'SUBMITTED'
+    APPROVED = 'APPROVED'
+    PACKED = 'PACKED'
+    IN_TRANSIT = 'IN_TRANSIT'
+    DELIVERED = 'DELIVERED'
+    RETURNED = 'RETURNED'
+    CANCELLED = 'CANCELLED'
+    
+    CHOICES = [
+        (DRAFT, 'Nháp'),
+        (SUBMITTED, 'Chờ duyệt'),
+        (APPROVED, 'Đã duyệt'),
+        (PACKED, 'Đã đóng gói'),
+        (IN_TRANSIT, 'Đang vận chuyển'),
+        (DELIVERED, 'Đã giao'),
+        (RETURNED, 'Đã trả'),
+        (CANCELLED, 'Đã hủy'),
+    ]
+
+
+class OutboundShipment(models.Model):
+    """Shipment to customer"""
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    sales_order = models.ForeignKey(
+        'sales.SalesOrder',
+        on_delete=models.SET_NULL,
+        related_name='shipments',
+        null=True,
+        blank=True
+    )
+    customer = models.ForeignKey(
+        'core.Customer',
+        on_delete=models.PROTECT,
+        related_name='shipments'
+    )
+    shipment_date = models.DateField(db_index=True)
+    status = models.CharField(
+        max_length=20,
+        choices=OutboundShipmentStatus.CHOICES,
+        default=OutboundShipmentStatus.DRAFT,
+        db_index=True
+    )
+    
+    # Shipment details
+    reference = models.CharField(max_length=100, blank=True)
+    carrier = models.CharField(max_length=100, blank=True)
+    tracking_number = models.CharField(max_length=100, blank=True)
+    shipping_address = models.TextField(blank=True)
+    
+    # Delivery details
+    expected_delivery_date = models.DateField(null=True, blank=True)
+    actual_delivery_date = models.DateField(null=True, blank=True)
+    delivered_by = models.CharField(max_length=100, blank=True)
+    delivery_notes = models.TextField(blank=True)
+    
+    # Tracking
+    submitted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='shipments_submitted'
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    
+    approved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='shipments_approved'
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    
+    packed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='shipments_packed'
+    )
+    packed_at = models.DateTimeField(null=True, blank=True)
+    
+    delivered_by_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='shipments_delivered'
+    )
+    
+    total_qty = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    total_weight_kg = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='shipments_created')
+    
+    class Meta:
+        db_table = 'sales_outbound_shipments'
+        ordering = ['-shipment_date', '-created_at']
+        indexes = [
+            models.Index(fields=['status', '-shipment_date']),
+            models.Index(fields=['customer', 'status']),
+            models.Index(fields=['sales_order', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.code} - {self.customer.name}"
+
+
+class ShipmentLine(models.Model):
+    """Line items in shipment"""
+    shipment = models.ForeignKey(
+        OutboundShipment,
+        on_delete=models.CASCADE,
+        related_name='lines'
+    )
+    line_number = models.PositiveIntegerField()
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.PROTECT
+    )
+    
+    qty_ordered = models.DecimalField(max_digits=18, decimal_places=4)
+    qty_shipped = models.DecimalField(max_digits=18, decimal_places=4)
+    qty_received = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    
+    unit_price = models.DecimalField(max_digits=18, decimal_places=4)
+    discount_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    tax_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    
+    weight_per_unit = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'sales_shipment_lines'
+        ordering = ['line_number']
+        unique_together = [['shipment', 'line_number']]
+
+    def __str__(self):
+        return f"{self.shipment.code} - Line {self.line_number}"
+
+
+
+
+# ── Material Plan models ──────────────────────────────────────────────────────
+
+class SalesLineMaterialPlanStatus:
+    DRAFT = 'DRAFT'
+    CONFIRMED = 'CONFIRMED'
+    PARTIAL_ORDERED = 'PARTIAL_ORDERED'
+    PARTIAL_RECEIVED = 'PARTIAL_RECEIVED'
+    READY = 'READY'
+    CHOICES = [
+        (DRAFT, 'Nháp'),
+        (CONFIRMED, 'Đã chốt vật tư'),
+        (PARTIAL_ORDERED, 'Đã đặt mua một phần'),
+        (PARTIAL_RECEIVED, 'Đã về một phần'),
+        (READY, 'Sẵn sàng'),
+    ]
+
+
+class SalesLineMaterialPlan(models.Model):
+    """Kế hoạch vật tư cho một dòng đơn hàng xuất."""
+    sales_order = models.ForeignKey(
+        SalesOrder,
+        on_delete=models.CASCADE,
+        related_name='material_plans',
+    )
+    sales_order_line = models.OneToOneField(
+        SalesOrderLine,
+        on_delete=models.CASCADE,
+        related_name='material_plan',
+    )
+    finished_product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.PROTECT,
+        related_name='sales_material_plans',
+    )
+    template = models.ForeignKey(
+        'products.ProductMaterialTemplate',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_line_plans',
+    )
+    ordered_finished_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    status = models.CharField(
+        max_length=20,
+        choices=SalesLineMaterialPlanStatus.CHOICES,
+        default=SalesLineMaterialPlanStatus.DRAFT,
+        db_index=True,
+    )
+    note = models.TextField(blank=True)
+    confirmed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_line_material_plans_confirmed',
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sales_line_material_plans'
+        ordering = ['sales_order_id', 'sales_order_line_id']
+        indexes = [
+            models.Index(fields=['sales_order']),
+            models.Index(fields=['sales_order_line']),
+            models.Index(fields=['finished_product']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.sales_order_id}#{self.sales_order_line_id}"
+
+
+class SalesLineMaterialPlanItem(models.Model):
+    """Một dòng vật tư trong kế hoạch của đơn hàng."""
+    plan = models.ForeignKey(
+        SalesLineMaterialPlan,
+        on_delete=models.CASCADE,
+        related_name='items',
+    )
+    template_group = models.ForeignKey(
+        'products.ProductMaterialGroup',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_plan_items',
+    )
+    template_option = models.ForeignKey(
+        'products.ProductMaterialOption',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_plan_items',
+    )
+    group_code_snapshot = models.CharField(max_length=50, blank=True, db_index=True)
+    group_name_snapshot = models.CharField(max_length=255, blank=True)
+    material_role = models.CharField(max_length=20, default='PRIMARY', db_index=True)
+    selection_rule = models.CharField(max_length=20, default='ONE_OF', db_index=True)
+    material_product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.PROTECT,
+        related_name='sales_material_plan_items',
+    )
+    spec_snapshot = models.JSONField(default=dict, blank=True)
+    is_selected = models.BooleanField(default=False, db_index=True)
+    required_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    ordered_qty_cache = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    received_qty_cache = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    available_qty_cache = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    short_qty_cache = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sales_line_material_plan_items'
+        ordering = ['plan_id', 'group_code_snapshot', 'id']
+        indexes = [
+            models.Index(fields=['plan']),
+            models.Index(fields=['material_product']),
+            models.Index(fields=['is_selected']),
+            models.Index(fields=['group_code_snapshot']),
+        ]
+
+    def __str__(self):
+        return f"plan:{self.plan_id} - {self.material_product_id}"
+
+
+class SalesDiscountRule(models.Model):
+    TYPE_PERCENTAGE = 'PERCENTAGE'
+    TYPE_FIXED = 'FIXED'
+    TYPE_CHOICES = [
+        (TYPE_PERCENTAGE, 'Phần trăm'),
+        (TYPE_FIXED, 'Cố định'),
+    ]
+
+    APPLIES_ALL_PRODUCTS = 'ALL_PRODUCTS'
+    APPLIES_SPECIFIC_PRODUCTS = 'SPECIFIC_PRODUCTS'
+    APPLIES_SPECIFIC_CUSTOMERS = 'SPECIFIC_CUSTOMERS'
+    APPLIES_VOLUME_BASED = 'VOLUME_BASED'
+    APPLICABLE_CHOICES = [
+        (APPLIES_ALL_PRODUCTS, 'Tất cả sản phẩm'),
+        (APPLIES_SPECIFIC_PRODUCTS, 'Sản phẩm chọn'),
+        (APPLIES_SPECIFIC_CUSTOMERS, 'Khách hàng chọn'),
+        (APPLIES_VOLUME_BASED, 'Theo số lượng'),
+    ]
+
+    STATUS_ACTIVE = 'ACTIVE'
+    STATUS_INACTIVE = 'INACTIVE'
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, 'Hoạt động'),
+        (STATUS_INACTIVE, 'Không hoạt động'),
+    ]
+
+    code = models.CharField(max_length=30, unique=True, db_index=True)
+    name = models.CharField(max_length=200)
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_PERCENTAGE)
+    value = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    applicable_to = models.CharField(max_length=30, choices=APPLICABLE_CHOICES, default=APPLIES_ALL_PRODUCTS)
+    min_order_value = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    min_quantity = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    max_discount_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    start_date = models.DateField(db_index=True)
+    end_date = models.DateField(null=True, blank=True, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)
+    usage_count = models.PositiveIntegerField(default=0)
+    total_discount_value = models.DecimalField(max_digits=18, decimal_places=2, default=Decimal('0'))
+    note = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_discount_rules_created',
+    )
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sales_discount_rules_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sales_discount_rules'
+        ordering = ['-created_at', 'code']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['status']),
+            models.Index(fields=['type']),
+            models.Index(fields=['applicable_to']),
+            models.Index(fields=['start_date', 'end_date']),
+        ]
+
+    def __str__(self):
+        return f'{self.code} - {self.name}'
+
+    @property
+    def is_currently_active(self):
+        today = timezone.localdate()
+        if self.status != self.STATUS_ACTIVE:
+            return False
+        if self.start_date and self.start_date > today:
+            return False
+        if self.end_date and self.end_date < today:
+            return False
+        return True
+
+    def save(self, *args, **kwargs):
+        if self.code:
+            self.code = str(self.code).strip().upper()
+        super().save(*args, **kwargs)

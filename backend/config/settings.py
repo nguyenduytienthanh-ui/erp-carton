@@ -12,7 +12,14 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 
 from pathlib import Path
 from datetime import timedelta
-from decouple import config
+from decouple import Csv, config
+
+try:
+    import sentry_sdk  # type: ignore[reportMissingImports]
+    from sentry_sdk.integrations.django import DjangoIntegration  # type: ignore[reportMissingImports]
+except ImportError:  # pragma: no cover - optional in local environments
+    sentry_sdk = None
+    DjangoIntegration = None
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -25,9 +32,32 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config('DEBUG', default=False, cast=bool)
+def _bool_config(name, default=False):
+    value = config(name, default=default)
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {'1', 'true', 'yes', 'on', 'y'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'off', 'n', '', 'release', 'prod', 'production'}:
+        return False
+    return bool(default)
 
-ALLOWED_HOSTS = []
+
+DEBUG = _bool_config('DEBUG', default=False)
+
+APP_ENV = str(config('APP_ENV', default='development')).strip().lower()
+IS_PRODUCTION = APP_ENV == 'production'
+DEPLOYMENT_MODE = str(config('DEPLOYMENT_MODE', default='colocated')).strip().lower()
+
+
+def _csv_config(name, default=''):
+    return [item for item in config(name, default=default, cast=Csv()) if str(item).strip()]
+
+ALLOWED_HOSTS = _csv_config(
+    'ALLOWED_HOSTS',
+    default='' if IS_PRODUCTION else '127.0.0.1,localhost',
+)
 
 
 # Application definition
@@ -39,19 +69,34 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.postgres',
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
+    'drf_spectacular',
+    'django_filters',
+    'corsheaders',
     'core.apps.CoreConfig',
+    'products',
+    'sales',
+    'inventory.apps.InventoryConfig',
+    'purchasing.apps.PurchasingConfig',
+    'production.apps.ProductionConfig',
+    'workforce.apps.WorkforceConfig',
+    'finance.apps.FinanceConfig',
+    'paper_optimizer.apps.PaperOptimizerConfig',
+    'django_q',
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'core.middleware.RequestContextMiddleware',  # Store current request and request_id for tracing
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -125,27 +170,206 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS
+_local_frontend_origins = (
+    'http://localhost:5173,http://localhost:5174,'
+    'http://127.0.0.1:5173,http://127.0.0.1:5174,'
+    'http://10.169.62.194:5173,http://10.169.62.194:5174'
+)
+CORS_ALLOWED_ORIGINS = _csv_config(
+    'CORS_ALLOWED_ORIGINS',
+    default='' if IS_PRODUCTION else _local_frontend_origins,
+)
+CSRF_TRUSTED_ORIGINS = _csv_config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='' if IS_PRODUCTION else 'http://localhost:5173,http://127.0.0.1:5173',
+)
+CORS_ALLOW_CREDENTIALS = _bool_config('CORS_ALLOW_CREDENTIALS', default=not IS_PRODUCTION)
+SESSION_COOKIE_SECURE = _bool_config('SESSION_COOKIE_SECURE', default=IS_PRODUCTION)
+CSRF_COOKIE_SECURE = _bool_config('CSRF_COOKIE_SECURE', default=IS_PRODUCTION)
+SESSION_COOKIE_HTTPONLY = _bool_config('SESSION_COOKIE_HTTPONLY', default=True)
+SESSION_COOKIE_SAMESITE = config('SESSION_COOKIE_SAMESITE', default='Lax')
+CSRF_COOKIE_SAMESITE = config('CSRF_COOKIE_SAMESITE', default='Lax')
+SECURE_SSL_REDIRECT = _bool_config('SECURE_SSL_REDIRECT', default=IS_PRODUCTION)
+SECURE_CONTENT_TYPE_NOSNIFF = _bool_config('SECURE_CONTENT_TYPE_NOSNIFF', default=True)
+SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default=31_536_000 if IS_PRODUCTION else 0, cast=int)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _bool_config('SECURE_HSTS_INCLUDE_SUBDOMAINS', default=IS_PRODUCTION)
+SECURE_HSTS_PRELOAD = _bool_config('SECURE_HSTS_PRELOAD', default=False)
+X_FRAME_OPTIONS = config('X_FRAME_OPTIONS', default='DENY')
+REFERRER_POLICY = config('REFERRER_POLICY', default='same-origin')
+SECURE_PROXY_SSL_HEADER = (
+    ('HTTP_X_FORWARDED_PROTO', 'https')
+    if _bool_config('USE_X_FORWARDED_PROTO', default=False)
+    else None
+)
+USE_X_FORWARDED_HOST = _bool_config('USE_X_FORWARDED_HOST', default=False)
 
 # Custom User Model
 AUTH_USER_MODEL = 'core.User'
 
 REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'core.authentication.SessionAwareJWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=config('JWT_ACCESS_TOKEN_MINUTES', default=60, cast=int)),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=config('JWT_REFRESH_TOKEN_DAYS', default=7, cast=int)),
+    'ROTATE_REFRESH_TOKENS': _bool_config('JWT_ROTATE_REFRESH_TOKENS', default=False),
+    'BLACKLIST_AFTER_ROTATION': _bool_config('JWT_BLACKLIST_AFTER_ROTATION', default=True),
+    'UPDATE_LAST_LOGIN': _bool_config('JWT_UPDATE_LAST_LOGIN', default=False),
+    'AUTH_HEADER_TYPES': tuple(_csv_config('JWT_AUTH_HEADER_TYPES', default='Bearer')),
 }
+
+PERMISSION_STRICT_DEFAULT = _bool_config('PERMISSION_STRICT_DEFAULT', default=False)
+
+# Media files (uploads)
+MEDIA_URL = config('MEDIA_URL', default='/media/')
+MEDIA_ROOT = Path(config('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
+BACKUP_ROOT = Path(config('BACKUP_ROOT', default=str(BASE_DIR / 'backups')))
+BACKUP_RETENTION_DAYS = config('BACKUP_RETENTION_DAYS', default=14 if IS_PRODUCTION else 7, cast=int)
+BACKUP_STALE_HOURS = config('BACKUP_STALE_HOURS', default=48 if IS_PRODUCTION else 168, cast=int)
+BACKUP_CLOUD_SYNC_ENABLED = _bool_config('BACKUP_CLOUD_SYNC_ENABLED', default=False)
+BACKUP_CLOUD_PROVIDER = str(config('BACKUP_CLOUD_PROVIDER', default='')).strip().lower()
+BACKUP_RCLONE_BINARY = config('BACKUP_RCLONE_BINARY', default='rclone')
+BACKUP_RCLONE_DESTINATION = config('BACKUP_RCLONE_DESTINATION', default='')
+BACKUP_CLOUD_SYNC_STALE_HOURS = config(
+    'BACKUP_CLOUD_SYNC_STALE_HOURS',
+    default=72 if IS_PRODUCTION else 168,
+    cast=int,
+)
+AUDIT_LOG_RETENTION_DAYS = config('AUDIT_LOG_RETENTION_DAYS', default=365 if IS_PRODUCTION else 90, cast=int)
+AUDIT_EXPORT_MAX_ROWS = config('AUDIT_EXPORT_MAX_ROWS', default=5000, cast=int)
+INCIDENT_RUNBOOK_URL = config('INCIDENT_RUNBOOK_URL', default='')
+INCIDENT_CONTACT_EMAILS = _csv_config('INCIDENT_CONTACT_EMAILS', default='')
+ALERT_EMAIL_RECIPIENTS = _csv_config('ALERT_EMAIL_RECIPIENTS', default='')
+ALERT_SLACK_WEBHOOK_URL = config('ALERT_SLACK_WEBHOOK_URL', default='')
+ALERT_TELEGRAM_BOT_TOKEN = config('ALERT_TELEGRAM_BOT_TOKEN', default='')
+ALERT_TELEGRAM_CHAT_ID = config('ALERT_TELEGRAM_CHAT_ID', default='')
+ALERT_REQUIRED_CHANNEL_COUNT = config('ALERT_REQUIRED_CHANNEL_COUNT', default=1 if IS_PRODUCTION else 0, cast=int)
+ALERT_REQUIRED_CHANNELS = _csv_config('ALERT_REQUIRED_CHANNELS', default='')
+ALERT_HTTP_TIMEOUT_SECONDS = config('ALERT_HTTP_TIMEOUT_SECONDS', default=10, cast=int)
+DB_SLOW_QUERY_THRESHOLD_MS = config('DB_SLOW_QUERY_THRESHOLD_MS', default=1500, cast=int)
+LARGE_DATA_WARNING_ROWS = config('LARGE_DATA_WARNING_ROWS', default=1000, cast=int)
+LARGE_DATA_CRITICAL_ROWS = config('LARGE_DATA_CRITICAL_ROWS', default=10000, cast=int)
+API_PUBLIC_URL = config('API_PUBLIC_URL', default='')
+CLOUDFLARED_TUNNEL_ID = config('CLOUDFLARED_TUNNEL_ID', default='')
+CLOUDFLARED_CONFIG_PATH = config('CLOUDFLARED_CONFIG_PATH', default='')
+TUNNEL_PROVIDER = str(config('TUNNEL_PROVIDER', default='')).strip().lower()
+
+# Email
+FRONTEND_PUBLIC_URL = config('FRONTEND_PUBLIC_URL', default='')
+FRONTEND_URL = config('FRONTEND_URL', default=FRONTEND_PUBLIC_URL or 'http://localhost:5173')
+if not FRONTEND_PUBLIC_URL:
+    FRONTEND_PUBLIC_URL = FRONTEND_URL
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='ERP Carton <noreply@localhost>')
+SERVER_EMAIL = config('SERVER_EMAIL', default=DEFAULT_FROM_EMAIL)
+EMAIL_BACKEND = config(
+    'EMAIL_BACKEND',
+    default='django.core.mail.backends.smtp.EmailBackend'
+    if IS_PRODUCTION
+    else 'django.core.mail.backends.filebased.EmailBackend',
+)
+EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=15, cast=int)
+EMAIL_HOST = config('EMAIL_HOST', default='')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = _bool_config('EMAIL_USE_TLS', default=IS_PRODUCTION)
+EMAIL_USE_SSL = _bool_config('EMAIL_USE_SSL', default=False)
+EMAIL_FILE_PATH = Path(config('EMAIL_FILE_PATH', default=str(BASE_DIR / 'sent_emails')))
+if EMAIL_BACKEND == 'django.core.mail.backends.filebased.EmailBackend':
+    EMAIL_FILE_PATH.mkdir(parents=True, exist_ok=True)
+
+# Django-Q Configuration
+Q_CLUSTER = {
+    'name': 'DjangORM',
+    'workers': config('Q_CLUSTER_WORKERS', default=4, cast=int),
+    'timeout': config('Q_CLUSTER_TIMEOUT', default=90, cast=int),
+    'retry': config('Q_CLUSTER_RETRY', default=120, cast=int),
+    'queue_limit': config('Q_CLUSTER_QUEUE_LIMIT', default=50, cast=int),
+    'bulk': config('Q_CLUSTER_BULK', default=10, cast=int),
+    'orm': 'default',
+    'save_limit': config('Q_CLUSTER_SAVE_LIMIT', default=250, cast=int),
+    'ack_failures': True,
+}
+
+LOG_LEVEL = config('LOG_LEVEL', default='INFO')
+LOG_TO_FILE = _bool_config('LOG_TO_FILE', default=False)
+LOG_DIR = Path(config('LOG_DIR', default=str(BASE_DIR / 'logs')))
+LOG_FILE_MAX_BYTES = config('LOG_FILE_MAX_BYTES', default=10_485_760, cast=int)
+LOG_FILE_BACKUP_COUNT = config('LOG_FILE_BACKUP_COUNT', default=5, cast=int)
+if LOG_TO_FILE:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+log_handlers = {
+    'console': {
+        'class': 'logging.StreamHandler',
+        'formatter': 'standard',
+        'filters': ['request_id'],
+    },
+}
+root_handlers = ['console']
+if LOG_TO_FILE:
+    log_handlers['file'] = {
+        'class': 'logging.handlers.RotatingFileHandler',
+        'formatter': 'standard',
+        'filters': ['request_id'],
+        'filename': str(LOG_DIR / 'erp-carton.log'),
+        'maxBytes': LOG_FILE_MAX_BYTES,
+        'backupCount': LOG_FILE_BACKUP_COUNT,
+        'encoding': 'utf-8',
+    }
+    root_handlers.append('file')
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'standard': {
+            'format': '[%(asctime)s] %(levelname)s %(name)s [req:%(request_id)s]: %(message)s',
+        },
+    },
+    'filters': {
+        'request_id': {
+            '()': 'core.middleware.RequestIdLogFilter',
+        },
+    },
+    'handlers': log_handlers,
+    'root': {
+        'handlers': root_handlers,
+        'level': LOG_LEVEL,
+    },
+}
+
+SENTRY_DSN = config('SENTRY_DSN', default='')
+if sentry_sdk and SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=config('SENTRY_ENVIRONMENT', default=APP_ENV),
+        integrations=[DjangoIntegration()] if DjangoIntegration else [],
+        traces_sample_rate=config('SENTRY_TRACES_SAMPLE_RATE', default=0.0, cast=float),
+        profiles_sample_rate=config('SENTRY_PROFILES_SAMPLE_RATE', default=0.0, cast=float),
+        send_default_pii=_bool_config('SENTRY_SEND_DEFAULT_PII', default=False),
+    )

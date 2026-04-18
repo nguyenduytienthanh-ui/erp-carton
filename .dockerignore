@@ -1,0 +1,16 @@
+.git
+.github
+.tmp.driveupload
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/node_modules
+**/dist
+**/playwright-report
+**/test-results
+backend/.venv
+backend/backups
+backend/media
+backend/sent_emails
+frontend/.env.local
+frontend/.env.production.local

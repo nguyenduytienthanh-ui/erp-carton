@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Environment / local
+.env
+*.local
+
+# Local artifacts
+debug.log
+backend-dev.log
+frontend-dev.log
+.tmp.driveupload/
+.tmp-playwright*.png
+.tmp-*-out.log
+.tmp-*-err.log
+artifacts/
+frontend/playwright-report/
+frontend/test-results/
+frontend/dist/
+backend/.pytest_cache/
+backend/backups/
+backend/backups/*/restore_dry_run.json
+backend/backups/*/restore_last_run.json
+deploy/cloudflared/*.json
+deploy/rclone/*.conf
+docs/GO_LIVE_HANDOFF_LATEST.json
+docs/RELEASE_LOCK_LATEST.json
+screenshots/
+test_*.py

@@ -1,0 +1,14 @@
+[Unit]
+Description=ERP Carton Django Backend
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/erp-carton/backend
+EnvironmentFile=/opt/erp-carton/backend/.env
+ExecStart=/opt/erp-carton/backend/.venv/bin/gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

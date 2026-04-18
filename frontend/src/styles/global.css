@@ -1,0 +1,1144 @@
+/* Global styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f5f5f5;
+}
+
+:root {
+  --app-border: #e8edf3;
+  --app-surface: #ffffff;
+  --app-bg: #f3f6fb;
+  --table-header-bg: #f8fafc;
+  --table-row-hover: #f2f8ff;
+  --table-row-zebra: #fbfcff;
+  --table-row-selected: #e7f2ff;
+  --text-secondary: #475467;
+}
+
+/* Keep transitions only on interactive controls to avoid layout jank */
+.ant-btn,
+.ant-input,
+.ant-select-selector,
+.ant-card,
+.ant-pagination-item {
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
+}
+
+/* Sidebar menu item click feedback */
+.app-desktop-sider .ant-menu-dark .ant-menu-item:active {
+  transform: scale(0.97);
+  transition: transform 0.1s ease;
+}
+
+/* Better scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Card hover effect */
+.ant-card {
+  transition: all 0.3s ease;
+}
+
+.ant-card:hover {
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
+}
+
+/* Desktop shell polish */
+.app-main-layout {
+  background: var(--app-bg);
+}
+
+.app-desktop-sider {
+  background: linear-gradient(180deg, #071a2f 0%, #061426 100%) !important;
+}
+
+.app-desktop-sider .ant-menu-dark {
+  background: transparent !important;
+}
+
+.app-desktop-sider .ant-menu-dark .ant-menu-item {
+  margin: 6px 10px !important;
+  border-radius: 10px !important;
+}
+
+.app-desktop-sider .ant-menu-dark .ant-menu-item-selected {
+  background: rgba(24, 144, 255, 0.22) !important;
+}
+
+.app-top-header {
+  background: rgba(255, 255, 255, 0.96) !important;
+  backdrop-filter: blur(8px);
+}
+
+/* Shared list-page visual system (desktop) */
+.list-page-head {
+  border-bottom: 1px solid var(--app-border);
+}
+
+.list-page-table-wrap {
+  border-radius: 0 0 10px 10px;
+}
+
+@media (min-width: 1024px) {
+  .list-page-head {
+    padding: 14px clamp(16px, 1.4vw, 24px) !important;
+  }
+
+  .list-page-toolbar {
+    gap: 10px !important;
+  }
+
+  .list-page-table-wrap {
+    padding: 0 clamp(16px, 1.4vw, 24px) 20px !important;
+  }
+}
+
+@media (min-width: 1600px) {
+  .app-main-content {
+    border-radius: 14px !important;
+  }
+
+  .list-page-head {
+    padding-top: 16px !important;
+    padding-bottom: 16px !important;
+  }
+
+  .list-page-table-wrap {
+    padding-bottom: 24px !important;
+  }
+}
+
+/* Table row hover */
+.ant-table-tbody > tr:hover > td {
+  background-color: #fafafa !important;
+}
+
+/* Button loading state */
+.ant-btn-loading {
+  opacity: 0.7;
+}
+
+/* ==================== MODERN TABLE STYLES 2026 ==================== */
+
+/* Modern row height - 44px is the sweet spot */
+.ant-table-middle .ant-table-tbody > tr > td {
+  padding: 10px 12px !important;
+  height: 44px;
+  font-size: 14px;
+  color: #1f2937;
+}
+
+.ant-table-middle .ant-table-thead > tr > th {
+  padding: 10px 12px !important;
+  height: 44px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--table-header-bg) !important;
+  border-bottom: 1px solid #e6ebf2 !important;
+}
+
+/* Subtle borders like Notion */
+.ant-table-bordered .ant-table-container {
+  border: 1px solid #e8edf3 !important;
+  border-radius: 10px;
+}
+
+/* Header: divider rõ nhưng mảnh (1px) */
+.ant-table-thead > tr > th {
+  border-right: 1px solid #e7edf5 !important;
+}
+.ant-table-thead > tr > th:last-child {
+  border-right: none !important;
+}
+
+/* Body: divider rất mờ; mỗi 5 cột kẻ rõ hơn (nhóm cột) */
+.ant-table-tbody > tr > td {
+  border-bottom: 1px solid #edf2f7 !important;
+  border-right: 1px solid #f3f6fa !important;
+}
+.ant-table-tbody > tr > td:nth-child(5n) {
+  border-right-color: #ecf1f7 !important;
+}
+.ant-table-tbody > tr > td:last-child {
+  border-right: none !important;
+}
+
+/* Zebra row */
+.ant-table-tbody > tr:nth-child(even) > td {
+  background-color: var(--table-row-zebra) !important;
+}
+
+/* Row hover highlight */
+.ant-table-tbody > tr:hover > td {
+  background-color: var(--table-row-hover) !important;
+  transition: background-color 0.15s ease;
+}
+.ant-table-tbody > tr:nth-child(even):hover > td {
+  background-color: #eaf4ff !important;
+}
+
+/* Selected row */
+.ant-table-tbody > tr.ant-table-row-selected > td {
+  background-color: var(--table-row-selected) !important;
+}
+
+/* Column highlight khi hover header (CSS :has) */
+.ant-table-wrapper {
+  --col-hover-bg: #eaf4ff;
+  --col-hover-bg-zebra: #f3f8ff;
+  --col-hover-bg-row: #d9ebff;
+}
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(1):hover) .ant-table-tbody > tr > td:nth-child(1),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(2):hover) .ant-table-tbody > tr > td:nth-child(2),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(3):hover) .ant-table-tbody > tr > td:nth-child(3),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(4):hover) .ant-table-tbody > tr > td:nth-child(4),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(5):hover) .ant-table-tbody > tr > td:nth-child(5),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(6):hover) .ant-table-tbody > tr > td:nth-child(6),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(7):hover) .ant-table-tbody > tr > td:nth-child(7),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(8):hover) .ant-table-tbody > tr > td:nth-child(8),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(9):hover) .ant-table-tbody > tr > td:nth-child(9),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(10):hover) .ant-table-tbody > tr > td:nth-child(10),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(11):hover) .ant-table-tbody > tr > td:nth-child(11),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(12):hover) .ant-table-tbody > tr > td:nth-child(12),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(13):hover) .ant-table-tbody > tr > td:nth-child(13),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(14):hover) .ant-table-tbody > tr > td:nth-child(14),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(15):hover) .ant-table-tbody > tr > td:nth-child(15),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(16):hover) .ant-table-tbody > tr > td:nth-child(16),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(17):hover) .ant-table-tbody > tr > td:nth-child(17),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(18):hover) .ant-table-tbody > tr > td:nth-child(18),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(19):hover) .ant-table-tbody > tr > td:nth-child(19),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(20):hover) .ant-table-tbody > tr > td:nth-child(20),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(21):hover) .ant-table-tbody > tr > td:nth-child(21),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(22):hover) .ant-table-tbody > tr > td:nth-child(22),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(23):hover) .ant-table-tbody > tr > td:nth-child(23),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(24):hover) .ant-table-tbody > tr > td:nth-child(24),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(25):hover) .ant-table-tbody > tr > td:nth-child(25),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(26):hover) .ant-table-tbody > tr > td:nth-child(26),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(27):hover) .ant-table-tbody > tr > td:nth-child(27),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(28):hover) .ant-table-tbody > tr > td:nth-child(28),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(29):hover) .ant-table-tbody > tr > td:nth-child(29),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(30):hover) .ant-table-tbody > tr > td:nth-child(30),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(31):hover) .ant-table-tbody > tr > td:nth-child(31),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(32):hover) .ant-table-tbody > tr > td:nth-child(32),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(33):hover) .ant-table-tbody > tr > td:nth-child(33),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(34):hover) .ant-table-tbody > tr > td:nth-child(34),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(35):hover) .ant-table-tbody > tr > td:nth-child(35),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(36):hover) .ant-table-tbody > tr > td:nth-child(36),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(37):hover) .ant-table-tbody > tr > td:nth-child(37),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(38):hover) .ant-table-tbody > tr > td:nth-child(38),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(39):hover) .ant-table-tbody > tr > td:nth-child(39),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(40):hover) .ant-table-tbody > tr > td:nth-child(40) {
+  background-color: var(--col-hover-bg) !important;
+}
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(1):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(1),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(2):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(2),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(3):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(3),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(4):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(4),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(5):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(5),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(6):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(6),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(7):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(7),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(8):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(8),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(9):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(9),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(10):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(10),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(11):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(11),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(12):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(12),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(13):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(13),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(14):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(14),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(15):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(15),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(16):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(16),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(17):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(17),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(18):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(18),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(19):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(19),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(20):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(20),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(21):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(21),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(22):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(22),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(23):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(23),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(24):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(24),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(25):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(25),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(26):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(26),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(27):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(27),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(28):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(28),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(29):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(29),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(30):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(30),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(31):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(31),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(32):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(32),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(33):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(33),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(34):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(34),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(35):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(35),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(36):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(36),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(37):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(37),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(38):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(38),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(39):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(39),
+.ant-table-wrapper:has(.ant-table-thead > tr > th:nth-child(40):hover) .ant-table-tbody > tr:nth-child(even) > td:nth-child(40) {
+  background-color: var(--col-hover-bg-zebra) !important;
+}
+
+/* Remove default padding from table container */
+.ant-table-wrapper {
+  padding: 0 !important;
+}
+
+/* Modern checkbox */
+.ant-checkbox-wrapper {
+  align-items: center;
+}
+
+.ant-checkbox-inner {
+  border-radius: 4px !important;
+  border-color: #d1d5db !important;
+}
+
+/* Ellipsis for long text */
+.ant-table-cell-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Action column centered */
+.ant-table-tbody > tr > td:last-child {
+  text-align: center !important;
+}
+
+/* Dropdown trigger button */
+.ant-table-tbody .ant-btn-text {
+  width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  border-radius: 8px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ant-table-tbody .ant-btn-text:hover {
+  background-color: #f3f6fb !important;
+}
+
+/* Enterprise action icons: neutral idle, semantic on hover */
+.table-row-action-btn.ant-btn-text {
+  color: #6b7280 !important;
+}
+
+.table-row-action-btn.ant-btn-text:hover {
+  color: #334155 !important;
+}
+
+.table-row-action-btn.action-view.ant-btn-text:hover {
+  color: #6d28d9 !important;
+  background-color: #f3e8ff !important;
+}
+
+.table-row-action-btn.action-copy.ant-btn-text:hover {
+  color: #047857 !important;
+  background-color: #ecfdf3 !important;
+}
+
+.table-row-action-btn.action-edit.ant-btn-text:hover {
+  color: #1d4ed8 !important;
+  background-color: #eaf2ff !important;
+}
+
+.table-row-action-btn.action-delete.ant-btn-text {
+  color: #ef4444 !important;
+}
+
+.table-row-action-btn.action-delete.ant-btn-text:hover {
+  color: #b91c1c !important;
+  background-color: #feecec !important;
+}
+
+.table-row-action-btn.action-more.ant-btn-text {
+  color: #475467 !important;
+}
+
+.table-row-action-btn.action-more.ant-btn-text:hover {
+  color: #1f2937 !important;
+  background-color: #eef2f7 !important;
+}
+
+/* Enterprise toolbar polish on desktop */
+@media (min-width: 1024px) {
+  .list-page-toolbar .ant-btn {
+    height: 36px;
+    border-radius: 10px;
+  }
+
+  .list-page-toolbar .ant-btn-primary {
+    box-shadow: 0 4px 10px rgba(22, 119, 255, 0.18);
+  }
+
+  .list-page-toolbar .ant-input-affix-wrapper {
+    height: 38px;
+    border-radius: 10px;
+  }
+
+  .list-page-toolbar .ant-checkbox-wrapper {
+    color: #344054;
+    font-weight: 500;
+  }
+}
+
+/* Sticky table header with subtle separation */
+.enterprise-data-table .ant-table-sticky-holder {
+  box-shadow: 0 1px 0 #e8edf3, 0 6px 12px rgba(2, 6, 23, 0.04);
+  z-index: 2;
+}
+
+/* Improve desktop data readability */
+.enterprise-data-table .ant-table-cell {
+  font-variant-numeric: tabular-nums;
+}
+
+.enterprise-data-table .ant-table-thead > tr > th,
+.enterprise-data-table .ant-table-thead > tr > th .ant-table-column-title {
+  white-space: nowrap !important;
+  vertical-align: middle;
+}
+
+.enterprise-data-table .cell-text-primary {
+  font-weight: 500;
+  color: #111827;
+}
+
+.enterprise-data-table .cell-text-child {
+  font-weight: 500;
+  color: #cf1322;
+}
+
+.cell-text-child {
+  font-weight: 500;
+  color: #cf1322;
+}
+
+.enterprise-data-table .cell-text-secondary {
+  color: #667085;
+}
+
+.enterprise-data-table .cell-warning-soft {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.enterprise-data-table .status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.enterprise-data-table .status-pill-ok {
+  color: #166534;
+  background: #ecfdf3;
+  border-color: #bbf7d0;
+}
+
+.enterprise-data-table .status-pill-pending {
+  color: #92400e;
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.enterprise-data-table .status-pill-warn {
+  color: #b42318;
+  background: #fef3f2;
+  border-color: #fecaca;
+}
+
+.enterprise-data-table .status-pill-neutral {
+  color: #475467;
+  background: #f8fafc;
+  border-color: #e4e7ec;
+}
+
+/* Sticky sub-toolbar pattern on desktop */
+@media (min-width: 1024px) {
+  .list-page-head {
+    position: sticky;
+    top: 64px;
+    z-index: 6;
+    background: rgba(255, 255, 255, 0.98) !important;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 1px 0 #e8edf3;
+  }
+
+  .enterprise-data-table .ant-table-thead > tr > th {
+    letter-spacing: 0.1px;
+  }
+
+  .enterprise-data-table .ant-table-cell-fix-right {
+    border-left: 1px solid #edf2f7 !important;
+  }
+
+  .table-density-comfortable .ant-table-thead > tr > th {
+    padding: 10px 12px !important;
+    height: 44px;
+  }
+
+  .table-density-comfortable .ant-table-tbody > tr > td {
+    padding: 10px 12px !important;
+    height: 44px;
+  }
+
+  .table-density-compact .ant-table-thead > tr > th {
+    padding: 8px 10px !important;
+    height: 40px;
+    font-size: 12px !important;
+  }
+
+  .table-density-compact .ant-table-tbody > tr > td {
+    padding: 8px 10px !important;
+    height: 40px;
+    font-size: 13px !important;
+  }
+}
+
+/* Fixed column shadow - subtle */
+.ant-table-cell-fix-right {
+  background-color: #ffffff !important;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.03) !important;
+}
+
+/* Pagination modern style */
+.ant-pagination {
+  margin: 16px 0 0 0 !important;
+}
+
+/* InputNumber với nút xóa bên trong ô — cùng kích thước/kiểu với ô tìm kiếm (ant-input-clear-icon) */
+.input-number-with-clear.ant-input-number .ant-input-number-input,
+.input-number-with-clear .ant-input-number-input {
+  padding-right: 24px !important;
+}
+/* Wrapper ô kích thước: không cắt icon, icon luôn nổi trên */
+.input-number-with-clear-wrapper {
+  position: relative;
+  display: inline-block;
+  overflow: visible;
+}
+.input-number-with-clear-wrapper .ant-input-number {
+  display: block;
+}
+/* QuickClearIcon — chuẩn UI xóa nhanh (không dùng allowClear của Ant Design) */
+.quick-clear-icon:hover {
+  color: rgba(0, 0, 0, 0.45) !important;
+}
+.quick-clear-icon:active {
+  color: rgba(0, 0, 0, 0.65) !important;
+}
+
+/* List bottom bar (Products, Customers, ...): align pagination vertically */
+.products-list-bottom-bar .ant-pagination,
+.customers-list-bottom-bar .ant-pagination {
+  margin: 0 !important;
+}
+
+.products-list-bottom-bar .ant-pagination-item,
+.products-list-bottom-bar .ant-pagination-prev,
+.products-list-bottom-bar .ant-pagination-next,
+.products-list-bottom-bar .ant-pagination-jump-prev,
+.products-list-bottom-bar .ant-pagination-jump-next,
+.customers-list-bottom-bar .ant-pagination-item,
+.customers-list-bottom-bar .ant-pagination-prev,
+.customers-list-bottom-bar .ant-pagination-next,
+.customers-list-bottom-bar .ant-pagination-jump-prev,
+.customers-list-bottom-bar .ant-pagination-jump-next {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.products-list-bottom-bar .ant-pagination-item a,
+.customers-list-bottom-bar .ant-pagination-item a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.ant-pagination-item {
+  border-radius: 6px !important;
+  border-color: #e5e7eb !important;
+}
+
+.ant-pagination-item-active {
+  border-color: #3b82f6 !important;
+  background-color: #eff6ff !important;
+}
+
+/* Empty state */
+.ant-empty {
+  padding: 48px 24px !important;
+}
+
+/* Select dropdown above Modal (fix dropdown not opening in modal) */
+.ant-select-dropdown {
+  z-index: 9999 !important;
+}
+
+/* Ô lọc: dịch mũi tên danh sách thả xuống sang phải 1mm (~4px) */
+[data-filter-panel] .ant-select-arrow {
+  margin-right: -4px;
+}
+
+/* ==================== PRODUCT FORM UI – SPEC LƯỚI BẮT BUỘC ==================== */
+/* colW động từ contentRef (ResizeObserver). Grid 10 cột, gap 8px. Không cuộn ngang. */
+.pf-container {
+  width: 100%;
+  box-sizing: border-box;
+  display: block;
+  /* Thêm con + Huỷ/Cập nhật thẳng với Ghi chú chung (Mẹ) = 1288. Chỉ card xám (Con) = 1298, mép trái giữ nguyên. */
+  --pf-con-card-width: 1298px;
+  --pf-con-align-width: 1288px;
+}
+.pf-section {
+  margin-bottom: 8px;
+}
+/* Dịch khối Mẹ sang phải 8px; width calc(100% - 8px) để mép phải = 1288 (thẳng với header/footer) */
+.pf-section-mother {
+  margin-left: 8px;
+  width: calc(100% - 8px);
+  box-sizing: border-box;
+}
+.pf-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #262626;
+  margin: 0 0 4px 0;
+}
+.pf-row {
+  display: grid;
+  grid-template-columns: repeat(10, var(--pf-col-w, 117.6px));
+  column-gap: 8px;
+  row-gap: 0;
+  align-items: end;
+  margin-bottom: 8px;
+}
+.pf-row:last-child {
+  margin-bottom: 0;
+}
+.pf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.pf-field[style*="grid-column"] {
+  /* grid-column set inline via span */
+}
+.pf-label {
+  font-size: 12px;
+  color: #595959;
+  font-weight: 500;
+}
+.pf-required {
+  color: #ff4d4f;
+  margin-left: 2px;
+}
+.pf-input,
+.pf-select,
+.pf-textarea {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  color: #262626;
+  box-sizing: border-box;
+}
+.pf-select {
+  appearance: auto;
+  cursor: pointer;
+}
+.pf-select:invalid,
+.pf-select option[value=""],
+.filter-select-native option[value=""] {
+  color: #bfbfbf;
+}
+/* Ghi chú chung: input 32px, không textarea cao */
+.pf-textarea {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 10px;
+  resize: none;
+}
+.pf-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.pf-input-wrap .pf-input {
+  padding-right: 36px;
+}
+
+/* Detail view readability: stack product fields one per row */
+.pf-view-mode .pf-row {
+  grid-template-columns: 1fr !important;
+  row-gap: 4px;
+  margin-bottom: 4px;
+}
+
+.pf-view-mode .pf-field {
+  grid-column: 1 / -1 !important;
+  gap: 2px;
+}
+
+@media (max-width: 768px) {
+  .mobile-list-search-compact.ant-input-affix-wrapper {
+    min-height: 40px !important;
+    height: 40px !important;
+    display: flex !important;
+    align-items: center !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+  }
+
+  .mobile-list-search-compact .ant-input {
+    min-height: 0 !important;
+    height: auto !important;
+    line-height: 1.2 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    font-size: 14px !important;
+  }
+
+  .mobile-list-search-compact .ant-input-prefix,
+  .mobile-list-search-compact .ant-input-suffix {
+    display: flex;
+    align-items: center;
+  }
+
+  .mobile-sticky-pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex: 1 1 auto;
+  }
+
+  .mobile-sticky-pagination-control.ant-pagination.ant-pagination-simple {
+    display: inline-flex !important;
+    align-items: center;
+    flex-wrap: nowrap !important;
+    white-space: nowrap;
+    margin: 0 !important;
+  }
+
+  .mobile-sticky-pagination-control .ant-pagination-prev,
+  .mobile-sticky-pagination-control .ant-pagination-next,
+  .mobile-sticky-pagination-control .ant-pagination-simple-pager {
+    margin-inline: 4px !important;
+  }
+
+  .mobile-sticky-pagination-control .ant-pagination-prev,
+  .mobile-sticky-pagination-control .ant-pagination-next {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    height: 28px !important;
+    line-height: 28px !important;
+    vertical-align: middle !important;
+  }
+
+  .mobile-sticky-pagination-control .ant-pagination-prev .ant-pagination-item-link,
+  .mobile-sticky-pagination-control .ant-pagination-next .ant-pagination-item-link {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 20px !important;
+    height: 20px !important;
+    line-height: 20px !important;
+  }
+
+  .mobile-sticky-pagination-control .ant-pagination-simple-pager input {
+    width: 34px !important;
+    min-width: 34px !important;
+    text-align: center;
+  }
+}
+.pf-upload-icon {
+  position: absolute;
+  right: 10px;
+  color: #8c8c8c;
+  font-size: 16px;
+  pointer-events: none;
+}
+/* Thành phần con – card nhẹ */
+.pf-section-children {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
+}
+.pf-children-header {
+  margin-bottom: 8px;
+}
+.pf-children-header-inner {
+  width: var(--pf-con-align-width, 1288px);
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pf-children-header .ant-checkbox-wrapper {
+  font-size: 13px;
+  color: #262626;
+}
+/* Card Con: spacing giống phần Mẹ. Ô xám – padding trái = padding phải (Xả→mép trái = Bế→mép phải). */
+.pf-child-card {
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* UI requirement (PHẦN CON): outer card must hug content only */
+  height: auto;
+  min-height: unset;
+  max-height: unset;
+  flex: 0 0 auto;
+  /* UI requirement (PHẦN CON): keep left, shrink right only; cùng width với header/footer để thẳng phải */
+  width: var(--pf-con-card-width, 1298px);
+  /* Bỏ max-width: 100% để width có hiệu lực; mép trái giữ nguyên, chỉ thu hẹp phải */
+  min-width: 0;
+  overflow-x: hidden; /* không cuộn ngang */
+}
+.pf-child-card:last-of-type {
+  margin-bottom: 0;
+}
+.pf-footer {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
+}
+.pf-footer-inner {
+  width: var(--pf-con-align-width, 1288px);
+  max-width: 100%;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+/* Placeholder styling */
+input::placeholder,
+.ant-input::placeholder,
+textarea::placeholder {
+  color: #bfbfbf !important;
+  font-style: italic;
+  opacity: 0.6;
+}
+
+/* ==================== MOBILE RESPONSIVE DESIGN ==================== */
+
+/* Mobile breakpoint: 768px và nhỏ hơn */
+@media (max-width: 768px) {
+  /* Layout adjustments */
+  .ant-layout-sider {
+    position: fixed !important;
+    height: 100vh;
+    left: 0;
+    top: 0;
+    z-index: 1000;
+    transition: transform 0.3s ease;
+  }
+
+  .ant-layout-sider-collapsed {
+    transform: translateX(-100%);
+  }
+
+  .ant-layout {
+    margin-left: 0 !important;
+  }
+
+  /* Header mobile */
+  .ant-layout-header {
+    padding: 0 12px !important;
+    height: 56px !important;
+    line-height: 56px !important;
+  }
+
+  .ant-layout-header .ant-btn {
+    width: 48px !important;
+    height: 48px !important;
+    padding: 0 !important;
+  }
+
+  /* Content mobile */
+  .ant-layout-content {
+    margin: 12px 8px !important;
+    padding: 16px 12px !important;
+    border-radius: 8px !important;
+  }
+
+  /* Table mobile - horizontal scroll */
+  .ant-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ant-table {
+    min-width: 600px;
+  }
+
+  .ant-table-thead > tr > th,
+  .ant-table-tbody > tr > td {
+    padding: 8px 10px !important;
+    font-size: 13px !important;
+  }
+
+  /* Card mobile */
+  .ant-card {
+    margin-bottom: 12px !important;
+  }
+
+  .ant-card-body {
+    padding: 16px 12px !important;
+  }
+
+  /* Button mobile - touch-friendly */
+  .ant-btn {
+    min-height: 44px !important;
+    padding: 8px 16px !important;
+    font-size: 14px !important;
+  }
+
+  .ant-btn-sm {
+    min-height: 36px !important;
+    padding: 6px 12px !important;
+    font-size: 13px !important;
+  }
+
+  /* Input mobile */
+  .ant-input,
+  .ant-input-number,
+  .ant-select-selector {
+    min-height: 44px !important;
+    font-size: 16px !important; /* Prevent zoom on iOS */
+  }
+
+  /* Modal mobile */
+  .ant-modal {
+    max-width: 95vw !important;
+    margin: 10px auto !important;
+  }
+
+  .ant-modal-content {
+    border-radius: 8px !important;
+  }
+
+  .ant-modal-header {
+    padding: 16px 12px !important;
+  }
+
+  .ant-modal-body {
+    padding: 16px 12px !important;
+    max-height: calc(100vh - 120px) !important;
+    overflow-y: auto;
+  }
+
+  .ant-modal-footer {
+    padding: 12px !important;
+  }
+
+  /* Form mobile */
+  .ant-form-item {
+    margin-bottom: 16px !important;
+  }
+
+  /* Pagination mobile */
+  .ant-pagination {
+    text-align: center !important;
+  }
+
+  .ant-pagination-item,
+  .ant-pagination-prev,
+  .ant-pagination-next {
+    min-width: 40px !important;
+    height: 40px !important;
+    line-height: 40px !important;
+    margin: 0 2px !important;
+  }
+
+  /* Product Form mobile */
+  .pf-container {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .pf-row {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .pf-field {
+    width: 100% !important;
+  }
+
+  .pf-child-card {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .pf-children-header-inner,
+  .pf-footer-inner {
+    width: 100% !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  /* Action buttons mobile */
+  .ant-table-tbody .ant-btn-text {
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+  }
+
+  /* Search and filter mobile */
+  .ant-input-search {
+    width: 100% !important;
+  }
+
+  /* Dropdown mobile */
+  .ant-select-dropdown {
+    max-width: 90vw !important;
+  }
+
+  /* Menu mobile */
+  .ant-menu {
+    font-size: 14px !important;
+  }
+
+  .ant-menu-item {
+    height: 48px !important;
+    line-height: 48px !important;
+  }
+
+  /* Empty state mobile */
+  .ant-empty {
+    padding: 32px 16px !important;
+  }
+
+  .ant-empty-description {
+    font-size: 14px !important;
+  }
+}
+
+/* Tablet breakpoint: 769px - 1024px */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .ant-layout-content {
+    margin: 16px 12px !important;
+    padding: 20px 16px !important;
+  }
+
+  .ant-table-thead > tr > th,
+  .ant-table-tbody > tr > td {
+    padding: 10px 12px !important;
+    font-size: 13px !important;
+  }
+
+  .ant-btn {
+    min-height: 40px !important;
+  }
+}
+
+/* Small mobile: 480px và nhỏ hơn */
+@media (max-width: 480px) {
+  .ant-layout-header {
+    padding: 0 8px !important;
+  }
+
+  .ant-layout-content {
+    margin: 8px 4px !important;
+    padding: 12px 8px !important;
+  }
+
+  .ant-card-body {
+    padding: 12px 8px !important;
+  }
+
+  .ant-table {
+    min-width: 500px;
+    font-size: 12px !important;
+  }
+
+  .ant-table-thead > tr > th,
+  .ant-table-tbody > tr > td {
+    padding: 6px 8px !important;
+    font-size: 12px !important;
+  }
+
+  .ant-btn {
+    min-height: 44px !important;
+    padding: 10px 12px !important;
+    font-size: 14px !important;
+  }
+
+  .ant-modal {
+    max-width: 98vw !important;
+    margin: 5px auto !important;
+  }
+
+  .ant-modal-body {
+    padding: 12px 8px !important;
+  }
+}
+
+/* Touch-friendly improvements for all mobile */
+@media (hover: none) and (pointer: coarse) {
+  /* Larger touch targets */
+  .ant-btn,
+  .ant-menu-item,
+  .ant-table-tbody .ant-btn-text {
+    min-height: 44px !important;
+  }
+
+  /* Better spacing for touch */
+  .ant-form-item {
+    margin-bottom: 20px !important;
+  }
+
+  /* Prevent text selection on buttons */
+  .ant-btn {
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+}

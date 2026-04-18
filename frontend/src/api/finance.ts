@@ -1,0 +1,646 @@
+import axiosInstance from './axios';
+import { API_ENDPOINTS } from '../utils/constants';
+import type {
+  AdvanceOverdueOverviewResponse,
+  AdvanceApprovalHistoryItem,
+  AdvanceApprovalQueueResponse,
+  AdvanceApprovalSlaPolicy,
+  AdvanceApprovalSlaOverviewResponse,
+  AdvanceApprovalSlaReminderHistoryResponse,
+  AdvanceReminderPolicy,
+  AdvanceReminderPolicyHistoryResponse,
+  AdvanceReminderPolicySimulationResponse,
+  AdvanceReminderHistoryResponse,
+  ExecutiveKpiResponse,
+  ExecutiveAutoPolicy,
+  ExecutiveAutoHistoryResponse,
+  ExecutiveAutoGovernanceResponse,
+  FinanceMonthCloseCheckResponse,
+  FinanceMonthlySummaryResponse,
+  FinanceTrend12mResponse,
+  CrossModuleBootstrapResponse,
+  CrossModuleBootstrapHistoryResponse,
+  CrossModuleReadinessResponse,
+  BankReconciliationPayload,
+  BankReconciliationRecord,
+  AdvanceOverdueReportResponse,
+  ArApSummaryResponse,
+  AdvanceSettlement,
+  AdvanceTransaction,
+  BankAccount,
+  BudgetPlan,
+  BudgetVarianceAnalysisResponse,
+  CashAccount,
+  CashTransaction,
+  FinanceLockedMonthsResponse,
+  PayableDocument,
+  PaginatedResponse,
+  PayrollReconciliationResponse,
+  ReceivableDocument,
+  TransactionCategory,
+} from '../types/finance';
+
+type BankAccountPayload = Omit<BankAccount, 'id' | 'created_at' | 'updated_at'>;
+type TransactionCategoryPayload = Omit<TransactionCategory, 'id' | 'created_at' | 'updated_at' | 'is_system'>;
+type CashAccountPayload = Omit<CashAccount, 'id' | 'created_at' | 'updated_at'>;
+type CashTransactionPayload = Omit<CashTransaction, 'id' | 'created_at' | 'updated_at'>;
+type AdvanceTransactionPayload = Omit<
+  AdvanceTransaction,
+  | 'id'
+  | 'created_at'
+  | 'updated_at'
+  | 'status'
+  | 'source_cash_account_name'
+  | 'source_bank_account_code'
+  | 'total_spent'
+  | 'total_refund'
+  | 'remaining_amount'
+  | 'disbursement_status'
+  | 'disbursement_transaction_id'
+  | 'disbursed_at'
+  | 'approval_status'
+  | 'required_approval_level'
+  | 'submitted_at'
+  | 'submitted_by'
+  | 'approved_level1_at'
+  | 'approved_level1_by'
+  | 'approved_level2_at'
+  | 'approved_level2_by'
+  | 'rejected_at'
+  | 'rejected_by'
+  | 'rejection_reason'
+>;
+type AdvanceSettlementPayload = Omit<
+  AdvanceSettlement,
+  'id' | 'created_at' | 'updated_at' | 'advance_code' | 'advance_recipient_name'
+>;
+type BudgetPlanPayload = {
+  department: string;
+  category: string;
+  fiscal_year: number;
+  budgeted_amount: number | string;
+  actual_amount?: number | string;
+  committed_amount?: number | string;
+  note?: string;
+  is_active: boolean;
+};
+
+export const financeApi = {
+  getBankAccounts: async (params?: Record<string, unknown>): Promise<PaginatedResponse<BankAccount>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_BANK_ACCOUNTS, { params });
+    return response.data;
+  },
+  createBankAccount: async (payload: BankAccountPayload): Promise<BankAccount> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_BANK_ACCOUNTS, payload);
+    return response.data;
+  },
+  updateBankAccount: async (id: number, payload: Partial<BankAccountPayload>): Promise<BankAccount> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.FINANCE_BANK_ACCOUNTS}${id}/`, payload);
+    return response.data;
+  },
+  deleteBankAccount: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.FINANCE_BANK_ACCOUNTS}${id}/`);
+  },
+
+  getTransactionCategories: async (
+    params?: Record<string, unknown>
+  ): Promise<PaginatedResponse<TransactionCategory>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_TRANSACTION_CATEGORIES, { params });
+    return response.data;
+  },
+  createTransactionCategory: async (payload: TransactionCategoryPayload): Promise<TransactionCategory> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_TRANSACTION_CATEGORIES, payload);
+    return response.data;
+  },
+  updateTransactionCategory: async (
+    id: number,
+    payload: Partial<TransactionCategoryPayload>
+  ): Promise<TransactionCategory> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.FINANCE_TRANSACTION_CATEGORIES}${id}/`, payload);
+    return response.data;
+  },
+  deleteTransactionCategory: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.FINANCE_TRANSACTION_CATEGORIES}${id}/`);
+  },
+
+  getCashAccounts: async (params?: Record<string, unknown>): Promise<PaginatedResponse<CashAccount>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CASH_ACCOUNTS, { params });
+    return response.data;
+  },
+  createCashAccount: async (payload: CashAccountPayload): Promise<CashAccount> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_CASH_ACCOUNTS, payload);
+    return response.data;
+  },
+  updateCashAccount: async (id: number, payload: Partial<CashAccountPayload>): Promise<CashAccount> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.FINANCE_CASH_ACCOUNTS}${id}/`, payload);
+    return response.data;
+  },
+  deleteCashAccount: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.FINANCE_CASH_ACCOUNTS}${id}/`);
+  },
+
+  getCashTransactions: async (
+    params?: Record<string, unknown>
+  ): Promise<PaginatedResponse<CashTransaction>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CASH_TRANSACTIONS, { params });
+    return response.data;
+  },
+  createCashTransaction: async (payload: CashTransactionPayload): Promise<CashTransaction> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_CASH_TRANSACTIONS, payload);
+    return response.data;
+  },
+  updateCashTransaction: async (
+    id: number,
+    payload: Partial<CashTransactionPayload>
+  ): Promise<CashTransaction> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.FINANCE_CASH_TRANSACTIONS}${id}/`, payload);
+    return response.data;
+  },
+  deleteCashTransaction: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.FINANCE_CASH_TRANSACTIONS}${id}/`);
+  },
+
+  getAdvanceTransactions: async (
+    params?: Record<string, unknown>
+  ): Promise<PaginatedResponse<AdvanceTransaction>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_TRANSACTIONS, { params });
+    return response.data;
+  },
+  createAdvanceTransaction: async (payload: AdvanceTransactionPayload): Promise<AdvanceTransaction> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_ADVANCE_TRANSACTIONS, payload);
+    return response.data;
+  },
+  updateAdvanceTransaction: async (
+    id: number,
+    payload: Partial<AdvanceTransactionPayload>
+  ): Promise<AdvanceTransaction> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.FINANCE_ADVANCE_TRANSACTIONS}${id}/`, payload);
+    return response.data;
+  },
+  deleteAdvanceTransaction: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.FINANCE_ADVANCE_TRANSACTIONS}${id}/`);
+  },
+  getAdvanceApprovalQueue: async (): Promise<AdvanceApprovalQueueResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_QUEUE);
+    return response.data as AdvanceApprovalQueueResponse;
+  },
+  getAdvanceApprovalHistory: async (id: number): Promise<AdvanceApprovalHistoryItem[]> => {
+    const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_HISTORY.replace('{id}', String(id));
+    const response = await axiosInstance.get(endpoint);
+    return response.data as AdvanceApprovalHistoryItem[];
+  },
+  getAdvanceApprovalSlaOverview: async (): Promise<AdvanceApprovalSlaOverviewResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_SLA_OVERVIEW);
+    return response.data as AdvanceApprovalSlaOverviewResponse;
+  },
+  getAdvanceApprovalSlaReminderHistory: async (params?: { days?: number }): Promise<AdvanceApprovalSlaReminderHistoryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_SLA_REMINDER_HISTORY, { params });
+    return response.data as AdvanceApprovalSlaReminderHistoryResponse;
+  },
+  getAdvanceApprovalSlaPolicy: async (): Promise<AdvanceApprovalSlaPolicy> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_SLA_POLICY);
+    return response.data as AdvanceApprovalSlaPolicy;
+  },
+  saveAdvanceApprovalSlaPolicy: async (payload: Partial<AdvanceApprovalSlaPolicy>): Promise<{ success: boolean; policy: AdvanceApprovalSlaPolicy }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_ADVANCE_APPROVAL_SLA_POLICY, payload);
+    return response.data as { success: boolean; policy: AdvanceApprovalSlaPolicy };
+  },
+  remindAdvancePendingApprovals: async (payload?: { dry_run?: boolean }): Promise<{
+    success: boolean;
+    dry_run: boolean;
+    sent_count: number;
+    sent_usernames: string[];
+    overview: AdvanceApprovalSlaOverviewResponse;
+  }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_ADVANCE_REMIND_PENDING_APPROVALS, payload || {});
+    return response.data as {
+      success: boolean;
+      dry_run: boolean;
+      sent_count: number;
+      sent_usernames: string[];
+      overview: AdvanceApprovalSlaOverviewResponse;
+    };
+  },
+  getExecutiveKpi: async (): Promise<ExecutiveKpiResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_KPI);
+    return response.data as ExecutiveKpiResponse;
+  },
+  getFinanceMonthCloseCheck: async (month: string): Promise<FinanceMonthCloseCheckResponse> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_CASH_TRANSACTIONS}preclose_check/`, {
+      params: { month },
+    });
+    return response.data as FinanceMonthCloseCheckResponse;
+  },
+  getCashFlowSummary: async (params: {
+    date_from: string;
+    date_to: string;
+  }): Promise<{
+    date_from: string;
+    date_to: string;
+    total_income: string;
+    total_expense: string;
+    cash_delta: string;
+    transactions_count: number;
+  }> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CASH_FLOW_SUMMARY, { params });
+    return response.data;
+  },
+  getFinanceMonthlySummary: async (month: string): Promise<FinanceMonthlySummaryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_MONTHLY_SUMMARY, { params: { month } });
+    return response.data as FinanceMonthlySummaryResponse;
+  },
+  exportFinanceMonthlySummaryExcel: async (month: string): Promise<Blob> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_MONTHLY_SUMMARY, {
+      params: { month, export: 'excel' },
+      responseType: 'blob',
+    });
+    return response.data as Blob;
+  },
+  getFinanceTrend12m: async (endMonth?: string): Promise<FinanceTrend12mResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_TREND_12M, {
+      params: endMonth ? { end_month: endMonth } : undefined,
+    });
+    return response.data as FinanceTrend12mResponse;
+  },
+  getCrossModuleReadiness: async (): Promise<CrossModuleReadinessResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CROSS_MODULE_READINESS);
+    return response.data as CrossModuleReadinessResponse;
+  },
+  runCrossModuleBootstrap: async (payload?: { dry_run?: boolean }): Promise<CrossModuleBootstrapResponse> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_CROSS_MODULE_BOOTSTRAP, payload || {});
+    return response.data as CrossModuleBootstrapResponse;
+  },
+  getCrossModuleBootstrapHistory: async (params?: { limit?: number; days?: number; username?: string; dry_run?: 'true' | 'false' }): Promise<CrossModuleBootstrapHistoryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CROSS_MODULE_BOOTSTRAP_HISTORY, { params });
+    return response.data as CrossModuleBootstrapHistoryResponse;
+  },
+  exportCrossModuleBootstrapHistoryExcel: async (params?: { days?: number; username?: string; dry_run?: 'true' | 'false' }): Promise<Blob> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_CROSS_MODULE_BOOTSTRAP_HISTORY, {
+      params: { ...(params || {}), export: 'excel' },
+      responseType: 'blob',
+    });
+    return response.data as Blob;
+  },
+  getExecutiveAutoPolicy: async (): Promise<ExecutiveAutoPolicy> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_POLICY);
+    return response.data as ExecutiveAutoPolicy;
+  },
+  saveExecutiveAutoPolicy: async (payload: Partial<ExecutiveAutoPolicy>): Promise<{ success: boolean; policy: ExecutiveAutoPolicy }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_POLICY, payload);
+    return response.data as { success: boolean; policy: ExecutiveAutoPolicy };
+  },
+  runExecutiveAutoExecute: async (payload?: { force?: boolean }): Promise<{
+    success: boolean;
+    skipped: boolean;
+    reason?: string;
+    policy?: ExecutiveAutoPolicy;
+    finance_result?: { sent_count?: number };
+    workforce_result?: { sent_count?: number };
+  }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_EXECUTE, payload || {});
+    return response.data as {
+      success: boolean;
+      skipped: boolean;
+      reason?: string;
+      policy?: ExecutiveAutoPolicy;
+      finance_result?: { sent_count?: number };
+      workforce_result?: { sent_count?: number };
+    };
+  },
+  getExecutiveAutoHistory: async (params?: { limit?: number }): Promise<ExecutiveAutoHistoryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_HISTORY, { params });
+    return response.data as ExecutiveAutoHistoryResponse;
+  },
+  getExecutiveAutoGovernance: async (params?: { days?: number; group_by?: 'day' | 'week' }): Promise<ExecutiveAutoGovernanceResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_GOVERNANCE, { params });
+    return response.data as ExecutiveAutoGovernanceResponse;
+  },
+  exportExecutiveAutoGovernanceExcel: async (params?: { days?: number; group_by?: 'day' | 'week' }): Promise<Blob> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_EXECUTIVE_AUTO_GOVERNANCE, {
+      params: { ...(params || {}), export: 'excel' },
+      responseType: 'blob',
+    });
+    return response.data as Blob;
+  },
+  submitAdvanceApproval: async (id: number): Promise<{ success: boolean; approval_status: string; required_approval_level: number }> => {
+    const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_SUBMIT_APPROVAL.replace('{id}', String(id));
+    const response = await axiosInstance.post(endpoint, {});
+    return response.data as { success: boolean; approval_status: string; required_approval_level: number };
+  },
+  approveAdvanceLevel1: async (id: number): Promise<{ success: boolean; approval_status: string }> => {
+    const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_APPROVE_LEVEL1.replace('{id}', String(id));
+    const response = await axiosInstance.post(endpoint, {});
+    return response.data as { success: boolean; approval_status: string };
+  },
+  approveAdvanceLevel2: async (id: number): Promise<{ success: boolean; approval_status: string }> => {
+    const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_APPROVE_LEVEL2.replace('{id}', String(id));
+    const response = await axiosInstance.post(endpoint, {});
+    return response.data as { success: boolean; approval_status: string };
+  },
+  postAdvanceDisbursement: async (id: number): Promise<{ success: boolean; transaction_id: number; disbursement_status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_ADVANCE_TRANSACTIONS}${id}/post_disbursement/`, {});
+    return response.data as { success: boolean; transaction_id: number; disbursement_status: string };
+  },
+  reverseAdvanceDisbursement: async (id: number): Promise<{ success: boolean; transaction_id: number; disbursement_status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_ADVANCE_TRANSACTIONS}${id}/reverse_disbursement/`, {});
+    return response.data as { success: boolean; transaction_id: number; disbursement_status: string };
+  },
+  rejectAdvanceApproval: async (id: number, reason: string): Promise<{ success: boolean; approval_status: string }> => {
+    const endpoint = API_ENDPOINTS.FINANCE_ADVANCE_REJECT_APPROVAL.replace('{id}', String(id));
+    const response = await axiosInstance.post(endpoint, { reason });
+    return response.data as { success: boolean; approval_status: string };
+  },
+
+  getAdvanceSettlements: async (params?: Record<string, unknown>): Promise<PaginatedResponse<AdvanceSettlement>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_SETTLEMENTS, { params });
+    return response.data;
+  },
+  createAdvanceSettlement: async (payload: AdvanceSettlementPayload): Promise<AdvanceSettlement> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_ADVANCE_SETTLEMENTS, payload);
+    return response.data;
+  },
+  updateAdvanceSettlement: async (
+    id: number,
+    payload: Partial<AdvanceSettlementPayload>
+  ): Promise<AdvanceSettlement> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.FINANCE_ADVANCE_SETTLEMENTS}${id}/`, payload);
+    return response.data;
+  },
+  deleteAdvanceSettlement: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.FINANCE_ADVANCE_SETTLEMENTS}${id}/`);
+  },
+
+  getReceivables: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ReceivableDocument>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_RECEIVABLES, { params });
+    return response.data;
+  },
+  getReceivable: async (id: number): Promise<ReceivableDocument> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_RECEIVABLES}${id}/`);
+    return response.data;
+  },
+  getReceivableSummary: async (params?: Record<string, unknown>): Promise<ArApSummaryResponse> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_RECEIVABLES}summary/`, { params });
+    return response.data as ArApSummaryResponse;
+  },
+  collectReceivable: async (
+    id: number,
+    payload: {
+      settlement_date?: string;
+      amount: string;
+      source_type?: 'CASH' | 'BANK';
+      source_cash_account?: number | null;
+      source_bank_account?: number | null;
+      note?: string;
+    }
+  ): Promise<ReceivableDocument> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_RECEIVABLES}${id}/collect/`, payload);
+    return response.data;
+  },
+  cancelReceivable: async (id: number, reason: string): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_RECEIVABLES}${id}/cancel/`, { reason });
+    return response.data;
+  },
+
+  getPayables: async (params?: Record<string, unknown>): Promise<PaginatedResponse<PayableDocument>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_PAYABLES, { params });
+    return response.data;
+  },
+  getPayable: async (id: number): Promise<PayableDocument> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_PAYABLES}${id}/`);
+    return response.data;
+  },
+  getPayableSummary: async (params?: Record<string, unknown>): Promise<ArApSummaryResponse> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_PAYABLES}summary/`, { params });
+    return response.data as ArApSummaryResponse;
+  },
+  getBudgets: async (params?: Record<string, unknown>): Promise<PaginatedResponse<BudgetPlan>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_BUDGETS, { params });
+    return response.data;
+  },
+  createBudget: async (payload: BudgetPlanPayload): Promise<BudgetPlan> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_BUDGETS, payload);
+    return response.data;
+  },
+  updateBudget: async (id: number, payload: Partial<BudgetPlanPayload>): Promise<BudgetPlan> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.FINANCE_BUDGETS}${id}/`, payload);
+    return response.data;
+  },
+  deleteBudget: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.FINANCE_BUDGETS}${id}/`);
+  },
+  getBudgetVarianceAnalysis: async (params?: Record<string, unknown>): Promise<BudgetVarianceAnalysisResponse> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.FINANCE_BUDGETS}variance_analysis/`, { params });
+    return response.data as BudgetVarianceAnalysisResponse;
+  },
+  getGeneralLedger: async (params: {
+    date_from: string;
+    date_to: string;
+    category?: number;
+  }): Promise<{
+    date_from: string;
+    date_to: string;
+    results: Array<{
+      id: number;
+      transaction_date: string;
+      reference: string;
+      category_id: number | null;
+      category_code: string;
+      category_name: string;
+      description: string;
+      transaction_type: string;
+      debit: string;
+      credit: string;
+    }>;
+  }> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_GENERAL_LEDGER, { params });
+    return response.data;
+  },
+  payPayable: async (
+    id: number,
+    payload: {
+      settlement_date?: string;
+      amount: string;
+      source_type?: 'CASH' | 'BANK';
+      source_cash_account?: number | null;
+      source_bank_account?: number | null;
+      note?: string;
+    }
+  ): Promise<PayableDocument> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_PAYABLES}${id}/pay/`, payload);
+    return response.data;
+  },
+  cancelPayable: async (id: number, reason: string): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.FINANCE_PAYABLES}${id}/cancel/`, { reason });
+    return response.data;
+  },
+
+  getAdvanceOverdueReport: async (params?: {
+    as_of?: string;
+    overdue_days?: number;
+  }): Promise<AdvanceOverdueReportResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_OVERDUE_REPORT, { params });
+    return response.data as AdvanceOverdueReportResponse;
+  },
+
+  exportAdvanceOverdueReportExcel: async (params?: {
+    as_of?: string;
+    overdue_days?: number;
+  }): Promise<Blob> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_OVERDUE_REPORT, {
+      params: { ...params, export: 'excel' },
+      responseType: 'blob',
+    });
+    return response.data as Blob;
+  },
+
+  getAdvanceOverdueOverview: async (params?: {
+    as_of?: string;
+  }): Promise<AdvanceOverdueOverviewResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_OVERDUE_OVERVIEW, { params });
+    return response.data as AdvanceOverdueOverviewResponse;
+  },
+
+  remindOverdueAdvances: async (payload?: {
+    threshold_days?: number;
+    as_of?: string;
+    recipient_usernames?: string[];
+  }): Promise<{
+    success: boolean;
+    sent_count: number;
+    sent_usernames?: string[];
+    requested_usernames?: string[];
+  }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_ADVANCE_REMIND_OVERDUE, payload || {});
+    return response.data as {
+      success: boolean;
+      sent_count: number;
+      sent_usernames?: string[];
+      requested_usernames?: string[];
+    };
+  },
+
+  getAdvanceReminderHistory: async (params?: {
+    days?: number;
+    as_of_from?: string;
+    as_of_to?: string;
+    unread_only?: boolean;
+  }): Promise<AdvanceReminderHistoryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_REMINDER_HISTORY, { params });
+    return response.data as AdvanceReminderHistoryResponse;
+  },
+
+  exportAdvanceReminderHistoryExcel: async (params?: {
+    days?: number;
+    as_of_from?: string;
+    as_of_to?: string;
+    unread_only?: boolean;
+  }): Promise<Blob> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_REMINDER_HISTORY, {
+      params: { ...(params || {}), export: 'excel' },
+      responseType: 'blob',
+    });
+    return response.data as Blob;
+  },
+
+  getFinanceLockedMonths: async (): Promise<FinanceLockedMonthsResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_LOCKED_MONTHS);
+    return response.data as FinanceLockedMonthsResponse;
+  },
+
+  lockFinanceMonth: async (month: string): Promise<FinanceLockedMonthsResponse> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_LOCK_MONTH, { month });
+    return response.data as FinanceLockedMonthsResponse;
+  },
+
+  unlockFinanceMonth: async (month: string, force = false): Promise<FinanceLockedMonthsResponse> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_UNLOCK_MONTH, { month, force });
+    return response.data as FinanceLockedMonthsResponse;
+  },
+
+  getPayrollReconciliation: async (month: string): Promise<PayrollReconciliationResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_PAYROLL_RECONCILIATION, { params: { month } });
+    return response.data as PayrollReconciliationResponse;
+  },
+
+  getAdvanceReminderPolicy: async (): Promise<AdvanceReminderPolicy> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_REMINDER_POLICY);
+    return response.data as AdvanceReminderPolicy;
+  },
+
+  saveAdvanceReminderPolicy: async (payload: Partial<AdvanceReminderPolicy>): Promise<{
+    success: boolean;
+    policy: AdvanceReminderPolicy;
+  }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_ADVANCE_REMINDER_POLICY, payload);
+    return response.data as { success: boolean; policy: AdvanceReminderPolicy };
+  },
+
+  getAdvanceReminderPolicyHistory: async (params?: {
+    limit?: number;
+  }): Promise<AdvanceReminderPolicyHistoryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.FINANCE_ADVANCE_REMINDER_POLICY_HISTORY, { params });
+    return response.data as AdvanceReminderPolicyHistoryResponse;
+  },
+
+  rollbackAdvanceReminderPolicy: async (payload: {
+    audit_log_id: number;
+  }): Promise<{
+    success: boolean;
+    policy: AdvanceReminderPolicy;
+    rolled_back_to_audit_log_id: number;
+  }> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_ADVANCE_REMINDER_POLICY_ROLLBACK, payload);
+    return response.data as {
+      success: boolean;
+      policy: AdvanceReminderPolicy;
+      rolled_back_to_audit_log_id: number;
+    };
+  },
+
+  simulateAdvanceReminderPolicy: async (payload: {
+    threshold_days?: number;
+    as_of?: string;
+    recipient_usernames?: string[];
+    policy?: Partial<AdvanceReminderPolicy>;
+  }): Promise<AdvanceReminderPolicySimulationResponse> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.FINANCE_ADVANCE_REMINDER_POLICY_SIMULATE, payload);
+    return response.data as AdvanceReminderPolicySimulationResponse;
+  },
+
+  // Bank Reconciliation
+  getBankReconciliations: async (params?: Record<string, unknown>): Promise<PaginatedResponse<BankReconciliationRecord>> => {
+    const response = await axiosInstance.get('/finance/bank-reconciliations/', { params });
+    return response.data;
+  },
+  getBankReconciliation: async (id: number): Promise<BankReconciliationRecord> => {
+    const response = await axiosInstance.get(`/finance/bank-reconciliations/${id}/`);
+    return response.data;
+  },
+  createBankReconciliation: async (payload: BankReconciliationPayload): Promise<BankReconciliationRecord> => {
+    const response = await axiosInstance.post('/finance/bank-reconciliations/', payload);
+    return response.data;
+  },
+  updateBankReconciliation: async (id: number, payload: Partial<BankReconciliationPayload>): Promise<BankReconciliationRecord> => {
+    const response = await axiosInstance.patch(`/finance/bank-reconciliations/${id}/`, payload);
+    return response.data;
+  },
+  deleteBankReconciliation: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`/finance/bank-reconciliations/${id}/`);
+  },
+  approveBankReconciliation: async (id: number): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`/finance/bank-reconciliations/${id}/approve/`);
+    return response.data;
+  },
+  postBankReconciliation: async (id: number): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`/finance/bank-reconciliations/${id}/post/`);
+    return response.data;
+  },
+};
+
+export const bankAccountsApi = {
+  getBankAccounts: financeApi.getBankAccounts,
+  createBankAccount: financeApi.createBankAccount,
+  updateBankAccount: financeApi.updateBankAccount,
+  deleteBankAccount: financeApi.deleteBankAccount,
+};
+
