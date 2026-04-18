@@ -1077,6 +1077,7 @@ export default function Dashboard() {
                 key={card.key}
                 type="button"
                 className="command-center-shortcut"
+                data-testid={`dashboard-restore-${card.key}`}
                 onClick={() => navigate(card.route)}
               >
                 <div className="command-center-shortcut-meta">

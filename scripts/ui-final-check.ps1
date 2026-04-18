@@ -1,6 +1,7 @@
 param(
     [string]$Scenario = "",
     [string]$Route = "",
+    [Alias("BaseUrl")]
     [string]$FrontendBase = "http://127.0.0.1:5173",
     [string]$ApiBaseUrl = "",
     [string]$Username = "uat_admin",
