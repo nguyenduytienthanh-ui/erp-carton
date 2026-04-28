@@ -1,16 +1,37 @@
+from django.db import transaction
 from rest_framework import serializers
 from .models import (
     ProductCategory,
     ProductUnit,
     ProductWave,
     ProductBoxType,
+    Operation,
     Product,
+    ProductOperation,
     ProductBundle,
     ProductBundleComponent,
     PriceChange,
     BundlePriceChange,
 )
 from core.models import Task
+
+
+LEGACY_PROCESS_OPERATION_MAP = [
+    ('process_xa', 'XA', 'Xả', 10),
+    ('process_in', 'IN', 'In', 20),
+    ('process_can_mang', 'CAN_MANG', 'Cán màng', 30),
+    ('process_boi', 'BOI', 'Bồi', 40),
+    ('process_be', 'BE', 'Bế', 50),
+    ('process_chap', 'CHAP', 'Chạp', 60),
+    ('process_dong', 'DONG', 'Đóng', 70),
+    ('process_dan', 'DAN', 'Dán', 80),
+    ('process_khac', 'KHAC', 'Khác', 90),
+]
+LEGACY_PROCESS_FIELDS = [item[0] for item in LEGACY_PROCESS_OPERATION_MAP]
+LEGACY_PROCESS_FIELD_BY_OPERATION_CODE = {
+    operation_code: field_name
+    for field_name, operation_code, _fallback_name, _fallback_sequence in LEGACY_PROCESS_OPERATION_MAP
+}
 
 
 class ProductCategorySerializer(serializers.ModelSerializer):
@@ -81,6 +102,49 @@ class ProductBoxTypeSerializer(serializers.ModelSerializer):
             'id', 'created_at', 'updated_at',
             'created_by', 'updated_by', 'deleted_at', 'deleted_by',
         ]
+
+
+class OperationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Operation
+        fields = [
+            'id', 'code', 'name', 'sequence', 'default_unit', 'description',
+            'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class ProductOperationSerializer(serializers.ModelSerializer):
+    operation_id = serializers.ReadOnlyField()
+
+    class Meta:
+        model = ProductOperation
+        fields = [
+            'id', 'operation_id', 'operation_code', 'operation_name',
+            'sequence', 'standard_rate_per_hour', 'note', 'is_active',
+        ]
+        read_only_fields = fields
+
+
+class ProductOperationInputSerializer(serializers.Serializer):
+    operation_id = serializers.IntegerField(required=False, allow_null=True)
+    operation_code = serializers.CharField(required=False, allow_blank=True)
+    standard_rate_per_hour = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    note = serializers.CharField(required=False, allow_blank=True, default='')
+    sequence = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    is_active = serializers.BooleanField(required=False, default=True)
+
+    def validate(self, attrs):
+        operation_id = attrs.get('operation_id')
+        operation_code = (attrs.get('operation_code') or '').strip().upper()
+        if not operation_id and not operation_code:
+            raise serializers.ValidationError('operation_id or operation_code is required.')
+        attrs['operation_code'] = operation_code
+        if attrs.get('is_active', True) and not attrs.get('standard_rate_per_hour'):
+            raise serializers.ValidationError({
+                'standard_rate_per_hour': 'Active operation rate is required.'
+            })
+        return attrs
 
 
 class ProductBundleComponentSerializer(serializers.ModelSerializer):
@@ -318,6 +382,8 @@ class ProductSerializer(serializers.ModelSerializer):
     resolved_bundle_sale_price = serializers.SerializerMethodField()
     resolved_bundle_commission_per_unit = serializers.SerializerMethodField()
     resolved_bundle_commission_percent = serializers.SerializerMethodField()
+    operations = serializers.SerializerMethodField()
+    operations_input = ProductOperationInputSerializer(many=True, write_only=True, required=False)
 
     class Meta:
         model = Product
@@ -332,6 +398,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'delivery_tolerance', 'commission_per_unit', 'commission_percent',
             'process_xa', 'process_in', 'process_boi', 'process_can_mang',
             'process_be', 'process_chap', 'process_dong', 'process_dan', 'process_khac',
+            'operations', 'operations_input',
             'film_code', 'film_file_url', 'color_count',
             'mold_code', 'mold_file_url', 'waterproof',
             'note_other', 'note',
@@ -366,6 +433,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'bundle_primary_product_id', 'bundle_primary_product_name',
             'resolved_bundle_cost_price', 'resolved_bundle_sale_price',
             'resolved_bundle_commission_per_unit', 'resolved_bundle_commission_percent',
+            'operations',
         ]
         extra_kwargs = {
             'code': {
@@ -375,6 +443,216 @@ class ProductSerializer(serializers.ModelSerializer):
                 'error_messages': {'unique': 'Mã hàng này đã tồn tại, hãy đổi lại.'},
             },
         }
+
+    def _request_user(self):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user and getattr(user, 'is_authenticated', False):
+            return user
+        return None
+
+    def _operation_lookup_by_id(self):
+        lookup = self.context.get('_operation_lookup_by_id')
+        if lookup is None:
+            lookup = {operation.id: operation for operation in Operation.objects.all()}
+            self.context['_operation_lookup_by_id'] = lookup
+        return lookup
+
+    def _resolve_operations_input(self, operations_data):
+        operation_lookup = self._operation_lookup()
+        operation_lookup_by_id = self._operation_lookup_by_id()
+        resolved_operations = []
+        seen_operation_codes = set()
+        errors = {}
+
+        for index, item in enumerate(operations_data):
+            operation_id = item.get('operation_id')
+            operation_code = (item.get('operation_code') or '').strip().upper()
+            operation = None
+            if operation_id:
+                operation = operation_lookup_by_id.get(operation_id)
+                if operation is None:
+                    errors[index] = {'operation_id': 'Operation does not exist.'}
+                    continue
+                if operation_code and operation.code != operation_code:
+                    errors[index] = {'operation_code': 'operation_code does not match operation_id.'}
+                    continue
+            else:
+                operation = operation_lookup.get(operation_code)
+                if operation is None:
+                    errors[index] = {'operation_code': 'Operation does not exist.'}
+                    continue
+
+            if operation.code in seen_operation_codes:
+                errors[index] = {'operation_code': 'Duplicate operation in operations_input.'}
+                continue
+            seen_operation_codes.add(operation.code)
+
+            resolved_operations.append({
+                'operation': operation,
+                'operation_code': operation.code,
+                'standard_rate_per_hour': item.get('standard_rate_per_hour'),
+                'note': item.get('note', ''),
+                'sequence': item.get('sequence') if item.get('sequence') is not None else operation.sequence,
+                'is_active': item.get('is_active', True),
+            })
+
+        if errors:
+            raise serializers.ValidationError({'operations_input': errors})
+        return resolved_operations
+
+    def _apply_operations_input_to_process_fields(self, data, resolved_operations):
+        for field_name in LEGACY_PROCESS_FIELDS:
+            data[field_name] = None
+        for item in resolved_operations:
+            if not item['is_active']:
+                continue
+            field_name = LEGACY_PROCESS_FIELD_BY_OPERATION_CODE.get(item['operation_code'])
+            if field_name:
+                data[field_name] = item['standard_rate_per_hour']
+
+    @staticmethod
+    def _positive_int(value):
+        try:
+            number = int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+        return number if number > 0 else 0
+
+    def _clear_product_operation_cache(self, product):
+        if hasattr(product, 'prefetched_product_operations'):
+            delattr(product, 'prefetched_product_operations')
+        prefetched_cache = getattr(product, '_prefetched_objects_cache', None)
+        if prefetched_cache is not None:
+            prefetched_cache.pop('operations', None)
+
+    def _save_product_operation(self, product, operation, rate, note=None, sequence=None):
+        user = self._request_user()
+        product_operation, created = ProductOperation.objects.get_or_create(
+            product=product,
+            operation=operation,
+            defaults={
+                'operation_code': operation.code,
+                'operation_name': operation.name,
+                'sequence': sequence if sequence is not None else operation.sequence,
+                'standard_rate_per_hour': rate,
+                'note': note or '',
+                'is_active': True,
+                'created_by': user,
+                'updated_by': user,
+            },
+        )
+        if not created:
+            product_operation.operation_code = operation.code
+            product_operation.operation_name = operation.name
+            product_operation.sequence = sequence if sequence is not None else operation.sequence
+            product_operation.standard_rate_per_hour = rate
+            if note is not None:
+                product_operation.note = note
+            product_operation.is_active = True
+            product_operation.updated_by = user
+            product_operation.save()
+        return product_operation
+
+    def _deactivate_product_operation(self, product, operation):
+        user = self._request_user()
+        updates = {'is_active': False}
+        if user:
+            updates['updated_by'] = user
+        ProductOperation.objects.filter(product=product, operation=operation).update(**updates)
+
+    def _sync_product_operations_from_input(self, product, resolved_operations):
+        provided_operation_codes = set()
+        for item in resolved_operations:
+            operation = item['operation']
+            provided_operation_codes.add(operation.code)
+            if item['is_active']:
+                self._save_product_operation(
+                    product=product,
+                    operation=operation,
+                    rate=item['standard_rate_per_hour'],
+                    note=item.get('note', ''),
+                    sequence=item.get('sequence'),
+                )
+            else:
+                self._deactivate_product_operation(product, operation)
+
+        stale_operations = ProductOperation.objects.filter(product=product).exclude(
+            operation__code__in=provided_operation_codes
+        )
+        user = self._request_user()
+        stale_updates = {'is_active': False}
+        if user:
+            stale_updates['updated_by'] = user
+        stale_operations.update(**stale_updates)
+        self._clear_product_operation_cache(product)
+
+    def _sync_product_operations_from_legacy_process_fields(self, product):
+        operation_lookup = self._operation_lookup()
+        for field_name, operation_code, _fallback_name, _fallback_sequence in LEGACY_PROCESS_OPERATION_MAP:
+            operation = operation_lookup.get(operation_code)
+            if operation is None:
+                continue
+            rate = self._positive_int(getattr(product, field_name, None))
+            if rate:
+                self._save_product_operation(
+                    product=product,
+                    operation=operation,
+                    rate=rate,
+                    sequence=operation.sequence,
+                )
+            else:
+                self._deactivate_product_operation(product, operation)
+        self._clear_product_operation_cache(product)
+
+    def get_operations(self, obj):
+        active_operations = self._get_active_product_operations(obj)
+        if active_operations:
+            return ProductOperationSerializer(active_operations, many=True).data
+        return self._build_legacy_process_operations(obj)
+
+    def _get_active_product_operations(self, obj):
+        prefetched = getattr(obj, 'prefetched_product_operations', None)
+        if prefetched is not None:
+            operations = [operation for operation in prefetched if operation.is_active]
+            return sorted(operations, key=lambda item: (item.sequence or 0, item.operation_code or '', item.id or 0))
+        return list(
+            obj.operations
+            .filter(is_active=True)
+            .select_related('operation')
+            .order_by('sequence', 'operation_code', 'id')
+        )
+
+    def _operation_lookup(self):
+        lookup = self.context.get('_operation_lookup')
+        if lookup is None:
+            lookup = {operation.code: operation for operation in Operation.objects.all()}
+            self.context['_operation_lookup'] = lookup
+        return lookup
+
+    def _build_legacy_process_operations(self, obj):
+        operation_lookup = self._operation_lookup()
+        payload = []
+        for field_name, operation_code, fallback_name, fallback_sequence in LEGACY_PROCESS_OPERATION_MAP:
+            raw_rate = getattr(obj, field_name, None)
+            try:
+                rate = int(raw_rate or 0)
+            except (TypeError, ValueError):
+                rate = 0
+            if rate <= 0:
+                continue
+            operation = operation_lookup.get(operation_code)
+            payload.append({
+                'id': None,
+                'operation_id': operation.id if operation else None,
+                'operation_code': operation_code,
+                'operation_name': operation.name if operation else fallback_name,
+                'sequence': operation.sequence if operation else fallback_sequence,
+                'standard_rate_per_hour': rate,
+                'note': '',
+                'is_active': True,
+            })
+        return payload
 
     def get_category_name(self, obj):
         return f"{obj.category.code} - {obj.category.name}" if obj.category else None
@@ -615,11 +893,13 @@ class ProductSerializer(serializers.ModelSerializer):
                         'price_change_reason': 'Vui lòng nhập lý do khi thay đổi giá hoặc hoa hồng.'
                 })
 
-        process_fields = [
-            'process_xa', 'process_in', 'process_boi', 'process_can_mang',
-            'process_be', 'process_chap', 'process_dong', 'process_dan', 'process_khac',
-        ]
-        for field in process_fields:
+        operations_input = data.get('operations_input')
+        if operations_input is not None:
+            resolved_operations = self._resolve_operations_input(operations_input)
+            data['_resolved_operations_input'] = resolved_operations
+            self._apply_operations_input_to_process_fields(data, resolved_operations)
+
+        for field in LEGACY_PROCESS_FIELDS:
             if data.get(field) is not None and data[field] < 0:
                 raise serializers.ValidationError({
                     field: 'Định mức phải lớn hơn 0'
@@ -628,25 +908,42 @@ class ProductSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
+        operations_input = validated_data.pop('_resolved_operations_input', None)
+        validated_data.pop('operations_input', None)
         # Remove write-only fields that are not model fields
         validated_data.pop('price_change_reason', None)
         validated_data.pop('price_effective_at', None)
         validated_data.pop('skip_price_floor_validation', None)
         
-        request = self.context.get('request')
-        if request and request.user:
-            validated_data['created_by'] = request.user
-            validated_data['updated_by'] = request.user
-        return super().create(validated_data)
+        user = self._request_user()
+        if user:
+            validated_data['created_by'] = user
+            validated_data['updated_by'] = user
+        with transaction.atomic():
+            product = super().create(validated_data)
+            if operations_input is not None:
+                self._sync_product_operations_from_input(product, operations_input)
+            else:
+                self._sync_product_operations_from_legacy_process_fields(product)
+        return product
 
     def update(self, instance, validated_data):
+        operations_input = validated_data.pop('_resolved_operations_input', None)
+        validated_data.pop('operations_input', None)
+        legacy_process_touched = any(field in validated_data for field in LEGACY_PROCESS_FIELDS)
         validated_data.pop('price_change_reason', None)
         validated_data.pop('price_effective_at', None)
         validated_data.pop('skip_price_floor_validation', None)
-        request = self.context.get('request')
-        if request and request.user:
-            validated_data['updated_by'] = request.user
-        return super().update(instance, validated_data)
+        user = self._request_user()
+        if user:
+            validated_data['updated_by'] = user
+        with transaction.atomic():
+            product = super().update(instance, validated_data)
+            if operations_input is not None:
+                self._sync_product_operations_from_input(product, operations_input)
+            elif legacy_process_touched:
+                self._sync_product_operations_from_legacy_process_fields(product)
+        return product
 
     def validate_sale_price(self, value):
         if value is not None and value < 0:

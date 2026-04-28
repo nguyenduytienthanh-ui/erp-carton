@@ -1,10 +1,12 @@
 from django.contrib import admin
 from .models import (
+    Operation,
     ProductCategory,
     ProductUnit,
     ProductWave,
     ProductBoxType,
     Product,
+    ProductOperation,
     ProductBundle,
     ProductBundleComponent,
 )
@@ -152,6 +154,39 @@ class ProductBoxTypeAdmin(admin.ModelAdmin):
 
     def get_queryset(self, request):
         return super().get_queryset(request).filter(deleted_at__isnull=True)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(Operation)
+class OperationAdmin(admin.ModelAdmin):
+    list_display = ['code', 'name', 'sequence', 'default_unit', 'is_active', 'updated_at']
+    list_filter = ['is_active', 'default_unit']
+    search_fields = ['code', 'name', 'description']
+    ordering = ['sequence', 'code']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(ProductOperation)
+class ProductOperationAdmin(admin.ModelAdmin):
+    list_display = [
+        'product',
+        'operation_code',
+        'operation_name',
+        'sequence',
+        'standard_rate_per_hour',
+        'is_active',
+        'updated_at',
+    ]
+    list_filter = ['operation', 'is_active']
+    search_fields = ['product__code', 'product__name', 'operation_code', 'operation_name', 'note']
+    ordering = ['product__code', 'sequence', 'operation_code']
+    readonly_fields = ['operation_code', 'operation_name', 'created_at', 'updated_at', 'created_by', 'updated_by']
+    autocomplete_fields = ['product', 'operation']
 
     def save_model(self, request, obj, form, change):
         if not change:

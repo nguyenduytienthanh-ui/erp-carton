@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.db import models
 from django.db.models import Q
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from unidecode import unidecode
 
@@ -269,6 +270,36 @@ class ProductBoxType(models.Model):
                 condition=Q(deleted_at__isnull=True),
                 name='product_boxtype_code_uniq_active',
             ),
+        ]
+
+    def __str__(self):
+        return f"{self.code} - {self.name}"
+
+    def save(self, *args, **kwargs):
+        if self.code:
+            self.code = str(self.code).strip().upper()
+        super().save(*args, **kwargs)
+
+
+class Operation(models.Model):
+    """Master production operation used as the source for product routings."""
+
+    code = models.CharField(max_length=30, unique=True)
+    name = models.CharField(max_length=100)
+    sequence = models.PositiveIntegerField(default=100)
+    default_unit = models.CharField(max_length=30, default='pcs/hour')
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'operations'
+        ordering = ['sequence', 'code']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['sequence']),
+            models.Index(fields=['is_active']),
         ]
 
     def __str__(self):
@@ -613,6 +644,79 @@ class Product(models.Model):
         if self.wave:
             parts.append(f"- {self.wave.code}")
         return " ".join(parts)
+
+
+class ProductOperation(models.Model):
+    """Standard operation/rate for a product, replacing legacy process_* columns over time."""
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='operations',
+    )
+    operation = models.ForeignKey(
+        Operation,
+        on_delete=models.PROTECT,
+        related_name='product_operations',
+    )
+    operation_code = models.CharField(max_length=30, blank=True)
+    operation_name = models.CharField(max_length=100, blank=True)
+    sequence = models.PositiveIntegerField(default=0)
+    standard_rate_per_hour = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    note = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_product_operations',
+    )
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='updated_product_operations',
+    )
+
+    class Meta:
+        db_table = 'product_operations'
+        ordering = ['product_id', 'sequence', 'operation_code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['product', 'operation'],
+                name='product_operation_product_operation_uniq',
+            ),
+            models.CheckConstraint(
+                condition=Q(standard_rate_per_hour__gt=0),
+                name='product_operation_rate_gt_0',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['product', 'sequence']),
+            models.Index(fields=['operation']),
+            models.Index(fields=['operation_code']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.product_id}:{self.operation_code}"
+
+    def clean(self):
+        super().clean()
+        if self.standard_rate_per_hour is None or self.standard_rate_per_hour <= 0:
+            raise ValidationError({'standard_rate_per_hour': 'Operation rate must be greater than 0.'})
+
+    def save(self, *args, **kwargs):
+        if self.operation_id:
+            self.operation_code = self.operation.code
+            self.operation_name = self.operation.name
+            if not self.sequence:
+                self.sequence = self.operation.sequence
+        super().save(*args, **kwargs)
 
 
 class ProductBundle(models.Model):

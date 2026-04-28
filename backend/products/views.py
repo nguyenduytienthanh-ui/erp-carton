@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import IntegrityError
 from django.db.models import ProtectedError
-from django.db.models import Q, Count, Case, When, Value, IntegerField, Exists, OuterRef, Subquery, DateTimeField, DecimalField
+from django.db.models import Q, Count, Case, When, Value, IntegerField, Exists, OuterRef, Subquery, DateTimeField, DecimalField, Prefetch
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.http import HttpResponse
@@ -28,8 +28,9 @@ from .filters import (
     ProductUnitFilter,
     ProductWaveFilter,
     ProductBoxTypeFilter,
+    OperationFilter,
 )
-from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product, ProductBundle, PriceChange, BundlePriceChange
+from .models import Operation, ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product, ProductOperation, ProductBundle, PriceChange, BundlePriceChange
 from .price_services import (
     activate_due_price_changes,
     activate_due_bundle_price_changes,
@@ -46,6 +47,7 @@ from .serializers import (
     ProductUnitSerializer,
     ProductWaveSerializer,
     ProductBoxTypeSerializer,
+    OperationSerializer,
     ProductSerializer,
     ProductBundleSerializer,
     PriceChangeSerializer,
@@ -343,6 +345,20 @@ class ProductBoxTypeViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         ]
 
 
+class OperationViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only master production operations."""
+
+    queryset = Operation.objects.all()
+    serializer_class = OperationSerializer
+    permission_classes = [IsAuthenticated]
+
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = OperationFilter
+    search_fields = ['code', 'name', 'description']
+    ordering_fields = ['code', 'name', 'sequence', 'created_at']
+    ordering = ['sequence', 'code']
+
+
 class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
     """CRUD Product với Data Scope, Export (Mixin), Bulk Actions, Import Template"""
 
@@ -421,6 +437,13 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
     ).prefetch_related(
         'bundle_config__components__component_product',
         'bundle_config__components__component_product__unit',
+        Prefetch(
+            'operations',
+            queryset=ProductOperation.objects.select_related('operation')
+            .filter(is_active=True)
+            .order_by('sequence', 'operation_code', 'id'),
+            to_attr='prefetched_product_operations',
+        ),
     ).all()
     serializer_class = ProductSerializer
     permission_classes = [IsAuthenticated]

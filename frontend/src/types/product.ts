@@ -43,6 +43,25 @@ export interface ProductBoxType {
 export type ProductBundlePricingMode = 'PRIMARY_PRODUCT' | 'FIXED_BUNDLE' | 'SUM_COMPONENTS';
 export type ProductBundleCommissionMode = 'PRIMARY_PRODUCT' | 'FIXED_VALUES' | 'SUM_COMPONENTS';
 export type ProductBundleDeliveryRule = 'STRICT_FULL_SET' | 'NON_SYNC';
+export type ProductOperationCode = 'XA' | 'IN' | 'CAN_MANG' | 'BOI' | 'BE' | 'CHAP' | 'DONG' | 'DAN' | 'KHAC';
+export type ProductOperationNotes = Partial<Record<ProductOperationCode, string>>;
+
+export interface ProductOperation {
+  id: number | null;
+  operation_id?: number | null;
+  operation_code: ProductOperationCode;
+  operation_name: string;
+  sequence: number;
+  standard_rate_per_hour: number;
+  note?: string;
+  is_active: boolean;
+}
+
+export interface ProductOperationInput {
+  operation_code: ProductOperationCode;
+  standard_rate_per_hour: number;
+  note?: string;
+}
 
 export interface ProductBundleComponent {
   id: number;
@@ -147,6 +166,7 @@ export interface Product {
   process_dong?: number | null;
   process_dan?: number | null;
   process_khac?: number | null;
+  operations?: ProductOperation[];
 
   // ============ IN ẤN ============
   film_code?: string;
@@ -231,15 +251,17 @@ export interface ProductFormData {
   commission_per_unit?: number;
   commission_percent?: number;
 
-  process_xa?: number;
-  process_in?: number;
-  process_boi?: number;
-  process_can_mang?: number;
-  process_be?: number;
-  process_chap?: number;
-  process_dong?: number;
-  process_dan?: number;
-  process_khac?: number;
+  process_xa?: number | string;
+  process_in?: number | string;
+  process_boi?: number | string;
+  process_can_mang?: number | string;
+  process_be?: number | string;
+  process_chap?: number | string;
+  process_dong?: number | string;
+  process_dan?: number | string;
+  process_khac?: number | string;
+  operation_notes?: ProductOperationNotes;
+  operations_input?: ProductOperationInput[];
 
   film_code?: string;
   film_file_url?: string;
@@ -278,15 +300,16 @@ export interface ProductChildFormData {
   wave?: number;
   box_type?: number;
   delivery_tolerance?: string;
-  process_xa?: number;
-  process_in?: number;
-  process_boi?: number;
-  process_can_mang?: number;
-  process_be?: number;
-  process_chap?: number;
-  process_dong?: number;
-  process_dan?: number;
-  process_khac?: number;
+  process_xa?: number | string;
+  process_in?: number | string;
+  process_boi?: number | string;
+  process_can_mang?: number | string;
+  process_be?: number | string;
+  process_chap?: number | string;
+  process_dong?: number | string;
+  process_dan?: number | string;
+  process_khac?: number | string;
+  operation_notes?: ProductOperationNotes;
   film_code?: string;
   film_file_url?: string;
   color_count?: number;

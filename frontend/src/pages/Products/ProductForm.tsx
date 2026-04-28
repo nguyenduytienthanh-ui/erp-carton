@@ -17,6 +17,9 @@ import type {
   ProductBundleUpsertPayload,
   ProductBundlePricingMode,
   ProductBundleDeliveryRule,
+  ProductOperationCode,
+  ProductOperationInput,
+  ProductOperationNotes,
 } from '../../types/product';
 import { WATERPROOF_OPTIONS } from '../../types/product';
 import { useQuickEntryKeys } from '../../hooks/useQuickEntryKeys';
@@ -77,6 +80,7 @@ const defaultMother = (firstUnitId: number | undefined): ProductFormData => ({
   process_dong: undefined,
   process_dan: undefined,
   process_khac: undefined,
+  operation_notes: {},
   film_code: '',
   color_count: undefined,
   mold_code: '',
@@ -109,6 +113,7 @@ const defaultChild = (firstUnitId: number | undefined): ProductChildFormData => 
   process_dong: undefined,
   process_dan: undefined,
   process_khac: undefined,
+  operation_notes: {},
   film_code: '',
   color_count: undefined,
   mold_code: '',
@@ -153,6 +158,136 @@ const BUNDLE_DELIVERY_RULE_OPTIONS: Array<{ value: ProductBundleDeliveryRule; la
 
 const PRICE_CHANGE_REASON_OPTIONS = ['Tăng giá', 'Giảm giá', 'Điều chỉnh giá'];
 
+type ProcessField =
+  | 'process_xa'
+  | 'process_in'
+  | 'process_can_mang'
+  | 'process_boi'
+  | 'process_be'
+  | 'process_chap'
+  | 'process_dong'
+  | 'process_dan'
+  | 'process_khac';
+
+interface ProductOperationDefinition {
+  code: ProductOperationCode;
+  label: string;
+  processField: ProcessField;
+}
+
+type OperationFormData = Pick<ProductFormData, ProcessField> & {
+  operation_notes?: ProductOperationNotes;
+};
+
+const PRODUCT_OPERATIONS: ProductOperationDefinition[] = [
+  { code: 'XA', label: 'Xả', processField: 'process_xa' },
+  { code: 'IN', label: 'In', processField: 'process_in' },
+  { code: 'CAN_MANG', label: 'Cán màng', processField: 'process_can_mang' },
+  { code: 'BOI', label: 'Bồi', processField: 'process_boi' },
+  { code: 'BE', label: 'Bế', processField: 'process_be' },
+  { code: 'CHAP', label: 'Chạp', processField: 'process_chap' },
+  { code: 'DONG', label: 'Đóng', processField: 'process_dong' },
+  { code: 'DAN', label: 'Dán', processField: 'process_dan' },
+  { code: 'KHAC', label: 'Khác', processField: 'process_khac' },
+];
+
+const PRODUCT_OPERATION_LEFT = PRODUCT_OPERATIONS.slice(0, 5);
+const PRODUCT_OPERATION_RIGHT = PRODUCT_OPERATIONS.slice(5);
+
+type ParsedOperationRate =
+  | { kind: 'empty' | 'zero'; value: 0 }
+  | { kind: 'positive'; value: number }
+  | { kind: 'invalid'; reason: 'negative' | 'format' };
+
+function parseOperationRate(value: unknown): ParsedOperationRate {
+  const raw = String(value ?? '').trim();
+  if (!raw) return { kind: 'empty', value: 0 };
+  if (raw.includes('-')) return { kind: 'invalid', reason: 'negative' };
+  if (!/^\d+(?:\.\d{3})*$/.test(raw)) return { kind: 'invalid', reason: 'format' };
+  const numericValue = Number(raw.replace(/\./g, ''));
+  if (!Number.isSafeInteger(numericValue)) return { kind: 'invalid', reason: 'format' };
+  if (numericValue <= 0) return { kind: 'zero', value: 0 };
+  return { kind: 'positive', value: numericValue };
+}
+
+function formatOperationRate(value: unknown): string {
+  const parsed = parseOperationRate(value);
+  if (parsed.kind === 'positive') return parsed.value.toLocaleString('vi-VN');
+  if (parsed.kind === 'zero') return '0';
+  if (parsed.kind === 'empty') return '';
+  return String(value ?? '');
+}
+
+function hasPositiveOperationRate(value: unknown): boolean {
+  return parseOperationRate(value).kind === 'positive';
+}
+
+function extractOperationFormState(product: Product): OperationFormData {
+  const formState = PRODUCT_OPERATIONS.reduce((acc, operation) => {
+    acc[operation.processField] = undefined;
+    return acc;
+  }, {} as OperationFormData);
+  const operationNotes: ProductOperationNotes = {};
+  const activeOperations = (product.operations ?? []).filter((operation) => operation.is_active !== false);
+
+  if (activeOperations.length > 0) {
+    for (const definition of PRODUCT_OPERATIONS) {
+      const operation = activeOperations.find((item) => item.operation_code === definition.code);
+      if (!operation) continue;
+      const rate = Number(operation.standard_rate_per_hour || 0);
+      if (rate <= 0) continue;
+      formState[definition.processField] = formatOperationRate(rate);
+      if ((operation.note ?? '').trim()) {
+        operationNotes[definition.code] = operation.note ?? '';
+      }
+    }
+  } else {
+    for (const definition of PRODUCT_OPERATIONS) {
+      const rate = Number(product[definition.processField] ?? 0);
+      if (rate > 0) {
+        formState[definition.processField] = formatOperationRate(rate);
+      }
+    }
+  }
+
+  formState.operation_notes = operationNotes;
+  return formState;
+}
+
+function buildOperationInputs(data: OperationFormData): ProductOperationInput[] {
+  return PRODUCT_OPERATIONS.flatMap((definition) => {
+    const parsed = parseOperationRate(data[definition.processField]);
+    if (parsed.kind !== 'positive') return [];
+    const note = (data.operation_notes?.[definition.code] ?? '').trim();
+    return [{
+      operation_code: definition.code,
+      standard_rate_per_hour: parsed.value,
+      note,
+    }];
+  });
+}
+
+function buildLegacyProcessPayload(data: OperationFormData): Partial<Record<ProcessField, number | undefined>> {
+  return PRODUCT_OPERATIONS.reduce((payload, definition) => {
+    const parsed = parseOperationRate(data[definition.processField]);
+    payload[definition.processField] = parsed.kind === 'positive' ? parsed.value : undefined;
+    return payload;
+  }, {} as Partial<Record<ProcessField, number | undefined>>);
+}
+
+function validateOperationRates(data: OperationFormData, labelPrefix: string): string | null {
+  for (const definition of PRODUCT_OPERATIONS) {
+    const parsed = parseOperationRate(data[definition.processField]);
+    if (parsed.kind === 'invalid') {
+      const reason = parsed.reason === 'negative'
+        ? 'không được âm'
+        : 'chỉ được nhập số nguyên hoặc dấu chấm hàng nghìn, ví dụ 20.000';
+      return `${labelPrefix}: Định mức ${definition.label} ${reason}.`;
+    }
+  }
+  return null;
+}
+
 /** Validate khi bấm Cập nhật; không validate khi đang gõ. */
 function validateMother(m: ProductFormData): string | null {
   if (!(m.code ?? '').trim()) return 'Vui lòng nhập Mã hàng (Mẹ).';
@@ -196,8 +331,13 @@ function deriveCommissionModeFromPricingMode(pricingMode: ProductBundlePricingMo
 
 /** Build payload Mẹ để gửi API. */
 function buildMotherPayload(m: ProductFormData, isSet: boolean): ProductFormData {
+  const { operation_notes, operations_input, ...base } = m;
+  void operation_notes;
+  void operations_input;
   return {
-    ...m,
+    ...base,
+    ...buildLegacyProcessPayload(m),
+    operations_input: buildOperationInputs(m),
     code: (m.code ?? '').trim(),
     name: (m.name ?? '').trim(),
     cost_price: Number(m.cost_price) || 0,
@@ -217,8 +357,13 @@ function buildChildPayload(
   code: string,
   skipPriceFloorValidation = false,
 ): ProductFormData & { parent: number } {
+  const { operation_notes, ...base } = c;
+  void operation_notes;
   return {
+    ...base,
     parent: parentId,
+    ...buildLegacyProcessPayload(c),
+    operations_input: buildOperationInputs(c),
     code,
     name: (c.name ?? '').trim(),
     component_quantity: Number(c.component_quantity) || 1,
@@ -235,15 +380,6 @@ function buildChildPayload(
     wave: c.wave,
     box_type: c.box_type,
     delivery_tolerance: c.delivery_tolerance ?? '',
-    process_xa: c.process_xa,
-    process_in: c.process_in,
-    process_boi: c.process_boi,
-    process_can_mang: c.process_can_mang,
-    process_be: c.process_be,
-    process_chap: c.process_chap,
-    process_dong: c.process_dong,
-    process_dan: c.process_dan,
-    process_khac: c.process_khac,
     film_code: c.film_code ?? '',
     color_count: c.color_count,
     mold_code: c.mold_code ?? '',
@@ -267,6 +403,95 @@ function bundleToFormData(bundle?: ProductBundleDefinition | null): BundleFormDa
     delivery_rule: bundle.delivery_rule ?? 'STRICT_FULL_SET',
     note: bundle.note ?? '',
   };
+}
+
+interface OperationRatesEditorProps {
+  value: OperationFormData;
+  disabled?: boolean;
+  onRateChange: (definition: ProductOperationDefinition, value: string) => void;
+  onNoteChange: (operationCode: ProductOperationCode, value: string) => void;
+}
+
+function OperationRatesEditor({
+  value,
+  disabled = false,
+  onRateChange,
+  onNoteChange,
+}: OperationRatesEditorProps) {
+  const renderTable = (items: ProductOperationDefinition[]) => (
+    <table className="pf-operation-table">
+      <colgroup>
+        <col className="pf-operation-col-name" />
+        <col className="pf-operation-col-rate" />
+        <col className="pf-operation-col-note" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Công đoạn</th>
+          <th>Định mức</th>
+          <th>Ghi chú</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((operation) => {
+          const rawRate = value[operation.processField] ?? '';
+          const noteEnabled = !disabled && hasPositiveOperationRate(rawRate);
+          const noteValue = value.operation_notes?.[operation.code] ?? '';
+          const handleRateChange = (rawValue: string) => {
+            onRateChange(operation, rawValue);
+            if (!hasPositiveOperationRate(rawValue)) {
+              onNoteChange(operation.code, '');
+            }
+          };
+
+          return (
+            <tr key={operation.code}>
+              <td className="pf-operation-name">{operation.label}</td>
+              <td data-quick-entry={!disabled ? '' : undefined}>
+                <FormInputWithClear
+                  type="text"
+                  inputMode="numeric"
+                  className="pf-input pf-operation-rate-input"
+                  placeholder="20.000"
+                  disabled={disabled}
+                  value={rawRate}
+                  onChange={(e) => handleRateChange(e.target.value)}
+                  onBlur={(e) => onRateChange(operation, formatOperationRate(e.target.value))}
+                  onClear={() => {
+                    onRateChange(operation, '');
+                    onNoteChange(operation.code, '');
+                  }}
+                  hasValue={String(rawRate ?? '').trim() !== ''}
+                />
+              </td>
+              <td data-quick-entry={noteEnabled ? '' : undefined}>
+                <FormInputWithClear
+                  type="text"
+                  className="pf-input"
+                  disabled={!noteEnabled}
+                  value={noteValue}
+                  onChange={(e) => onNoteChange(operation.code, e.target.value)}
+                  onClear={() => onNoteChange(operation.code, '')}
+                  hasValue={noteValue.trim() !== ''}
+                  style={!noteEnabled ? { background: 'var(--app-surface-accent)' } : undefined}
+                />
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+
+  return (
+    <div className="pf-operation-editor">
+      <div className="pf-operation-title">Công đoạn sản xuất</div>
+      <div className="pf-operation-grid">
+        {renderTable(PRODUCT_OPERATION_LEFT)}
+        {renderTable(PRODUCT_OPERATION_RIGHT)}
+      </div>
+    </div>
+  );
 }
 
 interface ChildBlockProps {
@@ -304,7 +529,7 @@ function ChildBlock({
     <div className="pf-child-card">
       <div className="pf-row pf-row-child1" style={{ alignItems: 'center' }}>
         <Field label="Mã hàng (Con)" required span={2}>
-          <input type="text" className="pf-input" value={childCode} readOnly style={{ background: '#f5f5f5' }} />
+          <input type="text" className="pf-input" value={childCode} readOnly style={{ background: 'var(--app-surface-accent)' }} />
         </Field>
         <Field label="Tên hàng" required span={2}>
           <FormInputWithClear
@@ -366,7 +591,7 @@ function ChildBlock({
             onChange={(e) => onChange('sale_price', e.target.value === '' ? 0 : Number(e.target.value))}
             onClear={() => onChange('sale_price', 0)}
             hasValue={Number(child.sale_price ?? 0) !== 0}
-            style={!canEditChildPrice ? { background: '#f5f5f5' } : undefined}
+            style={!canEditChildPrice ? { background: 'var(--app-surface-accent)' } : undefined}
           />
         </Field>
         <Field label="HHCĐ" span={1}>
@@ -379,7 +604,7 @@ function ChildBlock({
             onChange={(e) => onChange('commission_per_unit', e.target.value === '' ? undefined : Number(e.target.value))}
             onClear={() => onChange('commission_per_unit', undefined)}
             hasValue={child.commission_per_unit != null}
-            style={!canEditChildCommission ? { background: '#f5f5f5' } : undefined}
+            style={!canEditChildCommission ? { background: 'var(--app-surface-accent)' } : undefined}
           />
         </Field>
         <Field label="HH%" span={1}>
@@ -392,7 +617,7 @@ function ChildBlock({
             onChange={(e) => onChange('commission_percent', e.target.value === '' ? undefined : Number(e.target.value))}
             onClear={() => onChange('commission_percent', undefined)}
             hasValue={child.commission_percent != null}
-            style={!canEditChildCommission ? { background: '#f5f5f5' } : undefined}
+            style={!canEditChildCommission ? { background: 'var(--app-surface-accent)' } : undefined}
           />
         </Field>
         <Field label="Lý do thay đổi giá (Con)" span={4}>
@@ -448,13 +673,7 @@ function ChildBlock({
           <FormInputWithClear type="text" className="pf-input" value={child.delivery_tolerance ?? ''} onChange={(e) => onChange('delivery_tolerance', e.target.value)} onClear={() => onChange('delivery_tolerance', '')} />
         </Field>
       </div>
-      <div className="pf-row pf-row-process1">
-        <Field label="Xả" span={1}>
-          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_xa ?? ''} onChange={(e) => onChange('process_xa', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_xa', undefined)} hasValue={child.process_xa != null} />
-        </Field>
-        <Field label="In" span={1}>
-          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_in ?? ''} onChange={(e) => onChange('process_in', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_in', undefined)} hasValue={child.process_in != null} />
-        </Field>
+      <div className="pf-row">
         <Field label="Mã phim" span={2}>
           <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={child.film_code ?? ''} onChange={(e) => onChange('film_code', e.target.value)} onClear={() => onChange('film_code', '')} />
         </Field>
@@ -466,47 +685,21 @@ function ChildBlock({
             {WATERPROOF_OPTIONS.map((o) => <option key={o.value || 'x'} value={o.value}>{o.label}</option>)}
           </select>
         </Field>
-        <Field label="Có CM" span={1}>
-          <select
-            className="pf-select"
-            value={child.process_can_mang != null ? (Number(child.process_can_mang) > 0 ? '1' : '0') : ''}
-            onChange={(e) => onChange('process_can_mang', e.target.value === '' ? undefined : e.target.value === '1' ? 1 : 0)}
-          >
-            <option value="">Chọn</option>
-            <option value="1">Có</option>
-            <option value="0">Không</option>
-          </select>
-        </Field>
-        <Field label="C. Màng" span={1}>
-          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_can_mang ?? ''} onChange={(e) => onChange('process_can_mang', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_can_mang', undefined)} hasValue={child.process_can_mang != null} />
-        </Field>
-        <Field label="Bồi" span={1}>
-          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_boi ?? ''} onChange={(e) => onChange('process_boi', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_boi', undefined)} hasValue={child.process_boi != null} />
-        </Field>
-        <Field label="Bế" span={1}>
-          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_be ?? ''} onChange={(e) => onChange('process_be', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_be', undefined)} hasValue={child.process_be != null} />
-        </Field>
-      </div>
-      <div className="pf-row pf-row-process2">
         <Field label="Mã khuôn" span={2}>
           <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={child.mold_code ?? ''} onChange={(e) => onChange('mold_code', e.target.value)} onClear={() => onChange('mold_code', '')} />
-        </Field>
-        <Field label="Chạp" span={1}>
-          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_chap ?? ''} onChange={(e) => onChange('process_chap', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_chap', undefined)} hasValue={child.process_chap != null} />
-        </Field>
-        <Field label="Đóng" span={1}>
-          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_dong ?? ''} onChange={(e) => onChange('process_dong', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_dong', undefined)} hasValue={child.process_dong != null} />
-        </Field>
-        <Field label="Dán" span={1}>
-          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_dan ?? ''} onChange={(e) => onChange('process_dan', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_dan', undefined)} hasValue={child.process_dan != null} />
-        </Field>
-        <Field label="Khác" span={1}>
-          <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={child.process_khac ?? ''} onChange={(e) => onChange('process_khac', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('process_khac', undefined)} hasValue={child.process_khac != null} />
         </Field>
         <Field label="Ghi chú sản xuất" span={4}>
           <FormInputWithClear type="text" className="pf-input" value={child.note_other ?? ''} onChange={(e) => onChange('note_other', e.target.value)} onClear={() => onChange('note_other', '')} />
         </Field>
       </div>
+      <OperationRatesEditor
+        value={child}
+        onRateChange={(operation, rawValue) => onChange(operation.processField, rawValue)}
+        onNoteChange={(operationCode, note) => onChange('operation_notes', {
+          ...(child.operation_notes ?? {}),
+          [operationCode]: note,
+        })}
+      />
       <div className="pf-row pf-row-note">
         <Field label="Ghi chú mã hàng" span={9}>
           <FormInputWithClear type="text" className="pf-input" value={child.note ?? ''} onChange={(e) => onChange('note', e.target.value)} onClear={() => onChange('note', '')} />
@@ -523,10 +716,10 @@ function ChildBlock({
             style={{
               backgroundColor:
                 (child.status ?? 'ACTIVE') === 'ACTIVE'
-                  ? 'rgba(34, 197, 94, 0.5)'
+                  ? 'color-mix(in srgb, var(--app-success-bg) 72%, var(--app-surface))'
                   : (child.status ?? 'ACTIVE') === 'DISCONTINUED'
-                    ? 'rgba(239, 68, 68, 0.5)'
-                    : 'rgba(234, 179, 8, 0.5)',
+                    ? 'color-mix(in srgb, var(--app-danger-bg) 72%, var(--app-surface))'
+                    : 'color-mix(in srgb, var(--app-warning-bg) 72%, var(--app-surface))',
             }}
           >
             <option value="ACTIVE">Đang bán</option>
@@ -541,6 +734,7 @@ function ChildBlock({
 
 /** Map Product (API) → ProductChildFormData — dùng khi load components khi sửa */
 function componentToChildFormData(c: Product, firstUnitId: number | undefined): ProductChildFormData {
+  const operationState = extractOperationFormState(c);
   return {
     id: c.id,
     name: c.name ?? '',
@@ -556,15 +750,7 @@ function componentToChildFormData(c: Product, firstUnitId: number | undefined): 
     wave: c.wave ?? undefined,
     box_type: c.box_type ?? undefined,
     delivery_tolerance: c.delivery_tolerance ?? '',
-    process_xa: c.process_xa ?? undefined,
-    process_in: c.process_in ?? undefined,
-    process_boi: c.process_boi ?? undefined,
-    process_can_mang: c.process_can_mang ?? undefined,
-    process_be: c.process_be ?? undefined,
-    process_chap: c.process_chap ?? undefined,
-    process_dong: c.process_dong ?? undefined,
-    process_dan: c.process_dan ?? undefined,
-    process_khac: c.process_khac ?? undefined,
+    ...operationState,
     film_code: c.film_code ?? '',
     color_count: c.color_count ?? undefined,
     mold_code: c.mold_code ?? '',
@@ -579,6 +765,7 @@ function componentToChildFormData(c: Product, firstUnitId: number | undefined): 
 
 /** Map Product (API) → ProductFormData */
 function productToMother(p: Product): ProductFormData {
+  const operationState = extractOperationFormState(p);
   return {
     code: p.code ?? '',
     name: p.name ?? '',
@@ -596,15 +783,7 @@ function productToMother(p: Product): ProductFormData {
     delivery_tolerance: p.delivery_tolerance ?? '',
     commission_per_unit: p.commission_per_unit != null ? parseFloat(String(p.commission_per_unit)) : undefined,
     commission_percent: p.commission_percent != null ? parseFloat(String(p.commission_percent)) : undefined,
-    process_xa: p.process_xa ?? undefined,
-    process_in: p.process_in ?? undefined,
-    process_boi: p.process_boi ?? undefined,
-    process_can_mang: p.process_can_mang ?? undefined,
-    process_be: p.process_be ?? undefined,
-    process_chap: p.process_chap ?? undefined,
-    process_dong: p.process_dong ?? undefined,
-    process_dan: p.process_dan ?? undefined,
-    process_khac: p.process_khac ?? undefined,
+    ...operationState,
     film_code: p.film_code ?? '',
     color_count: p.color_count ?? undefined,
     mold_code: p.mold_code ?? '',
@@ -832,6 +1011,12 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
       message.error(errMother);
       return;
     }
+    const motherOperationError = validateOperationRates(mother, 'Mã mẹ');
+    if (motherOperationError) {
+      setSubmitError(motherOperationError);
+      message.error(motherOperationError);
+      return;
+    }
     if (requiresFixedBundlePrice && Number(bundleConfig.fixed_sale_price || 0) <= 0) {
       const err = 'Khi chọn Giá bộ cố định, bắt buộc nhập Đơn giá bộ lớn hơn 0.';
       setSubmitError(err);
@@ -883,6 +1068,12 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
           const errMsg = `Con ${i + 1}: ${err}`;
           setSubmitError(errMsg);
           message.error(errMsg);
+          return;
+        }
+        const operationError = validateOperationRates(children[i], `Con ${i + 1}`);
+        if (operationError) {
+          setSubmitError(operationError);
+          message.error(operationError);
           return;
         }
       }
@@ -1110,7 +1301,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 onChange={(e) => setMotherField('sale_price', e.target.value === '' ? 0 : Number(e.target.value))}
                 onClear={() => setMotherField('sale_price', 0)}
                 hasValue={mother.sale_price !== 0}
-                style={!canEditMotherPrice ? { background: '#f5f5f5' } : undefined}
+                style={!canEditMotherPrice ? { background: 'var(--app-surface-accent)' } : undefined}
               />
             </Field>
             <Field label="HHCĐ" span={1}>
@@ -1123,7 +1314,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 onChange={(e) => setMotherField('commission_per_unit', e.target.value === '' ? undefined : Number(e.target.value))}
                 onClear={() => setMotherField('commission_per_unit', undefined)}
                 hasValue={mother.commission_per_unit != null}
-                style={!canEditMotherCommission ? { background: '#f5f5f5' } : undefined}
+                style={!canEditMotherCommission ? { background: 'var(--app-surface-accent)' } : undefined}
               />
             </Field>
             <Field label="HH%" span={1}>
@@ -1136,7 +1327,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 onChange={(e) => setMotherField('commission_percent', e.target.value === '' ? undefined : Number(e.target.value))}
                 onClear={() => setMotherField('commission_percent', undefined)}
                 hasValue={mother.commission_percent != null}
-                style={!canEditMotherCommission ? { background: '#f5f5f5' } : undefined}
+                style={!canEditMotherCommission ? { background: 'var(--app-surface-accent)' } : undefined}
               />
             </Field>
           </div>
@@ -1171,8 +1362,8 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                   <div
                     className="pf-input"
                     style={{
-                      background: '#fafafa',
-                      color: '#595959',
+                      background: 'var(--app-surface-subtle)',
+                      color: 'var(--app-text-secondary)',
                       display: 'flex',
                       alignItems: 'center',
                       minHeight: 34,
@@ -1295,13 +1486,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
               <FormInputWithClear type="text" className="pf-input" value={mother.delivery_tolerance ?? ''} onChange={(e) => setMotherField('delivery_tolerance', e.target.value)} onClear={() => setMotherField('delivery_tolerance', '')} />
             </Field>
           </div>
-          <div className="pf-row pf-row-process1">
-            <Field label="Xả" span={1}>
-              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_xa ?? ''} onChange={(e) => setMotherField('process_xa', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_xa', undefined)} hasValue={mother.process_xa != null} />
-            </Field>
-            <Field label="In" span={1}>
-              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_in ?? ''} onChange={(e) => setMotherField('process_in', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_in', undefined)} hasValue={mother.process_in != null} />
-            </Field>
+          <div className="pf-row">
             <Field label="Mã phim" span={2}>
               <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={mother.film_code ?? ''} onChange={(e) => setMotherField('film_code', e.target.value)} onClear={() => setMotherField('film_code', '')} />
             </Field>
@@ -1313,47 +1498,24 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 {WATERPROOF_OPTIONS.map((o) => <option key={o.value || 'x'} value={o.value}>{o.label}</option>)}
               </select>
             </Field>
-            <Field label="Có CM" span={1}>
-              <select
-                className="pf-select"
-                value={mother.process_can_mang != null ? (Number(mother.process_can_mang) > 0 ? '1' : '0') : ''}
-                onChange={(e) => setMotherField('process_can_mang', e.target.value === '' ? undefined : e.target.value === '1' ? 1 : 0)}
-              >
-                <option value="">Chọn</option>
-                <option value="1">Có</option>
-                <option value="0">Không</option>
-              </select>
-            </Field>
-            <Field label="C. Màng" span={1}>
-              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_can_mang ?? ''} onChange={(e) => setMotherField('process_can_mang', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_can_mang', undefined)} hasValue={mother.process_can_mang != null} />
-            </Field>
-            <Field label="Bồi" span={1}>
-              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_boi ?? ''} onChange={(e) => setMotherField('process_boi', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_boi', undefined)} hasValue={mother.process_boi != null} />
-            </Field>
-            <Field label="Bế" span={1}>
-              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_be ?? ''} onChange={(e) => setMotherField('process_be', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_be', undefined)} hasValue={mother.process_be != null} />
-            </Field>
-          </div>
-          <div className="pf-row pf-row-process2">
             <Field label="Mã khuôn" span={2}>
               <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={mother.mold_code ?? ''} onChange={(e) => setMotherField('mold_code', e.target.value)} onClear={() => setMotherField('mold_code', '')} />
-            </Field>
-            <Field label="Chạp" span={1}>
-              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_chap ?? ''} onChange={(e) => setMotherField('process_chap', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_chap', undefined)} hasValue={mother.process_chap != null} />
-            </Field>
-            <Field label="Đóng" span={1}>
-              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_dong ?? ''} onChange={(e) => setMotherField('process_dong', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_dong', undefined)} hasValue={mother.process_dong != null} />
-            </Field>
-            <Field label="Dán" span={1}>
-              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_dan ?? ''} onChange={(e) => setMotherField('process_dan', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_dan', undefined)} hasValue={mother.process_dan != null} />
-            </Field>
-            <Field label="Khác" span={1}>
-              <FormInputWithClear type="text" placeholder="Cái/giờ" className="pf-input" value={mother.process_khac ?? ''} onChange={(e) => setMotherField('process_khac', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('process_khac', undefined)} hasValue={mother.process_khac != null} />
             </Field>
         <Field label="Ghi chú sản xuất" span={4}>
               <FormInputWithClear type="text" className="pf-input" value={mother.note_other ?? ''} onChange={(e) => setMotherField('note_other', e.target.value)} onClear={() => setMotherField('note_other', '')} />
             </Field>
           </div>
+          <OperationRatesEditor
+            value={mother}
+            onRateChange={(operation, rawValue) => setMotherField(operation.processField, rawValue)}
+            onNoteChange={(operationCode, note) => setMother((prev) => ({
+              ...prev,
+              operation_notes: {
+                ...(prev.operation_notes ?? {}),
+                [operationCode]: note,
+              },
+            }))}
+          />
           <div className="pf-row pf-row-note">
         <Field label="Ghi chú mã hàng" span={9}>
               <FormInputWithClear type="text" className="pf-input" value={mother.note ?? ''} onChange={(e) => setMotherField('note', e.target.value)} onClear={() => setMotherField('note', '')} />
@@ -1370,10 +1532,10 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 style={{
                   backgroundColor:
                     mother.status === 'ACTIVE'
-                      ? 'rgba(34, 197, 94, 0.5)'
+                      ? 'color-mix(in srgb, var(--app-success-bg) 72%, var(--app-surface))'
                       : mother.status === 'DISCONTINUED'
-                        ? 'rgba(239, 68, 68, 0.5)'
-                        : 'rgba(234, 179, 8, 0.5)',
+                        ? 'color-mix(in srgb, var(--app-danger-bg) 72%, var(--app-surface))'
+                        : 'color-mix(in srgb, var(--app-warning-bg) 72%, var(--app-surface))',
                 }}
               >
                 <option value="ACTIVE">Đang bán</option>

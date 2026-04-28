@@ -8,7 +8,7 @@ import django_filters
 from django.conf import settings
 from django.utils import timezone as django_tz
 
-from .models import ProductCategory, ProductUnit, ProductWave, ProductBoxType
+from .models import Operation, ProductCategory, ProductUnit, ProductWave, ProductBoxType
 
 
 def _parse_date_to_range(value, end_of_day=False):
@@ -88,4 +88,16 @@ class ProductBoxTypeFilter(django_filters.FilterSet):
 
     class Meta:
         model = ProductBoxType
+        fields = ['code', 'name', 'is_active', 'created_at__gte', 'created_at__lte']
+
+
+class OperationFilter(django_filters.FilterSet):
+    code = django_filters.CharFilter(field_name='code', lookup_expr='icontains')
+    name = django_filters.CharFilter(field_name='name', lookup_expr='icontains')
+    is_active = django_filters.BooleanFilter(field_name='is_active')
+    created_at__gte = django_filters.CharFilter(method=filter_created_at_gte)
+    created_at__lte = django_filters.CharFilter(method=filter_created_at_lte)
+
+    class Meta:
+        model = Operation
         fields = ['code', 'name', 'is_active', 'created_at__gte', 'created_at__lte']

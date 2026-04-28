@@ -706,6 +706,91 @@ body {
   padding-right: 36px;
 }
 
+.pf-operation-editor {
+  margin: 2px 0 8px;
+}
+
+.pf-operation-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.pf-operation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.pf-operation-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-surface);
+}
+
+.pf-operation-table th,
+.pf-operation-table td {
+  border-bottom: 1px solid var(--app-border-light);
+  border-right: 1px solid var(--app-border-light);
+  padding: 4px 6px;
+  vertical-align: middle;
+}
+
+.pf-operation-table th:last-child,
+.pf-operation-table td:last-child {
+  border-right: 0;
+}
+
+.pf-operation-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.pf-operation-table th {
+  height: 28px;
+  background: var(--app-surface-subtle);
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.pf-operation-col-name {
+  width: 72px;
+}
+
+.pf-operation-col-rate {
+  width: 108px;
+}
+
+.pf-operation-col-note {
+  width: auto;
+}
+
+.pf-operation-name {
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pf-operation-rate-input {
+  text-align: right;
+}
+
+.pf-operation-table .pf-input:disabled {
+  background: var(--app-surface-accent);
+  color: var(--app-text-secondary);
+  cursor: not-allowed;
+}
+
 /* Detail view readability: stack product fields one per row */
 .pf-view-mode .pf-row {
   grid-template-columns: 1fr !important;
@@ -1016,6 +1101,10 @@ textarea::placeholder {
   .pf-child-card {
     width: 100% !important;
     max-width: 100% !important;
+  }
+
+  .pf-operation-grid {
+    grid-template-columns: 1fr !important;
   }
 
   .pf-children-header-inner,
