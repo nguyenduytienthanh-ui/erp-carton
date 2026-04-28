@@ -83,6 +83,20 @@ class ProductOperationApiTest(TestCase):
         self.unit = ProductUnit.objects.create(code='CAI', name='Cai')
         run_operation_seed_backfill()
 
+    def create_product_with_operations(self, code):
+        product = Product.objects.create(
+            code=code,
+            name=code,
+            unit=self.unit,
+        )
+        for operation_code, rate in [('XA', 3000), ('IN', 20000)]:
+            ProductOperation.objects.create(
+                product=product,
+                operation=Operation.objects.get(code=operation_code),
+                standard_rate_per_hour=rate,
+            )
+        return product
+
     def test_product_defaults_to_specific_kind(self):
         product = Product.objects.create(
             code='KIND-DEFAULT',
@@ -517,6 +531,219 @@ class ProductOperationApiTest(TestCase):
         self.assertEqual([step['standard_rate_per_hour'] for step in routing_steps], [3000, 20000])
         self.assertTrue(all(step['route_step_id'] is None for step in routing_steps))
         self.assertFalse(ProductOperation.objects.filter(product=product).exists())
+
+    def test_product_create_accepts_routing_input(self):
+        response = self.client.post(
+            '/api/products/products/',
+            {
+                'code': 'ROUTE-INPUT-CREATE',
+                'name': 'Route Input Create',
+                'unit': self.unit.id,
+                'routing_input': [
+                    {
+                        'step_no': 10,
+                        'operation_code': 'IN',
+                        'standard_rate_per_hour': 20000,
+                        'note': 'In truoc',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        product = Product.objects.get(code='ROUTE-INPUT-CREATE')
+        self.assertNotIn('routing_input', payload)
+        self.assertEqual(ProductRoutingStep.objects.filter(product=product, is_active=True).count(), 1)
+        self.assertEqual(payload['routing_steps'][0]['source'], 'product_routing')
+        self.assertEqual(payload['routing_steps'][0]['operation_code'], 'IN')
+        self.assertIsNone(payload['routing_steps'][0]['product_operation_id'])
+
+    def test_product_update_routing_input_replaces_custom_routing(self):
+        product = self.create_product_with_operations('ROUTE-INPUT-UPDATE')
+
+        response = self.client.patch(
+            f'/api/products/products/{product.id}/',
+            {
+                'routing_input': [
+                    {
+                        'step_no': 10,
+                        'operation_code': 'IN',
+                        'standard_rate_per_hour': 20000,
+                        'note': 'In truoc',
+                    },
+                    {
+                        'step_no': 20,
+                        'operation_code': 'XA',
+                        'standard_rate_per_hour': 12000,
+                        'note': 'Xa sau in',
+                    },
+                    {
+                        'step_no': 30,
+                        'operation_code': 'XA',
+                        'standard_rate_per_hour': 10000,
+                        'note': 'Xa lan 2',
+                    },
+                    {
+                        'step_no': 40,
+                        'operation_code': 'DONG',
+                        'standard_rate_per_hour': 8000,
+                        'note': 'Dong',
+                        'step_type': 'PARALLEL',
+                        'group_code': 'finish',
+                    },
+                    {
+                        'step_no': 40,
+                        'operation_code': 'DAN',
+                        'standard_rate_per_hour': 7000,
+                        'note': 'Dan cung buoc',
+                        'step_type': 'PARALLEL',
+                        'group_code': 'finish',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        routing_steps = payload['routing_steps']
+        self.assertNotIn('routing_input', payload)
+        self.assertEqual([step['source'] for step in routing_steps], ['product_routing'] * 5)
+        self.assertEqual([step['operation_code'] for step in routing_steps], ['IN', 'XA', 'XA', 'DONG', 'DAN'])
+        self.assertEqual([step['step_no'] for step in routing_steps], [10, 20, 30, 40, 40])
+        self.assertEqual([step['display_step'] for step in routing_steps], [1, 2, 3, 4, 4])
+        self.assertTrue(routing_steps[3]['allow_parallel'])
+        self.assertTrue(routing_steps[4]['allow_parallel'])
+        self.assertEqual(routing_steps[3]['group_code'], 'FINISH')
+        self.assertEqual(ProductRoutingStep.objects.filter(product=product, is_active=True).count(), 5)
+        self.assertEqual(ProductOperation.objects.filter(product=product, is_active=True).count(), 2)
+        self.assertEqual(product.process_in, None)
+
+    def test_product_update_routing_input_empty_deactivates_custom_and_returns_fallback(self):
+        product = self.create_product_with_operations('ROUTE-INPUT-CLEAR')
+        ProductRoutingStep.objects.create(
+            product=product,
+            operation=Operation.objects.get(code='IN'),
+            step_no=10,
+            display_order=10,
+            standard_rate_per_hour=20000,
+            note='Custom route',
+        )
+
+        response = self.client.patch(
+            f'/api/products/products/{product.id}/',
+            {'routing_input': []},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        routing_steps = response.json()['routing_steps']
+        self.assertEqual(ProductRoutingStep.objects.filter(product=product, is_active=True).count(), 0)
+        self.assertEqual(ProductRoutingStep.objects.filter(product=product, is_active=False).count(), 1)
+        self.assertEqual({step['source'] for step in routing_steps}, {'product_operations_default'})
+        self.assertEqual([step['operation_code'] for step in routing_steps], ['XA', 'IN'])
+
+    def test_product_update_without_routing_input_preserves_custom_routing(self):
+        product = self.create_product_with_operations('ROUTE-INPUT-PRESERVE')
+        route_step = ProductRoutingStep.objects.create(
+            product=product,
+            operation=Operation.objects.get(code='IN'),
+            step_no=10,
+            display_order=10,
+            standard_rate_per_hour=20000,
+            note='Keep me',
+        )
+
+        response = self.client.patch(
+            f'/api/products/products/{product.id}/',
+            {'name': 'Route Input Preserve Renamed'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        route_step.refresh_from_db()
+        routing_steps = response.json()['routing_steps']
+        self.assertTrue(route_step.is_active)
+        self.assertEqual(ProductRoutingStep.objects.filter(product=product, is_active=True).count(), 1)
+        self.assertEqual(routing_steps[0]['route_step_id'], route_step.id)
+        self.assertEqual(routing_steps[0]['source'], 'product_routing')
+
+    def test_product_update_routing_input_requires_group_code_for_choose_one(self):
+        product = self.create_product_with_operations('ROUTE-INPUT-CHOOSE-ONE')
+
+        response = self.client.patch(
+            f'/api/products/products/{product.id}/',
+            {
+                'routing_input': [
+                    {
+                        'step_no': 10,
+                        'operation_code': 'IN',
+                        'standard_rate_per_hour': 20000,
+                        'step_type': 'CHOOSE_ONE',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(ProductRoutingStep.objects.filter(product=product).count(), 0)
+
+    def test_product_update_routing_input_rejects_unknown_operation_code(self):
+        product = self.create_product_with_operations('ROUTE-INPUT-BAD-OP')
+
+        response = self.client.patch(
+            f'/api/products/products/{product.id}/',
+            {
+                'routing_input': [
+                    {
+                        'step_no': 10,
+                        'operation_code': 'NO_SUCH_OPERATION',
+                        'standard_rate_per_hour': 20000,
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_product_update_routing_input_rejects_invalid_rate_and_step_no(self):
+        product = self.create_product_with_operations('ROUTE-INPUT-BAD-NUMBER')
+
+        response = self.client.patch(
+            f'/api/products/products/{product.id}/',
+            {
+                'routing_input': [
+                    {
+                        'step_no': 0,
+                        'operation_code': 'IN',
+                        'standard_rate_per_hour': 0,
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.patch(
+            f'/api/products/products/{product.id}/',
+            {
+                'routing_input': [
+                    {
+                        'step_no': 'abc',
+                        'operation_code': 'IN',
+                        'standard_rate_per_hour': 'abc',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
 
     def test_product_create_accepts_operations_input_and_syncs_legacy_process_fields(self):
         response = self.client.post(

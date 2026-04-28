@@ -147,6 +147,41 @@ class ProductRoutingStepSerializer(serializers.Serializer):
     is_active = serializers.BooleanField()
 
 
+class ProductRoutingInputSerializer(serializers.Serializer):
+    operation_id = serializers.IntegerField(required=False, allow_null=True)
+    operation_code = serializers.CharField(required=False, allow_blank=True)
+    step_no = serializers.IntegerField(min_value=1)
+    display_order = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    standard_rate_per_hour = serializers.IntegerField(min_value=1)
+    note = serializers.CharField(required=False, allow_blank=True, default='')
+    step_type = serializers.ChoiceField(
+        choices=ProductRoutingStep.StepType.choices,
+        required=False,
+        default=ProductRoutingStep.StepType.REQUIRED,
+    )
+    group_code = serializers.CharField(required=False, allow_blank=True, default='')
+    is_required = serializers.BooleanField(required=False, default=True)
+    allow_parallel = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        operation_id = attrs.get('operation_id')
+        operation_code = (attrs.get('operation_code') or '').strip().upper()
+        if not operation_id and not operation_code:
+            raise serializers.ValidationError('operation_id or operation_code is required.')
+
+        attrs['operation_code'] = operation_code
+        attrs['note'] = (attrs.get('note') or '').strip()
+        attrs['group_code'] = (attrs.get('group_code') or '').strip().upper()
+
+        if attrs.get('step_type') == ProductRoutingStep.StepType.CHOOSE_ONE and not attrs['group_code']:
+            raise serializers.ValidationError({
+                'group_code': 'group_code is required when step_type is CHOOSE_ONE.'
+            })
+        if attrs.get('step_type') == ProductRoutingStep.StepType.PARALLEL:
+            attrs['allow_parallel'] = True
+        return attrs
+
+
 class ProductOperationInputSerializer(serializers.Serializer):
     operation_id = serializers.IntegerField(required=False, allow_null=True)
     operation_code = serializers.CharField(required=False, allow_blank=True)
@@ -406,6 +441,7 @@ class ProductSerializer(serializers.ModelSerializer):
     operations = serializers.SerializerMethodField()
     operations_input = ProductOperationInputSerializer(many=True, write_only=True, required=False)
     routing_steps = serializers.SerializerMethodField()
+    routing_input = ProductRoutingInputSerializer(many=True, write_only=True, required=False)
     print_colors = serializers.SerializerMethodField()
 
     class Meta:
@@ -422,7 +458,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'delivery_tolerance', 'commission_per_unit', 'commission_percent',
             'process_xa', 'process_in', 'process_boi', 'process_can_mang',
             'process_be', 'process_chap', 'process_dong', 'process_dan', 'process_khac',
-            'operations', 'operations_input', 'routing_steps',
+            'operations', 'operations_input', 'routing_steps', 'routing_input',
             'film_code', 'film_file_url', 'color_count',
             'print_color_1', 'print_color_2', 'print_color_3', 'print_color_4', 'print_color_5',
             'print_colors',
@@ -551,6 +587,53 @@ class ProductSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'operations_input': errors})
         return resolved_operations
 
+    def _resolve_routing_input(self, routing_data):
+        operation_lookup = self._operation_lookup()
+        operation_lookup_by_id = self._operation_lookup_by_id()
+        resolved_steps = []
+        errors = {}
+
+        for index, item in enumerate(routing_data):
+            operation_id = item.get('operation_id')
+            operation_code = (item.get('operation_code') or '').strip().upper()
+            operation = None
+
+            if operation_id:
+                operation = operation_lookup_by_id.get(operation_id)
+                if operation is None:
+                    errors[index] = {'operation_id': 'Operation does not exist.'}
+                    continue
+                if operation_code and operation.code != operation_code:
+                    errors[index] = {'operation_code': 'operation_code does not match operation_id.'}
+                    continue
+            else:
+                operation = operation_lookup.get(operation_code)
+                if operation is None:
+                    errors[index] = {'operation_code': 'Operation does not exist.'}
+                    continue
+
+            if not operation.is_active:
+                errors[index] = {'operation_code': 'Operation is not active.'}
+                continue
+
+            display_order = item.get('display_order')
+            resolved_steps.append({
+                'operation': operation,
+                'operation_code': operation.code,
+                'step_no': item['step_no'],
+                'display_order': display_order if display_order is not None else (index + 1) * 10,
+                'standard_rate_per_hour': item['standard_rate_per_hour'],
+                'note': item.get('note', ''),
+                'step_type': item.get('step_type', ProductRoutingStep.StepType.REQUIRED),
+                'group_code': item.get('group_code', ''),
+                'is_required': item.get('is_required', True),
+                'allow_parallel': item.get('allow_parallel', False),
+            })
+
+        if errors:
+            raise serializers.ValidationError({'routing_input': errors})
+        return resolved_steps
+
     def _apply_operations_input_to_process_fields(self, data, resolved_operations):
         for field_name in LEGACY_PROCESS_FIELDS:
             data[field_name] = None
@@ -575,6 +658,13 @@ class ProductSerializer(serializers.ModelSerializer):
         prefetched_cache = getattr(product, '_prefetched_objects_cache', None)
         if prefetched_cache is not None:
             prefetched_cache.pop('operations', None)
+
+    def _clear_product_routing_cache(self, product):
+        if hasattr(product, 'prefetched_routing_steps'):
+            delattr(product, 'prefetched_routing_steps')
+        prefetched_cache = getattr(product, '_prefetched_objects_cache', None)
+        if prefetched_cache is not None:
+            prefetched_cache.pop('routing_steps', None)
 
     def _save_product_operation(self, product, operation, rate, note=None, sequence=None):
         user = self._request_user()
@@ -654,6 +744,36 @@ class ProductSerializer(serializers.ModelSerializer):
             else:
                 self._deactivate_product_operation(product, operation)
         self._clear_product_operation_cache(product)
+
+    def _sync_product_routing_steps_from_input(self, product, resolved_steps):
+        ProductRoutingStep.objects.filter(product=product, is_active=True).update(is_active=False)
+
+        new_steps = []
+        for item in resolved_steps:
+            operation = item['operation']
+            product_operation = ProductOperation.objects.filter(
+                product=product,
+                operation=operation,
+                is_active=True,
+            ).first()
+            new_steps.append(ProductRoutingStep(
+                product=product,
+                operation=operation,
+                product_operation=product_operation,
+                step_no=item['step_no'],
+                display_order=item['display_order'],
+                standard_rate_per_hour=item['standard_rate_per_hour'],
+                note=item.get('note', ''),
+                step_type=item.get('step_type', ProductRoutingStep.StepType.REQUIRED),
+                group_code=item.get('group_code', ''),
+                is_required=item.get('is_required', True),
+                allow_parallel=item.get('allow_parallel', False),
+                is_active=True,
+            ))
+
+        for step in new_steps:
+            step.save()
+        self._clear_product_routing_cache(product)
 
     def get_operations(self, obj):
         active_operations = self._get_active_product_operations(obj)
@@ -1139,6 +1259,10 @@ class ProductSerializer(serializers.ModelSerializer):
             data['_resolved_operations_input'] = resolved_operations
             self._apply_operations_input_to_process_fields(data, resolved_operations)
 
+        routing_input = data.get('routing_input')
+        if routing_input is not None:
+            data['_resolved_routing_input'] = self._resolve_routing_input(routing_input)
+
         for field in LEGACY_PROCESS_FIELDS:
             if data.get(field) is not None and data[field] < 0:
                 raise serializers.ValidationError({
@@ -1149,7 +1273,9 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         operations_input = validated_data.pop('_resolved_operations_input', None)
+        routing_input = validated_data.pop('_resolved_routing_input', None)
         validated_data.pop('operations_input', None)
+        validated_data.pop('routing_input', None)
         # Remove write-only fields that are not model fields
         validated_data.pop('price_change_reason', None)
         validated_data.pop('price_effective_at', None)
@@ -1165,11 +1291,15 @@ class ProductSerializer(serializers.ModelSerializer):
                 self._sync_product_operations_from_input(product, operations_input)
             else:
                 self._sync_product_operations_from_legacy_process_fields(product)
+            if routing_input is not None:
+                self._sync_product_routing_steps_from_input(product, routing_input)
         return product
 
     def update(self, instance, validated_data):
         operations_input = validated_data.pop('_resolved_operations_input', None)
+        routing_input = validated_data.pop('_resolved_routing_input', None)
         validated_data.pop('operations_input', None)
+        validated_data.pop('routing_input', None)
         legacy_process_touched = any(field in validated_data for field in LEGACY_PROCESS_FIELDS)
         validated_data.pop('price_change_reason', None)
         validated_data.pop('price_effective_at', None)
@@ -1183,6 +1313,8 @@ class ProductSerializer(serializers.ModelSerializer):
                 self._sync_product_operations_from_input(product, operations_input)
             elif legacy_process_touched:
                 self._sync_product_operations_from_legacy_process_fields(product)
+            if routing_input is not None:
+                self._sync_product_routing_steps_from_input(product, routing_input)
         return product
 
     def validate_sale_price(self, value):
