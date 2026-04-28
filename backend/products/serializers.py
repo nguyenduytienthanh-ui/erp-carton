@@ -384,6 +384,7 @@ class ProductSerializer(serializers.ModelSerializer):
     resolved_bundle_commission_percent = serializers.SerializerMethodField()
     operations = serializers.SerializerMethodField()
     operations_input = ProductOperationInputSerializer(many=True, write_only=True, required=False)
+    print_colors = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -401,6 +402,8 @@ class ProductSerializer(serializers.ModelSerializer):
             'process_be', 'process_chap', 'process_dong', 'process_dan', 'process_khac',
             'operations', 'operations_input',
             'film_code', 'film_file_url', 'color_count',
+            'print_color_1', 'print_color_2', 'print_color_3', 'print_color_4', 'print_color_5',
+            'print_colors',
             'mold_code', 'mold_file_url', 'waterproof',
             'note_other', 'note',
             'parent', 'parent_name', 'component_quantity', 'is_set', 'components', 'components_count',
@@ -434,7 +437,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'bundle_primary_product_id', 'bundle_primary_product_name',
             'resolved_bundle_cost_price', 'resolved_bundle_sale_price',
             'resolved_bundle_commission_per_unit', 'resolved_bundle_commission_percent',
-            'operations',
+            'operations', 'print_colors',
         ]
         extra_kwargs = {
             'code': {
@@ -451,6 +454,30 @@ class ProductSerializer(serializers.ModelSerializer):
         if user and getattr(user, 'is_authenticated', False):
             return user
         return None
+
+    def _normalize_print_color_fields(self, data):
+        print_colors_touched = any(field in data for field in Product.PRINT_COLOR_FIELDS)
+        print_colors_count = 0
+
+        for field in Product.PRINT_COLOR_FIELDS:
+            if field in data:
+                data[field] = (data.get(field) or '').strip()
+                value = data[field]
+            elif self.instance is not None:
+                value = getattr(self.instance, field, '') or ''
+            else:
+                value = ''
+
+            if str(value).strip():
+                print_colors_count += 1
+
+        if print_colors_count > 0:
+            data['color_count'] = print_colors_count
+        elif print_colors_touched:
+            if self.instance is not None and int(getattr(self.instance, 'color_count', 0) or 0) > 0:
+                data.pop('color_count', None)
+            else:
+                data['color_count'] = 0
 
     def _operation_lookup_by_id(self):
         lookup = self.context.get('_operation_lookup_by_id')
@@ -611,6 +638,13 @@ class ProductSerializer(serializers.ModelSerializer):
         if active_operations:
             return ProductOperationSerializer(active_operations, many=True).data
         return self._build_legacy_process_operations(obj)
+
+    def get_print_colors(self, obj):
+        return [
+            value
+            for value in ((getattr(obj, field, '') or '').strip() for field in Product.PRINT_COLOR_FIELDS)
+            if value
+        ]
 
     def _get_active_product_operations(self, obj):
         prefetched = getattr(obj, 'prefetched_product_operations', None)
@@ -900,6 +934,8 @@ class ProductSerializer(serializers.ModelSerializer):
         if effective_product_kind == Product.ProductKind.GENERIC:
             data['requires_order_spec'] = True
             data['requires_order_operations_review'] = True
+
+        self._normalize_print_color_fields(data)
 
         operations_input = data.get('operations_input')
         if operations_input is not None:

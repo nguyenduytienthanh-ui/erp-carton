@@ -177,6 +177,12 @@ export interface Product {
   film_code?: string;
   film_file_url?: string;
   color_count?: number;
+  print_color_1?: string;
+  print_color_2?: string;
+  print_color_3?: string;
+  print_color_4?: string;
+  print_color_5?: string;
+  print_colors?: string[];
 
   // ============ BẾ ============
   mold_code?: string;
@@ -274,6 +280,11 @@ export interface ProductFormData {
   film_code?: string;
   film_file_url?: string;
   color_count?: number;
+  print_color_1?: string;
+  print_color_2?: string;
+  print_color_3?: string;
+  print_color_4?: string;
+  print_color_5?: string;
   mold_code?: string;
   mold_file_url?: string;
   waterproof?: string;
@@ -321,6 +332,11 @@ export interface ProductChildFormData {
   film_code?: string;
   film_file_url?: string;
   color_count?: number;
+  print_color_1?: string;
+  print_color_2?: string;
+  print_color_3?: string;
+  print_color_4?: string;
+  print_color_5?: string;
   mold_code?: string;
   mold_file_url?: string;
   waterproof?: string;

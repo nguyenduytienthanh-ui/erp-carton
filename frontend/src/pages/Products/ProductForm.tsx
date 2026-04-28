@@ -87,6 +87,11 @@ const defaultMother = (firstUnitId: number | undefined): ProductFormData => ({
   operation_notes: {},
   film_code: '',
   color_count: undefined,
+  print_color_1: '',
+  print_color_2: '',
+  print_color_3: '',
+  print_color_4: '',
+  print_color_5: '',
   mold_code: '',
   waterproof: '',
   note_other: '',
@@ -120,6 +125,11 @@ const defaultChild = (firstUnitId: number | undefined): ProductChildFormData => 
   operation_notes: {},
   film_code: '',
   color_count: undefined,
+  print_color_1: '',
+  print_color_2: '',
+  print_color_3: '',
+  print_color_4: '',
+  print_color_5: '',
   mold_code: '',
   waterproof: '',
   note_other: '',
@@ -183,6 +193,17 @@ type OperationFormData = Pick<ProductFormData, ProcessField> & {
   operation_notes?: ProductOperationNotes;
 };
 
+type PrintColorField =
+  | 'print_color_1'
+  | 'print_color_2'
+  | 'print_color_3'
+  | 'print_color_4'
+  | 'print_color_5';
+
+type PrintColorFormData = Partial<Record<PrintColorField, string>> & {
+  color_count?: number;
+};
+
 const PRODUCT_OPERATIONS: ProductOperationDefinition[] = [
   { code: 'XA', label: 'Xả', processField: 'process_xa' },
   { code: 'IN', label: 'In', processField: 'process_in' },
@@ -197,6 +218,35 @@ const PRODUCT_OPERATIONS: ProductOperationDefinition[] = [
 
 const PRODUCT_OPERATION_LEFT = PRODUCT_OPERATIONS.slice(0, 5);
 const PRODUCT_OPERATION_RIGHT = PRODUCT_OPERATIONS.slice(5);
+
+const PRINT_COLOR_FIELDS: Array<{ field: PrintColorField; label: string }> = [
+  { field: 'print_color_1', label: 'Màu 1 / mã màu' },
+  { field: 'print_color_2', label: 'Màu 2 / mã màu' },
+  { field: 'print_color_3', label: 'Màu 3 / mã màu' },
+  { field: 'print_color_4', label: 'Màu 4 / mã màu' },
+  { field: 'print_color_5', label: 'Màu 5 / mã màu' },
+];
+
+function getPrintColorValue(data: PrintColorFormData, field: PrintColorField): string {
+  return String(data[field] ?? '').trim();
+}
+
+function countPrintColors(data: PrintColorFormData): number {
+  return PRINT_COLOR_FIELDS.filter((item) => getPrintColorValue(data, item.field) !== '').length;
+}
+
+function buildPrintColorPayload(data: PrintColorFormData): Pick<ProductFormData, PrintColorField> & { color_count: number } {
+  const payload = PRINT_COLOR_FIELDS.reduce((acc, item) => {
+    acc[item.field] = getPrintColorValue(data, item.field);
+    return acc;
+  }, {} as Pick<ProductFormData, PrintColorField>);
+  const computedColorCount = countPrintColors(payload);
+  const legacyColorCount = Number(data.color_count ?? 0) || 0;
+  return {
+    ...payload,
+    color_count: computedColorCount > 0 ? computedColorCount : legacyColorCount > 0 ? legacyColorCount : 0,
+  };
+}
 
 type ParsedOperationRate =
   | { kind: 'empty' | 'zero'; value: 0 }
@@ -335,14 +385,16 @@ function deriveCommissionModeFromPricingMode(pricingMode: ProductBundlePricingMo
 
 /** Build payload Mẹ để gửi API. */
 function buildMotherPayload(m: ProductFormData, isSet: boolean): ProductFormData {
-  const { operation_notes, operations_input, ...base } = m;
+  const { operation_notes, operations_input, color_count, ...base } = m;
   void operation_notes;
   void operations_input;
+  void color_count;
   const productKind = m.product_kind ?? 'SPECIFIC';
   return {
     ...base,
     ...buildLegacyProcessPayload(m),
     operations_input: buildOperationInputs(m),
+    ...buildPrintColorPayload(m),
     product_kind: productKind,
     requires_order_spec: productKind === 'GENERIC' ? true : Boolean(m.requires_order_spec),
     requires_order_operations_review: productKind === 'GENERIC' ? true : Boolean(m.requires_order_operations_review),
@@ -365,13 +417,15 @@ function buildChildPayload(
   code: string,
   skipPriceFloorValidation = false,
 ): ProductFormData & { parent: number } {
-  const { operation_notes, ...base } = c;
+  const { operation_notes, color_count, ...base } = c;
   void operation_notes;
+  void color_count;
   return {
     ...base,
     parent: parentId,
     ...buildLegacyProcessPayload(c),
     operations_input: buildOperationInputs(c),
+    ...buildPrintColorPayload(c),
     code,
     name: (c.name ?? '').trim(),
     component_quantity: Number(c.component_quantity) || 1,
@@ -389,7 +443,6 @@ function buildChildPayload(
     box_type: c.box_type,
     delivery_tolerance: c.delivery_tolerance ?? '',
     film_code: c.film_code ?? '',
-    color_count: c.color_count,
     mold_code: c.mold_code ?? '',
     waterproof: c.waterproof ?? '',
     note_other: c.note_other ?? '',
@@ -497,6 +550,47 @@ function OperationRatesEditor({
       <div className="pf-operation-grid">
         {renderTable(PRODUCT_OPERATION_LEFT)}
         {renderTable(PRODUCT_OPERATION_RIGHT)}
+      </div>
+    </div>
+  );
+}
+
+interface PrintColorsEditorProps {
+  value: PrintColorFormData;
+  onChange: (field: PrintColorField, value: string) => void;
+}
+
+function PrintColorsEditor({ value, onChange }: PrintColorsEditorProps) {
+  const computedColorCount = countPrintColors(value);
+  const legacyColorCount = Number(value.color_count ?? 0) || 0;
+  const summary = computedColorCount > 0
+    ? `Số màu tự tính: ${computedColorCount}`
+    : legacyColorCount > 0
+      ? `Số màu cũ: ${legacyColorCount} - chưa khai báo chi tiết màu`
+      : 'Số màu tự tính: 0';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 6 }}>
+        {PRINT_COLOR_FIELDS.map((item) => {
+          const rawValue = value[item.field] ?? '';
+          return (
+            <div key={item.field} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <span style={{ color: 'var(--app-text-secondary)', fontSize: 12, lineHeight: '16px' }}>{item.label}</span>
+              <FormInputWithClear
+                type="text"
+                className="pf-input"
+                value={rawValue}
+                onChange={(e) => onChange(item.field, e.target.value)}
+                onClear={() => onChange(item.field, '')}
+                hasValue={String(rawValue ?? '').trim() !== ''}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ color: computedColorCount > 0 ? 'var(--app-text-secondary)' : 'var(--app-text-muted)', fontSize: 12, lineHeight: '16px' }}>
+        {summary}
       </div>
     </div>
   );
@@ -685,8 +779,11 @@ function ChildBlock({
         <Field label="Mã phim" span={2}>
           <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={child.film_code ?? ''} onChange={(e) => onChange('film_code', e.target.value)} onClear={() => onChange('film_code', '')} />
         </Field>
-        <Field label="Số màu" span={1}>
-          <FormInputWithClear type="number" className="pf-input" value={child.color_count ?? ''} onChange={(e) => onChange('color_count', e.target.value ? Number(e.target.value) : undefined)} onClear={() => onChange('color_count', undefined)} hasValue={child.color_count != null} />
+        <Field label="Màu in / mã màu" span={5}>
+          <PrintColorsEditor
+            value={child}
+            onChange={(field, value) => onChange(field, value)}
+          />
         </Field>
         <Field label="C. thấm" span={1}>
           <select className="pf-select" value={child.waterproof ?? ''} onChange={(e) => onChange('waterproof', e.target.value)}>
@@ -696,7 +793,7 @@ function ChildBlock({
         <Field label="Mã khuôn" span={2}>
           <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={child.mold_code ?? ''} onChange={(e) => onChange('mold_code', e.target.value)} onClear={() => onChange('mold_code', '')} />
         </Field>
-        <Field label="Ghi chú sản xuất" span={4}>
+        <Field label="Ghi chú sản xuất" span={10}>
           <FormInputWithClear type="text" className="pf-input" value={child.note_other ?? ''} onChange={(e) => onChange('note_other', e.target.value)} onClear={() => onChange('note_other', '')} />
         </Field>
       </div>
@@ -761,6 +858,11 @@ function componentToChildFormData(c: Product, firstUnitId: number | undefined): 
     ...operationState,
     film_code: c.film_code ?? '',
     color_count: c.color_count ?? undefined,
+    print_color_1: c.print_color_1 ?? '',
+    print_color_2: c.print_color_2 ?? '',
+    print_color_3: c.print_color_3 ?? '',
+    print_color_4: c.print_color_4 ?? '',
+    print_color_5: c.print_color_5 ?? '',
     mold_code: c.mold_code ?? '',
     waterproof: (c.waterproof as string) ?? '',
     note_other: c.note_other ?? '',
@@ -797,6 +899,11 @@ function productToMother(p: Product): ProductFormData {
     ...operationState,
     film_code: p.film_code ?? '',
     color_count: p.color_count ?? undefined,
+    print_color_1: p.print_color_1 ?? '',
+    print_color_2: p.print_color_2 ?? '',
+    print_color_3: p.print_color_3 ?? '',
+    print_color_4: p.print_color_4 ?? '',
+    print_color_5: p.print_color_5 ?? '',
     mold_code: p.mold_code ?? '',
     waterproof: (p.waterproof as string) ?? '',
     note_other: p.note_other ?? '',
@@ -1540,8 +1647,11 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
             <Field label="Mã phim" span={2}>
               <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={mother.film_code ?? ''} onChange={(e) => setMotherField('film_code', e.target.value)} onClear={() => setMotherField('film_code', '')} />
             </Field>
-            <Field label="Số màu" span={1}>
-              <FormInputWithClear type="number" className="pf-input" value={mother.color_count ?? ''} onChange={(e) => setMotherField('color_count', e.target.value ? Number(e.target.value) : undefined)} onClear={() => setMotherField('color_count', undefined)} hasValue={mother.color_count != null} />
+            <Field label="Màu in / mã màu" span={5}>
+              <PrintColorsEditor
+                value={mother}
+                onChange={(field, value) => setMotherField(field, value)}
+              />
             </Field>
             <Field label="C. thấm" span={1}>
               <select className="pf-select" value={mother.waterproof ?? ''} onChange={(e) => setMotherField('waterproof', e.target.value)}>
@@ -1551,7 +1661,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
             <Field label="Mã khuôn" span={2}>
               <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={mother.mold_code ?? ''} onChange={(e) => setMotherField('mold_code', e.target.value)} onClear={() => setMotherField('mold_code', '')} />
             </Field>
-        <Field label="Ghi chú sản xuất" span={4}>
+        <Field label="Ghi chú sản xuất" span={10}>
               <FormInputWithClear type="text" className="pf-input" value={mother.note_other ?? ''} onChange={(e) => setMotherField('note_other', e.target.value)} onClear={() => setMotherField('note_other', '')} />
             </Field>
           </div>

@@ -182,6 +182,116 @@ class ProductOperationApiTest(TestCase):
         self.assertTrue(payload['requires_order_spec'])
         self.assertFalse(payload['requires_order_operations_review'])
 
+    def test_product_create_with_print_colors_sets_color_count(self):
+        response = self.client.post(
+            '/api/products/products/',
+            {
+                'code': 'COLOR-CREATE-3',
+                'name': 'Color Create 3',
+                'unit': self.unit.id,
+                'print_color_1': ' Đen ',
+                'print_color_2': 'Đỏ',
+                'print_color_3': '',
+                'print_color_4': 'Pantone 185C',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        product = Product.objects.get(code='COLOR-CREATE-3')
+        self.assertEqual(product.print_color_1, 'Đen')
+        self.assertEqual(product.print_color_2, 'Đỏ')
+        self.assertEqual(product.print_color_4, 'Pantone 185C')
+        self.assertEqual(product.color_count, 3)
+        self.assertEqual(payload['color_count'], 3)
+        self.assertEqual(payload['print_colors'], ['Đen', 'Đỏ', 'Pantone 185C'])
+
+    def test_product_create_without_print_colors_defaults_color_count_to_zero(self):
+        response = self.client.post(
+            '/api/products/products/',
+            {
+                'code': 'COLOR-CREATE-EMPTY',
+                'name': 'Color Create Empty',
+                'unit': self.unit.id,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        product = Product.objects.get(code='COLOR-CREATE-EMPTY')
+        self.assertEqual(product.color_count, 0)
+        self.assertEqual(response.json()['print_colors'], [])
+
+    def test_product_update_print_colors_updates_color_count(self):
+        product = Product.objects.create(
+            code='COLOR-UPDATE-ADD',
+            name='Color Update Add',
+            unit=self.unit,
+        )
+
+        response = self.client.patch(
+            f'/api/products/products/{product.id}/',
+            {
+                'print_color_1': 'Xanh',
+                'print_color_2': 'Vàng',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        product.refresh_from_db()
+        self.assertEqual(product.color_count, 2)
+        self.assertEqual(response.json()['print_colors'], ['Xanh', 'Vàng'])
+
+    def test_product_update_empty_print_colors_preserves_legacy_color_count(self):
+        product = Product.objects.create(
+            code='COLOR-UPDATE-PRESERVE',
+            name='Color Update Preserve',
+            unit=self.unit,
+        )
+        Product.objects.filter(pk=product.pk).update(color_count=4)
+        product.refresh_from_db()
+
+        response = self.client.patch(
+            f'/api/products/products/{product.id}/',
+            {
+                'print_color_1': '',
+                'print_color_2': '',
+                'print_color_3': '',
+                'print_color_4': '',
+                'print_color_5': '',
+                'color_count': 0,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        product.refresh_from_db()
+        self.assertEqual(product.color_count, 4)
+        self.assertEqual(response.json()['print_colors'], [])
+
+    def test_product_api_returns_print_color_fields(self):
+        product = Product.objects.create(
+            code='COLOR-API-FIELDS',
+            name='Color API Fields',
+            unit=self.unit,
+            print_color_1='Đen',
+            print_color_5='CMYK',
+        )
+
+        response = self.client.get(f'/api/products/products/{product.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['print_color_1'], 'Đen')
+        self.assertEqual(payload['print_color_2'], '')
+        self.assertEqual(payload['print_color_3'], '')
+        self.assertEqual(payload['print_color_4'], '')
+        self.assertEqual(payload['print_color_5'], 'CMYK')
+        self.assertEqual(payload['color_count'], 2)
+        self.assertEqual(payload['print_colors'], ['Đen', 'CMYK'])
+
     def test_product_api_returns_legacy_process_fields_and_product_operations(self):
         operation = Operation.objects.get(code='IN')
         product = Product.objects.create(

@@ -318,6 +318,14 @@ class Product(models.Model):
         SPECIFIC = 'SPECIFIC', 'Mã riêng'
         GENERIC = 'GENERIC', 'Mã chung'
 
+    PRINT_COLOR_FIELDS = (
+        'print_color_1',
+        'print_color_2',
+        'print_color_3',
+        'print_color_4',
+        'print_color_5',
+    )
+
     # ============ CƠ BẢN (Giữ nguyên) ============
     code = models.CharField(max_length=50, unique=True, verbose_name="Mã hàng")
     name = models.CharField(max_length=200, verbose_name="Tên hàng")
@@ -425,6 +433,11 @@ class Product(models.Model):
     film_code = models.CharField(max_length=100, blank=True, verbose_name="Mã phim")
     film_file_url = models.URLField(blank=True, verbose_name="Link file phim (PDF)")
     color_count = models.IntegerField(default=0, verbose_name="Số màu")
+    print_color_1 = models.CharField(max_length=100, blank=True, default='', verbose_name="Màu in 1 / mã màu")
+    print_color_2 = models.CharField(max_length=100, blank=True, default='', verbose_name="Màu in 2 / mã màu")
+    print_color_3 = models.CharField(max_length=100, blank=True, default='', verbose_name="Màu in 3 / mã màu")
+    print_color_4 = models.CharField(max_length=100, blank=True, default='', verbose_name="Màu in 4 / mã màu")
+    print_color_5 = models.CharField(max_length=100, blank=True, default='', verbose_name="Màu in 5 / mã màu")
 
     # ============ BẾ ============
     mold_code = models.CharField(max_length=100, blank=True, verbose_name="Mã khuôn")
@@ -641,6 +654,16 @@ class Product(models.Model):
         if self.product_kind == self.ProductKind.GENERIC:
             self.requires_order_spec = True
             self.requires_order_operations_review = True
+        color_count_from_print_colors = 0
+        for field in self.PRINT_COLOR_FIELDS:
+            value = (getattr(self, field, '') or '').strip()
+            setattr(self, field, value)
+            if value:
+                color_count_from_print_colors += 1
+        if color_count_from_print_colors > 0:
+            self.color_count = color_count_from_print_colors
+        elif self._state.adding:
+            self.color_count = 0
         if not self.size_production and self.size_order:
             self.size_production = self.size_order
         self._build_search_text()
