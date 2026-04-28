@@ -83,6 +83,105 @@ class ProductOperationApiTest(TestCase):
         self.unit = ProductUnit.objects.create(code='CAI', name='Cai')
         run_operation_seed_backfill()
 
+    def test_product_defaults_to_specific_kind(self):
+        product = Product.objects.create(
+            code='KIND-DEFAULT',
+            name='Kind Default',
+            unit=self.unit,
+        )
+
+        self.assertEqual(product.product_kind, Product.ProductKind.SPECIFIC)
+        self.assertFalse(product.requires_order_spec)
+        self.assertFalse(product.requires_order_operations_review)
+
+    def test_product_api_returns_product_kind_fields(self):
+        product = Product.objects.create(
+            code='KIND-API-FIELDS',
+            name='Kind API Fields',
+            unit=self.unit,
+            requires_order_spec=True,
+        )
+
+        response = self.client.get(f'/api/products/products/{product.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['product_kind'], 'SPECIFIC')
+        self.assertTrue(payload['requires_order_spec'])
+        self.assertFalse(payload['requires_order_operations_review'])
+
+    def test_product_create_generic_auto_sets_order_review_flags(self):
+        response = self.client.post(
+            '/api/products/products/',
+            {
+                'code': 'KIND-GENERIC-CREATE',
+                'name': 'Kind Generic Create',
+                'unit': self.unit.id,
+                'product_kind': 'GENERIC',
+                'requires_order_spec': False,
+                'requires_order_operations_review': False,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        product = Product.objects.get(code='KIND-GENERIC-CREATE')
+        self.assertEqual(product.product_kind, Product.ProductKind.GENERIC)
+        self.assertTrue(product.requires_order_spec)
+        self.assertTrue(product.requires_order_operations_review)
+        self.assertTrue(payload['requires_order_spec'])
+        self.assertTrue(payload['requires_order_operations_review'])
+
+    def test_product_update_to_generic_auto_sets_order_review_flags(self):
+        product = Product.objects.create(
+            code='KIND-GENERIC-UPDATE',
+            name='Kind Generic Update',
+            unit=self.unit,
+        )
+
+        response = self.client.patch(
+            f'/api/products/products/{product.id}/',
+            {
+                'product_kind': 'GENERIC',
+                'requires_order_spec': False,
+                'requires_order_operations_review': False,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        product.refresh_from_db()
+        self.assertEqual(product.product_kind, Product.ProductKind.GENERIC)
+        self.assertTrue(product.requires_order_spec)
+        self.assertTrue(product.requires_order_operations_review)
+        self.assertTrue(payload['requires_order_spec'])
+        self.assertTrue(payload['requires_order_operations_review'])
+
+    def test_specific_product_allows_manual_order_review_flags(self):
+        response = self.client.post(
+            '/api/products/products/',
+            {
+                'code': 'KIND-SPECIFIC-FLAGS',
+                'name': 'Kind Specific Flags',
+                'unit': self.unit.id,
+                'product_kind': 'SPECIFIC',
+                'requires_order_spec': True,
+                'requires_order_operations_review': False,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        product = Product.objects.get(code='KIND-SPECIFIC-FLAGS')
+        self.assertEqual(product.product_kind, Product.ProductKind.SPECIFIC)
+        self.assertTrue(product.requires_order_spec)
+        self.assertFalse(product.requires_order_operations_review)
+        self.assertTrue(payload['requires_order_spec'])
+        self.assertFalse(payload['requires_order_operations_review'])
+
     def test_product_api_returns_legacy_process_fields_and_product_operations(self):
         operation = Operation.objects.get(code='IN')
         product = Product.objects.create(

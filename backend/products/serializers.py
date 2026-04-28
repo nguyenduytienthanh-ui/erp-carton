@@ -389,6 +389,7 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             'id', 'code', 'name', 'description',
+            'product_kind', 'requires_order_spec', 'requires_order_operations_review',
             'category', 'category_name',
             'unit', 'unit_name',
             'size_order', 'size_production',
@@ -892,6 +893,13 @@ class ProductSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError({
                         'price_change_reason': 'Vui lòng nhập lý do khi thay đổi giá hoặc hoa hồng.'
                 })
+
+        effective_product_kind = data.get('product_kind')
+        if effective_product_kind is None and self.instance:
+            effective_product_kind = getattr(self.instance, 'product_kind', Product.ProductKind.SPECIFIC)
+        if effective_product_kind == Product.ProductKind.GENERIC:
+            data['requires_order_spec'] = True
+            data['requires_order_operations_review'] = True
 
         operations_input = data.get('operations_input')
         if operations_input is not None:

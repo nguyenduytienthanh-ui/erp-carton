@@ -17,6 +17,7 @@ import type {
   ProductBundleUpsertPayload,
   ProductBundlePricingMode,
   ProductBundleDeliveryRule,
+  ProductKind,
   ProductOperationCode,
   ProductOperationInput,
   ProductOperationNotes,
@@ -60,6 +61,9 @@ const defaultMother = (firstUnitId: number | undefined): ProductFormData => ({
   name: '',
   category: undefined,
   unit: firstUnitId ?? (0 as number),
+  product_kind: 'SPECIFIC',
+  requires_order_spec: false,
+  requires_order_operations_review: false,
   cost_price: 0,
   sale_price: 0,
   min_stock: 0,
@@ -334,10 +338,14 @@ function buildMotherPayload(m: ProductFormData, isSet: boolean): ProductFormData
   const { operation_notes, operations_input, ...base } = m;
   void operation_notes;
   void operations_input;
+  const productKind = m.product_kind ?? 'SPECIFIC';
   return {
     ...base,
     ...buildLegacyProcessPayload(m),
     operations_input: buildOperationInputs(m),
+    product_kind: productKind,
+    requires_order_spec: productKind === 'GENERIC' ? true : Boolean(m.requires_order_spec),
+    requires_order_operations_review: productKind === 'GENERIC' ? true : Boolean(m.requires_order_operations_review),
     code: (m.code ?? '').trim(),
     name: (m.name ?? '').trim(),
     cost_price: Number(m.cost_price) || 0,
@@ -772,6 +780,9 @@ function productToMother(p: Product): ProductFormData {
     category: p.category ?? undefined,
     description: p.description ?? '',
     unit: p.unit ?? 0,
+    product_kind: p.product_kind ?? 'SPECIFIC',
+    requires_order_spec: p.product_kind === 'GENERIC' ? true : Boolean(p.requires_order_spec),
+    requires_order_operations_review: p.product_kind === 'GENERIC' ? true : Boolean(p.requires_order_operations_review),
     cost_price: parseFloat(String(p.cost_price ?? 0)) || 0,
     sale_price: parseFloat(String(p.sale_price ?? 0)) || 0,
     min_stock: parseFloat(String(p.min_stock ?? 0)) || 0,
@@ -922,6 +933,15 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
 
   const setMotherField = <K extends keyof ProductFormData>(key: K, value: ProductFormData[K]) => {
     setMother((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const setMotherProductKind = (productKind: ProductKind) => {
+    setMother((prev) => ({
+      ...prev,
+      product_kind: productKind,
+      requires_order_spec: productKind === 'GENERIC' ? true : Boolean(prev.requires_order_spec),
+      requires_order_operations_review: productKind === 'GENERIC' ? true : Boolean(prev.requires_order_operations_review),
+    }));
   };
 
   const setBundleField = <K extends keyof BundleFormData>(key: K, value: BundleFormData[K]) => {
@@ -1329,6 +1349,36 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 hasValue={mother.commission_percent != null}
                 style={!canEditMotherCommission ? { background: 'var(--app-surface-accent)' } : undefined}
               />
+            </Field>
+          </div>
+          <div className="pf-row">
+            <Field label="Loại mã hàng" span={2}>
+              <select
+                className="pf-select"
+                value={mother.product_kind ?? 'SPECIFIC'}
+                onChange={(e) => setMotherProductKind(e.target.value as ProductKind)}
+              >
+                <option value="SPECIFIC">Mã riêng</option>
+                <option value="GENERIC">Mã chung</option>
+              </select>
+            </Field>
+            <Field label="Quy cách khi lên đơn" span={4}>
+              <Checkbox
+                checked={mother.product_kind === 'GENERIC' ? true : Boolean(mother.requires_order_spec)}
+                disabled={mother.product_kind === 'GENERIC'}
+                onChange={(e) => setMotherField('requires_order_spec', e.target.checked)}
+              >
+                Bắt buộc nhập/xác nhận lại quy cách
+              </Checkbox>
+            </Field>
+            <Field label="Công đoạn khi lên đơn" span={4}>
+              <Checkbox
+                checked={mother.product_kind === 'GENERIC' ? true : Boolean(mother.requires_order_operations_review)}
+                disabled={mother.product_kind === 'GENERIC'}
+                onChange={(e) => setMotherField('requires_order_operations_review', e.target.checked)}
+              >
+                Bắt buộc kiểm tra lại công đoạn/định mức
+              </Checkbox>
             </Field>
           </div>
           {hasChildren && (

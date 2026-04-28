@@ -122,6 +122,8 @@ export interface ProductBundleUpsertPayload {
   components: ProductBundleComponentInput[];
 }
 
+export type ProductKind = 'SPECIFIC' | 'GENERIC';
+
 export interface Product {
   id: number;
   code: string;
@@ -133,6 +135,9 @@ export interface Product {
   unit: number;
   unit_name?: string;
   description?: string;
+  product_kind: ProductKind;
+  requires_order_spec: boolean;
+  requires_order_operations_review: boolean;
 
   // ============ KÍCH THƯỚC ============
   size_order?: string;
@@ -237,6 +242,9 @@ export interface ProductFormData {
   category?: number;
   unit: number;
   description?: string;
+  product_kind?: ProductKind;
+  requires_order_spec?: boolean;
+  requires_order_operations_review?: boolean;
 
   size_order?: string;
   size_production?: string;

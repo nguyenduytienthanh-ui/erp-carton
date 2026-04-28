@@ -314,6 +314,10 @@ class Operation(models.Model):
 class Product(models.Model):
     """Model sản phẩm thùng carton với đầy đủ thông tin sản xuất"""
 
+    class ProductKind(models.TextChoices):
+        SPECIFIC = 'SPECIFIC', 'Mã riêng'
+        GENERIC = 'GENERIC', 'Mã chung'
+
     # ============ CƠ BẢN (Giữ nguyên) ============
     code = models.CharField(max_length=50, unique=True, verbose_name="Mã hàng")
     name = models.CharField(max_length=200, verbose_name="Tên hàng")
@@ -332,6 +336,20 @@ class Product(models.Model):
         verbose_name="Đơn vị tính",
     )
     description = models.TextField(blank=True, verbose_name="Mô tả")
+    product_kind = models.CharField(
+        max_length=20,
+        choices=ProductKind.choices,
+        default=ProductKind.SPECIFIC,
+        verbose_name="Loại mã hàng",
+    )
+    requires_order_spec = models.BooleanField(
+        default=False,
+        verbose_name="Bắt buộc xác nhận quy cách khi lên đơn",
+    )
+    requires_order_operations_review = models.BooleanField(
+        default=False,
+        verbose_name="Bắt buộc kiểm tra công đoạn khi lên đơn",
+    )
 
     # ============ KÍCH THƯỚC ============
     size_order = models.CharField(max_length=50, blank=True, verbose_name="Kích thước ĐH")
@@ -620,6 +638,9 @@ class Product(models.Model):
         self.search_text = unidecode(combined).lower() if combined else ''
 
     def save(self, *args, **kwargs):
+        if self.product_kind == self.ProductKind.GENERIC:
+            self.requires_order_spec = True
+            self.requires_order_operations_review = True
         if not self.size_production and self.size_order:
             self.size_production = self.size_order
         self._build_search_text()
