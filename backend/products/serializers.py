@@ -8,6 +8,7 @@ from .models import (
     Operation,
     Product,
     ProductOperation,
+    ProductRoutingStep,
     ProductBundle,
     ProductBundleComponent,
     PriceChange,
@@ -124,6 +125,26 @@ class ProductOperationSerializer(serializers.ModelSerializer):
             'sequence', 'standard_rate_per_hour', 'note', 'is_active',
         ]
         read_only_fields = fields
+
+
+class ProductRoutingStepSerializer(serializers.Serializer):
+    id = serializers.IntegerField(allow_null=True)
+    route_step_id = serializers.IntegerField(allow_null=True)
+    operation_id = serializers.IntegerField(allow_null=True)
+    product_operation_id = serializers.IntegerField(allow_null=True)
+    step_no = serializers.IntegerField()
+    display_step = serializers.IntegerField()
+    display_order = serializers.IntegerField()
+    operation_code = serializers.CharField()
+    operation_name = serializers.CharField()
+    standard_rate_per_hour = serializers.IntegerField()
+    note = serializers.CharField(allow_blank=True)
+    step_type = serializers.CharField()
+    group_code = serializers.CharField(allow_blank=True)
+    is_required = serializers.BooleanField()
+    allow_parallel = serializers.BooleanField()
+    source = serializers.CharField()
+    is_active = serializers.BooleanField()
 
 
 class ProductOperationInputSerializer(serializers.Serializer):
@@ -384,6 +405,7 @@ class ProductSerializer(serializers.ModelSerializer):
     resolved_bundle_commission_percent = serializers.SerializerMethodField()
     operations = serializers.SerializerMethodField()
     operations_input = ProductOperationInputSerializer(many=True, write_only=True, required=False)
+    routing_steps = serializers.SerializerMethodField()
     print_colors = serializers.SerializerMethodField()
 
     class Meta:
@@ -400,7 +422,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'delivery_tolerance', 'commission_per_unit', 'commission_percent',
             'process_xa', 'process_in', 'process_boi', 'process_can_mang',
             'process_be', 'process_chap', 'process_dong', 'process_dan', 'process_khac',
-            'operations', 'operations_input',
+            'operations', 'operations_input', 'routing_steps',
             'film_code', 'film_file_url', 'color_count',
             'print_color_1', 'print_color_2', 'print_color_3', 'print_color_4', 'print_color_5',
             'print_colors',
@@ -437,7 +459,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'bundle_primary_product_id', 'bundle_primary_product_name',
             'resolved_bundle_cost_price', 'resolved_bundle_sale_price',
             'resolved_bundle_commission_per_unit', 'resolved_bundle_commission_percent',
-            'operations', 'print_colors',
+            'operations', 'routing_steps', 'print_colors',
         ]
         extra_kwargs = {
             'code': {
@@ -639,12 +661,44 @@ class ProductSerializer(serializers.ModelSerializer):
             return ProductOperationSerializer(active_operations, many=True).data
         return self._build_legacy_process_operations(obj)
 
+    def get_routing_steps(self, obj):
+        custom_steps = self._build_custom_routing_steps(obj)
+        if custom_steps:
+            return ProductRoutingStepSerializer(
+                self._assign_routing_display_steps(custom_steps),
+                many=True,
+            ).data
+
+        default_steps = self._build_default_routing_steps_from_product_operations(obj)
+        if default_steps:
+            return ProductRoutingStepSerializer(
+                self._assign_routing_display_steps(default_steps),
+                many=True,
+            ).data
+
+        return ProductRoutingStepSerializer(
+            self._assign_routing_display_steps(self._build_legacy_process_routing_steps(obj)),
+            many=True,
+        ).data
+
     def get_print_colors(self, obj):
         return [
             value
             for value in ((getattr(obj, field, '') or '').strip() for field in Product.PRINT_COLOR_FIELDS)
             if value
         ]
+
+    def _get_active_product_routing_steps(self, obj):
+        prefetched = getattr(obj, 'prefetched_routing_steps', None)
+        if prefetched is not None:
+            steps = [step for step in prefetched if step.is_active]
+            return sorted(steps, key=lambda item: (item.step_no or 0, item.display_order or 0, item.id or 0))
+        return list(
+            obj.routing_steps
+            .filter(is_active=True)
+            .select_related('operation', 'product_operation')
+            .order_by('step_no', 'display_order', 'id')
+        )
 
     def _get_active_product_operations(self, obj):
         prefetched = getattr(obj, 'prefetched_product_operations', None)
@@ -657,6 +711,148 @@ class ProductSerializer(serializers.ModelSerializer):
             .select_related('operation')
             .order_by('sequence', 'operation_code', 'id')
         )
+
+    @staticmethod
+    def _assign_routing_display_steps(steps):
+        display_step_by_step_no = {}
+        display_step = 0
+        sorted_steps = sorted(
+            steps,
+            key=lambda item: (
+                item.get('step_no') or 0,
+                item.get('display_order') or 0,
+                item.get('id') or 0,
+                item.get('operation_code') or '',
+            ),
+        )
+        for item in sorted_steps:
+            step_no = item.get('step_no') or 0
+            if step_no not in display_step_by_step_no:
+                display_step += 1
+                display_step_by_step_no[step_no] = display_step
+            item['display_step'] = display_step_by_step_no[step_no]
+        return sorted_steps
+
+    @staticmethod
+    def _routing_step_payload(
+        *,
+        route_step_id=None,
+        operation_id=None,
+        product_operation_id=None,
+        step_no,
+        display_order,
+        operation_code,
+        operation_name,
+        standard_rate_per_hour,
+        source='',
+        note='',
+        step_type=ProductRoutingStep.StepType.REQUIRED,
+        group_code='',
+        is_required=True,
+        allow_parallel=False,
+        is_active=True,
+    ):
+        return {
+            'id': route_step_id,
+            'route_step_id': route_step_id,
+            'operation_id': operation_id,
+            'product_operation_id': product_operation_id,
+            'step_no': step_no,
+            'display_step': 0,
+            'display_order': display_order,
+            'operation_code': operation_code,
+            'operation_name': operation_name,
+            'standard_rate_per_hour': standard_rate_per_hour,
+            'note': note or '',
+            'step_type': step_type,
+            'group_code': group_code or '',
+            'is_required': is_required,
+            'allow_parallel': allow_parallel,
+            'source': source,
+            'is_active': is_active,
+        }
+
+    def _build_custom_routing_steps(self, obj):
+        payload = []
+        for step in self._get_active_product_routing_steps(obj):
+            operation = getattr(step, 'operation', None)
+            product_operation = getattr(step, 'product_operation', None)
+            payload.append(self._routing_step_payload(
+                route_step_id=step.id,
+                operation_id=step.operation_id,
+                product_operation_id=step.product_operation_id,
+                step_no=step.step_no,
+                display_order=step.display_order,
+                operation_code=step.operation_code or (operation.code if operation else ''),
+                operation_name=step.operation_name or (operation.name if operation else ''),
+                standard_rate_per_hour=step.standard_rate_per_hour,
+                note=step.note,
+                step_type=step.step_type,
+                group_code=step.group_code,
+                is_required=step.is_required,
+                allow_parallel=step.allow_parallel,
+                source='product_routing',
+                is_active=step.is_active,
+            ))
+            if product_operation and not payload[-1]['product_operation_id']:
+                payload[-1]['product_operation_id'] = product_operation.id
+        return payload
+
+    def _build_default_routing_steps_from_product_operations(self, obj):
+        payload = []
+        for product_operation in self._get_active_product_operations(obj):
+            operation = getattr(product_operation, 'operation', None)
+            step_no = product_operation.sequence or (operation.sequence if operation else 0)
+            payload.append(self._routing_step_payload(
+                route_step_id=None,
+                operation_id=product_operation.operation_id,
+                product_operation_id=product_operation.id,
+                step_no=step_no,
+                display_order=step_no,
+                operation_code=product_operation.operation_code or (operation.code if operation else ''),
+                operation_name=product_operation.operation_name or (operation.name if operation else ''),
+                standard_rate_per_hour=product_operation.standard_rate_per_hour,
+                note=product_operation.note,
+                step_type=ProductRoutingStep.StepType.REQUIRED,
+                group_code='',
+                is_required=True,
+                allow_parallel=False,
+                source='product_operations_default',
+                is_active=product_operation.is_active,
+            ))
+        return payload
+
+    def _build_legacy_process_routing_steps(self, obj):
+        operation_lookup = self._operation_lookup()
+        payload = []
+        for field_name, operation_code, fallback_name, fallback_sequence in LEGACY_PROCESS_OPERATION_MAP:
+            raw_rate = getattr(obj, field_name, None)
+            try:
+                rate = int(raw_rate or 0)
+            except (TypeError, ValueError):
+                rate = 0
+            if rate <= 0:
+                continue
+            operation = operation_lookup.get(operation_code)
+            step_no = operation.sequence if operation else fallback_sequence
+            payload.append(self._routing_step_payload(
+                route_step_id=None,
+                operation_id=operation.id if operation else None,
+                product_operation_id=None,
+                step_no=step_no,
+                display_order=step_no,
+                operation_code=operation_code,
+                operation_name=operation.name if operation else fallback_name,
+                standard_rate_per_hour=rate,
+                note='',
+                step_type=ProductRoutingStep.StepType.REQUIRED,
+                group_code='',
+                is_required=True,
+                allow_parallel=False,
+                source='legacy_process_fields',
+                is_active=True,
+            ))
+        return payload
 
     def _operation_lookup(self):
         lookup = self.context.get('_operation_lookup')

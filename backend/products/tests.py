@@ -5,7 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from core.models import User
-from products.models import Operation, Product, ProductOperation, ProductUnit
+from products.models import Operation, Product, ProductOperation, ProductRoutingStep, ProductUnit
 
 
 OPERATION_CODES = ['XA', 'IN', 'CAN_MANG', 'BOI', 'BE', 'CHAP', 'DONG', 'DAN', 'KHAC']
@@ -335,6 +335,189 @@ class ProductOperationApiTest(TestCase):
         self.assertEqual(payload['operations'][0]['operation_code'], 'XA')
         self.assertEqual(payload['operations'][0]['standard_rate_per_hour'], 3000)
 
+    def test_product_api_returns_default_routing_from_product_operations(self):
+        product = Product.objects.create(
+            code='ROUTE-DEFAULT',
+            name='Route Default',
+            unit=self.unit,
+        )
+        ProductOperation.objects.create(
+            product=product,
+            operation=Operation.objects.get(code='IN'),
+            standard_rate_per_hour=20000,
+            note='Default in',
+        )
+        ProductOperation.objects.create(
+            product=product,
+            operation=Operation.objects.get(code='XA'),
+            standard_rate_per_hour=3000,
+            note='Default xa',
+        )
+
+        response = self.client.get(f'/api/products/products/{product.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        routing_steps = response.json()['routing_steps']
+        self.assertEqual([step['operation_code'] for step in routing_steps], ['XA', 'IN'])
+        self.assertEqual([step['source'] for step in routing_steps], ['product_operations_default', 'product_operations_default'])
+        self.assertEqual([step['display_step'] for step in routing_steps], [1, 2])
+        self.assertEqual([step['step_no'] for step in routing_steps], [10, 20])
+        self.assertIsNone(routing_steps[0]['route_step_id'])
+        self.assertIsNotNone(routing_steps[0]['product_operation_id'])
+
+    def test_product_api_prefers_custom_product_routing_steps(self):
+        product = Product.objects.create(
+            code='ROUTE-CUSTOM',
+            name='Route Custom',
+            unit=self.unit,
+        )
+        xa_operation = Operation.objects.get(code='XA')
+        in_operation = Operation.objects.get(code='IN')
+        xa_product_operation = ProductOperation.objects.create(
+            product=product,
+            operation=xa_operation,
+            standard_rate_per_hour=3000,
+        )
+        in_product_operation = ProductOperation.objects.create(
+            product=product,
+            operation=in_operation,
+            standard_rate_per_hour=20000,
+        )
+        first_step = ProductRoutingStep.objects.create(
+            product=product,
+            operation=in_operation,
+            product_operation=in_product_operation,
+            step_no=10,
+            display_order=10,
+            standard_rate_per_hour=20000,
+            note='Custom first',
+        )
+        ProductRoutingStep.objects.create(
+            product=product,
+            operation=xa_operation,
+            product_operation=xa_product_operation,
+            step_no=20,
+            display_order=20,
+            standard_rate_per_hour=3000,
+            note='Custom second',
+        )
+
+        response = self.client.get(f'/api/products/products/{product.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        routing_steps = response.json()['routing_steps']
+        self.assertEqual([step['operation_code'] for step in routing_steps], ['IN', 'XA'])
+        self.assertEqual([step['source'] for step in routing_steps], ['product_routing', 'product_routing'])
+        self.assertEqual(routing_steps[0]['route_step_id'], first_step.id)
+        self.assertEqual(routing_steps[0]['product_operation_id'], in_product_operation.id)
+
+    def test_product_api_routing_supports_repeated_operation(self):
+        product = Product.objects.create(
+            code='ROUTE-REPEAT',
+            name='Route Repeat',
+            unit=self.unit,
+        )
+        xa_operation = Operation.objects.get(code='XA')
+        xa_product_operation = ProductOperation.objects.create(
+            product=product,
+            operation=xa_operation,
+            standard_rate_per_hour=3000,
+        )
+        ProductRoutingStep.objects.create(
+            product=product,
+            operation=xa_operation,
+            product_operation=xa_product_operation,
+            step_no=10,
+            display_order=10,
+            standard_rate_per_hour=3000,
+            note='Xa lan 1',
+        )
+        ProductRoutingStep.objects.create(
+            product=product,
+            operation=xa_operation,
+            product_operation=xa_product_operation,
+            step_no=30,
+            display_order=30,
+            standard_rate_per_hour=3200,
+            note='Xa lan 2',
+        )
+
+        response = self.client.get(f'/api/products/products/{product.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        routing_steps = response.json()['routing_steps']
+        self.assertEqual([step['operation_code'] for step in routing_steps], ['XA', 'XA'])
+        self.assertEqual([step['step_no'] for step in routing_steps], [10, 30])
+        self.assertEqual([step['display_step'] for step in routing_steps], [1, 2])
+        self.assertEqual([step['note'] for step in routing_steps], ['Xa lan 1', 'Xa lan 2'])
+
+    def test_product_api_routing_supports_same_step_no_display_step(self):
+        product = Product.objects.create(
+            code='ROUTE-SAME-STEP',
+            name='Route Same Step',
+            unit=self.unit,
+        )
+        dong_operation = Operation.objects.get(code='DONG')
+        dan_operation = Operation.objects.get(code='DAN')
+        dong_product_operation = ProductOperation.objects.create(
+            product=product,
+            operation=dong_operation,
+            standard_rate_per_hour=5000,
+        )
+        dan_product_operation = ProductOperation.objects.create(
+            product=product,
+            operation=dan_operation,
+            standard_rate_per_hour=4500,
+        )
+        ProductRoutingStep.objects.create(
+            product=product,
+            operation=dong_operation,
+            product_operation=dong_product_operation,
+            step_no=30,
+            display_order=10,
+            standard_rate_per_hour=5000,
+            step_type=ProductRoutingStep.StepType.PARALLEL,
+            allow_parallel=True,
+        )
+        ProductRoutingStep.objects.create(
+            product=product,
+            operation=dan_operation,
+            product_operation=dan_product_operation,
+            step_no=30,
+            display_order=20,
+            standard_rate_per_hour=4500,
+            step_type=ProductRoutingStep.StepType.PARALLEL,
+            allow_parallel=True,
+        )
+
+        response = self.client.get(f'/api/products/products/{product.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        routing_steps = response.json()['routing_steps']
+        self.assertEqual([step['operation_code'] for step in routing_steps], ['DONG', 'DAN'])
+        self.assertEqual([step['step_no'] for step in routing_steps], [30, 30])
+        self.assertEqual([step['display_step'] for step in routing_steps], [1, 1])
+        self.assertTrue(all(step['allow_parallel'] for step in routing_steps))
+
+    def test_product_api_falls_back_to_legacy_process_fields_for_routing(self):
+        product = Product.objects.create(
+            code='ROUTE-LEGACY',
+            name='Route Legacy',
+            unit=self.unit,
+            process_xa=3000,
+            process_in=20000,
+        )
+
+        response = self.client.get(f'/api/products/products/{product.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        routing_steps = response.json()['routing_steps']
+        self.assertEqual([step['operation_code'] for step in routing_steps], ['XA', 'IN'])
+        self.assertEqual([step['source'] for step in routing_steps], ['legacy_process_fields', 'legacy_process_fields'])
+        self.assertEqual([step['standard_rate_per_hour'] for step in routing_steps], [3000, 20000])
+        self.assertTrue(all(step['route_step_id'] is None for step in routing_steps))
+        self.assertFalse(ProductOperation.objects.filter(product=product).exists())
+
     def test_product_create_accepts_operations_input_and_syncs_legacy_process_fields(self):
         response = self.client.post(
             '/api/products/products/',
@@ -371,6 +554,11 @@ class ProductOperationApiTest(TestCase):
             ['XA', 'IN'],
         )
         self.assertEqual(ProductOperation.objects.get(product=product, operation__code='IN').note, 'Primary input wins')
+        self.assertEqual([step['operation_code'] for step in payload['routing_steps']], ['XA', 'IN'])
+        self.assertEqual(
+            {step['source'] for step in payload['routing_steps']},
+            {'product_operations_default'},
+        )
 
     def test_product_update_operations_input_replaces_active_operations_and_process_fields(self):
         product = Product.objects.create(

@@ -7,6 +7,7 @@ from .models import (
     ProductBoxType,
     Product,
     ProductOperation,
+    ProductRoutingStep,
     ProductBundle,
     ProductBundleComponent,
 )
@@ -193,6 +194,28 @@ class ProductOperationAdmin(admin.ModelAdmin):
             obj.created_by = request.user
         obj.updated_by = request.user
         super().save_model(request, obj, form, change)
+
+
+@admin.register(ProductRoutingStep)
+class ProductRoutingStepAdmin(admin.ModelAdmin):
+    list_display = [
+        'product',
+        'step_no',
+        'display_order',
+        'operation_code',
+        'operation_name',
+        'step_type',
+        'standard_rate_per_hour',
+        'is_required',
+        'allow_parallel',
+        'is_active',
+        'updated_at',
+    ]
+    list_filter = ['step_type', 'is_required', 'allow_parallel', 'is_active', 'operation']
+    search_fields = ['product__code', 'product__name', 'operation_code', 'operation_name', 'group_code', 'note']
+    ordering = ['product__code', 'step_no', 'display_order', 'id']
+    readonly_fields = ['operation_code', 'operation_name', 'created_at', 'updated_at']
+    autocomplete_fields = ['product', 'operation', 'product_operation']
 
 
 @admin.register(Product)

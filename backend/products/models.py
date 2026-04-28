@@ -763,6 +763,126 @@ class ProductOperation(models.Model):
         super().save(*args, **kwargs)
 
 
+class ProductRoutingStep(models.Model):
+    """Ordered production routing step for a product."""
+
+    class StepType(models.TextChoices):
+        REQUIRED = 'REQUIRED', 'Required'
+        OPTIONAL = 'OPTIONAL', 'Optional'
+        CHOOSE_ONE = 'CHOOSE_ONE', 'Choose one'
+        PARALLEL = 'PARALLEL', 'Parallel'
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='routing_steps',
+    )
+    step_no = models.PositiveIntegerField(default=10, validators=[MinValueValidator(1)])
+    display_order = models.PositiveIntegerField(default=10, validators=[MinValueValidator(1)])
+    operation = models.ForeignKey(
+        Operation,
+        on_delete=models.PROTECT,
+        related_name='routing_steps',
+    )
+    product_operation = models.ForeignKey(
+        ProductOperation,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='routing_steps',
+    )
+    operation_code = models.CharField(max_length=30, blank=True)
+    operation_name = models.CharField(max_length=100, blank=True)
+    standard_rate_per_hour = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    note = models.TextField(blank=True)
+    step_type = models.CharField(
+        max_length=20,
+        choices=StepType.choices,
+        default=StepType.REQUIRED,
+    )
+    group_code = models.CharField(max_length=50, blank=True, default='')
+    is_required = models.BooleanField(default=True)
+    allow_parallel = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'product_routing_steps'
+        ordering = ['product_id', 'step_no', 'display_order', 'id']
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(step_no__gt=0),
+                name='product_routing_step_step_no_gt_0',
+            ),
+            models.CheckConstraint(
+                condition=Q(display_order__gt=0),
+                name='product_routing_step_display_order_gt_0',
+            ),
+            models.CheckConstraint(
+                condition=Q(standard_rate_per_hour__gt=0),
+                name='product_routing_step_rate_gt_0',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['product', 'step_no', 'display_order']),
+            models.Index(fields=['operation']),
+            models.Index(fields=['product_operation']),
+            models.Index(fields=['operation_code']),
+            models.Index(fields=['is_active']),
+            models.Index(fields=['step_type']),
+            models.Index(fields=['group_code']),
+        ]
+
+    def __str__(self):
+        return f"{self.product_id}:{self.step_no}:{self.operation_code or self.operation_id}"
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.step_no is None or self.step_no <= 0:
+            errors['step_no'] = 'Step number must be greater than 0.'
+        if self.display_order is None or self.display_order <= 0:
+            errors['display_order'] = 'Display order must be greater than 0.'
+        if self.standard_rate_per_hour is None or self.standard_rate_per_hour <= 0:
+            errors['standard_rate_per_hour'] = 'Operation rate must be greater than 0.'
+        if self.product_operation_id:
+            if self.product_operation.product_id != self.product_id:
+                errors['product_operation'] = 'Product operation must belong to the same product.'
+            if self.operation_id and self.product_operation.operation_id != self.operation_id:
+                errors['operation'] = 'Operation must match the selected product operation.'
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.product_operation_id:
+            product_operation = self.product_operation
+            if not self.operation_id:
+                self.operation = product_operation.operation
+            if not self.standard_rate_per_hour:
+                self.standard_rate_per_hour = product_operation.standard_rate_per_hour
+            if not self.note:
+                self.note = product_operation.note
+            if not self.step_no:
+                self.step_no = product_operation.sequence or product_operation.operation.sequence
+            if not self.display_order:
+                self.display_order = product_operation.sequence or product_operation.operation.sequence
+        if self.operation_id:
+            self.operation_code = self.operation.code
+            self.operation_name = self.operation.name
+            if not self.step_no:
+                self.step_no = self.operation.sequence
+            if not self.display_order:
+                self.display_order = self.operation.sequence
+        if self.group_code:
+            self.group_code = str(self.group_code).strip().upper()
+        if self.step_type:
+            self.step_type = str(self.step_type).strip().upper()
+        else:
+            self.step_type = self.StepType.REQUIRED
+        super().save(*args, **kwargs)
+
+
 class ProductBundle(models.Model):
     """Định nghĩa bộ sản phẩm để bán/giao đồng bộ mà không làm mất tính độc lập của từng mã hàng."""
 

@@ -30,7 +30,7 @@ from .filters import (
     ProductBoxTypeFilter,
     OperationFilter,
 )
-from .models import Operation, ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product, ProductOperation, ProductBundle, PriceChange, BundlePriceChange
+from .models import Operation, ProductCategory, ProductUnit, ProductWave, ProductBoxType, Product, ProductOperation, ProductRoutingStep, ProductBundle, PriceChange, BundlePriceChange
 from .price_services import (
     activate_due_price_changes,
     activate_due_bundle_price_changes,
@@ -443,6 +443,13 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
             .filter(is_active=True)
             .order_by('sequence', 'operation_code', 'id'),
             to_attr='prefetched_product_operations',
+        ),
+        Prefetch(
+            'routing_steps',
+            queryset=ProductRoutingStep.objects.select_related('operation', 'product_operation')
+            .filter(is_active=True)
+            .order_by('step_no', 'display_order', 'id'),
+            to_attr='prefetched_routing_steps',
         ),
     ).all()
     serializer_class = ProductSerializer
