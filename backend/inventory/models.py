@@ -214,6 +214,13 @@ class OutboundShipment(models.Model):
         db_index=True,
     )
     reference = models.CharField(max_length=200, blank=True)
+    carrier = models.ForeignKey(
+        'sales.DeliveryCarrier',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='inventory_shipments',
+    )
     carrier_name = models.CharField(max_length=200, blank=True)
     tracking_number = models.CharField(max_length=100, blank=True, db_index=True)
     vehicle_no = models.CharField(max_length=100, blank=True)
