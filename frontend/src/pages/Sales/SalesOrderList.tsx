@@ -33,6 +33,7 @@ import { salesApi } from '../../api/sales';
 import type {
   SalesOrder,
   SalesOrderDeliveryPlan,
+  SalesOrderDeliveryRule,
   SalesOrderFormValues,
   SalesOrderLine,
   SalesOrderLineProductSnapshot,
@@ -51,6 +52,7 @@ import {
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
+import DeliveryCarrierField from '../../components/DeliveryCarrier/DeliveryCarrierField';
 import FormattedPrice from '../../components/FormattedPrice';
 import { getToastMessage } from '../../shared/apiError';
 import { storage } from '../../utils/storage';
@@ -97,6 +99,7 @@ type ShipmentFormValues = {
   reference?: string;
   reason?: string;
   note?: string;
+  carrier_id?: number | null;
   carrier_name?: string;
   tracking_number?: string;
   vehicle_no?: string;
@@ -204,6 +207,11 @@ const STATUS_LABELS: Record<string, string> = {
 const SHIPMENT_STATUS_LABELS: Record<string, string> = {
   POSTED: 'Đã xuất',
   CANCELLED: 'Đã hủy',
+};
+
+const DELIVERY_RULE_LABELS: Record<SalesOrderDeliveryRule, string> = {
+  FULL_REQUIRED: 'Giao đủ',
+  PARTIAL_ALLOWED: 'Cho phép sớt lại',
 };
 
 const BUNDLE_PRICING_MODE_LABELS: Record<string, string> = {
@@ -504,6 +512,9 @@ function toOrderFormValues(order: SalesOrder): SalesOrderFormValues {
         qty: toNumber(plan.qty),
         shipped_qty: toNumber(plan.shipped_qty),
         delivered_qty: toNumber(plan.delivered_qty),
+        planned_carrier: plan.planned_carrier ?? null,
+        planned_carrier_name: plan.planned_carrier_name ?? '',
+        delivery_rule: plan.delivery_rule ?? 'PARTIAL_ALLOWED',
         note: plan.note ?? '',
       })),
     })),
@@ -541,6 +552,9 @@ function buildPayload(values: SalesOrderFormValues): SalesOrderFormValues {
           qty: Number(plan.qty ?? 0),
           shipped_qty: Number(plan.shipped_qty ?? 0),
           delivered_qty: Number(plan.delivered_qty ?? 0),
+          planned_carrier: plan.planned_carrier ?? null,
+          planned_carrier_name: plan.planned_carrier_name?.trim() || '',
+          delivery_rule: plan.delivery_rule || 'PARTIAL_ALLOWED',
           note: plan.note?.trim() || '',
         })),
     })),
@@ -1002,6 +1016,7 @@ export default function SalesOrderList() {
         reference: payload.reference?.trim() || '',
         reason: payload.reason?.trim() || '',
         note: payload.note?.trim() || '',
+        carrier_id: payload.carrier_id ?? null,
         carrier_name: payload.carrier_name?.trim() || '',
         tracking_number: payload.tracking_number?.trim() || '',
         vehicle_no: payload.vehicle_no?.trim() || '',
@@ -2300,6 +2315,9 @@ export default function SalesOrderList() {
                                     qty: currentLine?.qty || 1,
                                     shipped_qty: 0,
                                     delivered_qty: 0,
+                                    planned_carrier: null,
+                                    planned_carrier_name: '',
+                                    delivery_rule: 'PARTIAL_ALLOWED',
                                     note: '',
                                   })
                                 }
@@ -2310,7 +2328,7 @@ export default function SalesOrderList() {
                             {planFields.map((planField) => (
                               <div
                                 key={planField.key}
-                                style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 2fr auto', gap: 12, alignItems: 'center' }}
+                                style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1.7fr 1.2fr 1.6fr auto', gap: 12, alignItems: 'start' }}
                               >
                                 <Form.Item
                                   name={[planField.name, 'delivery_date']}
@@ -2331,6 +2349,26 @@ export default function SalesOrderList() {
                                 </Form.Item>
                                 <Form.Item name={[planField.name, 'delivered_qty']} label="Đã giao">
                                   <InputNumber style={{ width: '100%' }} min={0} disabled />
+                                </Form.Item>
+                                <div>
+                                  <DeliveryCarrierField
+                                    label="ĐV vận chuyển"
+                                    carrierIdName={[planField.name, 'planned_carrier']}
+                                    carrierNameName={[planField.name, 'planned_carrier_name']}
+                                    carrierIdWatchName={['lines', index, 'delivery_plans', planField.name, 'planned_carrier']}
+                                    carrierNameWatchName={['lines', index, 'delivery_plans', planField.name, 'planned_carrier_name']}
+                                    selectTestId={`sales-order-plan-carrier-${planField.name}`}
+                                    freeTextTestId={`sales-order-plan-carrier-free-${planField.name}`}
+                                    warningTestId={`sales-order-plan-carrier-warning-${planField.name}`}
+                                  />
+                                </div>
+                                <Form.Item name={[planField.name, 'delivery_rule']} label="Quy tắc giao" initialValue="PARTIAL_ALLOWED">
+                                  <Select
+                                    options={[
+                                      { value: 'FULL_REQUIRED', label: DELIVERY_RULE_LABELS.FULL_REQUIRED },
+                                      { value: 'PARTIAL_ALLOWED', label: DELIVERY_RULE_LABELS.PARTIAL_ALLOWED },
+                                    ]}
+                                  />
                                 </Form.Item>
                                 <Form.Item name={[planField.name, 'note']} label="Ghi chú KH">
                                   <Input />
@@ -2807,9 +2845,16 @@ export default function SalesOrderList() {
             <Input />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="carrier_name" label="Nhà vận chuyển">
-              <Input />
-            </Form.Item>
+            <div>
+              <DeliveryCarrierField
+                label="Nhà vận chuyển"
+                carrierIdName="carrier_id"
+                carrierNameName="carrier_name"
+                selectTestId="sales-order-shipment-carrier-select"
+                freeTextTestId="sales-order-shipment-carrier-free-text"
+                warningTestId="sales-order-shipment-carrier-warning"
+              />
+            </div>
             <Form.Item name="tracking_number" label="Mã tracking / vận đơn">
               <Input />
             </Form.Item>

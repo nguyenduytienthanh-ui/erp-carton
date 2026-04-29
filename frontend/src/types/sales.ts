@@ -1,4 +1,24 @@
 export type SalesOrderStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'POSTED' | 'VOID';
+export type SalesOrderDeliveryRule = 'FULL_REQUIRED' | 'PARTIAL_ALLOWED';
+
+export interface DeliveryCarrier {
+  id: number;
+  code: string;
+  name: string;
+  contact_person?: string;
+  phone?: string;
+  email?: string;
+  note?: string;
+  is_internal: boolean;
+  is_active: boolean;
+  sort_order: number;
+  delivery_plan_usage_count?: number;
+  shipment_usage_count?: number;
+  legacy_shipment_usage_count?: number;
+  total_usage_count?: number;
+  created_at?: string;
+  updated_at?: string;
+}
 
 export interface SalesOrderLineProductSnapshot {
   product_id?: number;
@@ -79,6 +99,9 @@ export interface SalesOrderDeliveryPlan {
   remaining_shipment_qty?: string;
   remaining_qty?: string;
   is_completed?: boolean;
+  planned_carrier?: number | null;
+  planned_carrier_name?: string;
+  delivery_rule?: SalesOrderDeliveryRule;
   note?: string;
 }
 
@@ -166,6 +189,9 @@ export interface SalesOrderFormValues {
       qty: number;
       shipped_qty?: number;
       delivered_qty?: number;
+      planned_carrier?: number | null;
+      planned_carrier_name?: string;
+      delivery_rule?: SalesOrderDeliveryRule;
       note?: string;
     }>;
   }>;
@@ -188,6 +214,78 @@ export interface SalesOrderDeliveryOverviewItem {
   is_overdue: boolean;
   is_due_soon: boolean;
   note?: string;
+}
+
+export interface DeliveryPlanningSummaryRow {
+  group_key: string;
+  delivery_date: string;
+  customer_id?: number | null;
+  customer_name: string;
+  planned_carrier_name: string;
+  note_preview: string;
+  note_count: number;
+  plan_count: number;
+  order_count: number;
+  sku_count: number;
+  sku_preview: string[];
+  planned_qty_total: string;
+  shipped_qty_total: string;
+  delivered_qty_total: string;
+  remaining_shipment_qty_total: string;
+  remaining_qty_total: string;
+  overdue_count: number;
+  due_today_count: number;
+  due_soon_count: number;
+  awaiting_shipment_count: number;
+  awaiting_delivery_confirmation_count: number;
+  completed_count: number;
+  has_full_required_items: boolean;
+  has_unassigned_carrier: boolean;
+  attention_status: string;
+}
+
+export interface DeliveryPlanningGroupItem {
+  delivery_plan_id: number;
+  sales_order_id: number;
+  sales_order_code: string;
+  line_id: number;
+  line_number: number;
+  product_code?: string | null;
+  product_name?: string | null;
+  delivery_date: string;
+  planned_carrier_name: string;
+  delivery_rule: SalesOrderDeliveryRule;
+  note: string;
+  qty: string;
+  shipped_qty: string;
+  delivered_qty: string;
+  remaining_shipment_qty: string;
+  remaining_qty: string;
+  shipment_status?: string | null;
+  shipment_id?: number | null;
+  shipment_code?: string | null;
+}
+
+export interface DeliveryPlanningSummaryResponse {
+  count: number;
+  group_by: string;
+  summary: {
+    group_count: number;
+    overdue_groups: number;
+    due_today_groups: number;
+    due_soon_groups: number;
+    unassigned_carrier_groups: number;
+    full_required_groups: number;
+    awaiting_shipment_groups: number;
+    awaiting_delivery_confirmation_groups: number;
+    completed_groups: number;
+  };
+  results: DeliveryPlanningSummaryRow[];
+}
+
+export interface DeliveryPlanningGroupItemsResponse {
+  count: number;
+  results: DeliveryPlanningGroupItem[];
 }
 
 export interface SalesOrderReservationOverviewItem {

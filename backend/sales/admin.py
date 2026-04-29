@@ -6,6 +6,7 @@ from django.db.models import Q
 from core.models import ApprovalHistory, AuditLog
 from core.mixins import get_client_ip
 from sales.models import (
+    DeliveryCarrier,
     SalesOrder,
     SalesOrderLine,
     SalesOrderDeliveryPlan,
@@ -117,6 +118,8 @@ class SalesOrderDeliveryPlanAdmin(admin.ModelAdmin):
     list_display = [
         'line',
         'delivery_date',
+        'planned_carrier_name',
+        'delivery_rule',
         'qty',
         'shipped_qty',
         'delivered_qty',
@@ -125,6 +128,14 @@ class SalesOrderDeliveryPlanAdmin(admin.ModelAdmin):
     list_filter = ['delivery_date']
     search_fields = ['line__sales_order__code', 'line__product__code', 'line__product__name']
     raw_id_fields = ['line']
+
+
+@admin.register(DeliveryCarrier)
+class DeliveryCarrierAdmin(admin.ModelAdmin):
+    list_display = ['code', 'name', 'is_internal', 'is_active', 'sort_order', 'created_at']
+    list_filter = ['is_active', 'is_internal']
+    search_fields = ['code', 'name', 'contact_person', 'phone', 'email', 'note']
+    readonly_fields = ['created_at', 'updated_at']
 
 
 @admin.register(SalesOrderPostingLog)

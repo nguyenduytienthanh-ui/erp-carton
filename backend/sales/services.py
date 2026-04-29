@@ -1,10 +1,14 @@
 """
 Services chứng từ: code theo kỳ, snapshot, post atomic + idempotent.
 """
+import base64
+import json
+import re
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 
-from django.db import transaction
+from django.apps import apps
+from django.db import IntegrityError, transaction
 from django.db.models import Sum
 from django.utils import timezone
 from django.conf import settings
@@ -13,6 +17,7 @@ from core.models import WorkflowDefinition, ApprovalHistory, AuditLog, Task
 from core.mixins import get_client_ip
 from products.price_services import resolve_product_price_as_of
 from sales.models import (
+    DeliveryCarrier,
     SalesOrder,
     SalesOrderLine,
     SalesOrderPostingLog,
@@ -23,6 +28,14 @@ from sales.models import (
 
 
 AUTO_SHIPMENT_PLAN_NOTE = '[AUTO-SHIP]'
+DELIVERY_PLANNING_GROUP_BY_DATE_CUSTOMER_CARRIER = 'DATE_CUSTOMER_CARRIER'
+DELIVERY_PLANNING_GROUP_BY_CUSTOMER_DATE_CARRIER = 'CUSTOMER_DATE_CARRIER'
+DELIVERY_PLANNING_GROUP_BY_CARRIER_DATE_CUSTOMER = 'CARRIER_DATE_CUSTOMER'
+DELIVERY_PLANNING_GROUP_BY_CHOICES = {
+    DELIVERY_PLANNING_GROUP_BY_DATE_CUSTOMER_CARRIER,
+    DELIVERY_PLANNING_GROUP_BY_CUSTOMER_DATE_CARRIER,
+    DELIVERY_PLANNING_GROUP_BY_CARRIER_DATE_CUSTOMER,
+}
 
 
 def _normalize_price_as_of(as_of_datetime):
@@ -70,6 +83,290 @@ def build_shipment_package_code(shipment_code, line_number, package_index):
     line_token = str(line_number or 0).zfill(3)
     package_token = str(package_index or 0).zfill(3)
     return f'{shipment_token}-L{line_token}-P{package_token}' if shipment_token else f'L{line_token}-P{package_token}'
+
+
+def normalize_delivery_carrier_name(value):
+    return str(value or '').strip()
+
+
+def normalize_delivery_carrier_key(value):
+    normalized = normalize_delivery_carrier_name(value)
+    normalized = re.sub(r'\s+', ' ', normalized)
+    return normalized.casefold()
+
+
+def resolve_delivery_carrier_assignment(*, carrier_id=None, carrier_name=''):
+    carrier = None
+    candidate_id = getattr(carrier_id, 'pk', carrier_id)
+    if candidate_id not in (None, ''):
+        carrier = DeliveryCarrier.objects.filter(
+            pk=candidate_id,
+            deleted_at__isnull=True,
+        ).first()
+        if carrier is None:
+            raise ValueError('Đơn vị vận chuyển không tồn tại hoặc đã bị xóa.')
+        return carrier, normalize_delivery_carrier_name(carrier.name)
+    return None, normalize_delivery_carrier_name(carrier_name)
+
+
+def link_delivery_carrier_by_snapshot(queryset, *, snapshot_field, relation_field):
+    updated = 0
+    carriers = list(
+        DeliveryCarrier.objects.filter(deleted_at__isnull=True).only('id', 'name')
+    )
+    for row in queryset.exclude(**{f'{snapshot_field}__exact': ''}).filter(**{f'{relation_field}__isnull': True}):
+        snapshot_name = normalize_delivery_carrier_name(getattr(row, snapshot_field, ''))
+        if not snapshot_name:
+            continue
+        carrier = next(
+            (
+                item for item in carriers
+                if normalize_delivery_carrier_key(item.name) == normalize_delivery_carrier_key(snapshot_name)
+            ),
+            None,
+        )
+        if carrier is None:
+            continue
+        setattr(row, relation_field, carrier)
+        row.save(update_fields=[relation_field])
+        updated += 1
+    return updated
+
+
+def _normalize_delivery_planning_carrier_name(value):
+    return normalize_delivery_carrier_name(value)
+
+
+def build_delivery_planning_group_key(delivery_date, customer_id, planned_carrier_name):
+    payload = json.dumps(
+        [delivery_date.isoformat() if hasattr(delivery_date, 'isoformat') else str(delivery_date), int(customer_id or 0), _normalize_delivery_planning_carrier_name(planned_carrier_name)],
+        ensure_ascii=False,
+        separators=(',', ':'),
+    ).encode('utf-8')
+    return base64.urlsafe_b64encode(payload).decode('ascii')
+
+
+def parse_delivery_planning_group_key(group_key):
+    if not group_key:
+        raise ValueError('Thiếu group_key.')
+    padded = str(group_key).strip()
+    padded += '=' * (-len(padded) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8')
+        delivery_date, customer_id, planned_carrier_name = json.loads(raw)
+    except Exception as exc:
+        raise ValueError('group_key không hợp lệ.') from exc
+    return {
+        'delivery_date': delivery_date,
+        'customer_id': int(customer_id or 0),
+        'planned_carrier_name': _normalize_delivery_planning_carrier_name(planned_carrier_name),
+    }
+
+
+def _delivery_planning_sort_key(row, group_by):
+    if group_by == DELIVERY_PLANNING_GROUP_BY_CUSTOMER_DATE_CARRIER:
+        return (
+            row['customer_name'] or '',
+            row['delivery_date'],
+            row['planned_carrier_name'] or '',
+            row['group_key'],
+        )
+    if group_by == DELIVERY_PLANNING_GROUP_BY_CARRIER_DATE_CUSTOMER:
+        return (
+            row['planned_carrier_name'] or '~~~',
+            row['delivery_date'],
+            row['customer_name'] or '',
+            row['group_key'],
+        )
+    return (
+        row['delivery_date'],
+        row['customer_name'] or '',
+        row['planned_carrier_name'] or '',
+        row['group_key'],
+    )
+
+
+def build_delivery_planning_summary_rows(plans_queryset, *, today=None, group_by=None):
+    today = today or timezone.localdate()
+    due_soon_until = today + timedelta(days=3)
+    effective_group_by = (
+        group_by if group_by in DELIVERY_PLANNING_GROUP_BY_CHOICES else DELIVERY_PLANNING_GROUP_BY_DATE_CUSTOMER_CARRIER
+    )
+    grouped = {}
+
+    for plan in plans_queryset.order_by('delivery_date', 'line__sales_order__customer__name', 'planned_carrier_name', 'id'):
+        line = plan.line
+        order = line.sales_order
+        customer = getattr(order, 'customer', None)
+        customer_id = getattr(customer, 'id', None) or 0
+        customer_name = getattr(customer, 'name', None) or 'Khách lẻ'
+        carrier_name = _normalize_delivery_planning_carrier_name(plan.planned_carrier_name)
+        group_key = build_delivery_planning_group_key(plan.delivery_date, customer_id, carrier_name)
+        product_snapshot = getattr(line, 'product_snapshot', None) or {}
+        product_code = line.internal_product_code or product_snapshot.get('code') or getattr(line.product, 'code', None) or '-'
+        note_value = str(plan.note or '').strip()
+        remaining_qty = Decimal(str(plan.remaining_qty or 0))
+        remaining_shipment_qty = Decimal(str(plan.remaining_shipment_qty or 0))
+        shipped_qty = Decimal(str(plan.shipped_qty or 0))
+        delivered_qty = Decimal(str(plan.delivered_qty or 0))
+        entry = grouped.setdefault(group_key, {
+            'group_key': group_key,
+            'delivery_date': plan.delivery_date.isoformat(),
+            'customer_id': customer_id or None,
+            'customer_name': customer_name,
+            'planned_carrier_name': carrier_name,
+            'note_preview': '',
+            'note_count': 0,
+            'plan_count': 0,
+            'order_count': 0,
+            'sku_count': 0,
+            'sku_preview': [],
+            'planned_qty_total': Decimal('0'),
+            'shipped_qty_total': Decimal('0'),
+            'delivered_qty_total': Decimal('0'),
+            'remaining_shipment_qty_total': Decimal('0'),
+            'remaining_qty_total': Decimal('0'),
+            'overdue_count': 0,
+            'due_today_count': 0,
+            'due_soon_count': 0,
+            'awaiting_shipment_count': 0,
+            'awaiting_delivery_confirmation_count': 0,
+            'completed_count': 0,
+            'has_full_required_items': False,
+            'has_unassigned_carrier': not bool(carrier_name),
+            'attention_status': 'ON_TRACK',
+            '_notes': set(),
+            '_orders': set(),
+            '_products': set(),
+        })
+        entry['plan_count'] += 1
+        entry['planned_qty_total'] += Decimal(str(plan.qty or 0))
+        entry['shipped_qty_total'] += shipped_qty
+        entry['delivered_qty_total'] += delivered_qty
+        entry['remaining_shipment_qty_total'] += remaining_shipment_qty
+        entry['remaining_qty_total'] += remaining_qty
+        entry['has_full_required_items'] = entry['has_full_required_items'] or (
+            plan.delivery_rule == SalesOrderDeliveryPlan.DELIVERY_RULE_FULL_REQUIRED
+        )
+        if note_value:
+            entry['_notes'].add(note_value)
+        entry['_orders'].add(order.id)
+        entry['_products'].add(product_code)
+        if remaining_qty > 0 and plan.delivery_date < today:
+            entry['overdue_count'] += 1
+        if remaining_qty > 0 and plan.delivery_date == today:
+            entry['due_today_count'] += 1
+        if remaining_qty > 0 and today <= plan.delivery_date <= due_soon_until:
+            entry['due_soon_count'] += 1
+        if remaining_shipment_qty > 0:
+            entry['awaiting_shipment_count'] += 1
+        if shipped_qty > delivered_qty:
+            entry['awaiting_delivery_confirmation_count'] += 1
+        if plan.is_completed:
+            entry['completed_count'] += 1
+
+    rows = []
+    for entry in grouped.values():
+        entry['order_count'] = len(entry['_orders'])
+        entry['sku_count'] = len(entry['_products'])
+        entry['sku_preview'] = sorted(entry['_products'])[:3]
+        entry['note_count'] = len(entry['_notes'])
+        if entry['note_count'] == 0:
+            entry['note_preview'] = ''
+        elif entry['note_count'] == 1:
+            entry['note_preview'] = next(iter(entry['_notes']))
+        else:
+            entry['note_preview'] = 'Nhiều ghi chú'
+        if entry['overdue_count'] > 0:
+            entry['attention_status'] = 'OVERDUE'
+        elif entry['has_unassigned_carrier']:
+            entry['attention_status'] = 'UNASSIGNED_CARRIER'
+        elif entry['due_today_count'] > 0:
+            entry['attention_status'] = 'DUE_TODAY'
+        elif entry['due_soon_count'] > 0:
+            entry['attention_status'] = 'DUE_SOON'
+        elif entry['remaining_qty_total'] <= 0:
+            entry['attention_status'] = 'COMPLETED'
+        elif entry['awaiting_delivery_confirmation_count'] > 0:
+            entry['attention_status'] = 'AWAITING_DELIVERY_CONFIRMATION'
+        elif entry['awaiting_shipment_count'] > 0:
+            entry['attention_status'] = 'AWAITING_SHIPMENT'
+        entry['planned_qty_total'] = str(entry['planned_qty_total'])
+        entry['shipped_qty_total'] = str(entry['shipped_qty_total'])
+        entry['delivered_qty_total'] = str(entry['delivered_qty_total'])
+        entry['remaining_shipment_qty_total'] = str(entry['remaining_shipment_qty_total'])
+        entry['remaining_qty_total'] = str(entry['remaining_qty_total'])
+        entry.pop('_notes', None)
+        entry.pop('_orders', None)
+        entry.pop('_products', None)
+        rows.append(entry)
+
+    rows.sort(key=lambda item: _delivery_planning_sort_key(item, effective_group_by))
+    summary = {
+        'group_count': len(rows),
+        'overdue_groups': sum(1 for row in rows if row['overdue_count'] > 0),
+        'due_today_groups': sum(1 for row in rows if row['due_today_count'] > 0),
+        'due_soon_groups': sum(1 for row in rows if row['due_soon_count'] > 0),
+        'unassigned_carrier_groups': sum(1 for row in rows if row['has_unassigned_carrier']),
+        'full_required_groups': sum(1 for row in rows if row['has_full_required_items']),
+        'awaiting_shipment_groups': sum(1 for row in rows if Decimal(str(row['remaining_shipment_qty_total'])) > 0),
+        'awaiting_delivery_confirmation_groups': sum(1 for row in rows if row['awaiting_delivery_confirmation_count'] > 0),
+        'completed_groups': sum(1 for row in rows if Decimal(str(row['remaining_qty_total'])) <= 0),
+    }
+    return rows, summary
+
+
+def build_delivery_planning_group_items(plans_queryset, group_key):
+    bucket = parse_delivery_planning_group_key(group_key)
+    filtered = plans_queryset.filter(
+        delivery_date=bucket['delivery_date'],
+        line__sales_order__customer_id=bucket['customer_id'] or None,
+        planned_carrier_name=bucket['planned_carrier_name'],
+    ).order_by('delivery_date', 'line__sales_order__code', 'line__line_number', 'id')
+
+    InventoryTransaction = apps.get_model('inventory', 'InventoryTransaction')
+    latest_transactions = (
+        InventoryTransaction.objects.filter(
+            sales_order_line_id__in=filtered.values_list('line_id', flat=True),
+            shipment_batch__isnull=False,
+            status='POSTED',
+        )
+        .select_related('shipment_batch')
+        .order_by('sales_order_line_id', '-transaction_date', '-id')
+    )
+    latest_by_line = {}
+    for transaction in latest_transactions:
+        latest_by_line.setdefault(transaction.sales_order_line_id, transaction)
+
+    items = []
+    for plan in filtered:
+        line = plan.line
+        order = line.sales_order
+        product_snapshot = getattr(line, 'product_snapshot', None) or {}
+        latest_transaction = latest_by_line.get(line.id)
+        shipment = getattr(latest_transaction, 'shipment_batch', None)
+        items.append({
+            'delivery_plan_id': plan.id,
+            'sales_order_id': order.id,
+            'sales_order_code': order.code,
+            'line_id': line.id,
+            'line_number': line.line_number,
+            'product_code': line.internal_product_code or product_snapshot.get('code') or getattr(line.product, 'code', None),
+            'product_name': product_snapshot.get('name') or getattr(line.product, 'name', None),
+            'delivery_date': plan.delivery_date.isoformat(),
+            'planned_carrier_name': _normalize_delivery_planning_carrier_name(plan.planned_carrier_name),
+            'delivery_rule': plan.delivery_rule,
+            'note': plan.note or '',
+            'qty': str(plan.qty or 0),
+            'shipped_qty': str(plan.shipped_qty or 0),
+            'delivered_qty': str(plan.delivered_qty or 0),
+            'remaining_shipment_qty': str(plan.remaining_shipment_qty or 0),
+            'remaining_qty': str(plan.remaining_qty or 0),
+            'shipment_status': getattr(shipment, 'status', None),
+            'shipment_id': getattr(shipment, 'id', None),
+            'shipment_code': getattr(shipment, 'code', None),
+        })
+    return items
 
 
 def build_sales_order_line_product_snapshot(product, as_of_datetime=None):
@@ -264,6 +561,8 @@ def build_posted_snapshot(order):
                 'delivered_qty': str(pl.delivered_qty),
                 'remaining_qty': str(pl.remaining_qty),
                 'remaining_shipment_qty': str(pl.remaining_shipment_qty),
+                'planned_carrier_name': pl.planned_carrier_name or '',
+                'delivery_rule': pl.delivery_rule,
                 'note': pl.note or '',
             }
             for pl in line.delivery_plans.all().order_by('delivery_date', 'id')
@@ -605,8 +904,27 @@ def sync_sales_order_delivery_tasks(actor=None, order_ids=None, days_ahead=2):
             else:
                 skipped += 1
         else:
-            Task.objects.create(**payload)
-            created += 1
+            try:
+                Task.objects.create(**payload)
+                created += 1
+            except IntegrityError:
+                task = Task.objects.filter(source_key=source_key).order_by('-id').first()
+                if not task:
+                    raise
+                changed = False
+                for key, value in payload.items():
+                    if getattr(task, key) != value:
+                        setattr(task, key, value)
+                        changed = True
+                if task.status in [Task.STATUS_DONE, Task.STATUS_CANCELLED]:
+                    task.status = Task.STATUS_TODO
+                    task.completed_at = None
+                    changed = True
+                if changed:
+                    task.save()
+                    updated += 1
+                else:
+                    skipped += 1
 
     # Fallback: đơn có delivery_date tổng nhưng chưa tách delivery_plans vẫn cần nhắc việc.
     for order_id, order in orders_by_id.items():
@@ -656,8 +974,27 @@ def sync_sales_order_delivery_tasks(actor=None, order_ids=None, days_ahead=2):
             else:
                 skipped += 1
         else:
-            Task.objects.create(**payload)
-            created += 1
+            try:
+                Task.objects.create(**payload)
+                created += 1
+            except IntegrityError:
+                task = Task.objects.filter(source_key=source_key).order_by('-id').first()
+                if not task:
+                    raise
+                changed = False
+                for key, value in payload.items():
+                    if getattr(task, key) != value:
+                        setattr(task, key, value)
+                        changed = True
+                if task.status in [Task.STATUS_DONE, Task.STATUS_CANCELLED]:
+                    task.status = Task.STATUS_TODO
+                    task.completed_at = None
+                    changed = True
+                if changed:
+                    task.save()
+                    updated += 1
+                else:
+                    skipped += 1
 
     return {
         'created': created,

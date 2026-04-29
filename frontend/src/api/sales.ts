@@ -1,6 +1,9 @@
 import axiosInstance from './axios';
 import { API_ENDPOINTS } from '../utils/constants';
 import type {
+  DeliveryCarrier,
+  DeliveryPlanningGroupItemsResponse,
+  DeliveryPlanningSummaryResponse,
   PaginatedResponse,
   Quote,
   QuoteLine,
@@ -102,6 +105,37 @@ export const salesApi = {
     const response = await axiosInstance.get(`${API_ENDPOINTS.SALES_ORDERS}${id}/delivery_overview/`);
     return response.data;
   },
+  getDeliveryPlanningSummary: async (params?: Record<string, unknown>): Promise<DeliveryPlanningSummaryResponse> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.SALES_DELIVERY_PLANNING, { params });
+    return response.data;
+  },
+  getDeliveryPlanningGroupItems: async (
+    groupKey: string,
+    params?: Record<string, unknown>
+  ): Promise<DeliveryPlanningGroupItemsResponse> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.SALES_DELIVERY_PLANNING}group-items/`, {
+      params: {
+        ...params,
+        group_key: groupKey,
+      },
+    });
+    return response.data;
+  },
+  getDeliveryCarriers: async (params?: Record<string, unknown>): Promise<PaginatedResponse<DeliveryCarrier>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.SALES_DELIVERY_CARRIERS, { params });
+    return response.data;
+  },
+  createDeliveryCarrier: async (payload: Partial<DeliveryCarrier>): Promise<DeliveryCarrier> => {
+    const response = await axiosInstance.post(API_ENDPOINTS.SALES_DELIVERY_CARRIERS, payload);
+    return response.data;
+  },
+  updateDeliveryCarrier: async (id: number, payload: Partial<DeliveryCarrier>): Promise<DeliveryCarrier> => {
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.SALES_DELIVERY_CARRIERS}${id}/`, payload);
+    return response.data;
+  },
+  deleteDeliveryCarrier: async (id: number): Promise<void> => {
+    await axiosInstance.delete(`${API_ENDPOINTS.SALES_DELIVERY_CARRIERS}${id}/`);
+  },
   getReservationOverview: async (id: number): Promise<{ count: number; results: SalesOrderReservationOverviewItem[] }> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.SALES_ORDERS}${id}/reservation_overview/`);
     return response.data;
@@ -138,6 +172,7 @@ export const salesApi = {
       reference?: string;
       reason?: string;
       note?: string;
+      carrier_id?: number | null;
       carrier_name?: string;
       tracking_number?: string;
       vehicle_no?: string;

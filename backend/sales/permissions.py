@@ -34,3 +34,11 @@ def can_post_sales_order(user, order):
 def can_void_sales_order(user, order):
     """Void: APPROVED hoặc POSTED; bắt buộc có lý do (check ở view)."""
     return order.status in ('APPROVED', 'POSTED') and check_action_permission(user, 'SalesOrder', 'VOID', strict=True)
+
+
+def can_manage_delivery_carrier(user):
+    if not user or not user.is_authenticated:
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    return check_action_permission(user, 'DeliveryCarrier', 'EDIT', strict=True)

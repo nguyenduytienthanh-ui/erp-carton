@@ -41,6 +41,77 @@ class PeriodSequence(models.Model):
 
 
 # Trạng thái chứng từ (khớp WorkflowDefinition SalesOrder)
+class DeliveryCarrier(models.Model):
+    code = models.CharField(max_length=30)
+    name = models.CharField(max_length=200)
+    contact_person = models.CharField(max_length=150, blank=True)
+    phone = models.CharField(max_length=50, blank=True)
+    email = models.EmailField(blank=True)
+    note = models.TextField(blank=True)
+    is_internal = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.IntegerField(default=0, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_delivery_carriers',
+    )
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='updated_delivery_carriers',
+    )
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deleted_delivery_carriers',
+    )
+
+    class Meta:
+        db_table = 'sales_delivery_carriers'
+        ordering = ['sort_order', 'name', 'code']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['name']),
+            models.Index(fields=['is_active']),
+            models.Index(fields=['is_internal']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['code'],
+                condition=Q(deleted_at__isnull=True),
+                name='delivery_carrier_code_uniq_active',
+            ),
+        ]
+        verbose_name = 'Delivery Carrier'
+        verbose_name_plural = 'Delivery Carriers'
+
+    def __str__(self):
+        return f'{self.code} - {self.name}'
+
+    def save(self, *args, **kwargs):
+        if self.code:
+            self.code = str(self.code).strip().upper()
+        if self.name:
+            self.name = str(self.name).strip()
+        if self.contact_person:
+            self.contact_person = str(self.contact_person).strip()
+        if self.phone:
+            self.phone = str(self.phone).strip()
+        if self.email:
+            self.email = str(self.email).strip()
+        super().save(*args, **kwargs)
+
+
 class SalesOrderStatus:
     DRAFT = 'DRAFT'
     SUBMITTED = 'SUBMITTED'
@@ -293,6 +364,12 @@ class SalesOrderLine(models.Model):
 
 
 class SalesOrderDeliveryPlan(models.Model):
+    DELIVERY_RULE_FULL_REQUIRED = 'FULL_REQUIRED'
+    DELIVERY_RULE_PARTIAL_ALLOWED = 'PARTIAL_ALLOWED'
+    DELIVERY_RULE_CHOICES = [
+        (DELIVERY_RULE_FULL_REQUIRED, 'Giao đủ'),
+        (DELIVERY_RULE_PARTIAL_ALLOWED, 'Cho phép sớt lại'),
+    ]
     """
     Kế hoạch giao hàng theo từng dòng hàng.
     - Một mã hàng có thể giao nhiều ngày khác nhau.
@@ -307,6 +384,20 @@ class SalesOrderDeliveryPlan(models.Model):
     qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
     shipped_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
     delivered_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    planned_carrier = models.ForeignKey(
+        'sales.DeliveryCarrier',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='delivery_plans',
+    )
+    planned_carrier_name = models.CharField(max_length=200, blank=True)
+    delivery_rule = models.CharField(
+        max_length=20,
+        choices=DELIVERY_RULE_CHOICES,
+        default=DELIVERY_RULE_PARTIAL_ALLOWED,
+        db_index=True,
+    )
     note = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -317,6 +408,7 @@ class SalesOrderDeliveryPlan(models.Model):
         indexes = [
             models.Index(fields=['delivery_date']),
             models.Index(fields=['line', 'delivery_date']),
+            models.Index(fields=['delivery_rule', 'delivery_date']),
         ]
         verbose_name = 'Sales Order Delivery Plan'
         verbose_name_plural = 'Sales Order Delivery Plans'
@@ -514,6 +606,13 @@ class OutboundShipment(models.Model):
     
     # Shipment details
     reference = models.CharField(max_length=100, blank=True)
+    carrier_master = models.ForeignKey(
+        'sales.DeliveryCarrier',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='legacy_shipments',
+    )
     carrier = models.CharField(max_length=100, blank=True)
     tracking_number = models.CharField(max_length=100, blank=True)
     shipping_address = models.TextField(blank=True)

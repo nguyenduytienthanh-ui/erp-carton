@@ -9,7 +9,7 @@ from django.http import HttpResponse
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.permissions import DjangoObjectPermissions
@@ -19,7 +19,7 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from django.db.models import F, Q, Sum
+from django.db.models import Count, F, Q, Sum
 from django.db import transaction
 from django.apps import apps
 from reportlab.graphics import renderPDF
@@ -34,16 +34,23 @@ from core.mixins import get_client_ip
 from core.models import AuditLog, ApprovalHistory, Attachment
 from core.permissions import check_action_permission
 from core.workflow_services import generate_tasks_for_entity
-from sales.models import SalesOrder, SalesOrderStatus, Quote, QuoteStatus, OutboundShipment, OutboundShipmentStatus, ShipmentLine, SalesLineMaterialPlan
-from sales.serializers import SalesOrderSerializer, QuoteSerializer, OutboundShipmentSerializer, ShipmentLineSerializer, SalesLineMaterialPlanSerializer
+from sales.models import DeliveryCarrier, SalesOrder, SalesOrderStatus, Quote, QuoteStatus, OutboundShipment, OutboundShipmentStatus, ShipmentLine, SalesLineMaterialPlan, SalesOrderDeliveryPlan
+from sales.serializers import DeliveryCarrierSerializer, SalesOrderSerializer, QuoteSerializer, OutboundShipmentSerializer, ShipmentLineSerializer, SalesLineMaterialPlanSerializer, SalesOrderDeliveryPlanSerializer
 from sales.filters import SalesOrderFilter, QuoteFilter
 from sales.services import (
     apply_delivery_plan_delivery,
     apply_delivery_plan_shipment,
+    build_delivery_planning_group_items,
+    build_delivery_planning_summary_rows,
     build_shipment_package_code,
     build_shipment_package_trace_code,
     build_sales_order_line_package_trace_code,
+    DELIVERY_PLANNING_GROUP_BY_CHOICES,
+    DELIVERY_PLANNING_GROUP_BY_DATE_CUSTOMER_CARRIER,
     get_sales_order_void_blockers,
+    normalize_delivery_carrier_name,
+    parse_delivery_planning_group_key,
+    resolve_delivery_carrier_assignment,
     get_next_sales_order_code,
     post_sales_order,
     sync_sales_order_delivery_tasks,
@@ -63,6 +70,7 @@ from sales.permissions import (
     can_reject_sales_order,
     can_post_sales_order,
     can_void_sales_order,
+    can_manage_delivery_carrier,
 )
 
 
@@ -110,6 +118,33 @@ def _can_manage_inventory_execution(user):
             'ops-manager',
             'product-manager',
             'sales-manager',
+            'quan-ly',
+            'quanly',
+        }
+        for role in _user_role_names(user)
+    )
+
+
+def _can_access_sales_orders(user):
+    if not user or not user.is_authenticated:
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    if any(
+        check_action_permission(user, 'SALESORDER', action, strict=True)
+        for action in ('SUBMIT', 'APPROVE', 'REJECT', 'POST', 'VOID')
+    ):
+        return True
+    return any(
+        role in {
+            'admin',
+            'manager',
+            'sales',
+            'sales-manager',
+            'accountant',
+            'finance',
+            'finance-manager',
+            'ops-manager',
             'quan-ly',
             'quanly',
         }
@@ -339,6 +374,86 @@ def _latest_shipment_attachment_url(request, shipment_id, prefix):
         return request.build_absolute_uri(attachment.file.url)
     except Exception:
         return ''
+
+
+class DeliveryCarrierViewSet(viewsets.ModelViewSet):
+    serializer_class = DeliveryCarrierSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [OrderingFilter]
+    ordering_fields = [
+        'sort_order',
+        'code',
+        'name',
+        'is_internal',
+        'is_active',
+        'delivery_plan_usage_count',
+        'shipment_usage_count',
+        'legacy_shipment_usage_count',
+        'total_usage_count',
+    ]
+    ordering = ['sort_order', 'name', 'code']
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not _can_access_sales_orders(request.user):
+            raise PermissionDenied('Bạn không có quyền xem danh mục đơn vị vận chuyển.')
+
+    def get_queryset(self):
+        queryset = DeliveryCarrier.objects.filter(deleted_at__isnull=True).annotate(
+            delivery_plan_usage_count=Count('delivery_plans', distinct=True),
+            shipment_usage_count=Count('inventory_shipments', distinct=True),
+            legacy_shipment_usage_count=Count('legacy_shipments', distinct=True),
+        ).annotate(
+            total_usage_count=(
+                F('delivery_plan_usage_count')
+                + F('shipment_usage_count')
+                + F('legacy_shipment_usage_count')
+            )
+        )
+        params = self.request.query_params
+        is_active = params.get('is_active')
+        if is_active in ('true', 'false'):
+            queryset = queryset.filter(is_active=(is_active == 'true'))
+        is_internal = params.get('is_internal')
+        if is_internal in ('true', 'false'):
+            queryset = queryset.filter(is_internal=(is_internal == 'true'))
+        q = normalize_delivery_carrier_name(params.get('q') or params.get('search'))
+        if q:
+            for token in [item for item in q.split() if item]:
+                queryset = queryset.filter(
+                    Q(code__icontains=token)
+                    | Q(name__icontains=token)
+                    | Q(contact_person__icontains=token)
+                    | Q(phone__icontains=token)
+                    | Q(email__icontains=token)
+                    | Q(note__icontains=token)
+                )
+        return queryset
+
+    def _ensure_manage_permission(self):
+        if not can_manage_delivery_carrier(self.request.user):
+            raise PermissionDenied('Bạn không có quyền quản lý đơn vị vận chuyển.')
+
+    def perform_create(self, serializer):
+        self._ensure_manage_permission()
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        self._ensure_manage_permission()
+        serializer.save(updated_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        self._ensure_manage_permission()
+        if (
+            instance.delivery_plans.exists()
+            or instance.inventory_shipments.exists()
+            or instance.legacy_shipments.exists()
+        ):
+            raise ValidationError('Đơn vị vận chuyển đã phát sinh kế hoạch giao hoặc phiếu xuất. Hãy chuyển sang ngưng sử dụng.')
+        instance.deleted_at = timezone.now()
+        instance.deleted_by = self.request.user
+        instance.is_active = False
+        instance.save(update_fields=['deleted_at', 'deleted_by', 'is_active', 'updated_at'])
 
 
 class SalesOrderViewSet(viewsets.ModelViewSet):
@@ -1458,11 +1573,19 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         common_reference = (request.data.get('reference') or order.code or '').strip()
         common_reason = (request.data.get('reason') or 'Xuất kho theo đơn hàng').strip()
         common_note = (request.data.get('note') or '').strip()
+        shipment_carrier_id = request.data.get('carrier_id')
         shipment_carrier_name = (request.data.get('carrier_name') or '').strip()
         shipment_tracking_number = (request.data.get('tracking_number') or '').strip()
         shipment_vehicle_no = (request.data.get('vehicle_no') or '').strip()
         shipment_driver_name = (request.data.get('driver_name') or '').strip()
         shipment_driver_phone = (request.data.get('driver_phone') or '').strip()
+        try:
+            shipment_carrier, shipment_carrier_name = resolve_delivery_carrier_assignment(
+                carrier_id=shipment_carrier_id,
+                carrier_name=shipment_carrier_name,
+            )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         try:
             shipment_date_value = date.fromisoformat(str(transaction_date))
         except (TypeError, ValueError):
@@ -1475,6 +1598,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 sales_order=order,
                 shipment_date=shipment_date_value,
                 reference=common_reference,
+                carrier=shipment_carrier,
                 carrier_name=shipment_carrier_name,
                 tracking_number=shipment_tracking_number,
                 vehicle_no=shipment_vehicle_no,
@@ -1648,7 +1772,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             y -= 6 * mm
             pdf.setFont('Helvetica', 8)
             if not shipments:
-                pdf.drawString(18 * mm, y, 'Chua co phieu xuat kho.')
+                pdf.drawString(18 * mm, y, 'Chưa có phiếu xuất kho.')
             else:
                 for shipment in shipments:
                     if y < 20 * mm:
@@ -2011,7 +2135,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             y -= 4 * mm
             pdf.setFont('Helvetica-Bold', 9)
             pdf.drawString(18 * mm, y, f'Tong kien: {package_summary["package_count"]}')
-            pdf.drawString(60 * mm, y, f'Da load: {package_summary["loaded_package_count"]}')
+            pdf.drawString(60 * mm, y, f'Đã chất: {package_summary["loaded_package_count"]}')
             pdf.drawString(110 * mm, y, f'Tong kg: {package_summary["total_gross_weight_kg"]}')
 
         return _sales_order_pdf_response(f'shipment_loading_handover_{shipment.code}.pdf', build)
@@ -2111,7 +2235,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             y -= 4 * mm
             pdf.setFont('Helvetica-Bold', 9)
             pdf.drawString(18 * mm, y, f'Tong kien: {package_summary["package_count"]}')
-            pdf.drawString(60 * mm, y, f'Da verify: {package_summary["verified_package_count"]}')
+            pdf.drawString(60 * mm, y, f'Đã xác nhận: {package_summary["verified_package_count"]}')
             pdf.drawString(110 * mm, y, f'Tong kg: {package_summary["total_gross_weight_kg"]}')
 
         return _sales_order_pdf_response(f'shipment_delivery_proof_{shipment.code}.pdf', build)
@@ -2216,6 +2340,126 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             days_ahead=days_ahead,
         )
         return Response(result)
+
+
+class DeliveryPlanningViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = SalesOrderDeliveryPlanSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        queryset = SalesOrderDeliveryPlan.objects.select_related(
+            'line',
+            'line__product',
+            'line__sales_order',
+            'line__sales_order__customer',
+            'line__sales_order__owner',
+            'line__sales_order__team',
+        )
+        user = self.request.user
+        if not user.is_superuser:
+            if getattr(user, 'teams', None):
+                team_ids = list(user.teams.values_list('id', flat=True))
+                queryset = queryset.filter(
+                    Q(line__sales_order__owner=user)
+                    | Q(line__sales_order__team_id__in=team_ids)
+                    | Q(line__sales_order__owner__isnull=True)
+                )
+            else:
+                queryset = queryset.filter(Q(line__sales_order__owner=user) | Q(line__sales_order__owner__isnull=True))
+
+        params = self.request.query_params
+        q = str(params.get('q') or params.get('search') or '').strip()
+        if q:
+            queryset = queryset.filter(
+                Q(line__sales_order__code__icontains=q)
+                | Q(line__sales_order__reference__icontains=q)
+                | Q(line__sales_order__customer__name__icontains=q)
+                | Q(line__internal_product_code__icontains=q)
+                | Q(line__product__code__icontains=q)
+                | Q(line__product__name__icontains=q)
+                | Q(planned_carrier_name__icontains=q)
+                | Q(note__icontains=q)
+            )
+        if date_from := params.get('date_from'):
+            queryset = queryset.filter(delivery_date__gte=date_from)
+        if date_to := params.get('date_to'):
+            queryset = queryset.filter(delivery_date__lte=date_to)
+        if customer_id := params.get('customer_id'):
+            queryset = queryset.filter(line__sales_order__customer_id=customer_id)
+        if order_id := params.get('order_id'):
+            queryset = queryset.filter(line__sales_order_id=order_id)
+        if carrier := str(params.get('carrier') or '').strip():
+            queryset = queryset.filter(planned_carrier_name__icontains=carrier)
+        if delivery_rule := params.get('delivery_rule'):
+            queryset = queryset.filter(delivery_rule=delivery_rule)
+        if str(params.get('only_unassigned_carrier') or '').lower() in {'1', 'true', 'yes'}:
+            queryset = queryset.filter(planned_carrier_name='')
+        return queryset.distinct()
+
+    def _apply_group_filters(self, rows):
+        params = self.request.query_params
+        attention = str(params.get('attention') or '').strip().upper()
+        show_completed = str(params.get('show_completed') or '').lower() in {'1', 'true', 'yes'}
+
+        filtered = rows
+        if not show_completed and attention != 'COMPLETED':
+            filtered = [row for row in filtered if Decimal(str(row['remaining_qty_total'])) > 0]
+
+        if attention == 'OVERDUE':
+            filtered = [row for row in filtered if row['overdue_count'] > 0]
+        elif attention == 'DUE_TODAY':
+            filtered = [row for row in filtered if row['due_today_count'] > 0]
+        elif attention == 'DUE_SOON':
+            filtered = [row for row in filtered if row['due_soon_count'] > 0]
+        elif attention == 'UNASSIGNED_CARRIER':
+            filtered = [row for row in filtered if row['has_unassigned_carrier']]
+        elif attention == 'FULL_REQUIRED':
+            filtered = [row for row in filtered if row['has_full_required_items']]
+        elif attention == 'AWAITING_SHIPMENT':
+            filtered = [row for row in filtered if Decimal(str(row['remaining_shipment_qty_total'])) > 0]
+        elif attention == 'AWAITING_DELIVERY_CONFIRMATION':
+            filtered = [row for row in filtered if row['awaiting_delivery_confirmation_count'] > 0]
+        elif attention == 'COMPLETED':
+            filtered = [row for row in filtered if Decimal(str(row['remaining_qty_total'])) <= 0]
+        return filtered
+
+    def list(self, request, *args, **kwargs):
+        group_by = request.query_params.get('group_by') or DELIVERY_PLANNING_GROUP_BY_DATE_CUSTOMER_CARRIER
+        if group_by not in DELIVERY_PLANNING_GROUP_BY_CHOICES:
+            group_by = DELIVERY_PLANNING_GROUP_BY_DATE_CUSTOMER_CARRIER
+        rows, summary = build_delivery_planning_summary_rows(self.get_queryset(), group_by=group_by)
+        filtered_rows = self._apply_group_filters(rows)
+        filtered_summary = {
+            **summary,
+            'group_count': len(filtered_rows),
+            'overdue_groups': sum(1 for row in filtered_rows if row['overdue_count'] > 0),
+            'due_today_groups': sum(1 for row in filtered_rows if row['due_today_count'] > 0),
+            'due_soon_groups': sum(1 for row in filtered_rows if row['due_soon_count'] > 0),
+            'unassigned_carrier_groups': sum(1 for row in filtered_rows if row['has_unassigned_carrier']),
+            'full_required_groups': sum(1 for row in filtered_rows if row['has_full_required_items']),
+            'awaiting_shipment_groups': sum(1 for row in filtered_rows if Decimal(str(row['remaining_shipment_qty_total'])) > 0),
+            'awaiting_delivery_confirmation_groups': sum(1 for row in filtered_rows if row['awaiting_delivery_confirmation_count'] > 0),
+            'completed_groups': sum(1 for row in filtered_rows if Decimal(str(row['remaining_qty_total'])) <= 0),
+        }
+        return Response({
+            'count': len(filtered_rows),
+            'group_by': group_by,
+            'summary': filtered_summary,
+            'results': filtered_rows,
+        })
+
+    @action(detail=False, methods=['get'], url_path='group-items')
+    def group_items(self, request):
+        group_key = request.query_params.get('group_key')
+        if not group_key:
+            raise ValidationError({'group_key': 'Bắt buộc truyền group_key.'})
+        try:
+            parse_delivery_planning_group_key(group_key)
+        except ValueError as exc:
+            raise ValidationError({'group_key': str(exc)}) from exc
+        items = build_delivery_planning_group_items(self.get_queryset(), group_key)
+        return Response({'count': len(items), 'results': items})
 
 
 class QuoteViewSet(viewsets.ModelViewSet):

@@ -7,6 +7,7 @@ from django.db.models import Sum
 from rest_framework import serializers
 from sales.document_policy import calc_line_totals
 from sales.models import (
+    DeliveryCarrier,
     SalesOrder,
     SalesOrderLine,
     SalesOrderDeliveryPlan,
@@ -21,6 +22,7 @@ from sales.models import (
 from sales.services import (
     build_sales_order_line_trace_code,
     merge_sales_order_line_product_snapshot,
+    resolve_delivery_carrier_assignment,
 )
 
 
@@ -48,7 +50,7 @@ class SalesOrderDeliveryPlanSerializer(serializers.ModelSerializer):
         model = SalesOrderDeliveryPlan
         fields = [
             'id', 'delivery_date', 'qty', 'shipped_qty', 'delivered_qty', 'remaining_shipment_qty', 'remaining_qty',
-            'is_completed', 'note', 'created_at', 'updated_at',
+            'is_completed', 'planned_carrier', 'planned_carrier_name', 'delivery_rule', 'note', 'created_at', 'updated_at',
         ]
         read_only_fields = ['remaining_shipment_qty', 'remaining_qty', 'is_completed', 'created_at', 'updated_at']
 
@@ -75,6 +77,22 @@ class SalesOrderDeliveryPlanSerializer(serializers.ModelSerializer):
         qty = attrs.get('qty', getattr(self.instance, 'qty', Decimal('0')))
         shipped_qty = attrs.get('shipped_qty', getattr(self.instance, 'shipped_qty', Decimal('0')))
         delivered_qty = attrs.get('delivered_qty', getattr(self.instance, 'delivered_qty', Decimal('0')))
+        carrier_value = attrs.get('planned_carrier', getattr(self.instance, 'planned_carrier', None))
+        carrier_name_value = attrs.get('planned_carrier_name', getattr(self.instance, 'planned_carrier_name', '') or '')
+        try:
+            carrier, carrier_snapshot = resolve_delivery_carrier_assignment(
+                carrier_id=carrier_value,
+                carrier_name=carrier_name_value,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({'planned_carrier': str(exc)}) from exc
+        attrs['planned_carrier'] = carrier
+        attrs['planned_carrier_name'] = carrier_snapshot
+        attrs['delivery_rule'] = (
+            attrs.get('delivery_rule')
+            or getattr(self.instance, 'delivery_rule', None)
+            or SalesOrderDeliveryPlan.DELIVERY_RULE_PARTIAL_ALLOWED
+        )
         if delivered_qty > shipped_qty:
             shipped_qty = delivered_qty
             attrs['shipped_qty'] = shipped_qty
@@ -83,6 +101,67 @@ class SalesOrderDeliveryPlanSerializer(serializers.ModelSerializer):
         if delivered_qty > qty:
             raise serializers.ValidationError({'delivered_qty': 'Số lượng đã giao không được lớn hơn số lượng kế hoạch.'})
         return attrs
+
+
+class DeliveryCarrierSerializer(serializers.ModelSerializer):
+    delivery_plan_usage_count = serializers.IntegerField(read_only=True)
+    shipment_usage_count = serializers.IntegerField(read_only=True)
+    legacy_shipment_usage_count = serializers.IntegerField(read_only=True)
+    total_usage_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = DeliveryCarrier
+        fields = [
+            'id',
+            'code',
+            'name',
+            'contact_person',
+            'phone',
+            'email',
+            'note',
+            'is_internal',
+            'is_active',
+            'sort_order',
+            'delivery_plan_usage_count',
+            'shipment_usage_count',
+            'legacy_shipment_usage_count',
+            'total_usage_count',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'delivery_plan_usage_count',
+            'shipment_usage_count',
+            'legacy_shipment_usage_count',
+            'total_usage_count',
+            'created_at',
+            'updated_at',
+        ]
+
+    def validate_code(self, value):
+        normalized = str(value or '').strip().upper()
+        if not normalized:
+            raise serializers.ValidationError('Mã đơn vị vận chuyển là bắt buộc.')
+        return normalized
+
+    def validate_name(self, value):
+        normalized = str(value or '').strip()
+        if not normalized:
+            raise serializers.ValidationError('Tên đơn vị vận chuyển là bắt buộc.')
+        return normalized
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            validated_data.setdefault('created_by', request.user)
+            validated_data.setdefault('updated_by', request.user)
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            validated_data['updated_by'] = request.user
+        return super().update(instance, validated_data)
 
 
 class SalesOrderLineSerializer(serializers.ModelSerializer):
@@ -325,17 +404,29 @@ class SalesOrderSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'lines': 'Tổng số lượng kế hoạch giao không được lớn hơn số lượng dòng hàng.'}
             )
-        SalesOrderDeliveryPlan.objects.bulk_create([
-            SalesOrderDeliveryPlan(
-                line=line,
-                delivery_date=plan.get('delivery_date'),
-                qty=plan.get('qty') or Decimal('0'),
-                shipped_qty=max(plan.get('shipped_qty') or Decimal('0'), plan.get('delivered_qty') or Decimal('0')),
-                delivered_qty=plan.get('delivered_qty') or Decimal('0'),
-                note=plan.get('note') or '',
+        plan_rows = []
+        for plan in delivery_plans:
+            try:
+                carrier, carrier_name = resolve_delivery_carrier_assignment(
+                    carrier_id=plan.get('planned_carrier'),
+                    carrier_name=plan.get('planned_carrier_name') or '',
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError({'lines': str(exc)}) from exc
+            plan_rows.append(
+                SalesOrderDeliveryPlan(
+                    line=line,
+                    delivery_date=plan.get('delivery_date'),
+                    qty=plan.get('qty') or Decimal('0'),
+                    shipped_qty=max(plan.get('shipped_qty') or Decimal('0'), plan.get('delivered_qty') or Decimal('0')),
+                    delivered_qty=plan.get('delivered_qty') or Decimal('0'),
+                    planned_carrier=carrier,
+                    planned_carrier_name=carrier_name,
+                    delivery_rule=plan.get('delivery_rule') or SalesOrderDeliveryPlan.DELIVERY_RULE_PARTIAL_ALLOWED,
+                    note=plan.get('note') or '',
+                )
             )
-            for plan in delivery_plans
-        ])
+        SalesOrderDeliveryPlan.objects.bulk_create(plan_rows)
 
 
 class QuoteLineSerializer(serializers.ModelSerializer):
@@ -464,6 +555,7 @@ class ShipmentLineSerializer(serializers.ModelSerializer):
 class OutboundShipmentSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     sales_order_code = serializers.CharField(source='sales_order.code', read_only=True, allow_null=True)
+    carrier_master_name = serializers.CharField(source='carrier_master.name', read_only=True, allow_null=True)
     submitted_by_name = serializers.CharField(source='submitted_by.username', read_only=True, allow_null=True)
     approved_by_name = serializers.CharField(source='approved_by.username', read_only=True, allow_null=True)
     packed_by_name = serializers.CharField(source='packed_by.username', read_only=True, allow_null=True)
@@ -477,7 +569,7 @@ class OutboundShipmentSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'code', 'sales_order', 'sales_order_code',
             'customer', 'customer_name', 'shipment_date', 'status',
-            'reference', 'carrier', 'tracking_number', 'shipping_address',
+            'reference', 'carrier_master', 'carrier_master_name', 'carrier', 'tracking_number', 'shipping_address',
             'expected_delivery_date', 'actual_delivery_date',
             'delivered_by', 'delivery_notes',
             'submitted_by', 'submitted_by_name', 'submitted_at',
@@ -499,7 +591,15 @@ class OutboundShipmentSerializer(serializers.ModelSerializer):
         from django.utils import timezone
         
         lines_data = validated_data.pop('lines', [])
+        carrier_value = validated_data.pop('carrier_master', None)
         request = self.context.get('request')
+        try:
+            carrier, carrier_name = resolve_delivery_carrier_assignment(
+                carrier_id=carrier_value,
+                carrier_name=validated_data.get('carrier') or '',
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({'carrier_master': str(exc)}) from exc
         
         with transaction.atomic():
             # Generate code
@@ -512,6 +612,8 @@ class OutboundShipmentSerializer(serializers.ModelSerializer):
             )
             validated_data['code'] = seq.get_next_code()
             validated_data['created_by'] = request.user if request else None
+            validated_data['carrier_master'] = carrier
+            validated_data['carrier'] = carrier_name
             
             shipment = OutboundShipment.objects.create(**validated_data)
             
@@ -536,15 +638,27 @@ class OutboundShipmentSerializer(serializers.ModelSerializer):
         from django.db import transaction
         
         lines_data = validated_data.pop('lines', None)
+        carrier_value = validated_data.pop('carrier_master', getattr(instance, 'carrier_master', None))
         request = self.context.get('request')
         changed_fields = list(validated_data.keys())
         if lines_data is not None:
             changed_fields.append('lines')
+        if 'carrier' in validated_data or carrier_value is not None:
+            changed_fields.append('carrier_master')
         old_status = instance.status
+        try:
+            carrier, carrier_name = resolve_delivery_carrier_assignment(
+                carrier_id=carrier_value,
+                carrier_name=validated_data.get('carrier', getattr(instance, 'carrier', '') or ''),
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({'carrier_master': str(exc)}) from exc
         
         with transaction.atomic():
             for k, v in validated_data.items():
                 setattr(instance, k, v)
+            instance.carrier_master = carrier
+            instance.carrier = carrier_name
             instance.save()
             
             if lines_data is not None:

@@ -20,6 +20,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { customersApi } from '../../api/customers';
 import { productsApi } from '../../api/products';
 import { shipmentsApi } from '../../api/shipments';
+import DeliveryCarrierField from '../../components/DeliveryCarrier/DeliveryCarrierField';
 import type { Customer } from '../../types/customer';
 import type { Product } from '../../types/product';
 import type { OutboundShipment, ShipmentLine } from '../../types/shipments';
@@ -38,6 +39,7 @@ type ShipmentFormValues = {
   reference?: string;
   shipping_address?: string;
   tracking_number?: string;
+  carrier_master?: number | null;
   carrier?: string;
   expected_delivery_date?: Dayjs | null;
   notes?: string;
@@ -62,6 +64,7 @@ type ShipmentSubmitPayload = {
   reference?: string;
   shipping_address?: string;
   tracking_number?: string;
+  carrier_master?: number | null;
   carrier?: string;
   expected_delivery_date?: string | null;
   notes?: string;
@@ -104,6 +107,7 @@ function buildInitialValues(shipment?: OutboundShipment | null): ShipmentFormVal
     reference: shipment?.reference || '',
     shipping_address: shipment?.shipping_address || '',
     tracking_number: shipment?.tracking_number || '',
+    carrier_master: shipment?.carrier_master ?? null,
     carrier: shipment?.carrier || '',
     expected_delivery_date: shipment?.expected_delivery_date ? dayjs(shipment.expected_delivery_date) : null,
     notes: shipment?.notes || '',
@@ -304,6 +308,7 @@ export default function ShipmentFormModal({
         reference: values.reference?.trim() || undefined,
         shipping_address: values.shipping_address?.trim() || undefined,
         tracking_number: values.tracking_number?.trim() || undefined,
+        carrier_master: values.carrier_master ?? null,
         carrier: values.carrier?.trim() || undefined,
         expected_delivery_date: values.expected_delivery_date
           ? values.expected_delivery_date.format('YYYY-MM-DD')
@@ -375,9 +380,16 @@ export default function ShipmentFormModal({
             <Form.Item label="Mã vận chuyển" name="tracking_number">
               <Input data-testid="shipment-tracking-number" placeholder="Tracking number" />
             </Form.Item>
-            <Form.Item label="Nhà vận chuyển" name="carrier">
-              <Input data-testid="shipment-carrier" placeholder="Đơn vị giao nhận" />
-            </Form.Item>
+            <div>
+              <DeliveryCarrierField
+                label="Nhà vận chuyển"
+                carrierIdName="carrier_master"
+                carrierNameName="carrier"
+                selectTestId="shipment-carrier-select"
+                freeTextTestId="shipment-carrier-free-text"
+                warningTestId="shipment-carrier-warning"
+              />
+            </div>
           </div>
 
           <div

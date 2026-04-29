@@ -28,6 +28,8 @@ export interface OutboundShipment {
   shipment_date: string;
   status: OutboundShipmentStatus;
   reference?: string;
+  carrier_master?: number | null;
+  carrier_master_name?: string | null;
   carrier?: string;
   tracking_number?: string;
   shipping_address?: string;

@@ -8,6 +8,8 @@ export const PAGES = {
   CUSTOMERS_LIST: 'customers-list',
   ORDERS_LIST: 'orders-list',
   SALES_ORDERS: 'sales-orders',
+  SALES_DELIVERY_PLANNING: 'sales-delivery-planning',
+  SALES_DELIVERY_CARRIERS: 'sales-delivery-carriers',
   SALES_SHIPMENTS: 'sales-shipments',
   SALES_ANALYTICS_DASHBOARD: 'sales-analytics-dashboard',
   SALES_CUSTOMER_PORTAL: 'sales-customer-portal',
@@ -178,6 +180,8 @@ export const API_ENDPOINTS = {
   PRODUCTION_RECEIPTS: '/production/receipts/',
   SALES_DISCOUNTS: '/sales/discounts/',
   SALES_ORDERS: '/sales/orders/',
+  SALES_DELIVERY_PLANNING: '/sales/delivery-planning/',
+  SALES_DELIVERY_CARRIERS: '/sales/delivery-carriers/',
   SALES_QUOTES: '/sales/quotes/',
   SALES_SHIPMENTS: '/sales/shipments/',
 

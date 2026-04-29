@@ -46,6 +46,8 @@ const AccountCenter = lazy(() => import('./pages/Account/AccountCenter'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const ProductList = lazy(() => import('./pages/Products/ProductList'));
 const SalesOrderList = lazy(() => import('./pages/Sales/SalesOrderList'));
+const DeliveryPlanningPage = lazy(() => import('./pages/Sales/DeliveryPlanningPage'));
+const DeliveryCarrierList = lazy(() => import('./pages/Sales/DeliveryCarrierList'));
 const SalesFulfillmentCenter = lazy(() => import('./pages/Management/SalesFulfillmentCenter'));
 const ShipmentList = lazy(() => import('./pages/Sales/ShipmentList'));
 const ScanCenter = lazy(() => import('./pages/Inventory/ScanCenter'));
@@ -241,6 +243,8 @@ export default function AppRouter() {
                 )}
               />
               <Route path="sales-orders" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<SalesOrderList />)}</FeatureRoute>} />
+              <Route path="delivery-planning" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/sales-orders">{withAsyncBoundary(<DeliveryPlanningPage />)}</FeatureRoute>} />
+              <Route path="delivery-carriers" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/sales-orders">{withAsyncBoundary(<DeliveryCarrierList />)}</FeatureRoute>} />
               <Route path="sales-fulfillment-center" element={<FeatureRoute allow={canViewSalesFulfillmentCenter} fallbackTo="/sales-orders">{withAsyncBoundary(<SalesFulfillmentCenter />)}</FeatureRoute>} />
               <Route path="shipments" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<ShipmentList />)}</FeatureRoute>} />
               <Route path="scan-center" element={withAsyncBoundary(<ScanCenter />)} />

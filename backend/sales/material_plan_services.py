@@ -1,4 +1,4 @@
-﻿from collections import defaultdict
+from collections import defaultdict
 from datetime import timedelta
 from decimal import Decimal
 
@@ -344,6 +344,8 @@ def _serialize_delivery_plans(line, today):
             'is_overdue': bool(plan.remaining_qty > 0 and plan.delivery_date < today),
             'is_due_today': bool(plan.remaining_qty > 0 and plan.delivery_date == today),
             'is_due_soon': bool(plan.remaining_qty > 0 and today <= plan.delivery_date <= (today + timedelta(days=3))),
+            'planned_carrier_name': plan.planned_carrier_name or '',
+            'delivery_rule': plan.delivery_rule,
             'note': plan.note or '',
         }
         for plan in line.delivery_plans.all().order_by('delivery_date', 'id')
@@ -678,7 +680,9 @@ def build_sales_material_command_center_row(plan, *, today=None):
 
     return {
         'id': plan.id,
+        'plan_id': plan.id,
         'status': plan.status,
+        'plan_status': plan.status,
         'sales_order_id': plan.sales_order_id,
         'sales_order_code': plan.sales_order.code,
         'sales_order_status': plan.sales_order.status,
@@ -694,6 +698,7 @@ def build_sales_material_command_center_row(plan, *, today=None):
         'delivery_plans': delivery_plans,
         'delivery_summary': delivery_summary,
         'production': production_summary,
+        'production_summary': production_summary,
         'material_groups': material_groups,
         'material_summary': material_summary,
         'has_overdue_delivery': has_overdue_delivery,
