@@ -457,6 +457,122 @@ function getSnapshotRoutingPreview(snapshot?: SalesOrderLineProductSnapshot | nu
   }));
 }
 
+const snapshotStepTypeLabels: Record<string, string> = {
+  REQUIRED: 'Bắt buộc',
+  OPTIONAL: 'Tùy chọn',
+  CHOOSE_ONE: 'Chọn một',
+  PARALLEL: 'Song song',
+};
+
+function formatSnapshotRate(value?: number | null): string {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '-';
+  return new Intl.NumberFormat('vi-VN').format(numeric);
+}
+
+function getSnapshotStepTypeLabel(value?: string | null): string {
+  if (!value) return '-';
+  return snapshotStepTypeLabels[value] || value;
+}
+
+function renderOperationName(operation: Pick<SalesSnapshotOperation, 'operation_code' | 'operation_name'>) {
+  const code = operation.operation_code?.trim();
+  const name = operation.operation_name?.trim();
+  if (!code && !name) return '-';
+  return (
+    <span>
+      {code ? <strong>{code}</strong> : null}
+      {code && name && name !== code ? ` - ${name}` : !code && name ? name : null}
+    </span>
+  );
+}
+
+function renderRoutingOperationName(step: Pick<SalesSnapshotRoutingStep, 'operation_code' | 'operation_name'>) {
+  const code = step.operation_code?.trim();
+  const name = step.operation_name?.trim();
+  if (!code && !name) return '-';
+  return (
+    <span>
+      {code ? <strong>{code}</strong> : null}
+      {code && name && name !== code ? ` - ${name}` : !code && name ? name : null}
+    </span>
+  );
+}
+
+function SnapshotOperationsPreview({ operations }: { operations: SalesSnapshotOperation[] }) {
+  if (!operations.length) {
+    return <div style={{ color: '#8c8c8c', padding: '8px 0' }}>Chưa có công đoạn áp dụng</div>;
+  }
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <thead>
+          <tr style={{ background: '#fafafa' }}>
+            <th style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #f0f0f0' }}>Công đoạn</th>
+            <th style={{ textAlign: 'right', padding: '6px 8px', border: '1px solid #f0f0f0' }}>Định mức chuẩn</th>
+            <th style={{ textAlign: 'right', padding: '6px 8px', border: '1px solid #f0f0f0' }}>Định mức áp dụng</th>
+            <th style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #f0f0f0' }}>Ghi chú</th>
+          </tr>
+        </thead>
+        <tbody>
+          {operations.map((operation, operationIndex) => (
+            <tr key={`${operation.operation_code || 'operation'}-${operation.sequence ?? operationIndex}-${operationIndex}`}>
+              <td style={{ padding: '6px 8px', border: '1px solid #f0f0f0' }}>{renderOperationName(operation)}</td>
+              <td style={{ textAlign: 'right', padding: '6px 8px', border: '1px solid #f0f0f0' }}>
+                {formatSnapshotRate(operation.standard_rate_per_hour)}
+              </td>
+              <td style={{ textAlign: 'right', padding: '6px 8px', border: '1px solid #f0f0f0' }}>
+                {formatSnapshotRate(operation.applied_rate_per_hour ?? operation.standard_rate_per_hour)}
+              </td>
+              <td style={{ padding: '6px 8px', border: '1px solid #f0f0f0' }}>{operation.note || '-'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SnapshotRoutingPreview({ routingSteps }: { routingSteps: SalesSnapshotRoutingStep[] }) {
+  if (!routingSteps.length) {
+    return <div style={{ color: '#8c8c8c', padding: '8px 0' }}>Chưa có thứ tự công đoạn</div>;
+  }
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <thead>
+          <tr style={{ background: '#fafafa' }}>
+            <th style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #f0f0f0' }}>Bước</th>
+            <th style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #f0f0f0' }}>Công đoạn</th>
+            <th style={{ textAlign: 'right', padding: '6px 8px', border: '1px solid #f0f0f0' }}>Định mức áp dụng</th>
+            <th style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #f0f0f0' }}>Kiểu bước</th>
+            <th style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #f0f0f0' }}>Nhóm</th>
+            <th style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #f0f0f0' }}>Ghi chú</th>
+          </tr>
+        </thead>
+        <tbody>
+          {routingSteps.map((step, stepIndex) => (
+            <tr key={`${step.route_step_id ?? step.id ?? 'route'}-${step.step_no ?? stepIndex}-${step.display_order ?? stepIndex}-${stepIndex}`}>
+              <td style={{ padding: '6px 8px', border: '1px solid #f0f0f0' }}>
+                {step.display_step ?? step.step_no ?? '-'}
+              </td>
+              <td style={{ padding: '6px 8px', border: '1px solid #f0f0f0' }}>{renderRoutingOperationName(step)}</td>
+              <td style={{ textAlign: 'right', padding: '6px 8px', border: '1px solid #f0f0f0' }}>
+                {formatSnapshotRate(step.applied_rate_per_hour ?? step.standard_rate_per_hour)}
+              </td>
+              <td style={{ padding: '6px 8px', border: '1px solid #f0f0f0' }}>
+                {getSnapshotStepTypeLabel(step.step_type)}
+              </td>
+              <td style={{ padding: '6px 8px', border: '1px solid #f0f0f0' }}>{step.group_code || '-'}</td>
+              <td style={{ padding: '6px 8px', border: '1px solid #f0f0f0' }}>{step.note || '-'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function sanitizeLineSnapshotForSubmit(
   snapshot?: SalesOrderLineProductSnapshot | null,
 ): SalesOrderLineProductSnapshot {
@@ -2464,6 +2580,8 @@ export default function SalesOrderList() {
                   const hasDetailedColors = hasSnapshotDetailedPrintColors(currentSnapshot);
                   const calculatedColorCount = printColorSlots.filter((item) => item.trim()).length;
                   const legacyColorCount = !hasDetailedColors ? getSnapshotColorCount(currentSnapshot) : 0;
+                  const operationsPreview = getSnapshotOperationsPreview(currentSnapshot);
+                  const routingPreview = getSnapshotRoutingPreview(currentSnapshot);
                   return (
                     <Card
                       key={field.key}
@@ -2581,6 +2699,27 @@ export default function SalesOrderList() {
                             : legacyColorCount > 0
                               ? `Số màu cũ: ${legacyColorCount} - chưa khai báo chi tiết màu`
                               : 'Số màu tự tính: 0'}
+                        </div>
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+                            gap: 12,
+                            marginTop: 12,
+                          }}
+                        >
+                          <details open style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: 10 }}>
+                            <summary style={{ cursor: 'pointer', fontWeight: 600, marginBottom: 8 }}>
+                              Công đoạn áp dụng
+                            </summary>
+                            <SnapshotOperationsPreview operations={operationsPreview} />
+                          </details>
+                          <details open style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: 10 }}>
+                            <summary style={{ cursor: 'pointer', fontWeight: 600, marginBottom: 8 }}>
+                              Thứ tự công đoạn sản xuất
+                            </summary>
+                            <SnapshotRoutingPreview routingSteps={routingPreview} />
+                          </details>
                         </div>
                       </div>
 
