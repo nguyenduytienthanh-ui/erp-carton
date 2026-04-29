@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Descriptions,
   Divider,
   Drawer,
@@ -290,6 +291,13 @@ type LegacyProcessKey =
   | 'process_dan'
   | 'process_khac';
 
+type PrintColorKey =
+  | 'print_color_1'
+  | 'print_color_2'
+  | 'print_color_3'
+  | 'print_color_4'
+  | 'print_color_5';
+
 const legacyProcessPreviewFields: Array<{
   key: LegacyProcessKey;
   code: string;
@@ -305,6 +313,14 @@ const legacyProcessPreviewFields: Array<{
   { key: 'process_dong', code: 'DONG', name: 'Đóng', sequence: 70 },
   { key: 'process_dan', code: 'DAN', name: 'Dán', sequence: 80 },
   { key: 'process_khac', code: 'KHAC', name: 'Khác', sequence: 90 },
+];
+
+const printColorKeys: PrintColorKey[] = [
+  'print_color_1',
+  'print_color_2',
+  'print_color_3',
+  'print_color_4',
+  'print_color_5',
 ];
 
 const snapshotSubmitKeys: Array<keyof SalesOrderLineProductSnapshot> = [
@@ -368,6 +384,19 @@ function getSnapshotPrintColors(snapshot?: SalesOrderLineProductSnapshot | null)
     snapshot.print_color_4,
     snapshot.print_color_5,
   ].map((item) => String(item ?? '').trim()).filter(Boolean);
+}
+
+function getSnapshotPrintColorSlots(snapshot?: SalesOrderLineProductSnapshot | null): string[] {
+  const fieldValues = printColorKeys.map((key) => String(snapshot?.[key] ?? ''));
+  if (fieldValues.some((item) => item.trim())) {
+    return fieldValues;
+  }
+  const arrayValues = Array.isArray(snapshot?.print_colors) ? snapshot.print_colors : [];
+  return printColorKeys.map((_, index) => String(arrayValues[index] ?? ''));
+}
+
+function hasSnapshotDetailedPrintColors(snapshot?: SalesOrderLineProductSnapshot | null): boolean {
+  return getSnapshotPrintColorSlots(snapshot).some((item) => item.trim());
 }
 
 function getSnapshotColorCount(snapshot?: SalesOrderLineProductSnapshot | null): number {
@@ -758,6 +787,14 @@ function buildPayload(values: SalesOrderFormValues): SalesOrderFormValues {
     notes: values.notes?.trim() || '',
     lines: (values.lines ?? []).map((line, index) => {
       const sanitizedSnapshot = sanitizeLineSnapshotForSubmit(line.product_snapshot);
+      const hasPrintColorOverride = printColorKeys.some((key) => sanitizedSnapshot[key] !== undefined);
+      if (hasPrintColorOverride) {
+        const printColors = printColorKeys
+          .map((key) => String(sanitizedSnapshot[key] ?? '').trim())
+          .filter(Boolean);
+        sanitizedSnapshot.print_colors = printColors;
+        sanitizedSnapshot.color_count = printColors.length;
+      }
       const unitName = line.uom?.trim() || sanitizedSnapshot.unit_name || line.product_snapshot?.unit_name || '';
       return {
         line_number: index + 1,
@@ -996,6 +1033,17 @@ export default function SalesOrderList() {
   const configRecord = config as Record<string, unknown>;
   const pageSize = Number(configRecord.pageSize ?? 20);
   const liveLines = Form.useWatch('lines', form);
+  const syncLinePrintColors = (lineIndex: number, colorIndex: number, value: string) => {
+    const snapshot = (form.getFieldValue(['lines', lineIndex, 'product_snapshot']) ?? {}) as SalesOrderLineProductSnapshot;
+    const slots = getSnapshotPrintColorSlots(snapshot);
+    slots[colorIndex] = value;
+    const cleaned = slots.map((item) => item.trim()).filter(Boolean);
+    printColorKeys.forEach((key, index) => {
+      form.setFieldValue(['lines', lineIndex, 'product_snapshot', key], slots[index] ?? '');
+    });
+    form.setFieldValue(['lines', lineIndex, 'product_snapshot', 'print_colors'], cleaned);
+    form.setFieldValue(['lines', lineIndex, 'product_snapshot', 'color_count'], cleaned.length);
+  };
 
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
@@ -2405,6 +2453,17 @@ export default function SalesOrderList() {
 
                 {fields.map((field, index) => {
                   const currentLine = liveLines?.[index];
+                  const watchedSnapshot = currentLine?.product_snapshot;
+                  const storedSnapshot = (form.getFieldValue(['lines', index, 'product_snapshot']) ?? {}) as SalesOrderLineProductSnapshot;
+                  const currentSnapshot = { ...storedSnapshot, ...(watchedSnapshot ?? {}) };
+                  const currentProduct = productMap.get(Number(currentLine?.product ?? 0));
+                  const productKindValue = currentSnapshot?.product_kind || currentProduct?.product_kind;
+                  const productKind = productKindValue === 'GENERIC' ? 'GENERIC' : 'SPECIFIC';
+                  const isGenericProduct = productKind === 'GENERIC';
+                  const printColorSlots = getSnapshotPrintColorSlots(currentSnapshot);
+                  const hasDetailedColors = hasSnapshotDetailedPrintColors(currentSnapshot);
+                  const calculatedColorCount = printColorSlots.filter((item) => item.trim()).length;
+                  const legacyColorCount = !hasDetailedColors ? getSnapshotColorCount(currentSnapshot) : 0;
                   return (
                     <Card
                       key={field.key}
@@ -2471,6 +2530,60 @@ export default function SalesOrderList() {
                         </div>
                       </div>
 
+                      <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                          <strong>Thông tin sản phẩm áp dụng</strong>
+                          <Tag color={isGenericProduct ? 'gold' : 'blue'}>
+                            {isGenericProduct ? 'Mã chung' : 'Mã riêng'}
+                          </Tag>
+                        </div>
+                        {isGenericProduct ? (
+                          <Alert
+                            type="warning"
+                            showIcon
+                            style={{ marginBottom: 10 }}
+                            message="Mã chung cần xác nhận quy cách và kiểm tra công đoạn/định mức trước khi duyệt/lên sản xuất."
+                          />
+                        ) : null}
+                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
+                          <Form.Item
+                            name={[field.name, 'product_snapshot', 'order_spec_confirmed']}
+                            valuePropName="checked"
+                            style={{ marginBottom: 0 }}
+                          >
+                            <Checkbox>Đã xác nhận quy cách</Checkbox>
+                          </Form.Item>
+                          <Form.Item
+                            name={[field.name, 'product_snapshot', 'order_operations_reviewed']}
+                            valuePropName="checked"
+                            style={{ marginBottom: 0 }}
+                          >
+                            <Checkbox>Đã kiểm tra công đoạn/định mức</Checkbox>
+                          </Form.Item>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 10 }}>
+                          {printColorKeys.map((key, colorIndex) => (
+                            <Form.Item
+                              key={key}
+                              name={[field.name, 'product_snapshot', key]}
+                              label={`Màu ${colorIndex + 1} / mã màu`}
+                            >
+                              <Input
+                                placeholder={`Màu ${colorIndex + 1}`}
+                                onChange={(event) => syncLinePrintColors(index, colorIndex, event.target.value)}
+                              />
+                            </Form.Item>
+                          ))}
+                        </div>
+                        <div style={{ color: '#595959' }}>
+                          {hasDetailedColors || calculatedColorCount > 0
+                            ? `Số màu tự tính: ${calculatedColorCount}`
+                            : legacyColorCount > 0
+                              ? `Số màu cũ: ${legacyColorCount} - chưa khai báo chi tiết màu`
+                              : 'Số màu tự tính: 0'}
+                        </div>
+                      </div>
+
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
                         <Form.Item name={[field.name, 'product_snapshot', 'size_order']} label="Kích thước ĐH">
                           <Input placeholder="Dài x Rộng x Cao" />
@@ -2481,8 +2594,8 @@ export default function SalesOrderList() {
                         <Form.Item name={[field.name, 'product_snapshot', 'delivery_tolerance']} label="+/- giao hàng">
                           <Input />
                         </Form.Item>
-                        <Form.Item name={[field.name, 'product_snapshot', 'color_count']} label="Số màu">
-                          <InputNumber style={{ width: '100%' }} min={0} />
+                        <Form.Item name={[field.name, 'product_snapshot', 'color_count']} hidden>
+                          <InputNumber />
                         </Form.Item>
                       </div>
 
