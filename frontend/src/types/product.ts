@@ -45,6 +45,7 @@ export type ProductBundleCommissionMode = 'PRIMARY_PRODUCT' | 'FIXED_VALUES' | '
 export type ProductBundleDeliveryRule = 'STRICT_FULL_SET' | 'NON_SYNC';
 export type ProductOperationCode = 'XA' | 'IN' | 'CAN_MANG' | 'BOI' | 'BE' | 'CHAP' | 'DONG' | 'DAN' | 'KHAC';
 export type ProductOperationNotes = Partial<Record<ProductOperationCode, string>>;
+export type ProductRoutingStepType = 'REQUIRED' | 'OPTIONAL' | 'CHOOSE_ONE' | 'PARALLEL';
 
 export interface ProductOperation {
   id: number | null;
@@ -61,6 +62,38 @@ export interface ProductOperationInput {
   operation_code: ProductOperationCode;
   standard_rate_per_hour: number;
   note?: string;
+}
+
+export interface ProductRoutingStep {
+  id: number | null;
+  route_step_id?: number | null;
+  operation_id?: number | null;
+  product_operation_id?: number | null;
+  step_no: number;
+  display_step: number;
+  display_order: number;
+  operation_code: ProductOperationCode;
+  operation_name: string;
+  standard_rate_per_hour: number;
+  note?: string;
+  step_type: ProductRoutingStepType;
+  group_code?: string;
+  is_required: boolean;
+  allow_parallel: boolean;
+  source: 'product_routing' | 'product_operations_default' | 'legacy_process_fields' | string;
+  is_active: boolean;
+}
+
+export interface ProductRoutingInput {
+  step_no: number;
+  display_order?: number;
+  operation_code: ProductOperationCode;
+  standard_rate_per_hour: number;
+  note?: string;
+  step_type?: ProductRoutingStepType;
+  group_code?: string;
+  is_required?: boolean;
+  allow_parallel?: boolean;
 }
 
 export interface ProductBundleComponent {
@@ -172,6 +205,7 @@ export interface Product {
   process_dan?: number | null;
   process_khac?: number | null;
   operations?: ProductOperation[];
+  routing_steps?: ProductRoutingStep[];
 
   // ============ IN ẤN ============
   film_code?: string;
@@ -276,6 +310,7 @@ export interface ProductFormData {
   process_khac?: number | string;
   operation_notes?: ProductOperationNotes;
   operations_input?: ProductOperationInput[];
+  routing_input?: ProductRoutingInput[];
 
   film_code?: string;
   film_file_url?: string;

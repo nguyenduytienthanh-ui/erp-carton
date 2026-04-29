@@ -3,9 +3,9 @@
  * Grid Mẹ + Con (thành phần con Lót, Khay…), mã Con tự sinh Mã Mẹ-1, Mã Mẹ-2…
  * Không còn giao diện cũ; toàn bộ thêm/sửa dùng form này.
  */
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { App, Modal, Button, Checkbox, Alert } from 'antd';
-import { DeleteOutlined } from '@ant-design/icons';
+import { CopyOutlined, DeleteOutlined, PlusOutlined, SortAscendingOutlined, UndoOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { productsApi } from '../../api/products';
 import { FormInputWithClear } from '../../components';
@@ -21,6 +21,9 @@ import type {
   ProductOperationCode,
   ProductOperationInput,
   ProductOperationNotes,
+  ProductRoutingInput,
+  ProductRoutingStep,
+  ProductRoutingStepType,
 } from '../../types/product';
 import { WATERPROOF_OPTIONS } from '../../types/product';
 import { useQuickEntryKeys } from '../../hooks/useQuickEntryKeys';
@@ -219,6 +222,13 @@ const PRODUCT_OPERATIONS: ProductOperationDefinition[] = [
 const PRODUCT_OPERATION_LEFT = PRODUCT_OPERATIONS.slice(0, 5);
 const PRODUCT_OPERATION_RIGHT = PRODUCT_OPERATIONS.slice(5);
 
+const ROUTING_STEP_TYPE_OPTIONS: Array<{ value: ProductRoutingStepType; label: string }> = [
+  { value: 'REQUIRED', label: 'Bắt buộc' },
+  { value: 'OPTIONAL', label: 'Tùy chọn' },
+  { value: 'CHOOSE_ONE', label: 'Chọn một' },
+  { value: 'PARALLEL', label: 'Song song / cùng bước' },
+];
+
 const PRINT_COLOR_FIELDS: Array<{ field: PrintColorField; label: string }> = [
   { field: 'print_color_1', label: 'Màu 1 / mã màu' },
   { field: 'print_color_2', label: 'Màu 2 / mã màu' },
@@ -329,6 +339,150 @@ function buildLegacyProcessPayload(data: OperationFormData): Partial<Record<Proc
   }, {} as Partial<Record<ProcessField, number | undefined>>);
 }
 
+type RoutingEditState = 'untouched' | 'custom' | 'clear';
+
+interface RoutingFormRow {
+  key: string;
+  stepValue: string;
+  operationCode: ProductOperationCode | '';
+  rateValue: string;
+  note: string;
+  stepType: ProductRoutingStepType;
+  groupCode: string;
+  isRequired: boolean;
+  allowParallel: boolean;
+}
+
+let routingRowSeed = 0;
+
+function nextRoutingRowKey() {
+  routingRowSeed += 1;
+  return `routing-row-${routingRowSeed}`;
+}
+
+function getOperationDefinition(operationCode: ProductOperationCode | '') {
+  return PRODUCT_OPERATIONS.find((operation) => operation.code === operationCode);
+}
+
+function getOperationSequence(operationCode: ProductOperationCode | '') {
+  const index = PRODUCT_OPERATIONS.findIndex((operation) => operation.code === operationCode);
+  return index >= 0 ? (index + 1) * 10 : 10;
+}
+
+function displayStepValue(stepNo: number, displayStep?: number): string {
+  if (displayStep && stepNo === displayStep * 10) return String(displayStep);
+  if (stepNo > 0 && stepNo % 10 === 0) return String(stepNo / 10);
+  return String(stepNo || '');
+}
+
+function createEmptyRoutingRow(stepValue = ''): RoutingFormRow {
+  return {
+    key: nextRoutingRowKey(),
+    stepValue,
+    operationCode: '',
+    rateValue: '',
+    note: '',
+    stepType: 'REQUIRED',
+    groupCode: '',
+    isRequired: true,
+    allowParallel: false,
+  };
+}
+
+function routingStepToRow(step: ProductRoutingStep): RoutingFormRow {
+  return {
+    key: nextRoutingRowKey(),
+    stepValue: displayStepValue(Number(step.step_no || 0), Number(step.display_step || 0)),
+    operationCode: step.operation_code,
+    rateValue: formatOperationRate(step.standard_rate_per_hour),
+    note: step.note ?? '',
+    stepType: step.step_type ?? 'REQUIRED',
+    groupCode: step.group_code ?? '',
+    isRequired: step.is_required ?? true,
+    allowParallel: step.step_type === 'PARALLEL' ? true : Boolean(step.allow_parallel),
+  };
+}
+
+function productRoutingRows(product?: Product | null): RoutingFormRow[] {
+  return (product?.routing_steps ?? [])
+    .filter((step) => step.is_active !== false)
+    .sort((a, b) => (
+      Number(a.step_no || 0) - Number(b.step_no || 0)
+      || Number(a.display_order || 0) - Number(b.display_order || 0)
+      || Number(a.id || 0) - Number(b.id || 0)
+    ))
+    .map(routingStepToRow);
+}
+
+function hasCustomProductRouting(product?: Product | null): boolean {
+  return (product?.routing_steps ?? []).some((step) => step.is_active !== false && step.source === 'product_routing');
+}
+
+function buildDefaultRoutingRowsFromOperations(data: OperationFormData): RoutingFormRow[] {
+  return PRODUCT_OPERATIONS.flatMap((definition, index) => {
+    const parsed = parseOperationRate(data[definition.processField]);
+    if (parsed.kind !== 'positive') return [];
+    return [{
+      key: nextRoutingRowKey(),
+      stepValue: String(index + 1),
+      operationCode: definition.code,
+      rateValue: formatOperationRate(parsed.value),
+      note: data.operation_notes?.[definition.code] ?? '',
+      stepType: 'REQUIRED' as ProductRoutingStepType,
+      groupCode: '',
+      isRequired: true,
+      allowParallel: false,
+    }];
+  });
+}
+
+function cloneRoutingRows(rows: RoutingFormRow[]): RoutingFormRow[] {
+  return rows.map((row) => ({ ...row, key: nextRoutingRowKey() }));
+}
+
+function parseRoutingStepNo(value: string): number | null {
+  const raw = String(value ?? '').trim();
+  if (!/^\d+$/.test(raw)) return null;
+  const numericValue = Number(raw);
+  if (!Number.isSafeInteger(numericValue) || numericValue <= 0) return null;
+  return numericValue < 10 ? numericValue * 10 : numericValue;
+}
+
+function validateRoutingRows(rows: RoutingFormRow[]): string | null {
+  if (rows.length === 0) return 'Thứ tự công đoạn tùy chỉnh cần ít nhất một dòng.';
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index];
+    const label = `Dòng ${index + 1}`;
+    if (parseRoutingStepNo(row.stepValue) == null) return `${label}: Bước phải là số nguyên lớn hơn 0.`;
+    if (!row.operationCode) return `${label}: Vui lòng chọn công đoạn.`;
+    const parsedRate = parseOperationRate(row.rateValue);
+    if (parsedRate.kind !== 'positive') {
+      return `${label}: Định mức phải lớn hơn 0 và chỉ nhập số nguyên hoặc dấu chấm hàng nghìn.`;
+    }
+    if (row.stepType === 'CHOOSE_ONE' && !row.groupCode.trim()) {
+      return `${label}: Kiểu Chọn một bắt buộc nhập Nhóm.`;
+    }
+  }
+  return null;
+}
+
+function buildRoutingInput(rows: RoutingFormRow[]): ProductRoutingInput[] {
+  return rows.map((row, index) => {
+    const parsedRate = parseOperationRate(row.rateValue);
+    return {
+      step_no: parseRoutingStepNo(row.stepValue) ?? 10,
+      display_order: (index + 1) * 10,
+      operation_code: row.operationCode as ProductOperationCode,
+      standard_rate_per_hour: parsedRate.kind === 'positive' ? parsedRate.value : 0,
+      note: row.note.trim(),
+      step_type: row.stepType,
+      group_code: row.groupCode.trim().toUpperCase(),
+      is_required: row.isRequired,
+      allow_parallel: row.stepType === 'PARALLEL' ? true : row.allowParallel,
+    };
+  });
+}
+
 function validateOperationRates(data: OperationFormData, labelPrefix: string): string | null {
   for (const definition of PRODUCT_OPERATIONS) {
     const parsed = parseOperationRate(data[definition.processField]);
@@ -385,9 +539,10 @@ function deriveCommissionModeFromPricingMode(pricingMode: ProductBundlePricingMo
 
 /** Build payload Mẹ để gửi API. */
 function buildMotherPayload(m: ProductFormData, isSet: boolean): ProductFormData {
-  const { operation_notes, operations_input, color_count, ...base } = m;
+  const { operation_notes, operations_input, routing_input, color_count, ...base } = m;
   void operation_notes;
   void operations_input;
+  void routing_input;
   void color_count;
   const productKind = m.product_kind ?? 'SPECIFIC';
   return {
@@ -592,6 +747,271 @@ function PrintColorsEditor({ value, onChange }: PrintColorsEditorProps) {
       <div style={{ color: computedColorCount > 0 ? 'var(--app-text-secondary)' : 'var(--app-text-muted)', fontSize: 12, lineHeight: '16px' }}>
         {summary}
       </div>
+    </div>
+  );
+}
+
+interface RoutingStepsEditorProps {
+  expanded: boolean;
+  editState: RoutingEditState;
+  loadedCustom: boolean;
+  rows: RoutingFormRow[];
+  previewRows: RoutingFormRow[];
+  disabled?: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+  onStartCustom: () => void;
+  onClearCustom: () => void;
+  onRowChange: (rowKey: string, patch: Partial<RoutingFormRow>) => void;
+  onAddRow: () => void;
+  onDuplicateRow: (rowKey: string) => void;
+  onDeleteRow: (rowKey: string) => void;
+  onSortRows: () => void;
+}
+
+function RoutingStepsEditor({
+  expanded,
+  editState,
+  loadedCustom,
+  rows,
+  previewRows,
+  disabled = false,
+  onExpandedChange,
+  onStartCustom,
+  onClearCustom,
+  onRowChange,
+  onAddRow,
+  onDuplicateRow,
+  onDeleteRow,
+  onSortRows,
+}: RoutingStepsEditorProps) {
+  const customMode = editState === 'custom' || (editState === 'untouched' && loadedCustom);
+  const editable = customMode && !disabled;
+  const displayRows = customMode ? rows : previewRows;
+  const summary = editState === 'clear'
+    ? 'Sẽ quay về thứ tự mặc định'
+    : customMode
+      ? `Đang dùng thứ tự tùy chỉnh: ${rows.length} bước`
+      : 'Đang dùng thứ tự mặc định';
+
+  const emptyLabel = customMode
+    ? 'Chưa có dòng routing tùy chỉnh'
+    : 'Chưa có công đoạn để tạo thứ tự mặc định';
+
+  return (
+    <div
+      style={{
+        marginTop: 10,
+        border: '1px solid var(--app-border)',
+        borderRadius: 8,
+        background: 'var(--app-surface)',
+        overflow: 'hidden',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => onExpandedChange(!expanded)}
+        style={{
+          width: '100%',
+          border: 0,
+          background: 'var(--app-surface-subtle)',
+          padding: '9px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <span style={{ fontWeight: 600, color: 'var(--app-text-primary)' }}>
+          {expanded ? '−' : '+'} Thứ tự công đoạn sản xuất nâng cao
+        </span>
+        <span style={{ color: 'var(--app-text-secondary)', fontSize: 12 }}>{summary}</span>
+      </button>
+      {expanded && (
+        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ color: 'var(--app-text-secondary)', fontSize: 13 }}>
+              {customMode ? 'Tùy chỉnh thứ tự' : 'Dùng thứ tự mặc định'}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button size="small" icon={<UndoOutlined />} disabled={disabled} onClick={onClearCustom}>
+                Quay về mặc định
+              </Button>
+              <Button size="small" type={customMode ? 'default' : 'primary'} disabled={disabled} onClick={onStartCustom}>
+                Tùy chỉnh thứ tự
+              </Button>
+              <Button size="small" icon={<PlusOutlined />} disabled={disabled} onClick={onAddRow}>
+                Thêm bước
+              </Button>
+              <Button size="small" icon={<SortAscendingOutlined />} disabled={!editable || rows.length < 2} onClick={onSortRows}>
+                Sắp xếp lại theo bước
+              </Button>
+            </div>
+          </div>
+
+          <div style={{ overflowX: 'auto' }}>
+            <table
+              style={{
+                width: '100%',
+                minWidth: 980,
+                borderCollapse: 'collapse',
+                fontSize: 13,
+              }}
+            >
+              <colgroup>
+                <col style={{ width: 72 }} />
+                <col style={{ width: 150 }} />
+                <col style={{ width: 160 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 110 }} />
+                <col />
+                <col style={{ width: 116 }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  {['Bước', 'Công đoạn', 'Kiểu bước', 'Định mức', 'Nhóm', 'Ghi chú', 'Thao tác'].map((title) => (
+                    <th
+                      key={title}
+                      style={{
+                        padding: '6px 8px',
+                        borderBottom: '1px solid var(--app-border)',
+                        color: 'var(--app-text-secondary)',
+                        fontWeight: 600,
+                        textAlign: 'left',
+                      }}
+                    >
+                      {title}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {displayRows.length === 0 && (
+                  <tr>
+                    <td colSpan={7} style={{ padding: 12, color: 'var(--app-text-muted)' }}>
+                      {emptyLabel}
+                    </td>
+                  </tr>
+                )}
+                {displayRows.map((row) => {
+                  const operationDefinition = getOperationDefinition(row.operationCode);
+                  const rateParsed = parseOperationRate(row.rateValue);
+                  const rateInvalid = rateParsed.kind === 'invalid';
+                  const groupRequired = row.stepType === 'CHOOSE_ONE';
+                  const groupInvalid = groupRequired && !row.groupCode.trim();
+                  return (
+                    <tr key={row.key}>
+                      <td style={{ padding: 6, borderBottom: '1px solid var(--app-border-subtle)' }}>
+                        <input
+                          type="text"
+                          className="pf-input"
+                          disabled={!editable}
+                          value={row.stepValue}
+                          onChange={(event) => onRowChange(row.key, { stepValue: event.target.value })}
+                          style={parseRoutingStepNo(row.stepValue) == null ? { borderColor: 'var(--app-danger)' } : undefined}
+                        />
+                      </td>
+                      <td style={{ padding: 6, borderBottom: '1px solid var(--app-border-subtle)' }}>
+                        <select
+                          className="pf-select"
+                          disabled={!editable}
+                          value={row.operationCode}
+                          onChange={(event) => {
+                            const operationCode = event.target.value as ProductOperationCode | '';
+                            onRowChange(row.key, {
+                              operationCode,
+                              stepValue: row.stepValue || String(getOperationSequence(operationCode) / 10),
+                            });
+                          }}
+                        >
+                          <option value="">Chọn</option>
+                          {PRODUCT_OPERATIONS.map((operation) => (
+                            <option key={operation.code} value={operation.code}>{operation.label}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{ padding: 6, borderBottom: '1px solid var(--app-border-subtle)' }}>
+                        <select
+                          className="pf-select"
+                          disabled={!editable}
+                          value={row.stepType}
+                          onChange={(event) => {
+                            const stepType = event.target.value as ProductRoutingStepType;
+                            onRowChange(row.key, {
+                              stepType,
+                              allowParallel: stepType === 'PARALLEL' ? true : row.allowParallel,
+                            });
+                          }}
+                        >
+                          {ROUTING_STEP_TYPE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{ padding: 6, borderBottom: '1px solid var(--app-border-subtle)' }}>
+                        <FormInputWithClear
+                          type="text"
+                          className="pf-input"
+                          disabled={!editable}
+                          value={row.rateValue}
+                          onChange={(event) => onRowChange(row.key, { rateValue: event.target.value })}
+                          onClear={() => onRowChange(row.key, { rateValue: '' })}
+                          hasValue={String(row.rateValue ?? '').trim() !== ''}
+                          style={rateInvalid ? { borderColor: 'var(--app-danger)' } : undefined}
+                        />
+                      </td>
+                      <td style={{ padding: 6, borderBottom: '1px solid var(--app-border-subtle)' }}>
+                        <FormInputWithClear
+                          type="text"
+                          className="pf-input"
+                          disabled={!editable}
+                          value={row.groupCode}
+                          onChange={(event) => onRowChange(row.key, { groupCode: event.target.value.toUpperCase() })}
+                          onClear={() => onRowChange(row.key, { groupCode: '' })}
+                          hasValue={row.groupCode.trim() !== ''}
+                          style={groupInvalid ? { borderColor: 'var(--app-danger)' } : undefined}
+                        />
+                      </td>
+                      <td style={{ padding: 6, borderBottom: '1px solid var(--app-border-subtle)' }}>
+                        <FormInputWithClear
+                          type="text"
+                          className="pf-input"
+                          disabled={!editable}
+                          value={row.note}
+                          onChange={(event) => onRowChange(row.key, { note: event.target.value })}
+                          onClear={() => onRowChange(row.key, { note: '' })}
+                          hasValue={row.note.trim() !== ''}
+                        />
+                      </td>
+                      <td style={{ padding: 6, borderBottom: '1px solid var(--app-border-subtle)' }}>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<CopyOutlined />}
+                            disabled={!editable}
+                            onClick={() => onDuplicateRow(row.key)}
+                            title={`Nhân đôi ${operationDefinition?.label ?? 'dòng'}`}
+                          />
+                          <Button
+                            size="small"
+                            type="text"
+                            danger
+                            icon={<DeleteOutlined />}
+                            disabled={!editable}
+                            onClick={() => onDeleteRow(row.key)}
+                            title="Xóa dòng"
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -961,9 +1381,20 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
   const [children, setChildren] = useState<ProductChildFormData[]>([]);
   const [priceChangeReason, setPriceChangeReason] = useState('');
   const [priceEffectiveAt, setPriceEffectiveAt] = useState('');
+  const [routingExpanded, setRoutingExpanded] = useState(false);
+  const [routingRows, setRoutingRows] = useState<RoutingFormRow[]>([]);
+  const [routingEditState, setRoutingEditState] = useState<RoutingEditState>('untouched');
+  const [routingLoadedCustom, setRoutingLoadedCustom] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const { message } = App.useApp();
+
+  const resetRoutingState = useCallback((product?: Product | null) => {
+    setRoutingExpanded(false);
+    setRoutingEditState('untouched');
+    setRoutingLoadedCustom(hasCustomProductRouting(product));
+    setRoutingRows(productRoutingRows(product));
+  }, []);
 
   useEffect(() => {
     if (!visible) return;
@@ -972,6 +1403,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
       if (productDetail.parent != null) {
         if (parentDetail) {
           setMother(productToMother(parentDetail));
+          resetRoutingState(parentDetail);
           setBundleConfig(bundleToFormData(parentDetail.bundle_definition));
           setHasChildren(true);
           setChildren([componentToChildFormData(productDetail, firstUnitId)]);
@@ -979,6 +1411,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
         }
       } else {
         setMother(productToMother(productDetail));
+        resetRoutingState(productDetail);
         setBundleConfig(bundleToFormData(productDetail.bundle_definition));
         const comps = productDetail.components ?? [];
         setHasChildren(comps.length > 0);
@@ -987,6 +1420,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
       }
     } else if (!editingProduct) {
       setMother(defaultMother(firstUnitId));
+      resetRoutingState(null);
       setBundleConfig(defaultBundleConfig());
       setChildren([]);
       setHasChildren(false);
@@ -996,7 +1430,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
     }
     setPriceChangeReason('');
     setPriceEffectiveAt('');
-  }, [visible, editingProduct, productDetail, parentDetail, firstUnitId]);
+  }, [visible, editingProduct, productDetail, parentDetail, firstUnitId, resetRoutingState]);
 
   const GAP = 8;
   const PADDING_X = 16;
@@ -1063,6 +1497,70 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
   const showFixedBundleCommissionFields = hasChildren && bundleConfig.pricing_mode === 'FIXED_BUNDLE';
   const skipMotherPriceFloorValidation = hasChildren && bundleConfig.pricing_mode === 'FIXED_BUNDLE';
   const skipChildPriceFloorValidation = hasChildren && bundleConfig.pricing_mode !== 'SUM_COMPONENTS';
+  const defaultRoutingRows = useMemo(() => buildDefaultRoutingRowsFromOperations(mother), [mother]);
+  const routingIsCustom = routingEditState === 'custom' || (routingEditState === 'untouched' && routingLoadedCustom);
+  const routingPreviewRows = routingIsCustom
+    ? routingRows
+    : defaultRoutingRows.length > 0
+      ? defaultRoutingRows
+      : routingRows;
+
+  const markRoutingCustom = (nextRows?: RoutingFormRow[]) => {
+    if (nextRows) {
+      setRoutingRows(nextRows);
+    } else if (!routingIsCustom) {
+      setRoutingRows(cloneRoutingRows(routingPreviewRows));
+    }
+    setRoutingEditState('custom');
+  };
+
+  const updateRoutingRow = (rowKey: string, patch: Partial<RoutingFormRow>) => {
+    setRoutingRows((prev) => prev.map((row) => {
+      if (row.key !== rowKey) return row;
+      const nextRow = { ...row, ...patch };
+      if (patch.stepType === 'PARALLEL') {
+        nextRow.allowParallel = true;
+      }
+      return nextRow;
+    }));
+    setRoutingEditState('custom');
+  };
+
+  const addRoutingRow = () => {
+    const seedRows = routingIsCustom ? routingRows : cloneRoutingRows(routingPreviewRows);
+    const lastStep = seedRows
+      .map((row) => parseRoutingStepNo(row.stepValue) ?? 0)
+      .reduce((max, value) => Math.max(max, value), 0);
+    const nextStepValue = lastStep > 0 ? String(Math.floor(lastStep / 10) + 1) : '1';
+    setRoutingRows([...seedRows, createEmptyRoutingRow(nextStepValue)]);
+    setRoutingEditState('custom');
+    setRoutingExpanded(true);
+  };
+
+  const duplicateRoutingRow = (rowKey: string) => {
+    const sourceRows = routingIsCustom ? routingRows : cloneRoutingRows(routingPreviewRows);
+    const index = sourceRows.findIndex((row) => row.key === rowKey);
+    if (index < 0) return;
+    const duplicated = { ...sourceRows[index], key: nextRoutingRowKey() };
+    const nextRows = [...sourceRows.slice(0, index + 1), duplicated, ...sourceRows.slice(index + 1)];
+    setRoutingRows(nextRows);
+    setRoutingEditState('custom');
+  };
+
+  const deleteRoutingRow = (rowKey: string) => {
+    const sourceRows = routingIsCustom ? routingRows : cloneRoutingRows(routingPreviewRows);
+    setRoutingRows(sourceRows.filter((row) => row.key !== rowKey));
+    setRoutingEditState('custom');
+  };
+
+  const sortRoutingRows = () => {
+    const sourceRows = routingIsCustom ? routingRows : cloneRoutingRows(routingPreviewRows);
+    setRoutingRows([...sourceRows].sort((a, b) => (
+      (parseRoutingStepNo(a.stepValue) ?? 0) - (parseRoutingStepNo(b.stepValue) ?? 0)
+      || getOperationSequence(a.operationCode) - getOperationSequence(b.operationCode)
+    )));
+    setRoutingEditState('custom');
+  };
 
   const setChild = (index: number, field: keyof ProductChildFormData, value: unknown) => {
     setChildren((prev) => {
@@ -1144,6 +1642,14 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
       message.error(motherOperationError);
       return;
     }
+    if (!isEditingChild && routingEditState === 'custom') {
+      const routingError = validateRoutingRows(routingRows);
+      if (routingError) {
+        setSubmitError(routingError);
+        message.error(routingError);
+        return;
+      }
+    }
     if (requiresFixedBundlePrice && Number(bundleConfig.fixed_sale_price || 0) <= 0) {
       const err = 'Khi chọn Giá bộ cố định, bắt buộc nhập Đơn giá bộ lớn hơn 0.';
       setSubmitError(err);
@@ -1213,6 +1719,11 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
         ...buildMotherPayload(mother, isSet),
         skip_price_floor_validation: skipMotherPriceFloorValidation,
       };
+      if (!isEditingChild && routingEditState === 'custom') {
+        motherPayload.routing_input = buildRoutingInput(routingRows);
+      } else if (!isEditingChild && routingEditState === 'clear') {
+        motherPayload.routing_input = [];
+      }
 
       if (editingProduct?.id) {
         if (isEditingChild) {
@@ -1676,6 +2187,27 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
               },
             }))}
           />
+          {!isEditingChild && (
+            <RoutingStepsEditor
+              expanded={routingExpanded}
+              editState={routingEditState}
+              loadedCustom={routingLoadedCustom}
+              rows={routingRows}
+              previewRows={routingPreviewRows}
+              disabled={isViewMode}
+              onExpandedChange={setRoutingExpanded}
+              onStartCustom={() => markRoutingCustom()}
+              onClearCustom={() => {
+                setRoutingEditState('clear');
+                setRoutingExpanded(true);
+              }}
+              onRowChange={updateRoutingRow}
+              onAddRow={addRoutingRow}
+              onDuplicateRow={duplicateRoutingRow}
+              onDeleteRow={deleteRoutingRow}
+              onSortRows={sortRoutingRows}
+            />
+          )}
           <div className="pf-row pf-row-note">
         <Field label="Ghi chú mã hàng" span={9}>
               <FormInputWithClear type="text" className="pf-input" value={mother.note ?? ''} onChange={(e) => setMotherField('note', e.target.value)} onClear={() => setMotherField('note', '')} />
