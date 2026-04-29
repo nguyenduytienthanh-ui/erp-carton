@@ -37,6 +37,8 @@ import type {
   SalesOrderFormValues,
   SalesOrderLine,
   SalesOrderLineProductSnapshot,
+  SalesSnapshotOperation,
+  SalesSnapshotRoutingStep,
   SalesOrderShipmentDetailItem,
   SalesOrderShipmentPackageItem,
   SalesOrderShipmentOverviewItem,
@@ -277,9 +279,176 @@ function toNumber(value: string | number | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+type LegacyProcessKey =
+  | 'process_xa'
+  | 'process_in'
+  | 'process_can_mang'
+  | 'process_boi'
+  | 'process_be'
+  | 'process_chap'
+  | 'process_dong'
+  | 'process_dan'
+  | 'process_khac';
+
+const legacyProcessPreviewFields: Array<{
+  key: LegacyProcessKey;
+  code: string;
+  name: string;
+  sequence: number;
+}> = [
+  { key: 'process_xa', code: 'XA', name: 'Xả', sequence: 10 },
+  { key: 'process_in', code: 'IN', name: 'In', sequence: 20 },
+  { key: 'process_can_mang', code: 'CAN_MANG', name: 'Cán màng', sequence: 30 },
+  { key: 'process_boi', code: 'BOI', name: 'Bồi', sequence: 40 },
+  { key: 'process_be', code: 'BE', name: 'Bế', sequence: 50 },
+  { key: 'process_chap', code: 'CHAP', name: 'Chạp', sequence: 60 },
+  { key: 'process_dong', code: 'DONG', name: 'Đóng', sequence: 70 },
+  { key: 'process_dan', code: 'DAN', name: 'Dán', sequence: 80 },
+  { key: 'process_khac', code: 'KHAC', name: 'Khác', sequence: 90 },
+];
+
+const snapshotSubmitKeys: Array<keyof SalesOrderLineProductSnapshot> = [
+  'description',
+  'size_order',
+  'size_production',
+  'sale_price',
+  'delivery_tolerance',
+  'commission_per_unit',
+  'commission_percent',
+  'process_xa',
+  'process_in',
+  'process_can_mang',
+  'process_boi',
+  'process_be',
+  'process_chap',
+  'process_dong',
+  'process_dan',
+  'process_khac',
+  'film_code',
+  'film_file_url',
+  'color_count',
+  'print_color_1',
+  'print_color_2',
+  'print_color_3',
+  'print_color_4',
+  'print_color_5',
+  'print_colors',
+  'mold_code',
+  'mold_file_url',
+  'waterproof',
+  'note_other',
+  'note',
+  'unit_name',
+  'order_spec_confirmed',
+  'order_operations_reviewed',
+];
+
+function getSnapshotSchemaVersion(snapshot?: SalesOrderLineProductSnapshot | null): number {
+  const version = Number(snapshot?.schema_version ?? 1);
+  return Number.isFinite(version) && version > 0 ? version : 1;
+}
+
+function isSnapshotV2(snapshot?: SalesOrderLineProductSnapshot | null): boolean {
+  return getSnapshotSchemaVersion(snapshot) >= 2;
+}
+
+function getSnapshotProductKind(snapshot?: SalesOrderLineProductSnapshot | null): 'SPECIFIC' | 'GENERIC' {
+  return snapshot?.product_kind === 'GENERIC' ? 'GENERIC' : 'SPECIFIC';
+}
+
+function getSnapshotPrintColors(snapshot?: SalesOrderLineProductSnapshot | null): string[] {
+  if (!snapshot) return [];
+  if (Array.isArray(snapshot.print_colors)) {
+    return snapshot.print_colors.map((item) => String(item ?? '').trim()).filter(Boolean);
+  }
+  return [
+    snapshot.print_color_1,
+    snapshot.print_color_2,
+    snapshot.print_color_3,
+    snapshot.print_color_4,
+    snapshot.print_color_5,
+  ].map((item) => String(item ?? '').trim()).filter(Boolean);
+}
+
+function getSnapshotColorCount(snapshot?: SalesOrderLineProductSnapshot | null): number {
+  const printColors = getSnapshotPrintColors(snapshot);
+  if (printColors.length) return printColors.length;
+  const legacyCount = Number(snapshot?.color_count ?? 0);
+  return Number.isFinite(legacyCount) && legacyCount > 0 ? legacyCount : 0;
+}
+
+function getLegacyProcessOperations(snapshot?: SalesOrderLineProductSnapshot | null): SalesSnapshotOperation[] {
+  if (!snapshot) return [];
+  return legacyProcessPreviewFields
+    .map((item): SalesSnapshotOperation | null => {
+      const rate = Number(snapshot[item.key] ?? 0);
+      if (!Number.isFinite(rate) || rate <= 0) return null;
+      return {
+        operation_code: item.code,
+        operation_name: item.name,
+        sequence: item.sequence,
+        standard_rate_per_hour: rate,
+        applied_rate_per_hour: rate,
+        note: '',
+        source: 'legacy_process_fields',
+        is_overridden: false,
+        override_reason: '',
+      } satisfies SalesSnapshotOperation;
+    })
+    .filter((item): item is SalesSnapshotOperation => item !== null);
+}
+
+function getSnapshotOperationsPreview(snapshot?: SalesOrderLineProductSnapshot | null): SalesSnapshotOperation[] {
+  if (Array.isArray(snapshot?.operations) && snapshot.operations.length) {
+    return snapshot.operations;
+  }
+  return getLegacyProcessOperations(snapshot);
+}
+
+function getSnapshotRoutingPreview(snapshot?: SalesOrderLineProductSnapshot | null): SalesSnapshotRoutingStep[] {
+  if (Array.isArray(snapshot?.routing_steps) && snapshot.routing_steps.length) {
+    return snapshot.routing_steps;
+  }
+  return getSnapshotOperationsPreview(snapshot).map((operation, index) => ({
+    step_no: operation.sequence ?? (index + 1) * 10,
+    display_step: index + 1,
+    display_order: operation.sequence ?? (index + 1) * 10,
+    operation_code: operation.operation_code,
+    operation_name: operation.operation_name,
+    standard_rate_per_hour: operation.standard_rate_per_hour,
+    applied_rate_per_hour: operation.applied_rate_per_hour,
+    note: operation.note,
+    step_type: 'REQUIRED',
+    group_code: '',
+    is_required: true,
+    allow_parallel: false,
+    source: operation.source || 'snapshot_operations_default',
+    is_overridden: operation.is_overridden ?? false,
+    override_reason: operation.override_reason ?? '',
+  }));
+}
+
+function sanitizeLineSnapshotForSubmit(
+  snapshot?: SalesOrderLineProductSnapshot | null,
+): SalesOrderLineProductSnapshot {
+  const sanitized: SalesOrderLineProductSnapshot = {};
+  if (!snapshot) return sanitized;
+  snapshotSubmitKeys.forEach((key) => {
+    const value = snapshot[key];
+    if (value !== undefined) {
+      (sanitized as Record<string, unknown>)[key] = value;
+    }
+  });
+  return sanitized;
+}
+
 function buildLineSnapshotFromProduct(product?: {
+  id?: number;
   code?: string;
   name?: string;
+  product_kind?: 'SPECIFIC' | 'GENERIC' | string;
+  requires_order_spec?: boolean;
+  requires_order_operations_review?: boolean;
   category?: number;
   category_name?: string;
   unit?: number;
@@ -319,6 +488,12 @@ function buildLineSnapshotFromProduct(product?: {
   film_code?: string;
   film_file_url?: string;
   color_count?: number;
+  print_color_1?: string;
+  print_color_2?: string;
+  print_color_3?: string;
+  print_color_4?: string;
+  print_color_5?: string;
+  print_colors?: string[];
   mold_code?: string;
   mold_file_url?: string;
   waterproof?: string;
@@ -350,12 +525,21 @@ function buildLineSnapshotFromProduct(product?: {
   team?: number;
   team_name?: string;
   is_active?: boolean;
+  operations?: SalesSnapshotOperation[];
+  routing_steps?: SalesSnapshotRoutingStep[];
 }): SalesOrderLineProductSnapshot {
   if (!product) return {};
   return {
-    product_id: undefined,
+    product_id: product.id,
     code: product.code,
     name: product.name,
+    product_code: product.code,
+    product_name: product.name,
+    product_kind: product.product_kind,
+    requires_order_spec: product.requires_order_spec ?? false,
+    requires_order_operations_review: product.requires_order_operations_review ?? false,
+    order_spec_confirmed: !product.requires_order_spec,
+    order_operations_reviewed: !product.requires_order_operations_review,
     category_id: product.category ?? null,
     category_name: product.category_name,
     unit_id: product.unit ?? null,
@@ -391,6 +575,12 @@ function buildLineSnapshotFromProduct(product?: {
     film_code: product.film_code ?? '',
     film_file_url: product.film_file_url ?? '',
     color_count: product.color_count ?? 0,
+    print_color_1: product.print_color_1 ?? '',
+    print_color_2: product.print_color_2 ?? '',
+    print_color_3: product.print_color_3 ?? '',
+    print_color_4: product.print_color_4 ?? '',
+    print_color_5: product.print_color_5 ?? '',
+    print_colors: product.print_colors ?? [],
     mold_code: product.mold_code ?? '',
     mold_file_url: product.mold_file_url ?? '',
     waterproof: product.waterproof ?? '',
@@ -420,6 +610,9 @@ function buildLineSnapshotFromProduct(product?: {
     team_id: product.team ?? null,
     team_name: product.team_name ?? null,
     is_active: product.is_active ?? true,
+    operations: product.operations ?? [],
+    routing_schema_version: 1,
+    routing_steps: product.routing_steps ?? [],
   };
 }
 
@@ -457,6 +650,38 @@ function renderSnapshotPopover(line: SalesOrderLine) {
     ['Khác', snapshot.process_khac],
   ].filter(([, value]) => value !== null && value !== undefined && value !== 0);
   const summary = getLineSnapshotSummary(line);
+  const schemaVersion = getSnapshotSchemaVersion(snapshot);
+  const snapshotVersionLabel = isSnapshotV2(snapshot) ? `v${schemaVersion}` : `v${schemaVersion} legacy`;
+  const productKindLabel = getSnapshotProductKind(snapshot) === 'GENERIC' ? 'Mã chung' : 'Mã riêng';
+  const printColors = getSnapshotPrintColors(snapshot);
+  const colorCount = getSnapshotColorCount(snapshot);
+  const colorText = printColors.length
+    ? printColors.join(' | ')
+    : colorCount > 0
+      ? `Số màu cũ: ${colorCount}`
+      : '-';
+  const operationText = getSnapshotOperationsPreview(snapshot).length
+    ? getSnapshotOperationsPreview(snapshot)
+        .map((item) => {
+          const rate = item.applied_rate_per_hour ?? item.standard_rate_per_hour ?? '-';
+          return `${item.operation_name || item.operation_code || '-'}:${rate}`;
+        })
+        .join(' | ')
+    : '-';
+  const routingText = getSnapshotRoutingPreview(snapshot).length
+    ? getSnapshotRoutingPreview(snapshot)
+        .map((item) => {
+          const step = item.display_step ?? item.step_no ?? '-';
+          return `${step}.${item.operation_name || item.operation_code || '-'}`;
+        })
+        .join(' -> ')
+    : '-';
+  summary.unshift(
+    `Snapshot: ${snapshotVersionLabel} - ${productKindLabel}`,
+    `Màu: ${colorText}`,
+    `Công đoạn: ${operationText}`,
+    `Routing: ${routingText}`,
+  );
   return (
     <Popover
       trigger="click"
@@ -531,33 +756,37 @@ function buildPayload(values: SalesOrderFormValues): SalesOrderFormValues {
     currency: values.currency || 'VND',
     exchange_rate: Number(values.exchange_rate ?? 1),
     notes: values.notes?.trim() || '',
-    lines: (values.lines ?? []).map((line, index) => ({
-      line_number: index + 1,
-      product: Number(line.product),
-      uom: line.uom?.trim() || '',
-      product_snapshot: {
-        ...(line.product_snapshot ?? {}),
-        sale_price: String(Number(line.unit_price ?? 0)),
-        unit_name: line.uom?.trim() || line.product_snapshot?.unit_name || '',
-      },
-      qty: Number(line.qty ?? 0),
-      unit_price: Number(line.unit_price ?? 0),
-      discount_pct: Number(line.discount_pct ?? 0),
-      tax_pct: Number(line.tax_pct ?? 0),
-      note: line.note?.trim() || '',
-      delivery_plans: (line.delivery_plans ?? [])
-        .filter((plan) => plan.delivery_date && Number(plan.qty ?? 0) > 0)
-        .map((plan) => ({
-          delivery_date: plan.delivery_date,
-          qty: Number(plan.qty ?? 0),
-          shipped_qty: Number(plan.shipped_qty ?? 0),
-          delivered_qty: Number(plan.delivered_qty ?? 0),
-          planned_carrier: plan.planned_carrier ?? null,
-          planned_carrier_name: plan.planned_carrier_name?.trim() || '',
-          delivery_rule: plan.delivery_rule || 'PARTIAL_ALLOWED',
-          note: plan.note?.trim() || '',
-        })),
-    })),
+    lines: (values.lines ?? []).map((line, index) => {
+      const sanitizedSnapshot = sanitizeLineSnapshotForSubmit(line.product_snapshot);
+      const unitName = line.uom?.trim() || sanitizedSnapshot.unit_name || line.product_snapshot?.unit_name || '';
+      return {
+        line_number: index + 1,
+        product: Number(line.product),
+        uom: line.uom?.trim() || '',
+        product_snapshot: {
+          ...sanitizedSnapshot,
+          sale_price: String(Number(line.unit_price ?? 0)),
+          unit_name: unitName,
+        },
+        qty: Number(line.qty ?? 0),
+        unit_price: Number(line.unit_price ?? 0),
+        discount_pct: Number(line.discount_pct ?? 0),
+        tax_pct: Number(line.tax_pct ?? 0),
+        note: line.note?.trim() || '',
+        delivery_plans: (line.delivery_plans ?? [])
+          .filter((plan) => plan.delivery_date && Number(plan.qty ?? 0) > 0)
+          .map((plan) => ({
+            delivery_date: plan.delivery_date,
+            qty: Number(plan.qty ?? 0),
+            shipped_qty: Number(plan.shipped_qty ?? 0),
+            delivered_qty: Number(plan.delivered_qty ?? 0),
+            planned_carrier: plan.planned_carrier ?? null,
+            planned_carrier_name: plan.planned_carrier_name?.trim() || '',
+            delivery_rule: plan.delivery_rule || 'PARTIAL_ALLOWED',
+            note: plan.note?.trim() || '',
+          })),
+      };
+    }),
   };
 }
 

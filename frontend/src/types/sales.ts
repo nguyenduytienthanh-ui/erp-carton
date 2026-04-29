@@ -20,10 +20,57 @@ export interface DeliveryCarrier {
   updated_at?: string;
 }
 
+export type SalesProductKind = 'SPECIFIC' | 'GENERIC';
+export type SalesSnapshotStepType = 'REQUIRED' | 'OPTIONAL' | 'CHOOSE_ONE' | 'PARALLEL';
+
+export interface SalesSnapshotOperation {
+  operation_code?: string;
+  operation_name?: string;
+  sequence?: number;
+  standard_rate_per_hour?: number;
+  applied_rate_per_hour?: number;
+  note?: string;
+  source?: string;
+  is_overridden?: boolean;
+  override_reason?: string;
+}
+
+export interface SalesSnapshotRoutingStep {
+  id?: number | null;
+  route_step_id?: number | null;
+  operation_id?: number | null;
+  product_operation_id?: number | null;
+  step_no?: number;
+  display_step?: number;
+  display_order?: number;
+  operation_code?: string;
+  operation_name?: string;
+  standard_rate_per_hour?: number;
+  applied_rate_per_hour?: number;
+  note?: string;
+  step_type?: SalesSnapshotStepType | string;
+  group_code?: string;
+  is_required?: boolean;
+  allow_parallel?: boolean;
+  source?: string;
+  is_overridden?: boolean;
+  override_reason?: string;
+}
+
 export interface SalesOrderLineProductSnapshot {
+  schema_version?: number;
+  source?: string;
+  snapshot_created_at?: string;
   product_id?: number;
+  product_code?: string;
+  product_name?: string;
   code?: string;
   name?: string;
+  product_kind?: SalesProductKind | string;
+  requires_order_spec?: boolean;
+  requires_order_operations_review?: boolean;
+  order_spec_confirmed?: boolean;
+  order_operations_reviewed?: boolean;
   category_id?: number | null;
   category_name?: string | null;
   unit_id?: number | null;
@@ -59,6 +106,12 @@ export interface SalesOrderLineProductSnapshot {
   film_code?: string;
   film_file_url?: string;
   color_count?: number | null;
+  print_color_1?: string;
+  print_color_2?: string;
+  print_color_3?: string;
+  print_color_4?: string;
+  print_color_5?: string;
+  print_colors?: string[];
   mold_code?: string;
   mold_file_url?: string;
   waterproof?: string;
@@ -88,6 +141,9 @@ export interface SalesOrderLineProductSnapshot {
   team_id?: number | null;
   team_name?: string | null;
   is_active?: boolean;
+  operations?: SalesSnapshotOperation[];
+  routing_schema_version?: number;
+  routing_steps?: SalesSnapshotRoutingStep[];
 }
 
 export interface SalesOrderDeliveryPlan {
