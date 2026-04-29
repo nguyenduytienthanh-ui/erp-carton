@@ -3,6 +3,7 @@ Serializers chứng từ: nested lines, create/update trong transaction, validat
 """
 from decimal import Decimal
 from django.apps import apps
+from django.db import transaction
 from django.db.models import Sum
 from rest_framework import serializers
 from sales.document_policy import calc_line_totals
@@ -26,6 +27,45 @@ from sales.services import (
 )
 
 
+SALES_ORDER_LINE_SNAPSHOT_EDITABLE_KEYS = {
+    'description',
+    'size_order',
+    'size_production',
+    'sale_price',
+    'delivery_tolerance',
+    'commission_per_unit',
+    'commission_percent',
+    'process_xa',
+    'process_in',
+    'process_boi',
+    'process_can_mang',
+    'process_be',
+    'process_chap',
+    'process_dong',
+    'process_dan',
+    'process_khac',
+    'film_code',
+    'film_file_url',
+    'color_count',
+    'mold_code',
+    'mold_file_url',
+    'waterproof',
+    'note_other',
+    'note',
+    'unit_name',
+}
+
+
+def _merge_existing_sales_order_line_product_snapshot(existing_snapshot, overrides=None, *, unit_price=None):
+    snapshot = dict(existing_snapshot or {})
+    for key, value in (overrides or {}).items():
+        if key in SALES_ORDER_LINE_SNAPSHOT_EDITABLE_KEYS and value is not None:
+            snapshot[key] = value
+    if unit_price is not None:
+        snapshot['sale_price'] = str(unit_price)
+    return snapshot
+
+
 def _create_outbound_shipment_audit_log(*, user, shipment, action, changed_fields, new_values, old_values=None):
     from core.models import AuditLog
 
@@ -42,6 +82,7 @@ def _create_outbound_shipment_audit_log(*, user, shipment, action, changed_field
 
 
 class SalesOrderDeliveryPlanSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(required=False)
     remaining_shipment_qty = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
     remaining_qty = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
     is_completed = serializers.BooleanField(read_only=True)
@@ -165,6 +206,7 @@ class DeliveryCarrierSerializer(serializers.ModelSerializer):
 
 
 class SalesOrderLineSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(required=False)
     delivery_plans = SalesOrderDeliveryPlanSerializer(many=True, required=False)
     planned_qty_total = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
     unplanned_qty = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
@@ -318,7 +360,6 @@ class SalesOrderSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        from django.db import transaction
         lines_data = validated_data.pop('lines', [])
         validated_data['code'] = validated_data.get('code') or self.initial_data.get('code') or ''
         if not validated_data['code']:
@@ -364,7 +405,6 @@ class SalesOrderSerializer(serializers.ModelSerializer):
         return data
 
     def update(self, instance, validated_data):
-        from django.db import transaction
         if instance.status != SalesOrderStatus.DRAFT:
             raise serializers.ValidationError({'status': 'Chỉ được sửa đơn ở trạng thái Nháp.'})
         lines_data = validated_data.pop('lines', None)
@@ -374,25 +414,7 @@ class SalesOrderSerializer(serializers.ModelSerializer):
             instance.version += 1
             instance.save()
             if lines_data is not None:
-                instance.lines.all().delete()
-                for i, line_data in enumerate(lines_data, start=1):
-                    delivery_plans = line_data.pop('delivery_plans', [])
-                    product_snapshot_input = line_data.pop('product_snapshot', None)
-                    line_data['line_number'] = line_data.get('line_number') or i
-                    line_data['sales_order'] = instance
-                    product = line_data.get('product')
-                    if product:
-                        line_data['internal_product_code'] = getattr(product, 'code', '') or ''
-                        line_data['trace_code'] = build_sales_order_line_trace_code(instance, product, line_data['line_number'])
-                        line_data['uom'] = line_data.get('uom') or getattr(getattr(product, 'unit', None), 'code', '')
-                        line_data['product_snapshot'] = merge_sales_order_line_product_snapshot(
-                            product,
-                            product_snapshot_input,
-                            unit_price=line_data.get('unit_price'),
-                            as_of_datetime=instance.order_date,
-                        )
-                    line = SalesOrderLine.objects.create(**line_data)
-                    self._save_delivery_plans(line, delivery_plans)
+                self._sync_lines(instance, lines_data)
                 instance.recalc_totals()
         return instance
 
@@ -427,6 +449,229 @@ class SalesOrderSerializer(serializers.ModelSerializer):
                 )
             )
         SalesOrderDeliveryPlan.objects.bulk_create(plan_rows)
+
+    def _sync_lines(self, order, lines_data):
+        existing_lines = list(order.lines.select_related('product').prefetch_related('delivery_plans').order_by('line_number', 'id'))
+        lines_by_id = {line.id: line for line in existing_lines}
+        lines_by_number = {line.line_number: line for line in existing_lines}
+        seen_ids = set()
+        seen_line_numbers = set()
+        kept_ids = set()
+        resolved_rows = []
+
+        for i, raw_line_data in enumerate(lines_data, start=1):
+            line_data = dict(raw_line_data)
+            delivery_plans = line_data.pop('delivery_plans', None)
+            product_snapshot_input = line_data.pop('product_snapshot', None)
+            line_id = line_data.pop('id', None)
+            line_number = line_data.get('line_number') or i
+            line_data['line_number'] = line_number
+            if line_number in seen_line_numbers:
+                raise serializers.ValidationError({'lines': f'Dòng hàng số {line_number} bị trùng.'})
+            seen_line_numbers.add(line_number)
+
+            line = None
+            if line_id not in (None, ''):
+                line_id = int(line_id)
+                if line_id in seen_ids:
+                    raise serializers.ValidationError({'lines': f'Dòng hàng id {line_id} bị trùng.'})
+                line = lines_by_id.get(line_id)
+                if line is None:
+                    raise serializers.ValidationError({'lines': f'Dòng hàng id {line_id} không thuộc đơn này.'})
+                seen_ids.add(line_id)
+            else:
+                line = lines_by_number.get(line_number)
+                if line and line.id in kept_ids:
+                    line = None
+
+            if line is not None:
+                kept_ids.add(line.id)
+            resolved_rows.append({
+                'line': line,
+                'line_data': line_data,
+                'delivery_plans': delivery_plans,
+                'product_snapshot_input': product_snapshot_input,
+            })
+
+        omitted_lines = [line for line in existing_lines if line.id not in kept_ids]
+        for line in omitted_lines:
+            ok, summary = self._line_can_be_deleted(line)
+            if not ok:
+                raise serializers.ValidationError(
+                    {'lines': f'Không thể xóa dòng hàng đã có kế hoạch giao/sản xuất/kho: {summary}.'}
+                )
+        for line in existing_lines:
+            if line.id in kept_ids:
+                continue
+            line.delete()
+
+        final_line_numbers = [row['line_data']['line_number'] for row in resolved_rows]
+        temp_line_number = max(
+            [line.line_number for line in existing_lines] + final_line_numbers + [0]
+        ) + 1000
+        for row in resolved_rows:
+            line = row['line']
+            if line is not None and line.line_number != row['line_data']['line_number']:
+                SalesOrderLine.objects.filter(pk=line.pk).update(line_number=temp_line_number)
+                line.line_number = temp_line_number
+                temp_line_number += 1
+
+        for row in resolved_rows:
+            line = row['line']
+            if line is None:
+                line = self._create_order_line(order, row['line_data'], row['product_snapshot_input'])
+            else:
+                line = self._update_order_line(order, line, row['line_data'], row['product_snapshot_input'])
+            if row['delivery_plans'] is not None:
+                self._sync_delivery_plans(line, row['delivery_plans'], replace_existing=True)
+
+    def _create_order_line(self, order, line_data, product_snapshot_input):
+        line_data['sales_order'] = order
+        product = line_data.get('product')
+        if product:
+            line_data['internal_product_code'] = getattr(product, 'code', '') or ''
+            line_data['trace_code'] = build_sales_order_line_trace_code(order, product, line_data['line_number'])
+            line_data['uom'] = line_data.get('uom') or getattr(getattr(product, 'unit', None), 'code', '')
+            line_data['product_snapshot'] = merge_sales_order_line_product_snapshot(
+                product,
+                product_snapshot_input,
+                unit_price=line_data.get('unit_price'),
+                as_of_datetime=order.order_date,
+            )
+        return SalesOrderLine.objects.create(**line_data)
+
+    def _update_order_line(self, order, line, line_data, product_snapshot_input):
+        product = line_data.get('product') or line.product
+        product_changed = bool(product and line.product_id and product.id != line.product_id)
+        if product_changed:
+            ok, summary = self._line_can_be_deleted(line)
+            if not ok:
+                raise serializers.ValidationError(
+                    {'lines': f'Không thể đổi sản phẩm của dòng hàng đã có kế hoạch giao/sản xuất/kho: {summary}.'}
+                )
+        line_number_changed = line_data.get('line_number') != line.line_number
+        if product:
+            line_data['product'] = product
+            line_data['internal_product_code'] = getattr(product, 'code', '') or ''
+            if product_changed or line_number_changed or not line.trace_code:
+                line_data['trace_code'] = build_sales_order_line_trace_code(order, product, line_data['line_number'])
+            line_data['uom'] = line_data.get('uom') or getattr(getattr(product, 'unit', None), 'code', '')
+            if product_changed or not line.product_snapshot:
+                line_data['product_snapshot'] = merge_sales_order_line_product_snapshot(
+                    product,
+                    product_snapshot_input,
+                    unit_price=line_data.get('unit_price'),
+                    as_of_datetime=order.order_date,
+                )
+            else:
+                line_data['product_snapshot'] = _merge_existing_sales_order_line_product_snapshot(
+                    line.product_snapshot,
+                    product_snapshot_input,
+                    unit_price=line_data.get('unit_price'),
+                )
+        for field, value in line_data.items():
+            setattr(line, field, value)
+        line.save()
+        return line
+
+    def _sync_delivery_plans(self, line, delivery_plans, *, replace_existing):
+        planned_total = sum((p.get('qty') or Decimal('0')) for p in delivery_plans)
+        if planned_total > (line.qty or Decimal('0')):
+            raise serializers.ValidationError(
+                {'lines': 'Tổng số lượng kế hoạch giao không được lớn hơn số lượng dòng hàng.'}
+            )
+        existing_plans = list(line.delivery_plans.order_by('delivery_date', 'id'))
+        plans_by_id = {plan.id: plan for plan in existing_plans}
+        matched_plan_ids = set()
+        fallback_cursor = 0
+
+        for raw_plan_data in delivery_plans:
+            plan_data = dict(raw_plan_data)
+            plan_id = plan_data.pop('id', None)
+            plan = None
+            if plan_id not in (None, ''):
+                plan_id = int(plan_id)
+                if plan_id in matched_plan_ids:
+                    raise serializers.ValidationError({'lines': f'Kế hoạch giao id {plan_id} bị trùng.'})
+                plan = plans_by_id.get(plan_id)
+                if plan is None:
+                    raise serializers.ValidationError({'lines': f'Kế hoạch giao id {plan_id} không thuộc dòng hàng này.'})
+            elif replace_existing:
+                plan, fallback_cursor = self._match_delivery_plan_by_fallback(
+                    plan_data,
+                    existing_plans,
+                    matched_plan_ids,
+                    fallback_cursor,
+                )
+
+            if plan is None:
+                plan = SalesOrderDeliveryPlan(line=line)
+            else:
+                matched_plan_ids.add(plan.id)
+            self._apply_delivery_plan_data(plan, plan_data)
+            plan.save()
+
+        if replace_existing:
+            for plan in existing_plans:
+                if plan.id in matched_plan_ids:
+                    continue
+                if self._delivery_plan_has_downstream(plan):
+                    raise serializers.ValidationError(
+                        {'lines': 'Không thể xóa kế hoạch giao đã có số lượng xuất/giao.'}
+                    )
+                plan.delete()
+
+    def _match_delivery_plan_by_fallback(self, plan_data, existing_plans, matched_plan_ids, fallback_cursor):
+        delivery_date = plan_data.get('delivery_date')
+        for plan in existing_plans:
+            if plan.id in matched_plan_ids:
+                continue
+            if delivery_date and plan.delivery_date == delivery_date:
+                return plan, fallback_cursor
+        while fallback_cursor < len(existing_plans):
+            plan = existing_plans[fallback_cursor]
+            fallback_cursor += 1
+            if plan.id not in matched_plan_ids:
+                return plan, fallback_cursor
+        return None, fallback_cursor
+
+    def _apply_delivery_plan_data(self, plan, plan_data):
+        try:
+            carrier, carrier_name = resolve_delivery_carrier_assignment(
+                carrier_id=plan_data.get('planned_carrier'),
+                carrier_name=plan_data.get('planned_carrier_name') or '',
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({'lines': str(exc)}) from exc
+        plan.delivery_date = plan_data.get('delivery_date')
+        plan.qty = plan_data.get('qty') or Decimal('0')
+        plan.delivered_qty = plan_data.get('delivered_qty') or Decimal('0')
+        plan.shipped_qty = max(plan_data.get('shipped_qty') or Decimal('0'), plan.delivered_qty or Decimal('0'))
+        plan.planned_carrier = carrier
+        plan.planned_carrier_name = carrier_name
+        plan.delivery_rule = plan_data.get('delivery_rule') or SalesOrderDeliveryPlan.DELIVERY_RULE_PARTIAL_ALLOWED
+        plan.note = plan_data.get('note') or ''
+
+    def _delivery_plan_has_downstream(self, plan):
+        return (plan.shipped_qty or Decimal('0')) > 0 or (plan.delivered_qty or Decimal('0')) > 0
+
+    def _line_can_be_deleted(self, line):
+        blockers = []
+        if line.delivery_plans.filter(shipped_qty__gt=0).exists() or line.delivery_plans.filter(delivered_qty__gt=0).exists():
+            blockers.append('kế hoạch giao đã xuất/giao')
+        if SalesLineMaterialPlan.objects.filter(sales_order_line=line).exists():
+            blockers.append('kế hoạch vật tư')
+        if getattr(line, 'production_orders', None) and line.production_orders.exclude(status='CANCELLED').exists():
+            blockers.append('lệnh sản xuất')
+        if getattr(line, 'inventory_reservations', None) and line.inventory_reservations.exclude(status__in=['CANCELLED', 'RELEASED']).exists():
+            blockers.append('giữ kho')
+        if getattr(line, 'inventory_transactions', None) and line.inventory_transactions.exclude(status='CANCELLED').exists():
+            blockers.append('giao dịch kho')
+        if getattr(line, 'shipment_packages', None) and line.shipment_packages.exclude(status='CANCELLED').exists():
+            blockers.append('kiện giao hàng')
+        if getattr(line, 'profitability_attributions', None) and line.profitability_attributions.exists():
+            blockers.append('phân bổ lợi nhuận')
+        return not blockers, ', '.join(blockers)
 
 
 class QuoteLineSerializer(serializers.ModelSerializer):

@@ -6,11 +6,23 @@ from decimal import Decimal
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
 from core.models import AuditLog, Customer, Team, Task
-from inventory.models import InventoryTransaction, OutboundShipment, OutboundShipmentPackage
+from finance.models import GeneralLedgerAccount
+from finance.posting import save_finance_gl_control_mappings
+from inventory.models import InventoryReservation, InventoryTransaction, OutboundShipment, OutboundShipmentPackage, Warehouse
 from products.models import Product, ProductUnit
-from sales.models import SalesOrder, SalesOrderLine, SalesOrderDeliveryPlan, SalesOrderStatus, PeriodSequence, OutboundShipment as SalesOutboundShipment
+from production.models import ProductionOrder
+from sales.models import (
+    SalesLineMaterialPlan,
+    SalesOrder,
+    SalesOrderLine,
+    SalesOrderDeliveryPlan,
+    SalesOrderStatus,
+    PeriodSequence,
+    OutboundShipment as SalesOutboundShipment,
+)
 from sales.document_policy import calc_line_totals, round_money
 from sales.services import (
     build_sales_order_line_package_trace_code,
@@ -389,6 +401,286 @@ class SalesOrderLineSnapshotTests(TestCase):
         self.assertEqual(line.product_snapshot['sale_price'], '13000.00')
 
 
+class SalesOrderLineIdentityUpdateTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='line_id_user', password='test')
+        self.unit = ProductUnit.objects.create(code='LINE-ID', name='Line ID unit')
+        self.product = Product.objects.create(
+            code='LINE-ID-P1',
+            name='Line ID product 1',
+            unit=self.unit,
+            sale_price=Decimal('100'),
+        )
+        self.other_product = Product.objects.create(
+            code='LINE-ID-P2',
+            name='Line ID product 2',
+            unit=self.unit,
+            sale_price=Decimal('200'),
+        )
+
+    def _order(self, code='SO-LINE-ID-001'):
+        return SalesOrder.objects.create(
+            code=code,
+            doc_type='SO',
+            order_date=date(2026, 3, 9),
+            status=SalesOrderStatus.DRAFT,
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+
+    def _line(self, order, number=1, product=None, qty='10', price='100'):
+        return SalesOrderLine.objects.create(
+            sales_order=order,
+            line_number=number,
+            product=product or self.product,
+            qty=Decimal(qty),
+            unit_price=Decimal(price),
+            discount_pct=Decimal('0'),
+            tax_pct=Decimal('0'),
+        )
+
+    def _line_payload(self, line=None, **overrides):
+        payload = {
+            'line_number': getattr(line, 'line_number', overrides.get('line_number', 1)),
+            'product': getattr(line, 'product_id', self.product.id),
+            'qty': str(getattr(line, 'qty', Decimal('10'))),
+            'unit_price': str(getattr(line, 'unit_price', Decimal('100'))),
+            'discount_pct': str(getattr(line, 'discount_pct', Decimal('0'))),
+            'tax_pct': str(getattr(line, 'tax_pct', Decimal('0'))),
+            'note': getattr(line, 'note', '') or '',
+        }
+        if line is not None:
+            payload['id'] = line.id
+        payload.update(overrides)
+        return payload
+
+    def _plan_payload(self, plan=None, **overrides):
+        payload = {
+            'delivery_date': str(getattr(plan, 'delivery_date', date(2026, 3, 12))),
+            'qty': str(getattr(plan, 'qty', Decimal('5'))),
+            'shipped_qty': str(getattr(plan, 'shipped_qty', Decimal('0'))),
+            'delivered_qty': str(getattr(plan, 'delivered_qty', Decimal('0'))),
+            'planned_carrier': getattr(plan, 'planned_carrier_id', None),
+            'planned_carrier_name': getattr(plan, 'planned_carrier_name', '') or '',
+            'delivery_rule': getattr(plan, 'delivery_rule', 'PARTIAL_ALLOWED'),
+            'note': getattr(plan, 'note', '') or '',
+        }
+        if plan is not None:
+            payload['id'] = plan.id
+        payload.update(overrides)
+        return payload
+
+    def _save_order_update(self, order, lines):
+        serializer = SalesOrderSerializer(
+            instance=order,
+            data={'version': order.version, 'lines': lines},
+            partial=True,
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        return serializer.save(updated_by=self.user)
+
+    def _assert_update_blocked(self, order, lines):
+        serializer = SalesOrderSerializer(
+            instance=order,
+            data={'version': order.version, 'lines': lines},
+            partial=True,
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        with self.assertRaises(ValidationError):
+            serializer.save(updated_by=self.user)
+
+    def test_update_line_with_id_preserves_line_id(self):
+        order = self._order()
+        line = self._line(order)
+
+        self._save_order_update(order, [self._line_payload(line, qty='15', unit_price='125', note='Updated')])
+
+        line.refresh_from_db()
+        self.assertEqual(order.lines.count(), 1)
+        self.assertEqual(order.lines.get().id, line.id)
+        self.assertEqual(line.qty, Decimal('15.0000'))
+        self.assertEqual(line.unit_price, Decimal('125.00'))
+        self.assertEqual(line.note, 'Updated')
+
+    def test_update_without_line_id_falls_back_to_line_number(self):
+        order = self._order()
+        line = self._line(order)
+        payload = self._line_payload(line, qty='18')
+        payload.pop('id')
+
+        self._save_order_update(order, [payload])
+
+        line.refresh_from_db()
+        self.assertEqual(order.lines.get().id, line.id)
+        self.assertEqual(line.qty, Decimal('18.0000'))
+
+    def test_update_can_create_and_delete_line_without_downstream(self):
+        order = self._order()
+        old_line = self._line(order, number=1)
+        kept_line = self._line(order, number=2, qty='8')
+
+        self._save_order_update(order, [
+            self._line_payload(kept_line, line_number=1, qty='9'),
+            {
+                'line_number': 2,
+                'product': self.other_product.id,
+                'qty': '4',
+                'unit_price': '200',
+                'discount_pct': '0',
+                'tax_pct': '0',
+                'note': 'New line',
+            },
+        ])
+
+        self.assertFalse(SalesOrderLine.objects.filter(pk=old_line.pk).exists())
+        kept_line.refresh_from_db()
+        self.assertEqual(kept_line.line_number, 1)
+        self.assertEqual(order.lines.count(), 2)
+        self.assertTrue(order.lines.filter(product=self.other_product, note='New line').exists())
+
+    def test_delete_line_with_shipped_delivery_plan_is_blocked(self):
+        order = self._order()
+        blocked_line = self._line(order, number=1)
+        kept_line = self._line(order, number=2)
+        SalesOrderDeliveryPlan.objects.create(
+            line=blocked_line,
+            delivery_date=date(2026, 3, 12),
+            qty=Decimal('5'),
+            shipped_qty=Decimal('1'),
+        )
+
+        self._assert_update_blocked(order, [self._line_payload(kept_line, line_number=1)])
+        self.assertTrue(SalesOrderLine.objects.filter(pk=blocked_line.pk).exists())
+
+    def test_delete_line_with_material_plan_is_blocked(self):
+        order = self._order()
+        blocked_line = self._line(order, number=1)
+        kept_line = self._line(order, number=2)
+        SalesLineMaterialPlan.objects.create(
+            sales_order=order,
+            sales_order_line=blocked_line,
+            finished_product=self.product,
+            ordered_finished_qty=Decimal('10'),
+        )
+
+        self._assert_update_blocked(order, [self._line_payload(kept_line, line_number=1)])
+
+    def test_delete_line_with_production_order_is_blocked(self):
+        order = self._order()
+        blocked_line = self._line(order, number=1)
+        kept_line = self._line(order, number=2)
+        ProductionOrder.objects.create(
+            code='MO-LINE-ID-001',
+            order_date=date(2026, 3, 10),
+            sales_order=order,
+            sales_order_line=blocked_line,
+            product=self.product,
+            planned_qty=Decimal('10'),
+        )
+
+        self._assert_update_blocked(order, [self._line_payload(kept_line, line_number=1)])
+
+    def test_delete_line_with_inventory_links_is_blocked(self):
+        order = self._order()
+        blocked_line = self._line(order, number=1)
+        kept_line = self._line(order, number=2)
+        warehouse = Warehouse.objects.create(code='LINE-ID-WH', name='Line ID warehouse')
+        InventoryReservation.objects.create(
+            code='RES-LINE-ID-001',
+            reservation_date=date(2026, 3, 10),
+            sales_order=order,
+            sales_order_line=blocked_line,
+            product=self.product,
+            warehouse=warehouse,
+            reserved_qty=Decimal('3'),
+        )
+        InventoryTransaction.objects.create(
+            transaction_date=date(2026, 3, 10),
+            product=self.product,
+            warehouse=warehouse,
+            quantity=Decimal('2'),
+            sales_order=order,
+            sales_order_line=blocked_line,
+        )
+
+        self._assert_update_blocked(order, [self._line_payload(kept_line, line_number=1)])
+
+    def test_delivery_plan_with_id_updates_existing_row(self):
+        order = self._order()
+        line = self._line(order)
+        plan = SalesOrderDeliveryPlan.objects.create(
+            line=line,
+            delivery_date=date(2026, 3, 12),
+            qty=Decimal('5'),
+            note='Old',
+        )
+
+        self._save_order_update(order, [
+            self._line_payload(
+                line,
+                delivery_plans=[self._plan_payload(plan, qty='7', note='Updated plan')],
+            )
+        ])
+
+        plan.refresh_from_db()
+        self.assertEqual(line.delivery_plans.count(), 1)
+        self.assertEqual(plan.qty, Decimal('7.0000'))
+        self.assertEqual(plan.note, 'Updated plan')
+
+    def test_delivery_plan_without_id_falls_back_to_delivery_date(self):
+        order = self._order()
+        line = self._line(order)
+        plan = SalesOrderDeliveryPlan.objects.create(
+            line=line,
+            delivery_date=date(2026, 3, 12),
+            qty=Decimal('5'),
+        )
+        payload = self._plan_payload(plan, qty='9')
+        payload.pop('id')
+
+        self._save_order_update(order, [self._line_payload(line, delivery_plans=[payload])])
+
+        plan.refresh_from_db()
+        self.assertEqual(line.delivery_plans.count(), 1)
+        self.assertEqual(line.delivery_plans.get().id, plan.id)
+        self.assertEqual(plan.qty, Decimal('9.0000'))
+
+    def test_snapshot_is_not_refreshed_when_updating_qty_price_note(self):
+        order = self._order()
+        line = self._line(order, price='100')
+        original_snapshot_name = line.product_snapshot['name']
+        self.product.name = 'Changed product name'
+        self.product.save(update_fields=['name', 'updated_at'])
+
+        self._save_order_update(order, [self._line_payload(line, qty='12', unit_price='150', note='Keep snapshot')])
+
+        line.refresh_from_db()
+        self.assertEqual(line.product_snapshot['name'], original_snapshot_name)
+        self.assertEqual(line.product_snapshot['sale_price'], '150.00')
+        self.assertEqual(line.note, 'Keep snapshot')
+
+    def test_product_change_with_downstream_is_blocked(self):
+        order = self._order()
+        line = self._line(order)
+        SalesOrderDeliveryPlan.objects.create(
+            line=line,
+            delivery_date=date(2026, 3, 12),
+            qty=Decimal('5'),
+            delivered_qty=Decimal('1'),
+        )
+
+        self._assert_update_blocked(order, [self._line_payload(line, product=self.other_product.id)])
+
+    def test_line_id_from_other_order_is_rejected(self):
+        order = self._order()
+        self._line(order)
+        other_order = self._order(code='SO-LINE-ID-OTHER')
+        other_line = self._line(other_order)
+
+        self._assert_update_blocked(order, [self._line_payload(other_line)])
+
+
 class SalesOrderPdfExportTests(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -724,6 +1016,14 @@ class SalesOrderSummaryApiTests(TestCase):
         self.client.force_authenticate(self.user)
         self.unit = ProductUnit.objects.create(code='SUM', name='Summary Unit')
         self.product = Product.objects.create(code='SUM-BOX', name='Summary Box', unit=self.unit, sale_price=Decimal('100'))
+        ar_account = GeneralLedgerAccount.objects.create(code='131-SUM', name='Phải thu summary', account_type='ASSET')
+        revenue_account = GeneralLedgerAccount.objects.create(code='511-SUM', name='Doanh thu summary', account_type='REVENUE')
+        vat_account = GeneralLedgerAccount.objects.create(code='3331-SUM', name='VAT summary', account_type='LIABILITY')
+        save_finance_gl_control_mappings({
+            'ar_control_gl_account_id': ar_account.id,
+            'default_sales_revenue_gl_account_id': revenue_account.id,
+            'vat_output_gl_account_id': vat_account.id,
+        })
 
     def test_summary_endpoint_returns_operational_metrics(self):
         today = timezone.localdate()
