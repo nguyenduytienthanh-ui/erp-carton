@@ -416,6 +416,12 @@ export function canAccessSalesOrders(): boolean {
   ]);
 }
 
+export function canManageDeliveryCarriers(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  return hasPermission(authz.permissions, 'DELIVERYCARRIER', 'EDIT');
+}
+
 export function canSubmitSalesOrders(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
