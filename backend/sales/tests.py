@@ -807,6 +807,57 @@ class SalesOrderLineIdentityUpdateTests(TestCase):
         self.assertEqual(line.product_snapshot['sale_price'], '150.00')
         self.assertEqual(line.note, 'Keep snapshot')
 
+    def test_update_same_product_persists_confirmation_flags_but_blocks_forbidden_snapshot_fields(self):
+        self.product.product_kind = Product.ProductKind.GENERIC
+        self.product.requires_order_spec = True
+        self.product.requires_order_operations_review = True
+        self.product.save(update_fields=[
+            'product_kind',
+            'requires_order_spec',
+            'requires_order_operations_review',
+            'updated_at',
+        ])
+        order = self._order()
+        line = self._line(order)
+        self.assertFalse(line.product_snapshot['order_spec_confirmed'])
+        self.assertFalse(line.product_snapshot['order_operations_reviewed'])
+
+        original_line_id = line.id
+        fake_operations = [{'operation_code': 'BAD', 'standard_rate_per_hour': 999}]
+        fake_routing_steps = [{'operation_code': 'BAD', 'step_no': 10, 'standard_rate_per_hour': 999}]
+        self._save_order_update(order, [
+            self._line_payload(
+                line,
+                product_snapshot={
+                    'order_spec_confirmed': True,
+                    'order_operations_reviewed': True,
+                    'product_kind': Product.ProductKind.SPECIFIC,
+                    'requires_order_spec': False,
+                    'requires_order_operations_review': False,
+                    'product_id': 999999,
+                    'product_code': 'FAKE-CODE',
+                    'product_name': 'Fake product',
+                    'operations': fake_operations,
+                    'routing_steps': fake_routing_steps,
+                    'standard_rate_per_hour': 999,
+                },
+            ),
+        ])
+
+        line.refresh_from_db()
+        self.assertEqual(line.id, original_line_id)
+        self.assertTrue(line.product_snapshot['order_spec_confirmed'])
+        self.assertTrue(line.product_snapshot['order_operations_reviewed'])
+        self.assertEqual(line.product_snapshot['product_kind'], Product.ProductKind.GENERIC)
+        self.assertTrue(line.product_snapshot['requires_order_spec'])
+        self.assertTrue(line.product_snapshot['requires_order_operations_review'])
+        self.assertEqual(line.product_snapshot['product_id'], self.product.id)
+        self.assertEqual(line.product_snapshot['product_code'], 'LINE-ID-P1')
+        self.assertEqual(line.product_snapshot['product_name'], 'Line ID product 1')
+        self.assertNotEqual(line.product_snapshot['operations'], fake_operations)
+        self.assertNotEqual(line.product_snapshot['routing_steps'], fake_routing_steps)
+        self.assertNotEqual(line.product_snapshot.get('standard_rate_per_hour'), 999)
+
     def test_product_change_without_downstream_builds_new_v2_snapshot(self):
         order = self._order()
         line = self._line(order)

@@ -57,6 +57,8 @@ SALES_ORDER_LINE_SNAPSHOT_EDITABLE_KEYS = {
     'delivery_tolerance',
     'commission_per_unit',
     'commission_percent',
+    'order_spec_confirmed',
+    'order_operations_reviewed',
     *LEGACY_PROCESS_FIELDS,
     'film_code',
     'film_file_url',
