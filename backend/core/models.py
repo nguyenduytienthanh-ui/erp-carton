@@ -1339,6 +1339,100 @@ class ColumnPermission(models.Model):
         return False
 
 
+class TaskScheduleSeries(models.Model):
+    RECURRENCE_DAILY = 'DAILY'
+    RECURRENCE_WEEKDAY = 'WEEKDAY'
+    RECURRENCE_WEEKLY = 'WEEKLY'
+    RECURRENCE_MONTHLY = 'MONTHLY'
+
+    RECURRENCE_CHOICES = [
+        (RECURRENCE_DAILY, 'Hang ngay'),
+        (RECURRENCE_WEEKDAY, 'Ngay lam viec'),
+        (RECURRENCE_WEEKLY, 'Theo tuan'),
+        (RECURRENCE_MONTHLY, 'Theo thang'),
+    ]
+
+    entity_type = models.CharField(max_length=50, verbose_name='Loai doi tuong')
+    entity_id = models.PositiveIntegerField(verbose_name='ID doi tuong')
+    entity_code = models.CharField(max_length=100, blank=True, verbose_name='Ma doi tuong')
+
+    title = models.CharField(max_length=200, verbose_name='Tieu de mau')
+    description = models.TextField(blank=True, verbose_name='Mo ta mau')
+    assigned_to = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='task_schedule_series_assigned',
+        verbose_name='Nguoi thuc hien',
+    )
+    assigned_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='task_schedule_series_created',
+        verbose_name='Nguoi tao series',
+    )
+    depends_on = models.ForeignKey(
+        'Task',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='dependent_schedule_series',
+        verbose_name='Phu thuoc task',
+    )
+    priority = models.CharField(
+        max_length=20,
+        choices=[
+            ('LOW', 'Thap'),
+            ('MEDIUM', 'Trung binh'),
+            ('HIGH', 'Cao'),
+            ('URGENT', 'Khan cap'),
+        ],
+        default='MEDIUM',
+        verbose_name='Uu tien',
+    )
+    is_pinned = models.BooleanField(default=False, verbose_name='Ghim uu tien')
+    tags = models.JSONField(default=list, blank=True, verbose_name='Nhan')
+    is_blocking = models.BooleanField(default=False, verbose_name='Chan')
+    blocks_action = models.CharField(max_length=50, blank=True, verbose_name='Hanh dong bi chan')
+
+    anchor_start_at = models.DateTimeField(verbose_name='Moc bat dau')
+    anchor_end_at = models.DateTimeField(null=True, blank=True, verbose_name='Moc ket thuc')
+    is_all_day = models.BooleanField(default=False, verbose_name='Ca ngay')
+
+    recurrence_type = models.CharField(
+        max_length=20,
+        choices=RECURRENCE_CHOICES,
+        default=RECURRENCE_DAILY,
+        verbose_name='Kieu lap',
+    )
+    interval = models.PositiveIntegerField(default=1, verbose_name='Chu ky')
+    weekdays = models.JSONField(default=list, blank=True, verbose_name='Ngay lap trong tuan')
+    ends_on = models.DateField(null=True, blank=True, verbose_name='Ket thuc vao ngay')
+    occurrence_limit = models.PositiveIntegerField(null=True, blank=True, verbose_name='So lan toi da')
+    is_active = models.BooleanField(default=True, verbose_name='Dang kich hoat')
+    last_materialized_to = models.DateField(null=True, blank=True, verbose_name='Da sinh den ngay')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'task_schedule_series'
+        ordering = ['title', 'id']
+        verbose_name = 'Task schedule series'
+        verbose_name_plural = 'Task schedule series'
+        indexes = [
+            models.Index(fields=['is_active', 'recurrence_type']),
+            models.Index(fields=['entity_type', 'entity_id']),
+            models.Index(fields=['assigned_to']),
+        ]
+
+    def __str__(self):
+        return self.title
+
+
 class Task(models.Model):
     """
     Nhiệm vụ giao cho người dùng, liên kết với bất kỳ đối tượng nào
@@ -1412,6 +1506,22 @@ class Task(models.Model):
 
     # Thời hạn
     due_date = models.DateField(null=True, blank=True, verbose_name='Hạn hoàn thành')
+    scheduled_start_time = models.TimeField(null=True, blank=True, verbose_name='Gio bat dau du kien')
+    scheduled_end_time = models.TimeField(null=True, blank=True, verbose_name='Gio ket thuc du kien')
+    scheduled_start_at = models.DateTimeField(null=True, blank=True, verbose_name='Bat dau tren lich')
+    scheduled_end_at = models.DateTimeField(null=True, blank=True, verbose_name='Ket thuc tren lich')
+    is_all_day = models.BooleanField(default=False, verbose_name='Ca ngay')
+    schedule_series = models.ForeignKey(
+        'TaskScheduleSeries',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='occurrences',
+        verbose_name='Recurring series',
+    )
+    schedule_occurrence_date = models.DateField(null=True, blank=True, verbose_name='Ngay occurrence')
+    schedule_occurrence_index = models.PositiveIntegerField(null=True, blank=True, verbose_name='Thu tu occurrence')
+    schedule_is_exception = models.BooleanField(default=False, verbose_name='Occurrence da override')
     completed_at = models.DateTimeField(null=True, blank=True, verbose_name='Thời gian hoàn thành')
 
     # Cần hỗ trợ — nhân viên tự báo khi vướng mắc
@@ -1448,6 +1558,8 @@ class Task(models.Model):
             models.Index(fields=['assigned_to']),
             models.Index(fields=['status']),
             models.Index(fields=['is_blocking', 'status']),
+            models.Index(fields=['scheduled_start_at']),
+            models.Index(fields=['schedule_series', 'schedule_occurrence_date']),
         ]
 
     def __str__(self):
