@@ -22,48 +22,10 @@ from sales.models import (
 )
 from sales.services import (
     build_sales_order_line_trace_code,
+    merge_existing_sales_order_line_product_snapshot,
     merge_sales_order_line_product_snapshot,
     resolve_delivery_carrier_assignment,
 )
-
-
-SALES_ORDER_LINE_SNAPSHOT_EDITABLE_KEYS = {
-    'description',
-    'size_order',
-    'size_production',
-    'sale_price',
-    'delivery_tolerance',
-    'commission_per_unit',
-    'commission_percent',
-    'process_xa',
-    'process_in',
-    'process_boi',
-    'process_can_mang',
-    'process_be',
-    'process_chap',
-    'process_dong',
-    'process_dan',
-    'process_khac',
-    'film_code',
-    'film_file_url',
-    'color_count',
-    'mold_code',
-    'mold_file_url',
-    'waterproof',
-    'note_other',
-    'note',
-    'unit_name',
-}
-
-
-def _merge_existing_sales_order_line_product_snapshot(existing_snapshot, overrides=None, *, unit_price=None):
-    snapshot = dict(existing_snapshot or {})
-    for key, value in (overrides or {}).items():
-        if key in SALES_ORDER_LINE_SNAPSHOT_EDITABLE_KEYS and value is not None:
-            snapshot[key] = value
-    if unit_price is not None:
-        snapshot['sale_price'] = str(unit_price)
-    return snapshot
 
 
 def _create_outbound_shipment_audit_log(*, user, shipment, action, changed_fields, new_values, old_values=None):
@@ -564,7 +526,7 @@ class SalesOrderSerializer(serializers.ModelSerializer):
                     as_of_datetime=order.order_date,
                 )
             else:
-                line_data['product_snapshot'] = _merge_existing_sales_order_line_product_snapshot(
+                line_data['product_snapshot'] = merge_existing_sales_order_line_product_snapshot(
                     line.product_snapshot,
                     product_snapshot_input,
                     unit_price=line_data.get('unit_price'),

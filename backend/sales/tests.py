@@ -12,7 +12,7 @@ from core.models import AuditLog, Customer, Team, Task
 from finance.models import GeneralLedgerAccount
 from finance.posting import save_finance_gl_control_mappings
 from inventory.models import InventoryReservation, InventoryTransaction, OutboundShipment, OutboundShipmentPackage, Warehouse
-from products.models import Product, ProductUnit
+from products.models import Operation, Product, ProductOperation, ProductRoutingStep, ProductUnit
 from production.models import ProductionOrder
 from sales.models import (
     SalesLineMaterialPlan,
@@ -25,7 +25,9 @@ from sales.models import (
 )
 from sales.document_policy import calc_line_totals, round_money
 from sales.services import (
+    build_sales_order_line_product_snapshot,
     build_sales_order_line_package_trace_code,
+    normalize_sales_product_snapshot,
     post_sales_order,
     workflow_can_transition,
     get_next_sales_order_code,
@@ -303,6 +305,28 @@ class SalesOrderLineSnapshotTests(TestCase):
             waterproof='OUTSIDE',
         )
 
+    def _operation(self, code, name, sequence):
+        operation, _ = Operation.objects.update_or_create(
+            code=code,
+            defaults={
+                'name': name,
+                'sequence': sequence,
+                'default_unit': 'pcs/hour',
+                'is_active': True,
+            },
+        )
+        return operation
+
+    def _product_operation(self, product, code, name, sequence, rate, note=''):
+        operation = self._operation(code, name, sequence)
+        return ProductOperation.objects.create(
+            product=product,
+            operation=operation,
+            sequence=sequence,
+            standard_rate_per_hour=rate,
+            note=note,
+        )
+
     def test_serializer_persists_product_snapshot_and_trace_code(self):
         serializer = SalesOrderSerializer(data={
             'code': 'SO-202603-00011',
@@ -329,6 +353,11 @@ class SalesOrderLineSnapshotTests(TestCase):
         self.assertEqual(line.product_snapshot['name'], 'Thung Carton QR')
         self.assertEqual(line.product_snapshot['commission_per_unit'], '120.00')
         self.assertEqual(line.product_snapshot['process_in'], 2500)
+        self.assertEqual(line.product_snapshot['schema_version'], 2)
+        self.assertEqual(line.product_snapshot['product_code'], 'BOX-QR')
+        self.assertEqual(line.product_snapshot['product_kind'], Product.ProductKind.SPECIFIC)
+        self.assertIn('operations', line.product_snapshot)
+        self.assertIn('routing_steps', line.product_snapshot)
 
     def test_build_package_trace_code(self):
         self.assertEqual(
@@ -383,6 +412,9 @@ class SalesOrderLineSnapshotTests(TestCase):
                     'process_xa': 3000,
                     'process_chap': 1800,
                     'film_code': 'FILM-EDIT',
+                    'product_kind': Product.ProductKind.GENERIC,
+                    'product_code': 'BAD-CODE',
+                    'operations': [{'operation_code': 'BAD', 'standard_rate_per_hour': 999}],
                 },
             }],
         })
@@ -399,6 +431,121 @@ class SalesOrderLineSnapshotTests(TestCase):
         self.assertEqual(line.product_snapshot['process_chap'], 1800)
         self.assertEqual(line.product_snapshot['film_code'], 'FILM-EDIT')
         self.assertEqual(line.product_snapshot['sale_price'], '13000.00')
+        self.assertEqual(line.product_snapshot['product_kind'], Product.ProductKind.SPECIFIC)
+        self.assertEqual(line.product_snapshot['product_code'], 'BOX-QR')
+        self.assertFalse(any(item.get('operation_code') == 'BAD' for item in line.product_snapshot['operations']))
+
+    def test_build_snapshot_v2_for_generic_product_with_print_colors(self):
+        generic_product = Product.objects.create(
+            code='GENERIC-BOX',
+            name='Generic Box',
+            unit=self.unit,
+            product_kind=Product.ProductKind.GENERIC,
+            print_color_1='Den',
+            print_color_2='Do Pantone 185C',
+            print_color_3='Xanh duong',
+            sale_price=Decimal('1000'),
+        )
+
+        snapshot = build_sales_order_line_product_snapshot(generic_product)
+
+        self.assertEqual(snapshot['schema_version'], 2)
+        self.assertEqual(snapshot['product_kind'], Product.ProductKind.GENERIC)
+        self.assertTrue(snapshot['requires_order_spec'])
+        self.assertTrue(snapshot['requires_order_operations_review'])
+        self.assertFalse(snapshot['order_spec_confirmed'])
+        self.assertFalse(snapshot['order_operations_reviewed'])
+        self.assertEqual(snapshot['print_color_1'], 'Den')
+        self.assertEqual(snapshot['print_color_2'], 'Do Pantone 185C')
+        self.assertEqual(snapshot['print_color_3'], 'Xanh duong')
+        self.assertEqual(snapshot['print_colors'], ['Den', 'Do Pantone 185C', 'Xanh duong'])
+        self.assertEqual(snapshot['color_count'], 3)
+
+    def test_snapshot_v2_uses_product_operations(self):
+        self._product_operation(self.product, 'IN', 'In', 20, 20000, 'Canh mau')
+        self._product_operation(self.product, 'BE', 'Be', 50, 8500, 'Canh khuon')
+
+        snapshot = build_sales_order_line_product_snapshot(self.product)
+        operations = snapshot['operations']
+
+        self.assertEqual([item['operation_code'] for item in operations], ['IN', 'BE'])
+        self.assertEqual(operations[0]['standard_rate_per_hour'], 20000)
+        self.assertEqual(operations[0]['applied_rate_per_hour'], 20000)
+        self.assertEqual(operations[0]['source'], 'product_operations')
+        self.assertEqual(snapshot['process_in'], 2500)
+        self.assertEqual(snapshot['process_be'], 1200)
+
+    def test_snapshot_v2_uses_custom_routing_steps(self):
+        op_in = self._operation('IN', 'In', 20)
+        op_xa = self._operation('XA', 'Xa', 10)
+        po_in = ProductOperation.objects.create(
+            product=self.product,
+            operation=op_in,
+            sequence=20,
+            standard_rate_per_hour=20000,
+        )
+        ProductRoutingStep.objects.create(
+            product=self.product,
+            operation=op_in,
+            product_operation=po_in,
+            step_no=10,
+            display_order=10,
+            standard_rate_per_hour=20000,
+            note='In truoc',
+        )
+        ProductRoutingStep.objects.create(
+            product=self.product,
+            operation=op_xa,
+            step_no=20,
+            display_order=20,
+            standard_rate_per_hour=12000,
+            note='Xa sau in',
+        )
+        ProductRoutingStep.objects.create(
+            product=self.product,
+            operation=op_xa,
+            step_no=20,
+            display_order=30,
+            standard_rate_per_hour=10000,
+            note='Xa cung buoc',
+        )
+
+        snapshot = build_sales_order_line_product_snapshot(self.product)
+        routing_steps = snapshot['routing_steps']
+
+        self.assertEqual([item['operation_code'] for item in routing_steps], ['IN', 'XA', 'XA'])
+        self.assertEqual([item['source'] for item in routing_steps], ['product_routing', 'product_routing', 'product_routing'])
+        self.assertEqual([item['display_step'] for item in routing_steps], [1, 2, 2])
+        self.assertEqual(routing_steps[0]['applied_rate_per_hour'], 20000)
+
+    def test_snapshot_v2_routing_falls_back_to_product_operations(self):
+        self._product_operation(self.product, 'IN', 'In', 20, 20000)
+        self._product_operation(self.product, 'BE', 'Be', 50, 8500)
+
+        snapshot = build_sales_order_line_product_snapshot(self.product)
+        routing_steps = snapshot['routing_steps']
+
+        self.assertEqual([item['operation_code'] for item in routing_steps], ['IN', 'BE'])
+        self.assertEqual([item['source'] for item in routing_steps], ['product_operations_default', 'product_operations_default'])
+        self.assertEqual([item['display_step'] for item in routing_steps], [1, 2])
+
+    def test_normalize_legacy_snapshot_builds_operations_and_routing(self):
+        self._operation('IN', 'In', 20)
+        self._operation('BE', 'Be', 50)
+        snapshot = normalize_sales_product_snapshot({
+            'code': 'LEGACY-BOX',
+            'name': 'Legacy Box',
+            'process_in': 2500,
+            'process_be': 1200,
+        })
+
+        self.assertEqual(snapshot['schema_version'], 2)
+        self.assertEqual(snapshot['product_code'], 'LEGACY-BOX')
+        self.assertEqual(snapshot['product_name'], 'Legacy Box')
+        self.assertEqual([item['operation_code'] for item in snapshot['operations']], ['IN', 'BE'])
+        self.assertEqual([item['operation_code'] for item in snapshot['routing_steps']], ['IN', 'BE'])
+        self.assertEqual([item['source'] for item in snapshot['routing_steps']], ['legacy_process_fields', 'legacy_process_fields'])
+        self.assertEqual(snapshot['process_in'], 2500)
 
 
 class SalesOrderLineIdentityUpdateTests(TestCase):
@@ -659,6 +806,20 @@ class SalesOrderLineIdentityUpdateTests(TestCase):
         self.assertEqual(line.product_snapshot['name'], original_snapshot_name)
         self.assertEqual(line.product_snapshot['sale_price'], '150.00')
         self.assertEqual(line.note, 'Keep snapshot')
+
+    def test_product_change_without_downstream_builds_new_v2_snapshot(self):
+        order = self._order()
+        line = self._line(order)
+
+        self._save_order_update(order, [self._line_payload(line, product=self.other_product.id, unit_price='220')])
+
+        line.refresh_from_db()
+        self.assertEqual(line.product_id, self.other_product.id)
+        self.assertEqual(line.product_snapshot['schema_version'], 2)
+        self.assertEqual(line.product_snapshot['product_id'], self.other_product.id)
+        self.assertEqual(line.product_snapshot['product_code'], 'LINE-ID-P2')
+        self.assertEqual(line.product_snapshot['name'], 'Line ID product 2')
+        self.assertEqual(line.product_snapshot['sale_price'], '220.00')
 
     def test_product_change_with_downstream_is_blocked(self):
         order = self._order()

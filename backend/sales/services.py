@@ -15,6 +15,7 @@ from django.conf import settings
 
 from core.models import WorkflowDefinition, ApprovalHistory, AuditLog, Task
 from core.mixins import get_client_ip
+from products.models import Operation, ProductOperation, ProductRoutingStep
 from products.price_services import resolve_product_price_as_of
 from sales.models import (
     DeliveryCarrier,
@@ -35,6 +36,43 @@ DELIVERY_PLANNING_GROUP_BY_CHOICES = {
     DELIVERY_PLANNING_GROUP_BY_DATE_CUSTOMER_CARRIER,
     DELIVERY_PLANNING_GROUP_BY_CUSTOMER_DATE_CARRIER,
     DELIVERY_PLANNING_GROUP_BY_CARRIER_DATE_CUSTOMER,
+}
+LEGACY_PROCESS_OPERATION_MAP = [
+    ('process_xa', 'XA', 'Xa', 10),
+    ('process_in', 'IN', 'In', 20),
+    ('process_can_mang', 'CAN_MANG', 'Can mang', 30),
+    ('process_boi', 'BOI', 'Boi', 40),
+    ('process_be', 'BE', 'Be', 50),
+    ('process_chap', 'CHAP', 'Chap', 60),
+    ('process_dong', 'DONG', 'Dong', 70),
+    ('process_dan', 'DAN', 'Dan', 80),
+    ('process_khac', 'KHAC', 'Khac', 90),
+]
+LEGACY_PROCESS_FIELDS = [item[0] for item in LEGACY_PROCESS_OPERATION_MAP]
+SALES_ORDER_LINE_SNAPSHOT_EDITABLE_KEYS = {
+    'description',
+    'size_order',
+    'size_production',
+    'sale_price',
+    'delivery_tolerance',
+    'commission_per_unit',
+    'commission_percent',
+    *LEGACY_PROCESS_FIELDS,
+    'film_code',
+    'film_file_url',
+    'color_count',
+    'print_color_1',
+    'print_color_2',
+    'print_color_3',
+    'print_color_4',
+    'print_color_5',
+    'print_colors',
+    'mold_code',
+    'mold_file_url',
+    'waterproof',
+    'note_other',
+    'note',
+    'unit_name',
 }
 
 
@@ -369,6 +407,317 @@ def build_delivery_planning_group_items(plans_queryset, group_key):
     return items
 
 
+def _operation_lookup():
+    return {operation.code: operation for operation in Operation.objects.all()}
+
+
+def _coerce_positive_int(value):
+    try:
+        number = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
+
+
+def _print_color_values_from_snapshot(snapshot):
+    return [
+        value
+        for value in ((snapshot.get(field) or '').strip() for field in (
+            'print_color_1',
+            'print_color_2',
+            'print_color_3',
+            'print_color_4',
+            'print_color_5',
+        ))
+        if value
+    ]
+
+
+def _assign_routing_display_steps(steps):
+    display_step_by_step_no = {}
+    display_step = 0
+    sorted_steps = sorted(
+        steps,
+        key=lambda item: (
+            item.get('step_no') or 0,
+            item.get('display_order') or 0,
+            item.get('route_step_id') or item.get('id') or 0,
+            item.get('operation_code') or '',
+        ),
+    )
+    for item in sorted_steps:
+        step_no = item.get('step_no') or 0
+        if step_no not in display_step_by_step_no:
+            display_step += 1
+            display_step_by_step_no[step_no] = display_step
+        item['display_step'] = display_step_by_step_no[step_no]
+    return sorted_steps
+
+
+def _operation_payload(*, operation_id=None, product_operation_id=None, operation_code='', operation_name='', sequence=0, rate=0, note='', source=''):
+    rate_value = _coerce_positive_int(rate)
+    return {
+        'id': product_operation_id,
+        'operation_id': operation_id,
+        'product_operation_id': product_operation_id,
+        'operation_code': operation_code or '',
+        'operation_name': operation_name or '',
+        'sequence': sequence or 0,
+        'standard_rate_per_hour': rate_value,
+        'applied_rate_per_hour': rate_value,
+        'note': note or '',
+        'source': source,
+        'is_overridden': False,
+        'override_reason': '',
+        'is_active': True,
+    }
+
+
+def _routing_step_payload(
+    *,
+    route_step_id=None,
+    operation_id=None,
+    product_operation_id=None,
+    step_no=0,
+    display_order=0,
+    operation_code='',
+    operation_name='',
+    rate=0,
+    note='',
+    step_type='REQUIRED',
+    group_code='',
+    is_required=True,
+    allow_parallel=False,
+    source='',
+    is_active=True,
+):
+    rate_value = _coerce_positive_int(rate)
+    return {
+        'id': route_step_id,
+        'route_step_id': route_step_id,
+        'operation_id': operation_id,
+        'product_operation_id': product_operation_id,
+        'step_no': step_no or 0,
+        'display_step': 0,
+        'display_order': display_order or step_no or 0,
+        'operation_code': operation_code or '',
+        'operation_name': operation_name or '',
+        'standard_rate_per_hour': rate_value,
+        'applied_rate_per_hour': rate_value,
+        'note': note or '',
+        'step_type': step_type or 'REQUIRED',
+        'group_code': group_code or '',
+        'is_required': is_required,
+        'allow_parallel': allow_parallel,
+        'source': source,
+        'is_overridden': False,
+        'override_reason': '',
+        'is_active': is_active,
+    }
+
+
+def build_snapshot_operations_from_legacy(snapshot):
+    lookup = _operation_lookup()
+    operations = []
+    for field_name, operation_code, fallback_name, fallback_sequence in LEGACY_PROCESS_OPERATION_MAP:
+        rate = _coerce_positive_int(snapshot.get(field_name))
+        if rate <= 0:
+            continue
+        operation = lookup.get(operation_code)
+        operations.append(_operation_payload(
+            operation_id=operation.id if operation else None,
+            product_operation_id=None,
+            operation_code=operation_code,
+            operation_name=operation.name if operation else fallback_name,
+            sequence=operation.sequence if operation else fallback_sequence,
+            rate=rate,
+            note='',
+            source='legacy_process_fields',
+        ))
+    return operations
+
+
+def build_snapshot_routing_steps_from_legacy(snapshot):
+    lookup = _operation_lookup()
+    steps = []
+    for field_name, operation_code, fallback_name, fallback_sequence in LEGACY_PROCESS_OPERATION_MAP:
+        rate = _coerce_positive_int(snapshot.get(field_name))
+        if rate <= 0:
+            continue
+        operation = lookup.get(operation_code)
+        step_no = operation.sequence if operation else fallback_sequence
+        steps.append(_routing_step_payload(
+            operation_id=operation.id if operation else None,
+            product_operation_id=None,
+            step_no=step_no,
+            display_order=step_no,
+            operation_code=operation_code,
+            operation_name=operation.name if operation else fallback_name,
+            rate=rate,
+            note='',
+            source='legacy_process_fields',
+        ))
+    return _assign_routing_display_steps(steps)
+
+
+def _build_snapshot_routing_steps_from_operations(operations, *, source='snapshot_operations_default'):
+    steps = []
+    for operation in operations or []:
+        step_no = operation.get('sequence') or 0
+        operation_source = operation.get('source') or source
+        steps.append(_routing_step_payload(
+            route_step_id=None,
+            operation_id=operation.get('operation_id'),
+            product_operation_id=operation.get('product_operation_id') or operation.get('id'),
+            step_no=step_no,
+            display_order=step_no,
+            operation_code=operation.get('operation_code') or '',
+            operation_name=operation.get('operation_name') or '',
+            rate=operation.get('applied_rate_per_hour') or operation.get('standard_rate_per_hour') or 0,
+            note=operation.get('note') or '',
+            source='legacy_process_fields' if operation_source == 'legacy_process_fields' else source,
+            is_active=operation.get('is_active', True),
+        ))
+    return _assign_routing_display_steps(steps)
+
+
+def build_snapshot_operations_from_product(product):
+    product_operations = list(
+        ProductOperation.objects
+        .filter(product=product, is_active=True)
+        .select_related('operation')
+        .order_by('sequence', 'operation_code', 'id')
+    )
+    if not product_operations:
+        return build_snapshot_operations_from_legacy({
+            field_name: getattr(product, field_name, None)
+            for field_name in LEGACY_PROCESS_FIELDS
+        })
+
+    operations = []
+    for product_operation in product_operations:
+        operation = getattr(product_operation, 'operation', None)
+        operations.append(_operation_payload(
+            operation_id=product_operation.operation_id,
+            product_operation_id=product_operation.id,
+            operation_code=product_operation.operation_code or (operation.code if operation else ''),
+            operation_name=product_operation.operation_name or (operation.name if operation else ''),
+            sequence=product_operation.sequence or (operation.sequence if operation else 0),
+            rate=product_operation.standard_rate_per_hour,
+            note=product_operation.note,
+            source='product_operations',
+        ))
+    return operations
+
+
+def build_snapshot_routing_steps_from_product(product):
+    custom_steps = list(
+        ProductRoutingStep.objects
+        .filter(product=product, is_active=True)
+        .select_related('operation', 'product_operation')
+        .order_by('step_no', 'display_order', 'id')
+    )
+    if custom_steps:
+        payload = []
+        for step in custom_steps:
+            operation = getattr(step, 'operation', None)
+            product_operation = getattr(step, 'product_operation', None)
+            payload.append(_routing_step_payload(
+                route_step_id=step.id,
+                operation_id=step.operation_id,
+                product_operation_id=step.product_operation_id,
+                step_no=step.step_no,
+                display_order=step.display_order,
+                operation_code=step.operation_code or (operation.code if operation else ''),
+                operation_name=step.operation_name or (operation.name if operation else ''),
+                rate=step.standard_rate_per_hour,
+                note=step.note,
+                step_type=step.step_type,
+                group_code=step.group_code,
+                is_required=step.is_required,
+                allow_parallel=step.allow_parallel,
+                source='product_routing',
+                is_active=step.is_active,
+            ))
+            if product_operation and not payload[-1]['product_operation_id']:
+                payload[-1]['product_operation_id'] = product_operation.id
+        return _assign_routing_display_steps(payload)
+
+    operations = build_snapshot_operations_from_product(product)
+    if operations:
+        source = 'product_operations_default'
+        if all(item.get('source') == 'legacy_process_fields' for item in operations):
+            source = 'legacy_process_fields'
+        return _build_snapshot_routing_steps_from_operations(operations, source=source)
+    return build_snapshot_routing_steps_from_legacy({
+        field_name: getattr(product, field_name, None)
+        for field_name in LEGACY_PROCESS_FIELDS
+    })
+
+
+def normalize_sales_product_snapshot(snapshot):
+    if not snapshot:
+        return {}
+    normalized = dict(snapshot)
+    normalized['schema_version'] = 2
+    normalized.setdefault('source', 'legacy_snapshot')
+    if 'product_code' not in normalized and normalized.get('code'):
+        normalized['product_code'] = normalized.get('code')
+    if 'product_name' not in normalized and normalized.get('name'):
+        normalized['product_name'] = normalized.get('name')
+    if 'code' not in normalized and normalized.get('product_code'):
+        normalized['code'] = normalized.get('product_code')
+    if 'name' not in normalized and normalized.get('product_name'):
+        normalized['name'] = normalized.get('product_name')
+    normalized.setdefault('product_kind', 'SPECIFIC')
+    normalized.setdefault('requires_order_spec', False)
+    normalized.setdefault('requires_order_operations_review', False)
+    normalized.setdefault('order_spec_confirmed', not bool(normalized.get('requires_order_spec')))
+    normalized.setdefault('order_operations_reviewed', not bool(normalized.get('requires_order_operations_review')))
+
+    for field_name in LEGACY_PROCESS_FIELDS:
+        normalized.setdefault(field_name, None)
+    for field_name in ('print_color_1', 'print_color_2', 'print_color_3', 'print_color_4', 'print_color_5'):
+        normalized.setdefault(field_name, '')
+    if 'print_colors' not in normalized:
+        normalized['print_colors'] = _print_color_values_from_snapshot(normalized)
+    if 'color_count' not in normalized:
+        normalized['color_count'] = len(normalized.get('print_colors') or [])
+
+    if not normalized.get('operations'):
+        normalized['operations'] = build_snapshot_operations_from_legacy(normalized)
+    normalized.setdefault('routing_schema_version', 1)
+    if not normalized.get('routing_steps'):
+        if normalized.get('operations'):
+            normalized['routing_steps'] = _build_snapshot_routing_steps_from_operations(
+                normalized['operations'],
+                source='snapshot_operations_default',
+            )
+        else:
+            normalized['routing_steps'] = build_snapshot_routing_steps_from_legacy(normalized)
+    else:
+        normalized['routing_steps'] = _assign_routing_display_steps([
+            dict(item)
+            for item in normalized.get('routing_steps') or []
+        ])
+    return normalized
+
+
+def _apply_sales_order_line_snapshot_overrides(snapshot, overrides=None, *, unit_price=None):
+    for key, value in (overrides or {}).items():
+        if key in SALES_ORDER_LINE_SNAPSHOT_EDITABLE_KEYS and value is not None:
+            snapshot[key] = value
+    if unit_price is not None:
+        snapshot['sale_price'] = str(unit_price)
+    return snapshot
+
+
+def merge_existing_sales_order_line_product_snapshot(existing_snapshot, overrides=None, *, unit_price=None):
+    snapshot = dict(existing_snapshot or {})
+    _apply_sales_order_line_snapshot_overrides(snapshot, overrides, unit_price=unit_price)
+    return normalize_sales_product_snapshot(snapshot)
+
+
 def build_sales_order_line_product_snapshot(product, as_of_datetime=None):
     if not product:
         return {}
@@ -412,10 +761,36 @@ def build_sales_order_line_product_snapshot(product, as_of_datetime=None):
             }
             for component in bundle.get_active_components()
         ]
+    print_colors = [
+        value
+        for value in ((getattr(product, field, '') or '').strip() for field in (
+            'print_color_1',
+            'print_color_2',
+            'print_color_3',
+            'print_color_4',
+            'print_color_5',
+        ))
+        if value
+    ]
+    product_kind = getattr(product, 'product_kind', 'SPECIFIC') or 'SPECIFIC'
+    requires_order_spec = bool(getattr(product, 'requires_order_spec', False))
+    requires_order_operations_review = bool(getattr(product, 'requires_order_operations_review', False))
+    operations = build_snapshot_operations_from_product(product)
+    routing_steps = build_snapshot_routing_steps_from_product(product)
     return {
+        'schema_version': 2,
+        'source': 'product',
+        'snapshot_created_at': timezone.now().isoformat(),
         'product_id': product.id,
+        'product_code': product.code,
+        'product_name': product.name,
         'code': product.code,
         'name': product.name,
+        'product_kind': product_kind,
+        'requires_order_spec': requires_order_spec,
+        'requires_order_operations_review': requires_order_operations_review,
+        'order_spec_confirmed': not requires_order_spec,
+        'order_operations_reviewed': not requires_order_operations_review,
         'category_id': product.category_id,
         'category_name': getattr(getattr(product, 'category', None), 'name', None),
         'unit_id': product.unit_id,
@@ -451,6 +826,12 @@ def build_sales_order_line_product_snapshot(product, as_of_datetime=None):
         'film_code': product.film_code or '',
         'film_file_url': product.film_file_url or '',
         'color_count': product.color_count,
+        'print_color_1': product.print_color_1 or '',
+        'print_color_2': product.print_color_2 or '',
+        'print_color_3': product.print_color_3 or '',
+        'print_color_4': product.print_color_4 or '',
+        'print_color_5': product.print_color_5 or '',
+        'print_colors': print_colors,
         'mold_code': product.mold_code or '',
         'mold_file_url': product.mold_file_url or '',
         'waterproof': product.waterproof or '',
@@ -473,45 +854,16 @@ def build_sales_order_line_product_snapshot(product, as_of_datetime=None):
         'team_id': product.team_id,
         'team_name': getattr(getattr(product, 'team', None), 'name', None),
         'is_active': product.is_active,
+        'operations': operations,
+        'routing_schema_version': 1,
+        'routing_steps': routing_steps,
     }
 
 
 def merge_sales_order_line_product_snapshot(product, overrides=None, *, unit_price=None, as_of_datetime=None):
     snapshot = build_sales_order_line_product_snapshot(product, as_of_datetime=as_of_datetime)
-    overrides = overrides or {}
-    editable_keys = {
-        'description',
-        'size_order',
-        'size_production',
-        'sale_price',
-        'delivery_tolerance',
-        'commission_per_unit',
-        'commission_percent',
-        'process_xa',
-        'process_in',
-        'process_boi',
-        'process_can_mang',
-        'process_be',
-        'process_chap',
-        'process_dong',
-        'process_dan',
-        'process_khac',
-        'film_code',
-        'film_file_url',
-        'color_count',
-        'mold_code',
-        'mold_file_url',
-        'waterproof',
-        'note_other',
-        'note',
-        'unit_name',
-    }
-    for key, value in overrides.items():
-        if key in editable_keys and value is not None:
-            snapshot[key] = value
-    if unit_price is not None:
-        snapshot['sale_price'] = str(unit_price)
-    return snapshot
+    _apply_sales_order_line_snapshot_overrides(snapshot, overrides, unit_price=unit_price)
+    return normalize_sales_product_snapshot(snapshot)
 
 
 def get_next_sales_order_code(order_date):
