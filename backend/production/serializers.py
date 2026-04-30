@@ -4,6 +4,7 @@ from django.db import transaction
 from rest_framework import serializers
 
 from production.models import (
+    ProductionDemand,
     ProductionIssue,
     ProductionIssueLine,
     ProductionMaterialRequirement,
@@ -30,6 +31,78 @@ def _format_packaging_number(value):
     if '.' in text:
         text = text.rstrip('0').rstrip('.')
     return text
+
+
+class ProductionDemandSerializer(serializers.ModelSerializer):
+    sales_order_code = serializers.CharField(source='sales_order.code', read_only=True)
+    sales_order_line_number = serializers.IntegerField(source='sales_order_line.line_number', read_only=True)
+    delivery_plan_date = serializers.DateField(source='delivery_plan.delivery_date', read_only=True)
+    product_display_code = serializers.CharField(source='product.code', read_only=True)
+    product_display_name = serializers.CharField(source='product.name', read_only=True)
+    assigned_planner_name = serializers.CharField(source='assigned_planner.username', read_only=True)
+    qty_remaining_to_plan = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
+    qty_remaining_to_release = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
+    qty_remaining_to_complete = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
+
+    class Meta:
+        model = ProductionDemand
+        fields = [
+            'id',
+            'demand_code',
+            'demand_key',
+            'sales_order',
+            'sales_order_code',
+            'sales_order_line',
+            'sales_order_line_number',
+            'delivery_plan',
+            'delivery_plan_date',
+            'product',
+            'product_display_code',
+            'product_display_name',
+            'customer_id_snapshot',
+            'customer_name_snapshot',
+            'product_code',
+            'product_name',
+            'product_kind',
+            'unit_name',
+            'size_order',
+            'size_production',
+            'print_colors',
+            'operations_summary',
+            'routing_summary',
+            'qty_required',
+            'qty_planned',
+            'qty_released',
+            'qty_completed',
+            'qty_remaining_to_plan',
+            'qty_remaining_to_release',
+            'qty_remaining_to_complete',
+            'order_date',
+            'delivery_date',
+            'production_due_date',
+            'planning_due_date',
+            'reminder_date',
+            'planning_status',
+            'production_status',
+            'priority',
+            'assigned_planner',
+            'assigned_planner_name',
+            'notes',
+            'reminder_note',
+            'hold_reason',
+            'source',
+            'created_by',
+            'updated_by',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'qty_remaining_to_plan',
+            'qty_remaining_to_release',
+            'qty_remaining_to_complete',
+            'created_at',
+            'updated_at',
+        ]
 
 
 class ProductionOperationSerializer(serializers.ModelSerializer):

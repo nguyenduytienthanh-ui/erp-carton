@@ -109,6 +109,61 @@ class ProductionHandoverStatus:
     ]
 
 
+class ProductionDemandPlanningStatus:
+    NOT_DUE = 'NOT_DUE'
+    UPCOMING = 'UPCOMING'
+    DUE = 'DUE'
+    OVERDUE = 'OVERDUE'
+    PARTIALLY_PLANNED = 'PARTIALLY_PLANNED'
+    FULLY_PLANNED = 'FULLY_PLANNED'
+    NO_PRODUCTION_NEEDED = 'NO_PRODUCTION_NEEDED'
+    CANCELLED = 'CANCELLED'
+    CHOICES = [
+        (NOT_DUE, 'Not due'),
+        (UPCOMING, 'Upcoming'),
+        (DUE, 'Due'),
+        (OVERDUE, 'Overdue'),
+        (PARTIALLY_PLANNED, 'Partially planned'),
+        (FULLY_PLANNED, 'Fully planned'),
+        (NO_PRODUCTION_NEEDED, 'No production needed'),
+        (CANCELLED, 'Cancelled'),
+    ]
+
+
+class ProductionDemandProductionStatus:
+    NOT_RELEASED = 'NOT_RELEASED'
+    PARTIALLY_RELEASED = 'PARTIALLY_RELEASED'
+    FULLY_RELEASED = 'FULLY_RELEASED'
+    IN_PROGRESS = 'IN_PROGRESS'
+    PARTIALLY_COMPLETED = 'PARTIALLY_COMPLETED'
+    COMPLETED = 'COMPLETED'
+    PAUSED = 'PAUSED'
+    CANCELLED = 'CANCELLED'
+    CHOICES = [
+        (NOT_RELEASED, 'Not released'),
+        (PARTIALLY_RELEASED, 'Partially released'),
+        (FULLY_RELEASED, 'Fully released'),
+        (IN_PROGRESS, 'In progress'),
+        (PARTIALLY_COMPLETED, 'Partially completed'),
+        (COMPLETED, 'Completed'),
+        (PAUSED, 'Paused'),
+        (CANCELLED, 'Cancelled'),
+    ]
+
+
+class ProductionDemandPriority:
+    LOW = 'LOW'
+    NORMAL = 'NORMAL'
+    HIGH = 'HIGH'
+    URGENT = 'URGENT'
+    CHOICES = [
+        (LOW, 'Low'),
+        (NORMAL, 'Normal'),
+        (HIGH, 'High'),
+        (URGENT, 'Urgent'),
+    ]
+
+
 class ProductionIssueStatus:
     POSTED = 'POSTED'
     CANCELLED = 'CANCELLED'
@@ -125,6 +180,169 @@ class ProductionReceiptStatus:
         (POSTED, 'Đã ghi sổ'),
         (CANCELLED, 'Đã hủy'),
     ]
+
+
+class ProductionDemand(SearchTextModelMixin):
+    demand_code = models.CharField(max_length=50, unique=True, null=True, blank=True, db_index=True)
+    demand_key = models.CharField(max_length=200, unique=True, db_index=True)
+    sales_order = models.ForeignKey(
+        'sales.SalesOrder',
+        on_delete=models.PROTECT,
+        related_name='production_demands',
+    )
+    sales_order_line = models.ForeignKey(
+        'sales.SalesOrderLine',
+        on_delete=models.PROTECT,
+        related_name='production_demands',
+    )
+    delivery_plan = models.ForeignKey(
+        'sales.SalesOrderDeliveryPlan',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='production_demands',
+    )
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='production_demands',
+    )
+    customer_id_snapshot = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    customer_name_snapshot = models.CharField(max_length=200, blank=True, default='')
+    product_code = models.CharField(max_length=80, blank=True, default='', db_index=True)
+    product_name = models.CharField(max_length=255, blank=True, default='')
+    product_kind = models.CharField(max_length=20, blank=True, default='', db_index=True)
+    unit_name = models.CharField(max_length=80, blank=True, default='')
+    size_order = models.CharField(max_length=255, blank=True, default='')
+    size_production = models.CharField(max_length=255, blank=True, default='')
+    print_colors = models.JSONField(default=list, blank=True)
+    operations_summary = models.JSONField(default=list, blank=True)
+    routing_summary = models.JSONField(default=list, blank=True)
+    qty_required = models.DecimalField(
+        max_digits=18,
+        decimal_places=4,
+        default=Decimal('0'),
+        validators=[MinValueValidator(Decimal('0'))],
+    )
+    qty_planned = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    qty_released = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    qty_completed = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
+    order_date = models.DateField(null=True, blank=True, db_index=True)
+    delivery_date = models.DateField(null=True, blank=True, db_index=True)
+    production_due_date = models.DateField(null=True, blank=True, db_index=True)
+    planning_due_date = models.DateField(null=True, blank=True, db_index=True)
+    reminder_date = models.DateField(null=True, blank=True, db_index=True)
+    planning_status = models.CharField(
+        max_length=30,
+        choices=ProductionDemandPlanningStatus.CHOICES,
+        default=ProductionDemandPlanningStatus.NOT_DUE,
+        db_index=True,
+    )
+    production_status = models.CharField(
+        max_length=30,
+        choices=ProductionDemandProductionStatus.CHOICES,
+        default=ProductionDemandProductionStatus.NOT_RELEASED,
+        db_index=True,
+    )
+    priority = models.CharField(
+        max_length=20,
+        choices=ProductionDemandPriority.CHOICES,
+        default=ProductionDemandPriority.NORMAL,
+        db_index=True,
+    )
+    assigned_planner = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_production_demands',
+    )
+    notes = models.TextField(blank=True, default='')
+    reminder_note = models.TextField(blank=True, default='')
+    hold_reason = models.TextField(blank=True, default='')
+    source = models.CharField(max_length=50, blank=True, default='SALES_ORDER', db_index=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='production_demands_created',
+    )
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='production_demands_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'production_demands'
+        ordering = ['planning_due_date', 'delivery_date', 'id']
+        indexes = [
+            models.Index(fields=['planning_status']),
+            models.Index(fields=['production_status']),
+            models.Index(fields=['planning_due_date']),
+            models.Index(fields=['delivery_date']),
+            models.Index(fields=['product_code']),
+            models.Index(fields=['product_kind']),
+            models.Index(fields=['assigned_planner']),
+            models.Index(fields=['priority']),
+            models.Index(fields=['source']),
+        ]
+
+    def __str__(self):
+        return self.demand_code or self.demand_key
+
+    @property
+    def qty_remaining_to_plan(self):
+        remaining = Decimal(str(self.qty_required or 0)) - Decimal(str(self.qty_planned or 0))
+        return round_qty(remaining if remaining > 0 else Decimal('0'))
+
+    @property
+    def qty_remaining_to_release(self):
+        remaining = Decimal(str(self.qty_required or 0)) - Decimal(str(self.qty_released or 0))
+        return round_qty(remaining if remaining > 0 else Decimal('0'))
+
+    @property
+    def qty_remaining_to_complete(self):
+        remaining = Decimal(str(self.qty_required or 0)) - Decimal(str(self.qty_completed or 0))
+        return round_qty(remaining if remaining > 0 else Decimal('0'))
+
+    def _search_values(self):
+        sales_order_code = getattr(getattr(self, 'sales_order', None), 'code', '')
+        line_number = getattr(getattr(self, 'sales_order_line', None), 'line_number', '')
+        return [
+            self.demand_code,
+            self.demand_key,
+            sales_order_code,
+            line_number,
+            self.customer_name_snapshot,
+            self.product_code,
+            self.product_name,
+            self.product_kind,
+            self.unit_name,
+            self.size_order,
+            self.size_production,
+            self.planning_status,
+            self.production_status,
+            self.priority,
+            self.delivery_date,
+            self.planning_due_date,
+            self.notes,
+            self.reminder_note,
+            self.hold_reason,
+            self.source,
+        ]
+
+    def save(self, *args, **kwargs):
+        self._build_search_text()
+        kwargs['update_fields'] = self._merge_update_fields(kwargs.get('update_fields'))
+        super().save(*args, **kwargs)
 
 
 class ProductionOrder(SearchTextModelMixin):

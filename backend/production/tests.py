@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.db import IntegrityError, transaction
 from rest_framework.test import APITestCase
 from django.utils import timezone
 
@@ -7,13 +8,151 @@ from core.models import ApprovalHistory, AuditLog, Customer, User
 from inventory.models import InventoryTransaction, Warehouse, WarehouseLocation
 from products.models import Product, ProductUnit
 from production.models import (
+    ProductionDemand,
+    ProductionDemandPlanningStatus,
+    ProductionDemandPriority,
+    ProductionDemandProductionStatus,
     ProductionIssue,
     ProductionMaterialRequirement,
     ProductionOperation,
     ProductionOrder,
     ProductionReceipt,
 )
-from sales.models import SalesOrder
+from sales.models import SalesOrder, SalesOrderDeliveryPlan, SalesOrderLine
+
+
+class ProductionDemandModelTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='production_demand_admin',
+            password='Demo123!',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.customer = Customer.objects.create(
+            code='PD-CUST-001',
+            name='Production Demand Customer',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.unit = ProductUnit.objects.create(code='PD-UNIT', name='Unit')
+        self.product = Product.objects.create(
+            code='PD-FG-001',
+            name='Production Demand Finished Good',
+            unit=self.unit,
+            cost_price=25000,
+            sale_price=40000,
+            process_in=20000,
+            process_be=8500,
+            status='ACTIVE',
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        self.order = SalesOrder.objects.create(
+            code='SO-PD-001',
+            order_date=timezone.localdate(),
+            delivery_date=timezone.localdate() + timedelta(days=10),
+            customer=self.customer,
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        self.line = SalesOrderLine.objects.create(
+            sales_order=self.order,
+            line_number=1,
+            product=self.product,
+            qty='10',
+            uom='PD-UNIT',
+            unit_price='40000',
+        )
+        self.delivery_plan = SalesOrderDeliveryPlan.objects.create(
+            line=self.line,
+            delivery_date=timezone.localdate() + timedelta(days=10),
+            qty='6',
+        )
+
+    def _create_demand(self, **overrides):
+        data = {
+            'demand_key': 'SO:1:LINE:1:PLAN:1',
+            'sales_order': self.order,
+            'sales_order_line': self.line,
+            'delivery_plan': self.delivery_plan,
+            'product': self.product,
+            'customer_id_snapshot': self.customer.id,
+            'customer_name_snapshot': self.customer.name,
+            'product_code': self.product.code,
+            'product_name': self.product.name,
+            'product_kind': 'GENERIC',
+            'unit_name': self.unit.name,
+            'size_order': '20x30',
+            'size_production': '21x31',
+            'print_colors': ['Black', 'Red'],
+            'operations_summary': [{'operation_code': 'IN', 'applied_rate_per_hour': 20000}],
+            'routing_summary': [{'step_no': 10, 'operation_code': 'IN'}],
+            'qty_required': '10',
+            'order_date': self.order.order_date,
+            'delivery_date': self.delivery_plan.delivery_date,
+            'source': 'SALES_ORDER',
+            'created_by': self.user,
+            'updated_by': self.user,
+        }
+        data.update(overrides)
+        return ProductionDemand.objects.create(**data)
+
+    def test_create_production_demand_with_delivery_plan(self):
+        demand = self._create_demand()
+
+        self.assertEqual(demand.sales_order_id, self.order.id)
+        self.assertEqual(demand.sales_order_line_id, self.line.id)
+        self.assertEqual(demand.delivery_plan_id, self.delivery_plan.id)
+        self.assertEqual(demand.product_id, self.product.id)
+        self.assertEqual(demand.product_code, self.product.code)
+        self.assertEqual(demand.print_colors, ['Black', 'Red'])
+        self.assertIn('pd-fg-001', demand.search_text)
+
+    def test_delivery_plan_is_nullable(self):
+        demand = self._create_demand(
+            demand_key='SO:1:LINE:1:DEFAULT',
+            delivery_plan=None,
+            delivery_date=self.order.delivery_date,
+        )
+
+        self.assertIsNone(demand.delivery_plan_id)
+        self.assertEqual(demand.delivery_date, self.order.delivery_date)
+
+    def test_demand_key_is_unique(self):
+        self._create_demand(demand_key='SO:1:LINE:1:PLAN:UNIQUE')
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self._create_demand(demand_key='SO:1:LINE:1:PLAN:UNIQUE')
+
+    def test_remaining_quantity_properties_are_clamped(self):
+        demand = self._create_demand(
+            qty_required='10',
+            qty_planned='4',
+            qty_released='3',
+            qty_completed='7',
+        )
+
+        self.assertEqual(str(demand.qty_remaining_to_plan), '6.0000')
+        self.assertEqual(str(demand.qty_remaining_to_release), '7.0000')
+        self.assertEqual(str(demand.qty_remaining_to_complete), '3.0000')
+
+        demand.qty_planned = '12'
+        demand.qty_released = '12'
+        demand.qty_completed = '12'
+        self.assertEqual(str(demand.qty_remaining_to_plan), '0.0000')
+        self.assertEqual(str(demand.qty_remaining_to_release), '0.0000')
+        self.assertEqual(str(demand.qty_remaining_to_complete), '0.0000')
+
+    def test_default_status_and_priority(self):
+        demand = self._create_demand()
+
+        self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.NOT_DUE)
+        self.assertEqual(demand.production_status, ProductionDemandProductionStatus.NOT_RELEASED)
+        self.assertEqual(demand.priority, ProductionDemandPriority.NORMAL)
 
 
 class ProductionWorkflowTests(APITestCase):
