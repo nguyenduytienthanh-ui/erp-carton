@@ -3,17 +3,21 @@ Tests tối thiểu: transition, totals, cannot edit when posted, idempotent pos
 """
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest.mock import patch
+
+from django.contrib.admin.sites import AdminSite
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
-from rest_framework.test import APIClient
+from rest_framework.test import APIClient, APIRequestFactory
 from core.models import AuditLog, Customer, Team, Task
 from finance.models import GeneralLedgerAccount
 from finance.posting import save_finance_gl_control_mappings
 from inventory.models import InventoryReservation, InventoryTransaction, OutboundShipment, OutboundShipmentPackage, Warehouse
 from products.models import Operation, Product, ProductOperation, ProductRoutingStep, ProductUnit
-from production.models import ProductionOrder
+from production.models import ProductionDemand, ProductionDemandPlanningStatus, ProductionDemandProductionStatus, ProductionOrder
+from sales.admin import SalesOrderAdmin
 from sales.models import (
     SalesLineMaterialPlan,
     SalesOrder,
@@ -161,6 +165,192 @@ class SalesOrderIdempotentPostTests(TestCase):
         self.assertTrue('idempotent' in msg2.lower() or 'Already' in msg2)
         self.order.refresh_from_db()
         self.assertEqual(self.order.post_number, post_number_first)
+
+
+class SalesOrderProductionDemandWorkflowTests(TestCase):
+    def setUp(self):
+        from sales.management.commands.seed_sales_order_workflow import Command
+
+        Command().handle()
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='sales_pd_workflow_admin',
+            password='test',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_authenticate(self.user)
+        self.unit = ProductUnit.objects.create(code='PD-SO', name='PD Sales Unit')
+        self.product = Product.objects.create(
+            code='PD-SO-P1',
+            name='PD Sales Product',
+            unit=self.unit,
+            sale_price=Decimal('100'),
+            process_in=20000,
+            process_be=8500,
+        )
+
+    def _submitted_order(self, code='SO-PD-WF-001', qty='10', delivery_plan_qtys=None):
+        today = timezone.localdate()
+        order = SalesOrder.objects.create(
+            code=code,
+            doc_type='SO',
+            order_date=today,
+            delivery_date=today + timedelta(days=14),
+            status=SalesOrderStatus.SUBMITTED,
+            submitted_by=self.user,
+            submitted_at=timezone.now(),
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        line = SalesOrderLine.objects.create(
+            sales_order=order,
+            line_number=1,
+            product=self.product,
+            qty=Decimal(qty),
+            unit_price=Decimal('100'),
+        )
+        for index, plan_qty in enumerate(delivery_plan_qtys or [], start=1):
+            SalesOrderDeliveryPlan.objects.create(
+                line=line,
+                delivery_date=today + timedelta(days=10 + index),
+                qty=Decimal(str(plan_qty)),
+                note=f'PD workflow plan {index}',
+            )
+        return order, line
+
+    def _approve(self, order):
+        return self.client.post(f'/api/sales/orders/{order.id}/approve/', format='json')
+
+    def test_approve_sales_order_creates_production_demand(self):
+        order, line = self._submitted_order()
+
+        response = self._approve(order)
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['production_demand_sync']['created'], 1)
+        order.refresh_from_db()
+        self.assertEqual(order.status, SalesOrderStatus.APPROVED)
+        demand = ProductionDemand.objects.get(sales_order=order)
+        self.assertEqual(demand.sales_order_line_id, line.id)
+        self.assertEqual(demand.demand_key, f'SO:{order.id}:LINE:{line.id}:DEFAULT')
+
+    def test_approve_order_with_two_delivery_plans_creates_two_demands(self):
+        order, line = self._submitted_order(code='SO-PD-WF-002', qty='15', delivery_plan_qtys=['10', '5'])
+
+        response = self._approve(order)
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['production_demand_sync']['created'], 2)
+        self.assertEqual(ProductionDemand.objects.filter(sales_order=order).count(), 2)
+        self.assertEqual(
+            set(ProductionDemand.objects.filter(sales_order=order).values_list('delivery_plan__qty', flat=True)),
+            {Decimal('10.0000'), Decimal('5.0000')},
+        )
+        self.assertTrue(
+            ProductionDemand.objects.filter(
+                sales_order=order,
+                demand_key__startswith=f'SO:{order.id}:LINE:{line.id}:PLAN:',
+            ).exists()
+        )
+
+    def test_invalid_second_approve_does_not_create_duplicate_demands(self):
+        order, _ = self._submitted_order(code='SO-PD-WF-003')
+        first_response = self._approve(order)
+        self.assertEqual(first_response.status_code, 200, first_response.data)
+
+        second_response = self._approve(SalesOrder.objects.get(pk=order.pk))
+
+        self.assertEqual(second_response.status_code, 403)
+        self.assertEqual(ProductionDemand.objects.filter(sales_order=order).count(), 1)
+
+    def test_approve_rolls_back_when_demand_sync_fails(self):
+        order, _ = self._submitted_order(code='SO-PD-WF-004')
+
+        with patch('sales.views.sync_production_demands_for_sales_order', side_effect=RuntimeError('sync failed')):
+            response = self._approve(order)
+
+        self.assertEqual(response.status_code, 400)
+        order.refresh_from_db()
+        self.assertEqual(order.status, SalesOrderStatus.SUBMITTED)
+        self.assertFalse(ProductionDemand.objects.filter(sales_order=order).exists())
+
+    def test_void_cancels_production_demands_without_downstream(self):
+        order, _ = self._submitted_order(code='SO-PD-WF-005')
+        approve_response = self._approve(order)
+        self.assertEqual(approve_response.status_code, 200, approve_response.data)
+
+        response = self.client.post(
+            f'/api/sales/orders/{order.id}/void/',
+            {'void_reason': 'cancel demand test'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['production_demand_cancel']['cancelled'], 1)
+        demand = ProductionDemand.objects.get(sales_order=order)
+        self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.CANCELLED)
+        self.assertEqual(demand.production_status, ProductionDemandProductionStatus.CANCELLED)
+
+    def test_void_holds_production_demand_with_downstream(self):
+        order, _ = self._submitted_order(code='SO-PD-WF-006')
+        approve_response = self._approve(order)
+        self.assertEqual(approve_response.status_code, 200, approve_response.data)
+        demand = ProductionDemand.objects.get(sales_order=order)
+        demand.qty_planned = Decimal('2')
+        demand.save(update_fields=['qty_planned', 'updated_at'])
+
+        response = self.client.post(
+            f'/api/sales/orders/{order.id}/void/',
+            {'void_reason': 'hold demand test'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['production_demand_cancel']['held'], 1)
+        demand.refresh_from_db()
+        self.assertEqual(demand.qty_planned, Decimal('2.0000'))
+        self.assertNotEqual(demand.planning_status, ProductionDemandPlanningStatus.CANCELLED)
+        self.assertTrue(demand.hold_reason)
+
+    def test_reject_cancels_manually_synced_demand(self):
+        order, line = self._submitted_order(code='SO-PD-WF-007')
+        ProductionDemand.objects.create(
+            demand_key=f'SO:{order.id}:LINE:{line.id}:DEFAULT',
+            sales_order=order,
+            sales_order_line=line,
+            product=self.product,
+            product_code=self.product.code,
+            product_name=self.product.name,
+            qty_required=Decimal('10'),
+            source='SALES_ORDER',
+        )
+
+        response = self.client.post(
+            f'/api/sales/orders/{order.id}/reject/',
+            {'reason': 'reject demand test'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['production_demand_cancel']['cancelled'], 1)
+        demand = ProductionDemand.objects.get(sales_order=order)
+        self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.CANCELLED)
+        self.assertEqual(demand.production_status, ProductionDemandProductionStatus.CANCELLED)
+
+    def test_admin_approve_selected_syncs_production_demand(self):
+        order, _ = self._submitted_order(code='SO-PD-WF-008')
+        request = APIRequestFactory().post('/admin/sales/salesorder/')
+        request.user = self.user
+        admin = SalesOrderAdmin(SalesOrder, AdminSite())
+
+        with patch.object(admin, 'message_user'):
+            admin.approve_selected(request, SalesOrder.objects.filter(pk=order.pk))
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, SalesOrderStatus.APPROVED)
+        self.assertEqual(ProductionDemand.objects.filter(sales_order=order).count(), 1)
 
 
 class SalesOrderDeliveryPlanTests(TestCase):

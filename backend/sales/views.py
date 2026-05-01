@@ -34,6 +34,11 @@ from core.mixins import get_client_ip
 from core.models import AuditLog, ApprovalHistory, Attachment
 from core.permissions import check_action_permission
 from core.workflow_services import generate_tasks_for_entity
+from finance.services import cancel_receivable_for_sales_order
+from production.demand_services import (
+    cancel_production_demands_for_sales_order,
+    sync_production_demands_for_sales_order,
+)
 from sales.models import DeliveryCarrier, SalesOrder, SalesOrderStatus, Quote, QuoteStatus, OutboundShipment, OutboundShipmentStatus, ShipmentLine, SalesLineMaterialPlan, SalesOrderDeliveryPlan
 from sales.serializers import DeliveryCarrierSerializer, SalesOrderSerializer, QuoteSerializer, OutboundShipmentSerializer, ShipmentLineSerializer, SalesLineMaterialPlanSerializer, SalesOrderDeliveryPlanSerializer
 from sales.filters import SalesOrderFilter, QuoteFilter
@@ -538,26 +543,35 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Không có quyền hoặc trạng thái không hợp lệ.'}, status=status.HTTP_403_FORBIDDEN)
         if not workflow_can_transition('SalesOrder', order.status, SalesOrderStatus.APPROVED):
             return Response({'error': 'Chuyển trạng thái không hợp lệ.'}, status=status.HTTP_400_BAD_REQUEST)
-        order.status = SalesOrderStatus.APPROVED
-        order.approved_by = request.user
-        order.approved_at = timezone.now()
-        order.rejected_by = None
-        order.rejected_at = None
-        order.reject_reason = ''
-        order.save(update_fields=['status', 'approved_by', 'approved_at', 'rejected_by', 'rejected_at', 'reject_reason', 'updated_at'])
-        ApprovalHistory.objects.create(
-            entity_type='SalesOrder', entity_id=order.id, entity_code=order.code,
-            action='APPROVE', user=request.user, level=1,
-        )
-        AuditLog.objects.create(
-            user=request.user, action='APPROVE', entity_type='SalesOrder',
-            entity_id=order.id, entity_code=order.code,
-            old_values={'status': SalesOrderStatus.SUBMITTED},
-            new_values={'status': SalesOrderStatus.APPROVED},
-            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
-        )
-        generate_tasks_for_entity('SalesOrder', order.id, order.code, 'APPROVE', triggered_by=request.user)
-        return Response({'status': order.status})
+        try:
+            with transaction.atomic():
+                order = SalesOrder.objects.select_for_update().get(pk=order.pk)
+                order.status = SalesOrderStatus.APPROVED
+                order.approved_by = request.user
+                order.approved_at = timezone.now()
+                order.rejected_by = None
+                order.rejected_at = None
+                order.reject_reason = ''
+                order.save(update_fields=['status', 'approved_by', 'approved_at', 'rejected_by', 'rejected_at', 'reject_reason', 'updated_at'])
+                ApprovalHistory.objects.create(
+                    entity_type='SalesOrder', entity_id=order.id, entity_code=order.code,
+                    action='APPROVE', user=request.user, level=1,
+                )
+                AuditLog.objects.create(
+                    user=request.user, action='APPROVE', entity_type='SalesOrder',
+                    entity_id=order.id, entity_code=order.code,
+                    old_values={'status': SalesOrderStatus.SUBMITTED},
+                    new_values={'status': SalesOrderStatus.APPROVED},
+                    ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+                )
+                production_demand_sync = sync_production_demands_for_sales_order(order, user=request.user)
+                generate_tasks_for_entity('SalesOrder', order.id, order.code, 'APPROVE', triggered_by=request.user)
+        except Exception as exc:
+            return Response(
+                {'error': f'Khong the duyet don vi dong bo nhu cau san xuat loi: {exc}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({'status': order.status, 'production_demand_sync': production_demand_sync})
 
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
@@ -567,24 +581,37 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         reason = request.data.get('reason', '')
         if not workflow_can_transition('SalesOrder', order.status, SalesOrderStatus.REJECTED):
             return Response({'error': 'Chuyển trạng thái không hợp lệ.'}, status=status.HTTP_400_BAD_REQUEST)
-        order.status = SalesOrderStatus.REJECTED
-        order.rejected_by = request.user
-        order.rejected_at = timezone.now()
-        order.reject_reason = reason
-        order.save(update_fields=['status', 'rejected_by', 'rejected_at', 'reject_reason', 'updated_at'])
-        ApprovalHistory.objects.create(
-            entity_type='SalesOrder', entity_id=order.id, entity_code=order.code,
-            action='REJECT', user=request.user, comments=reason, level=1,
-        )
-        AuditLog.objects.create(
-            user=request.user, action='REJECT', entity_type='SalesOrder',
-            entity_id=order.id, entity_code=order.code,
-            old_values={'status': SalesOrderStatus.SUBMITTED},
-            new_values={'status': SalesOrderStatus.REJECTED, 'reason': reason},
-            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
-        )
-        generate_tasks_for_entity('SalesOrder', order.id, order.code, 'REJECT', triggered_by=request.user)
-        return Response({'status': order.status})
+        try:
+            with transaction.atomic():
+                order = SalesOrder.objects.select_for_update().get(pk=order.pk)
+                order.status = SalesOrderStatus.REJECTED
+                order.rejected_by = request.user
+                order.rejected_at = timezone.now()
+                order.reject_reason = reason
+                order.save(update_fields=['status', 'rejected_by', 'rejected_at', 'reject_reason', 'updated_at'])
+                ApprovalHistory.objects.create(
+                    entity_type='SalesOrder', entity_id=order.id, entity_code=order.code,
+                    action='REJECT', user=request.user, comments=reason, level=1,
+                )
+                AuditLog.objects.create(
+                    user=request.user, action='REJECT', entity_type='SalesOrder',
+                    entity_id=order.id, entity_code=order.code,
+                    old_values={'status': SalesOrderStatus.SUBMITTED},
+                    new_values={'status': SalesOrderStatus.REJECTED, 'reason': reason},
+                    ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+                )
+                production_demand_cancel = cancel_production_demands_for_sales_order(
+                    order,
+                    user=request.user,
+                    reason='Sales order rejected',
+                )
+                generate_tasks_for_entity('SalesOrder', order.id, order.code, 'REJECT', triggered_by=request.user)
+        except Exception as exc:
+            return Response(
+                {'error': f'Khong the tu choi don vi xu ly nhu cau san xuat loi: {exc}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({'status': order.status, 'production_demand_cancel': production_demand_cancel})
 
     @action(detail=True, methods=['post'])
     def confirm_order(self, request, pk=None):
@@ -631,31 +658,36 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         blockers = get_sales_order_void_blockers(order)
         if blockers:
             return Response({'error': ' '.join(blockers)}, status=status.HTTP_400_BAD_REQUEST)
-        old_status = order.status
-        order.status = SalesOrderStatus.VOID
-        order.voided_by = request.user
-        order.voided_at = timezone.now()
-        order.void_reason = void_reason
-        order.save(update_fields=['status', 'voided_by', 'voided_at', 'void_reason', 'updated_at'])
-        ApprovalHistory.objects.create(
-            entity_type='SalesOrder', entity_id=order.id, entity_code=order.code,
-            action='REJECT', user=request.user, comments=void_reason, level=1,
-        )
-        AuditLog.objects.create(
-            user=request.user, action='VOID', entity_type='SalesOrder',
-            entity_id=order.id, entity_code=order.code,
-            old_values={'status': old_status},
-            new_values={'status': SalesOrderStatus.VOID, 'reason': void_reason},
-            ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
-        )
         try:
-            from finance.services import cancel_receivable_for_sales_order
-
-            cancel_receivable_for_sales_order(order, actor=request.user, reason=void_reason)
+            with transaction.atomic():
+                order = SalesOrder.objects.select_for_update().get(pk=order.pk)
+                old_status = order.status
+                order.status = SalesOrderStatus.VOID
+                order.voided_by = request.user
+                order.voided_at = timezone.now()
+                order.void_reason = void_reason
+                order.save(update_fields=['status', 'voided_by', 'voided_at', 'void_reason', 'updated_at'])
+                ApprovalHistory.objects.create(
+                    entity_type='SalesOrder', entity_id=order.id, entity_code=order.code,
+                    action='REJECT', user=request.user, comments=void_reason, level=1,
+                )
+                AuditLog.objects.create(
+                    user=request.user, action='VOID', entity_type='SalesOrder',
+                    entity_id=order.id, entity_code=order.code,
+                    old_values={'status': old_status},
+                    new_values={'status': SalesOrderStatus.VOID, 'reason': void_reason},
+                    ip_address=get_client_ip(request), user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+                )
+                cancel_receivable_for_sales_order(order, actor=request.user, reason=void_reason)
+                production_demand_cancel = cancel_production_demands_for_sales_order(
+                    order,
+                    user=request.user,
+                    reason='Sales order voided',
+                )
+                generate_tasks_for_entity('SalesOrder', order.id, order.code, 'VOID', triggered_by=request.user)
         except Exception as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        generate_tasks_for_entity('SalesOrder', order.id, order.code, 'VOID', triggered_by=request.user)
-        return Response({'status': order.status})
+        return Response({'status': order.status, 'production_demand_cancel': production_demand_cancel})
 
     @action(detail=True, methods=['get'])
     def invoice_pdf(self, request, pk=None):

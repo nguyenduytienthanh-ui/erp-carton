@@ -24,6 +24,7 @@ PRODUCTION_DEMAND_SETTING_DEFAULTS = {
 
 SYNCED_DEMAND_SOURCE = 'SALES_ORDER'
 DEMAND_HOLD_REASON_SOURCE_CHANGED = 'Nguon nhu cau da thay doi, can planner kiem tra lai.'
+DEMAND_CANCEL_REASON_DEFAULT = 'Sales order cancelled/rejected; planner review required.'
 
 
 def _to_decimal(value):
@@ -323,6 +324,63 @@ def demand_has_downstream(demand):
     )
 
 
+def _cancel_reason_text(reason):
+    return str(reason or '').strip() or DEMAND_CANCEL_REASON_DEFAULT
+
+
+def _notes_with_reason(notes, reason):
+    reason_text = _cancel_reason_text(reason)
+    marker = f'[ProductionDemand] {reason_text}'
+    current = str(notes or '').strip()
+    if marker in current:
+        return current
+    return f'{current}\n{marker}'.strip()
+
+
+def cancel_production_demands_for_sales_order(order, *, user=None, reason='', dry_run=False):
+    result = _result(dry_run)
+    reason_text = _cancel_reason_text(reason)
+    demands = ProductionDemand.objects.filter(
+        sales_order=order,
+        source=SYNCED_DEMAND_SOURCE,
+    ).order_by('id')
+
+    for demand in demands:
+        if demand_has_downstream(demand):
+            if dry_run:
+                result['would_hold'] += 1
+                result['details'].append({'action': 'would_hold_cancel', 'demand_key': demand.demand_key, 'id': demand.id})
+                continue
+            demand.hold_reason = reason_text
+            demand.updated_by = user
+            demand.save(update_fields=['hold_reason', 'updated_by', 'updated_at'])
+            result['held'] += 1
+            result['details'].append({'action': 'held_cancel', 'demand_key': demand.demand_key, 'id': demand.id})
+            continue
+
+        if (
+            demand.planning_status == ProductionDemandPlanningStatus.CANCELLED
+            and demand.production_status == ProductionDemandProductionStatus.CANCELLED
+        ):
+            result['skipped'] += 1
+            result['details'].append({'action': 'skipped_cancelled', 'demand_key': demand.demand_key, 'id': demand.id})
+            continue
+
+        if dry_run:
+            result['would_cancel'] += 1
+            result['details'].append({'action': 'would_cancel', 'demand_key': demand.demand_key, 'id': demand.id})
+            continue
+
+        demand.planning_status = ProductionDemandPlanningStatus.CANCELLED
+        demand.production_status = ProductionDemandProductionStatus.CANCELLED
+        demand.notes = _notes_with_reason(demand.notes, reason_text)
+        demand.updated_by = user
+        demand.save(update_fields=['planning_status', 'production_status', 'notes', 'updated_by', 'updated_at'])
+        result['cancelled'] += 1
+        result['details'].append({'action': 'cancelled', 'demand_key': demand.demand_key, 'id': demand.id})
+    return result
+
+
 def _payload_for_compare(payload):
     return {
         key: value
@@ -489,4 +547,3 @@ def sync_production_demands_for_sales_order(order, *, user=None, dry_run=False):
     )
     _merge_result(result, _cancel_or_hold_stale_demands(stale_qs, active_keys, user=user, dry_run=dry_run))
     return result
-

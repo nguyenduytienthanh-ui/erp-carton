@@ -1,10 +1,12 @@
 """Admin SalesOrder: Header + TabularInline lines, readonly theo status, actions workflow."""
 from django.contrib import admin
+from django.db import transaction
 from django.utils import timezone
 from django.db.models import Q
 
 from core.models import ApprovalHistory, AuditLog
 from core.mixins import get_client_ip
+from production.demand_services import sync_production_demands_for_sales_order
 from sales.models import (
     DeliveryCarrier,
     SalesOrder,
@@ -86,12 +88,20 @@ class SalesOrderAdmin(admin.ModelAdmin):
 
     @admin.action(description='Duyệt')
     def approve_selected(self, request, queryset):
+        approved_count = 0
         for order in queryset.filter(status=SalesOrderStatus.SUBMITTED):
-            order.status = SalesOrderStatus.APPROVED
-            order.approved_by = request.user
-            order.approved_at = timezone.now()
-            order.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
-            ApprovalHistory.objects.create(entity_type='SalesOrder', entity_id=order.id, entity_code=order.code, action='APPROVE', user=request.user, level=1)
+            try:
+                with transaction.atomic():
+                    order = SalesOrder.objects.select_for_update().get(pk=order.pk)
+                    order.status = SalesOrderStatus.APPROVED
+                    order.approved_by = request.user
+                    order.approved_at = timezone.now()
+                    order.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
+                    ApprovalHistory.objects.create(entity_type='SalesOrder', entity_id=order.id, entity_code=order.code, action='APPROVE', user=request.user, level=1)
+                    sync_production_demands_for_sales_order(order, user=request.user)
+                approved_count += 1
+            except Exception as exc:
+                self.message_user(request, f'{order.code}: khong the duyet vi dong bo nhu cau san xuat loi: {exc}', level='warning')
         self.message_user(request, 'Đã duyệt.')
 
     @admin.action(description='Vào sổ (idempotent)')
