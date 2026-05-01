@@ -1,10 +1,13 @@
+import json
 from datetime import timedelta
+from io import StringIO
 
+from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from rest_framework.test import APITestCase
 from django.utils import timezone
 
-from core.models import ApprovalHistory, AuditLog, Customer, User
+from core.models import ApprovalHistory, AuditLog, Customer, Setting, User
 from inventory.models import InventoryTransaction, Warehouse, WarehouseLocation
 from products.models import Product, ProductUnit
 from production.models import (
@@ -18,7 +21,8 @@ from production.models import (
     ProductionOrder,
     ProductionReceipt,
 )
-from sales.models import SalesOrder, SalesOrderDeliveryPlan, SalesOrderLine
+from production.demand_services import sync_production_demands_for_sales_order
+from sales.models import SalesOrder, SalesOrderDeliveryPlan, SalesOrderLine, SalesOrderStatus
 
 
 class ProductionDemandModelTests(APITestCase):
@@ -153,6 +157,272 @@ class ProductionDemandModelTests(APITestCase):
         self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.NOT_DUE)
         self.assertEqual(demand.production_status, ProductionDemandProductionStatus.NOT_RELEASED)
         self.assertEqual(demand.priority, ProductionDemandPriority.NORMAL)
+
+
+class ProductionDemandSyncTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='production_demand_sync_admin',
+            password='Demo123!',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.customer = Customer.objects.create(
+            code='PD-SYNC-CUST',
+            name='Production Demand Sync Customer',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.unit = ProductUnit.objects.create(code='PDSYNC', name='Sync Unit')
+        self.product = Product.objects.create(
+            code='PD-SYNC-FG',
+            name='Production Demand Sync Product',
+            unit=self.unit,
+            cost_price=25000,
+            sale_price=40000,
+            process_in=20000,
+            process_be=8500,
+            status='ACTIVE',
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        self.order = SalesOrder.objects.create(
+            code='SO-PD-SYNC-001',
+            order_date=timezone.localdate(),
+            delivery_date=timezone.localdate() + timedelta(days=14),
+            status=SalesOrderStatus.APPROVED,
+            customer=self.customer,
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+
+    def _create_line(self, line_number=1, qty='10', product_snapshot=None):
+        if product_snapshot is None:
+            product_snapshot = {
+                'schema_version': 2,
+                'product_id': self.product.id,
+                'product_code': self.product.code,
+                'product_name': self.product.name,
+                'code': self.product.code,
+                'name': self.product.name,
+                'product_kind': 'SPECIFIC',
+                'unit_name': self.unit.name,
+                'size_order': '20x30',
+                'size_production': '21x31',
+                'print_colors': ['Black', 'Red'],
+                'operations': [
+                    {
+                        'operation_code': 'IN',
+                        'operation_name': 'In',
+                        'sequence': 20,
+                        'standard_rate_per_hour': 20000,
+                        'applied_rate_per_hour': 20000,
+                        'source': 'product_operations',
+                    },
+                ],
+                'routing_steps': [
+                    {
+                        'step_no': 10,
+                        'display_step': 1,
+                        'operation_code': 'IN',
+                        'operation_name': 'In',
+                        'applied_rate_per_hour': 20000,
+                        'source': 'product_routing',
+                    },
+                ],
+            }
+        return SalesOrderLine.objects.create(
+            sales_order=self.order,
+            line_number=line_number,
+            product=self.product,
+            internal_product_code=self.product.code,
+            product_snapshot=product_snapshot,
+            qty=qty,
+            uom=self.unit.code,
+            unit_price='40000',
+        )
+
+    def test_sync_line_without_delivery_plan_creates_fallback_demand(self):
+        line = self._create_line()
+
+        result = sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        self.assertEqual(result['created'], 1)
+        demand = ProductionDemand.objects.get(sales_order_line=line)
+        self.assertEqual(demand.demand_key, f'SO:{self.order.id}:LINE:{line.id}:DEFAULT')
+        self.assertEqual(str(demand.qty_required), '10.0000')
+        self.assertEqual(demand.delivery_date, self.order.delivery_date)
+        self.assertTrue(demand.demand_code.startswith('PD-'))
+
+    def test_sync_line_with_two_delivery_plans_creates_two_demands(self):
+        line = self._create_line()
+        first = SalesOrderDeliveryPlan.objects.create(
+            line=line,
+            delivery_date=timezone.localdate() + timedelta(days=5),
+            qty='4',
+        )
+        second = SalesOrderDeliveryPlan.objects.create(
+            line=line,
+            delivery_date=timezone.localdate() + timedelta(days=9),
+            qty='6',
+        )
+
+        result = sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        self.assertEqual(result['created'], 2)
+        keys = set(ProductionDemand.objects.values_list('demand_key', flat=True))
+        self.assertEqual(keys, {
+            f'SO:{self.order.id}:LINE:{line.id}:PLAN:{first.id}',
+            f'SO:{self.order.id}:LINE:{line.id}:PLAN:{second.id}',
+        })
+        self.assertFalse(ProductionDemand.objects.filter(demand_key__contains='DEFAULT').exists())
+
+    def test_sync_is_idempotent(self):
+        self._create_line()
+
+        first = sync_production_demands_for_sales_order(self.order, user=self.user)
+        second = sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        self.assertEqual(first['created'], 1)
+        self.assertEqual(second['created'], 0)
+        self.assertEqual(ProductionDemand.objects.count(), 1)
+
+    def test_delivery_plan_qty_and_date_change_updates_demand_without_downstream(self):
+        line = self._create_line()
+        plan = SalesOrderDeliveryPlan.objects.create(
+            line=line,
+            delivery_date=timezone.localdate() + timedelta(days=5),
+            qty='4',
+        )
+        sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        plan.qty = '7'
+        plan.delivery_date = timezone.localdate() + timedelta(days=8)
+        plan.save(update_fields=['qty', 'delivery_date'])
+        result = sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        demand = ProductionDemand.objects.get(demand_key=f'SO:{self.order.id}:LINE:{line.id}:PLAN:{plan.id}')
+        self.assertEqual(result['updated'], 1)
+        self.assertEqual(str(demand.qty_required), '7.0000')
+        self.assertEqual(demand.delivery_date, plan.delivery_date)
+
+    def test_zero_qty_delivery_plan_cancels_existing_demand_without_downstream(self):
+        line = self._create_line()
+        plan = SalesOrderDeliveryPlan.objects.create(
+            line=line,
+            delivery_date=timezone.localdate() + timedelta(days=5),
+            qty='4',
+        )
+        sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        plan.qty = '0'
+        plan.save(update_fields=['qty'])
+        result = sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        demand = ProductionDemand.objects.get(demand_key=f'SO:{self.order.id}:LINE:{line.id}:PLAN:{plan.id}')
+        self.assertEqual(result['cancelled'], 1)
+        self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.CANCELLED)
+        self.assertEqual(demand.production_status, ProductionDemandProductionStatus.CANCELLED)
+
+    def test_generic_snapshot_gets_extra_planning_lead_days(self):
+        Setting.objects.update_or_create(
+            key='PRODUCTION_DEMAND_GENERIC_EXTRA_LEAD_DAYS',
+            defaults={'value': '2', 'data_type': 'integer', 'is_active': True},
+        )
+        delivery_date = timezone.localdate() + timedelta(days=20)
+        self.order.delivery_date = delivery_date
+        self.order.save(update_fields=['delivery_date'])
+        line = self._create_line(product_snapshot={
+            'schema_version': 2,
+            'product_code': self.product.code,
+            'product_name': self.product.name,
+            'product_kind': 'GENERIC',
+            'requires_order_spec': True,
+            'requires_order_operations_review': True,
+            'operations': [],
+            'routing_steps': [],
+        })
+
+        sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        demand = ProductionDemand.objects.get(sales_order_line=line)
+        self.assertEqual(demand.planning_due_date, delivery_date - timedelta(days=9))
+
+    def test_snapshot_v2_summary_is_copied(self):
+        line = self._create_line()
+
+        sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        demand = ProductionDemand.objects.get(sales_order_line=line)
+        self.assertEqual(demand.product_kind, 'SPECIFIC')
+        self.assertEqual(demand.print_colors, ['Black', 'Red'])
+        self.assertEqual(demand.operations_summary[0]['operation_code'], 'IN')
+        self.assertEqual(demand.routing_summary[0]['operation_code'], 'IN')
+
+    def test_legacy_snapshot_summary_does_not_crash(self):
+        line = self._create_line(product_snapshot={
+            'code': 'LEGACY-FG',
+            'name': 'Legacy FG',
+            'process_in': 20000,
+            'process_be': 8500,
+            'color_count': 2,
+        })
+
+        sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        demand = ProductionDemand.objects.get(sales_order_line=line)
+        self.assertEqual(demand.product_code, 'LEGACY-FG')
+        self.assertTrue(any(item.get('operation_code') == 'IN' for item in demand.operations_summary))
+        self.assertTrue(any(item.get('operation_code') == 'IN' for item in demand.routing_summary))
+
+    def test_downstream_demand_is_held_not_overwritten(self):
+        line = self._create_line()
+        plan = SalesOrderDeliveryPlan.objects.create(
+            line=line,
+            delivery_date=timezone.localdate() + timedelta(days=5),
+            qty='4',
+        )
+        sync_production_demands_for_sales_order(self.order, user=self.user)
+        demand = ProductionDemand.objects.get(demand_key=f'SO:{self.order.id}:LINE:{line.id}:PLAN:{plan.id}')
+        demand.qty_planned = '2'
+        demand.save(update_fields=['qty_planned'])
+
+        plan.qty = '8'
+        plan.save(update_fields=['qty'])
+        result = sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        demand.refresh_from_db()
+        self.assertEqual(result['held'], 1)
+        self.assertEqual(str(demand.qty_required), '4.0000')
+        self.assertTrue(demand.hold_reason)
+
+    def test_dry_run_does_not_write_demands(self):
+        self._create_line()
+
+        result = sync_production_demands_for_sales_order(self.order, user=self.user, dry_run=True)
+
+        self.assertEqual(result['would_create'], 1)
+        self.assertEqual(ProductionDemand.objects.count(), 0)
+
+    def test_management_command_dry_run_json(self):
+        self._create_line()
+        output = StringIO()
+
+        call_command(
+            'sync_production_demands',
+            '--order-code',
+            self.order.code,
+            '--dry-run',
+            '--json',
+            stdout=output,
+        )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload['order_count'], 1)
+        self.assertEqual(payload['would_create'], 1)
+        self.assertEqual(ProductionDemand.objects.count(), 0)
 
 
 class ProductionWorkflowTests(APITestCase):
