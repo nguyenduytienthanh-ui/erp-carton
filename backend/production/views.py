@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 from django.db import transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -18,6 +19,9 @@ from core.models import ApprovalHistory, AuditLog
 from core.permissions import check_action_permission
 from core.workflow_services import generate_tasks_for_entity
 from production.models import (
+    ProductionDemand,
+    ProductionDemandPlanningStatus,
+    ProductionDemandProductionStatus,
     ProductionIssue,
     ProductionIssueLine,
     ProductionIssueStatus,
@@ -47,6 +51,7 @@ from production.permissions import (
     can_submit_production_order,
 )
 from production.serializers import (
+    ProductionDemandSerializer,
     ProductionIssueSerializer,
     ProductionOperationSerializer,
     ProductionOrderSerializer,
@@ -3417,6 +3422,167 @@ class SearchTextMixin:
         for token in tokens[1:]:
             query &= Q(**{f'{field_name}__icontains': token})
         return queryset.filter(query).distinct()
+
+
+def _parse_date_filter(value):
+    value = str(value or '').strip()
+    if not value:
+        return None
+    return parse_date(value)
+
+
+def _split_filter_values(value):
+    return [item.strip() for item in str(value or '').split(',') if item.strip()]
+
+
+def _active_bucket_queryset(queryset):
+    return (
+        queryset
+        .filter(Q(hold_reason='') | Q(hold_reason__isnull=True))
+        .exclude(
+            Q(planning_status=ProductionDemandPlanningStatus.CANCELLED)
+            | Q(production_status=ProductionDemandProductionStatus.CANCELLED)
+        )
+    )
+
+
+def _apply_production_demand_bucket(queryset, bucket, today=None):
+    bucket_value = str(bucket or '').strip().lower()
+    if not bucket_value:
+        return queryset
+    today_value = today or timezone.localdate()
+    if bucket_value == 'held':
+        return queryset.exclude(hold_reason='')
+    if bucket_value == 'cancelled':
+        return queryset.filter(
+            Q(planning_status=ProductionDemandPlanningStatus.CANCELLED)
+            | Q(production_status=ProductionDemandProductionStatus.CANCELLED)
+        )
+    active = _active_bucket_queryset(queryset)
+    if bucket_value == 'no_date':
+        return active.filter(planning_due_date__isnull=True)
+    if bucket_value == 'overdue':
+        return active.filter(planning_due_date__lt=today_value)
+    if bucket_value == 'due_today':
+        return active.filter(planning_due_date=today_value)
+    if bucket_value == 'upcoming_7':
+        return active.filter(
+            planning_due_date__gt=today_value,
+            planning_due_date__lte=today_value + timedelta(days=7),
+        )
+    if bucket_value == 'not_due':
+        return active.filter(planning_due_date__gt=today_value + timedelta(days=7))
+    return queryset
+
+
+def _production_demand_summary(queryset, today=None):
+    today_value = today or timezone.localdate()
+    active = _active_bucket_queryset(queryset)
+    return {
+        'total': queryset.count(),
+        'held': queryset.exclude(hold_reason='').count(),
+        'cancelled': queryset.filter(
+            Q(planning_status=ProductionDemandPlanningStatus.CANCELLED)
+            | Q(production_status=ProductionDemandProductionStatus.CANCELLED)
+        ).count(),
+        'no_date': active.filter(planning_due_date__isnull=True).count(),
+        'overdue': active.filter(planning_due_date__lt=today_value).count(),
+        'due_today': active.filter(planning_due_date=today_value).count(),
+        'upcoming_7_days': active.filter(
+            planning_due_date__gt=today_value,
+            planning_due_date__lte=today_value + timedelta(days=7),
+        ).count(),
+        'not_due': active.filter(planning_due_date__gt=today_value + timedelta(days=7)).count(),
+        'partially_planned': queryset.filter(planning_status=ProductionDemandPlanningStatus.PARTIALLY_PLANNED).count(),
+        'fully_planned': queryset.filter(planning_status=ProductionDemandPlanningStatus.FULLY_PLANNED).count(),
+        'no_production_needed': queryset.filter(planning_status=ProductionDemandPlanningStatus.NO_PRODUCTION_NEEDED).count(),
+        'not_released': queryset.filter(production_status=ProductionDemandProductionStatus.NOT_RELEASED).count(),
+        'in_progress': queryset.filter(production_status=ProductionDemandProductionStatus.IN_PROGRESS).count(),
+        'completed': queryset.filter(production_status=ProductionDemandProductionStatus.COMPLETED).count(),
+    }
+
+
+class ProductionDemandViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
+    serializer_class = ProductionDemandSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['planning_due_date', 'delivery_date', 'priority', 'product_code', 'created_at']
+    ordering = ['planning_due_date', 'delivery_date', 'id']
+
+    def _base_queryset(self):
+        return ProductionDemand.objects.select_related(
+            'sales_order',
+            'sales_order__customer',
+            'sales_order_line',
+            'delivery_plan',
+            'product',
+            'assigned_planner',
+        )
+
+    def _apply_filters(self, queryset, *, include_planning_bucket=True):
+        params = self.request.query_params
+        exact_filters = {
+            'planning_status': 'planning_status',
+            'production_status': 'production_status',
+            'product_kind': 'product_kind',
+            'priority': 'priority',
+            'assigned_planner': 'assigned_planner_id',
+            'sales_order': 'sales_order_id',
+            'sales_order_line': 'sales_order_line_id',
+            'delivery_plan': 'delivery_plan_id',
+            'product': 'product_id',
+        }
+        for param_name, field_name in exact_filters.items():
+            values = _split_filter_values(params.get(param_name))
+            if not values:
+                continue
+            if len(values) == 1:
+                queryset = queryset.filter(**{field_name: values[0]})
+            else:
+                queryset = queryset.filter(**{f'{field_name}__in': values})
+
+        product_code = str(params.get('product_code') or '').strip()
+        if product_code:
+            queryset = queryset.filter(product_code__icontains=product_code)
+
+        customer_value = str(params.get('customer') or '').strip()
+        if customer_value:
+            if customer_value.isdigit():
+                queryset = queryset.filter(
+                    Q(customer_id_snapshot=int(customer_value))
+                    | Q(sales_order__customer_id=int(customer_value))
+                )
+            else:
+                queryset = queryset.filter(
+                    Q(customer_name_snapshot__icontains=customer_value)
+                    | Q(sales_order__customer__name__icontains=customer_value)
+                    | Q(sales_order__customer__code__icontains=customer_value)
+                )
+
+        delivery_date_from = _parse_date_filter(params.get('delivery_date_from'))
+        if delivery_date_from:
+            queryset = queryset.filter(delivery_date__gte=delivery_date_from)
+        delivery_date_to = _parse_date_filter(params.get('delivery_date_to'))
+        if delivery_date_to:
+            queryset = queryset.filter(delivery_date__lte=delivery_date_to)
+        planning_due_date_from = _parse_date_filter(params.get('planning_due_date_from'))
+        if planning_due_date_from:
+            queryset = queryset.filter(planning_due_date__gte=planning_due_date_from)
+        planning_due_date_to = _parse_date_filter(params.get('planning_due_date_to'))
+        if planning_due_date_to:
+            queryset = queryset.filter(planning_due_date__lte=planning_due_date_to)
+
+        if include_planning_bucket:
+            queryset = _apply_production_demand_bucket(queryset, params.get('planning_bucket'))
+        return self.apply_search(queryset)
+
+    def get_queryset(self):
+        return self._apply_filters(self._base_queryset(), include_planning_bucket=True)
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        queryset = self._apply_filters(self._base_queryset(), include_planning_bucket=False)
+        return Response(_production_demand_summary(queryset))
 
 
 class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):

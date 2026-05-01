@@ -425,6 +425,233 @@ class ProductionDemandSyncTests(APITestCase):
         self.assertEqual(ProductionDemand.objects.count(), 0)
 
 
+class ProductionDemandApiTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='production_demand_api_admin',
+            password='Demo123!',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.basic_user = User.objects.create_user(
+            username='production_demand_api_basic',
+            password='Demo123!',
+        )
+        self.client.force_authenticate(user=self.user)
+        self.today = timezone.localdate()
+        self.customer = Customer.objects.create(
+            code='PD-API-CUST',
+            name='Production Demand API Customer',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.unit = ProductUnit.objects.create(code='PDAPI', name='API Unit')
+        self.product = Product.objects.create(
+            code='PD-API-FG',
+            name='Production Demand API Product',
+            unit=self.unit,
+            cost_price=25000,
+            sale_price=40000,
+            status='ACTIVE',
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        self.specific_product = Product.objects.create(
+            code='PD-API-SPEC',
+            name='Production Demand API Specific',
+            unit=self.unit,
+            cost_price=25000,
+            sale_price=40000,
+            status='ACTIVE',
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        self.order = SalesOrder.objects.create(
+            code='SO-PD-API-001',
+            order_date=self.today,
+            delivery_date=self.today + timedelta(days=10),
+            status=SalesOrderStatus.APPROVED,
+            customer=self.customer,
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        self.line = SalesOrderLine.objects.create(
+            sales_order=self.order,
+            line_number=1,
+            product=self.product,
+            qty='10',
+            uom=self.unit.code,
+            unit_price='40000',
+        )
+        self.delivery_plan = SalesOrderDeliveryPlan.objects.create(
+            line=self.line,
+            delivery_date=self.today + timedelta(days=10),
+            qty='10',
+        )
+        self.overdue = self._create_demand('OVERDUE', planning_due_date=self.today - timedelta(days=1))
+        self.due_today = self._create_demand('DUE', planning_due_date=self.today)
+        self.upcoming = self._create_demand('UPCOMING', planning_due_date=self.today + timedelta(days=3))
+        self.specific_not_due = self._create_demand(
+            'SPECIFIC',
+            product=self.specific_product,
+            product_kind='SPECIFIC',
+            product_code=self.specific_product.code,
+            product_name=self.specific_product.name,
+            planning_due_date=self.today + timedelta(days=12),
+        )
+        self.no_date = self._create_demand('NO-DATE', planning_due_date=None)
+        self.held = self._create_demand(
+            'HELD',
+            planning_due_date=self.today - timedelta(days=2),
+            hold_reason='Planner review required',
+        )
+        self.cancelled = self._create_demand(
+            'CANCELLED',
+            planning_due_date=self.today + timedelta(days=2),
+            planning_status=ProductionDemandPlanningStatus.CANCELLED,
+            production_status=ProductionDemandProductionStatus.CANCELLED,
+        )
+        self.partially_planned = self._create_demand(
+            'PARTIAL',
+            planning_due_date=self.today + timedelta(days=14),
+            planning_status=ProductionDemandPlanningStatus.PARTIALLY_PLANNED,
+        )
+        self.fully_planned = self._create_demand(
+            'FULL',
+            planning_due_date=self.today + timedelta(days=15),
+            planning_status=ProductionDemandPlanningStatus.FULLY_PLANNED,
+            production_status=ProductionDemandProductionStatus.COMPLETED,
+        )
+        self.no_production_needed = self._create_demand(
+            'NO-PROD',
+            planning_due_date=self.today + timedelta(days=16),
+            planning_status=ProductionDemandPlanningStatus.NO_PRODUCTION_NEEDED,
+            production_status=ProductionDemandProductionStatus.IN_PROGRESS,
+        )
+
+    def _create_demand(self, suffix, **overrides):
+        product = overrides.pop('product', self.product)
+        product_code = overrides.pop('product_code', product.code)
+        product_name = overrides.pop('product_name', product.name)
+        data = {
+            'demand_key': f'SO:{self.order.id}:LINE:{self.line.id}:API:{suffix}',
+            'sales_order': self.order,
+            'sales_order_line': self.line,
+            'delivery_plan': self.delivery_plan,
+            'product': product,
+            'customer_id_snapshot': self.customer.id,
+            'customer_name_snapshot': self.customer.name,
+            'product_code': product_code,
+            'product_name': product_name,
+            'product_kind': 'GENERIC',
+            'unit_name': self.unit.name,
+            'qty_required': '10',
+            'qty_planned': '0',
+            'qty_released': '0',
+            'qty_completed': '0',
+            'order_date': self.order.order_date,
+            'delivery_date': self.delivery_plan.delivery_date,
+            'planning_due_date': self.today + timedelta(days=10),
+            'planning_status': ProductionDemandPlanningStatus.NOT_DUE,
+            'production_status': ProductionDemandProductionStatus.NOT_RELEASED,
+            'priority': ProductionDemandPriority.NORMAL,
+            'source': 'SALES_ORDER',
+            'created_by': self.user,
+            'updated_by': self.user,
+        }
+        data.update(overrides)
+        return ProductionDemand.objects.create(**data)
+
+    def _results(self, response):
+        if isinstance(response.data, dict) and 'results' in response.data:
+            return response.data['results']
+        return response.data
+
+    def _count(self, response):
+        if isinstance(response.data, dict) and 'count' in response.data:
+            return response.data['count']
+        return len(self._results(response))
+
+    def test_list_and_detail_return_read_fields(self):
+        response = self.client.get('/api/production/demands/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._count(response), 10)
+        first = self._results(response)[0]
+        self.assertIn('planning_bucket', first)
+        self.assertIn('is_held', first)
+        self.assertIn('customer_display', first)
+        self.assertIn('delivery_plan_display', first)
+
+        detail_response = self.client.get(f'/api/production/demands/{self.overdue.id}/')
+
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.data['planning_bucket'], 'overdue')
+        self.assertFalse(detail_response.data['is_held'])
+
+    def test_filters_search_and_planning_bucket_work(self):
+        self.assertEqual(self._count(self.client.get('/api/production/demands/', {'planning_status': 'CANCELLED'})), 1)
+        self.assertEqual(self._count(self.client.get('/api/production/demands/', {'production_status': 'COMPLETED'})), 1)
+        self.assertEqual(self._count(self.client.get('/api/production/demands/', {'product_kind': 'SPECIFIC'})), 1)
+        self.assertEqual(self._count(self.client.get('/api/production/demands/', {'product_code': 'PD-API-SPEC'})), 1)
+        self.assertEqual(self._count(self.client.get('/api/production/demands/', {'customer': self.customer.id})), 10)
+        self.assertEqual(self._count(self.client.get('/api/production/demands/', {'customer': 'API Customer'})), 10)
+        self.assertEqual(
+            self._count(self.client.get(
+                '/api/production/demands/',
+                {'planning_due_date_from': str(self.today), 'planning_due_date_to': str(self.today)},
+            )),
+            1,
+        )
+        held_response = self.client.get('/api/production/demands/', {'planning_bucket': 'held'})
+        self.assertEqual(self._count(held_response), 1)
+        self.assertEqual(self._results(held_response)[0]['id'], self.held.id)
+        search_response = self.client.get('/api/production/demands/', {'q': 'api customer'})
+        self.assertEqual(self._count(search_response), 10)
+
+    def test_summary_counts_and_ignores_planning_bucket_filter(self):
+        response = self.client.get('/api/production/demands/summary/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['total'], 10)
+        self.assertEqual(response.data['held'], 1)
+        self.assertEqual(response.data['cancelled'], 1)
+        self.assertEqual(response.data['no_date'], 1)
+        self.assertEqual(response.data['overdue'], 1)
+        self.assertEqual(response.data['due_today'], 1)
+        self.assertEqual(response.data['upcoming_7_days'], 1)
+        self.assertEqual(response.data['not_due'], 4)
+        self.assertEqual(response.data['partially_planned'], 1)
+        self.assertEqual(response.data['fully_planned'], 1)
+        self.assertEqual(response.data['no_production_needed'], 1)
+        self.assertEqual(response.data['not_released'], 7)
+        self.assertEqual(response.data['in_progress'], 1)
+        self.assertEqual(response.data['completed'], 1)
+
+        generic_response = self.client.get(
+            '/api/production/demands/summary/',
+            {'product_kind': 'GENERIC', 'planning_bucket': 'overdue'},
+        )
+
+        self.assertEqual(generic_response.status_code, 200)
+        self.assertEqual(generic_response.data['total'], 9)
+        self.assertEqual(generic_response.data['overdue'], 1)
+
+    def test_permission_blocks_non_production_user(self):
+        self.client.force_authenticate(user=self.basic_user)
+
+        response = self.client.get('/api/production/demands/')
+
+        self.assertEqual(response.status_code, 403)
+
+        self.client.force_authenticate(user=self.user)
+        allowed_response = self.client.get('/api/production/demands/')
+        self.assertEqual(allowed_response.status_code, 200)
+
+
 class ProductionWorkflowTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(

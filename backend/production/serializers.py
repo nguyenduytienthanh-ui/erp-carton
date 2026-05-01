@@ -1,10 +1,14 @@
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 
 from production.models import (
     ProductionDemand,
+    ProductionDemandPlanningStatus,
+    ProductionDemandProductionStatus,
     ProductionIssue,
     ProductionIssueLine,
     ProductionMaterialRequirement,
@@ -33,6 +37,26 @@ def _format_packaging_number(value):
     return text
 
 
+def get_production_demand_planning_bucket(obj, today=None):
+    if obj.hold_reason:
+        return 'held'
+    if (
+        obj.planning_status == ProductionDemandPlanningStatus.CANCELLED
+        or obj.production_status == ProductionDemandProductionStatus.CANCELLED
+    ):
+        return 'cancelled'
+    if not obj.planning_due_date:
+        return 'no_date'
+    today_value = today or timezone.localdate()
+    if obj.planning_due_date < today_value:
+        return 'overdue'
+    if obj.planning_due_date == today_value:
+        return 'due_today'
+    if obj.planning_due_date <= today_value + timedelta(days=7):
+        return 'upcoming_7'
+    return 'not_due'
+
+
 class ProductionDemandSerializer(serializers.ModelSerializer):
     sales_order_code = serializers.CharField(source='sales_order.code', read_only=True)
     sales_order_line_number = serializers.IntegerField(source='sales_order_line.line_number', read_only=True)
@@ -43,6 +67,30 @@ class ProductionDemandSerializer(serializers.ModelSerializer):
     qty_remaining_to_plan = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
     qty_remaining_to_release = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
     qty_remaining_to_complete = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
+    planning_bucket = serializers.SerializerMethodField()
+    is_held = serializers.SerializerMethodField()
+    customer_display = serializers.SerializerMethodField()
+    delivery_plan_display = serializers.SerializerMethodField()
+
+    def get_planning_bucket(self, obj):
+        return get_production_demand_planning_bucket(obj)
+
+    def get_is_held(self, obj):
+        return bool(obj.hold_reason)
+
+    def get_customer_display(self, obj):
+        return obj.customer_name_snapshot or getattr(getattr(obj.sales_order, 'customer', None), 'name', '') or ''
+
+    def get_delivery_plan_display(self, obj):
+        if not obj.delivery_plan_id:
+            return ''
+        date_value = getattr(getattr(obj, 'delivery_plan', None), 'delivery_date', None) or obj.delivery_date
+        qty_value = getattr(obj.delivery_plan, 'qty', None)
+        if date_value and qty_value is not None:
+            return f'{date_value} qty={qty_value}'
+        if date_value:
+            return str(date_value)
+        return ''
 
     class Meta:
         model = ProductionDemand
@@ -77,6 +125,10 @@ class ProductionDemandSerializer(serializers.ModelSerializer):
             'qty_remaining_to_plan',
             'qty_remaining_to_release',
             'qty_remaining_to_complete',
+            'planning_bucket',
+            'is_held',
+            'customer_display',
+            'delivery_plan_display',
             'order_date',
             'delivery_date',
             'production_due_date',
@@ -100,6 +152,10 @@ class ProductionDemandSerializer(serializers.ModelSerializer):
             'qty_remaining_to_plan',
             'qty_remaining_to_release',
             'qty_remaining_to_complete',
+            'planning_bucket',
+            'is_held',
+            'customer_display',
+            'delivery_plan_display',
             'created_at',
             'updated_at',
         ]
