@@ -4,6 +4,9 @@ import type {
   ProductionBulkUpdateResponse,
   PaginatedResponse,
   ProductionApprovalHistoryItem,
+  ProductionDemand,
+  ProductionDemandQueryParams,
+  ProductionDemandSummary,
   ProductionOperation,
   ProductionOrderSummary,
   ProductionIssue,
@@ -22,6 +25,18 @@ type ProductionOrderPayload = Omit<ProductionOrderFormValues, never>;
 
 
 export const productionApi = {
+  getDemands: async (params?: ProductionDemandQueryParams): Promise<PaginatedResponse<ProductionDemand>> => {
+    const response = await axiosInstance.get(API_ENDPOINTS.PRODUCTION_DEMANDS, { params });
+    return response.data;
+  },
+  getDemand: async (id: number): Promise<ProductionDemand> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_DEMANDS}${id}/`);
+    return response.data;
+  },
+  getDemandSummary: async (params?: ProductionDemandQueryParams): Promise<ProductionDemandSummary> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_DEMANDS}summary/`, { params });
+    return response.data;
+  },
   getOrders: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ProductionOrder>> => {
     const response = await axiosInstance.get(API_ENDPOINTS.PRODUCTION_ORDERS, { params });
     return response.data;

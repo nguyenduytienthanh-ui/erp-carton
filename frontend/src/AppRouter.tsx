@@ -67,6 +67,7 @@ const PurchaseRequestList = lazy(() => import('./pages/Purchasing/PurchaseReques
 const PurchaseReturnList = lazy(() => import('./pages/Purchasing/PurchaseReturnList'));
 const PurchaseOrderForecast = lazy(() => import('./pages/Purchasing/PurchaseOrderForecast'));
 const SupplierPerformanceAnalytics = lazy(() => import('./pages/Purchasing/SupplierPerformanceAnalytics'));
+const ProductionDemandList = lazy(() => import('./pages/Production/ProductionDemandList'));
 const ProductionOrderList = lazy(() => import('./pages/Production/ProductionOrderList'));
 const ProductionPlanningBoard = lazy(() => import('./pages/Production/ProductionPlanningBoard'));
 const MaterialIssueList = lazy(() => import('./pages/Production/MaterialIssueList'));
@@ -264,6 +265,7 @@ export default function AppRouter() {
               <Route path="purchase-returns" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseReturnList />)}</FeatureRoute>} />
               <Route path="purchase-order-forecast" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseOrderForecast />)}</FeatureRoute>} />
               <Route path="supplier-analytics" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<SupplierPerformanceAnalytics />)}</FeatureRoute>} />
+              <Route path="production-demands" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionDemandList />)}</FeatureRoute>} />
               <Route path="production-orders" element={<FeatureRoute allow={canAccessProduction} fallbackTo="/">{withAsyncBoundary(<ProductionOrderList />)}</FeatureRoute>} />
               <Route path="production-planning" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionPlanningBoard />)}</FeatureRoute>} />
               <Route path="material-issues" element={<FeatureRoute allow={canAccessMaterialIssueRoute} fallbackTo="/">{withAsyncBoundary(<MaterialIssueList />)}</FeatureRoute>} />

@@ -23,6 +23,27 @@ export type ProductionOperationDependencyState = 'ROOT' | 'CLEAR' | 'WAIT_PREVIO
 export type ProductionOperationRiskState = 'DONE' | 'UNSCHEDULED' | 'OVERDUE' | 'BLOCKED' | 'AT_RISK' | 'ON_TRACK';
 export type ProductionIssueStatus = 'POSTED' | 'CANCELLED';
 export type ProductionReceiptStatus = 'POSTED' | 'CANCELLED';
+export type ProductionDemandPlanningStatus =
+  | 'NOT_DUE'
+  | 'UPCOMING'
+  | 'DUE'
+  | 'OVERDUE'
+  | 'PARTIALLY_PLANNED'
+  | 'FULLY_PLANNED'
+  | 'NO_PRODUCTION_NEEDED'
+  | 'CANCELLED';
+export type ProductionDemandProductionStatus =
+  | 'NOT_RELEASED'
+  | 'PARTIALLY_RELEASED'
+  | 'FULLY_RELEASED'
+  | 'IN_PROGRESS'
+  | 'PARTIALLY_COMPLETED'
+  | 'COMPLETED'
+  | 'PAUSED'
+  | 'CANCELLED';
+export type ProductionDemandPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
+export type ProductionDemandProductKind = 'SPECIFIC' | 'GENERIC' | string;
+export type ProductionDemandPlanningBucket = 'held' | 'cancelled' | 'no_date' | 'overdue' | 'due_today' | 'upcoming_7' | 'not_due';
 export type ProductionPlanningBucketKey = 'OVERDUE' | 'TODAY' | 'TOMORROW' | 'UPCOMING' | 'UNSCHEDULED';
 export type ProductionPlanningShiftFilter = ProductionPlanningShift | 'UNASSIGNED';
 export type ProductionPlanningHandoverFilter = ProductionOperationHandoverStatus | 'NONE';
@@ -33,6 +54,91 @@ export interface PaginatedResponse<T> {
   next: string | null;
   previous: string | null;
   results: T[];
+}
+
+export interface ProductionDemand {
+  id: number;
+  demand_code?: string | null;
+  demand_key: string;
+  sales_order: number;
+  sales_order_code?: string | null;
+  sales_order_line: number;
+  sales_order_line_number?: number | null;
+  delivery_plan?: number | null;
+  delivery_plan_date?: string | null;
+  delivery_plan_display?: string;
+  product?: number | null;
+  product_display_code?: string | null;
+  product_display_name?: string | null;
+  customer_id_snapshot?: number | null;
+  customer_name_snapshot?: string;
+  customer_display?: string;
+  product_code?: string;
+  product_name?: string;
+  product_kind?: ProductionDemandProductKind;
+  unit_name?: string;
+  size_order?: string;
+  size_production?: string;
+  print_colors?: unknown[];
+  operations_summary?: unknown[];
+  routing_summary?: unknown[];
+  qty_required: string;
+  qty_planned: string;
+  qty_released: string;
+  qty_completed: string;
+  qty_remaining_to_plan: string;
+  qty_remaining_to_release: string;
+  qty_remaining_to_complete: string;
+  planning_bucket: ProductionDemandPlanningBucket;
+  is_held: boolean;
+  order_date?: string | null;
+  delivery_date?: string | null;
+  production_due_date?: string | null;
+  planning_due_date?: string | null;
+  reminder_date?: string | null;
+  planning_status: ProductionDemandPlanningStatus;
+  production_status: ProductionDemandProductionStatus;
+  priority: ProductionDemandPriority;
+  assigned_planner?: number | null;
+  assigned_planner_name?: string | null;
+  notes?: string;
+  reminder_note?: string;
+  hold_reason?: string;
+  source?: string;
+  created_by?: number | null;
+  updated_by?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductionDemandSummary {
+  total: number;
+  held: number;
+  cancelled: number;
+  no_date: number;
+  overdue: number;
+  due_today: number;
+  upcoming_7_days: number;
+  not_due: number;
+  partially_planned: number;
+  fully_planned: number;
+  no_production_needed: number;
+  not_released: number;
+  in_progress: number;
+  completed: number;
+}
+
+export interface ProductionDemandQueryParams {
+  page?: number;
+  page_size?: number;
+  q?: string;
+  search?: string;
+  planning_status?: ProductionDemandPlanningStatus | string;
+  production_status?: ProductionDemandProductionStatus | string;
+  product_kind?: ProductionDemandProductKind;
+  priority?: ProductionDemandPriority | string;
+  planning_bucket?: ProductionDemandPlanningBucket | string;
+  ordering?: string;
 }
 
 export interface ProductionOperation {

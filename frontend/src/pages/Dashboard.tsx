@@ -469,6 +469,14 @@ export default function Dashboard() {
 
     if (canManageProduction) {
       cards.push({
+        key: 'production-demands',
+        title: 'Nhu cầu sản xuất',
+        badge: 'Demand',
+        description: 'Theo dõi nhu cầu sản xuất phát sinh từ đơn hàng và kế hoạch giao để ưu tiên lập kế hoạch đúng hạn.',
+        route: '/production-demands',
+        actionLabel: 'Mở nhu cầu sản xuất',
+      });
+      cards.push({
         key: 'production-planning',
         title: 'Điều độ sản xuất',
         badge: 'Planner',
@@ -552,6 +560,15 @@ export default function Dashboard() {
     }
 
     if (canManageProduction) {
+      cards.push({
+        key: 'production-demands',
+        testId: 'dashboard-restore-production-demands',
+        title: 'Nhu cầu sản xuất',
+        badge: 'Demand',
+        description: 'Mở nhanh danh sách nhu cầu sản xuất từ đơn hàng và kế hoạch giao để rà quá hạn, hôm nay và các dòng cần xử lý.',
+        route: '/production-demands',
+        actionLabel: 'Mở nhu cầu sản xuất',
+      });
       cards.push({
         key: 'production-planning',
         testId: 'dashboard-restore-production-planning',

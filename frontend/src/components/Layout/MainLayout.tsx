@@ -119,6 +119,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/purchase-receipts': () => import('../../pages/Purchasing/PurchaseReceiptList'),
   '/purchase-requests': () => import('../../pages/Purchasing/PurchaseRequestList'),
   '/purchase-returns': () => import('../../pages/Purchasing/PurchaseReturnList'),
+  '/production-demands': () => import('../../pages/Production/ProductionDemandList'),
   '/production-orders': () => import('../../pages/Production/ProductionOrderList'),
   '/production-planning': () => import('../../pages/Production/ProductionPlanningBoard'),
   '/material-issues': () => import('../../pages/Production/MaterialIssueList'),
@@ -543,13 +544,22 @@ const MainLayout = () => {
     }
 
     if (canManageProduction) {
-      shortcuts.push({
-        key: 'production-planning',
-        label: 'Điều độ sản xuất',
-        description: 'Mở planner công đoạn để rà tải theo ngày, ca và điểm nghẽn.',
-        path: '/production-planning',
-        testId: 'header-restore-shortcut-production-planning',
-      });
+      shortcuts.push(
+        {
+          key: 'production-demands',
+          label: 'Nhu cầu sản xuất',
+          description: 'Theo dõi nhu cầu sản xuất phát sinh từ đơn hàng và kế hoạch giao.',
+          path: '/production-demands',
+          testId: 'header-restore-shortcut-production-demands',
+        },
+        {
+          key: 'production-planning',
+          label: 'Điều độ sản xuất',
+          description: 'Mở planner công đoạn để rà tải theo ngày, ca và điểm nghẽn.',
+          path: '/production-planning',
+          testId: 'header-restore-shortcut-production-planning',
+        },
+      );
     }
 
     if (canManageOnboarding) {
@@ -816,6 +826,10 @@ const MainLayout = () => {
       icon: <BuildOutlined />,
       label: 'Sản xuất',
       children: [
+        ...(canManageProduction ? [{
+          key: '/production-demands',
+          label: renderMenuLabel('/production-demands', 'Nhu cầu sản xuất'),
+        }] : []),
         ...(canAccessProduction ? [{
           key: '/production-orders',
           label: renderMenuLabel('/production-orders', 'Lệnh sản xuất'),

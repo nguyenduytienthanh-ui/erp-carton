@@ -418,6 +418,16 @@ export function buildCommandPaletteCatalog(
       spotlight: options.canAccessProductionCenter,
     },
     {
+      key: 'production-demands',
+      path: '/production-demands',
+      title: 'Nhu cầu sản xuất',
+      group: 'Sản xuất',
+      description: 'Theo dõi nhu cầu sản xuất phát sinh từ đơn hàng và kế hoạch giao.',
+      keywords: ['nhu cau san xuat', 'production demand', 'demand', 'ke hoach giao'],
+      enabled: options.canManageProduction,
+      spotlight: options.canManageProduction,
+    },
+    {
       key: 'production-planning',
       path: '/production-planning',
       title: 'Điều độ sản xuất',
