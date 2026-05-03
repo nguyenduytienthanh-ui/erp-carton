@@ -1,9 +1,24 @@
-import { useMemo, useState } from 'react';
-import { Alert, Button, Card, Empty, Input, Space, Statistic, Table, Tag, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  DatePicker,
+  Empty,
+  Input,
+  Select,
+  Space,
+  Statistic,
+  Table,
+  Tabs,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd';
+import type { ColumnsType, TableProps } from 'antd/es/table';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import dayjs from 'dayjs';
+import dayjs, { type Dayjs } from 'dayjs';
 
 import { productionApi } from '../../api/production';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
@@ -15,10 +30,47 @@ import type {
   ProductionDemandPlanningStatus,
   ProductionDemandPriority,
   ProductionDemandProductionStatus,
+  ProductionDemandProductKind,
+  ProductionDemandQueryParams,
 } from '../../types/production';
 import { PAGES } from '../../utils/constants';
 
+const { RangePicker } = DatePicker;
 const { Text, Title } = Typography;
+
+type DemandLaneFilter =
+  | 'ALL'
+  | 'OVERDUE'
+  | 'DUE_TODAY'
+  | 'UPCOMING_7'
+  | 'NOT_DUE'
+  | 'HELD'
+  | 'NO_DATE'
+  | 'PARTIALLY_PLANNED'
+  | 'FULLY_PLANNED'
+  | 'IN_PROGRESS'
+  | 'COMPLETED';
+
+type DemandFilters = {
+  planning_status?: ProductionDemandPlanningStatus;
+  production_status?: ProductionDemandProductionStatus;
+  product_kind?: ProductionDemandProductKind;
+  priority?: ProductionDemandPriority;
+  product_code?: string;
+  customer?: string;
+  delivery_date_from?: string;
+  delivery_date_to?: string;
+  planning_due_date_from?: string;
+  planning_due_date_to?: string;
+};
+
+type SummaryCard = {
+  key: string;
+  title: string;
+  value: number;
+  color: string;
+  lane?: DemandLaneFilter;
+};
 
 const SUMMARY_DEFAULT = {
   total: 0,
@@ -105,6 +157,50 @@ const PRIORITY_COLORS: Record<ProductionDemandPriority, string> = {
   URGENT: 'red',
 };
 
+const LANE_LABELS: Record<DemandLaneFilter, string> = {
+  ALL: 'Tất cả',
+  OVERDUE: 'Quá hạn',
+  DUE_TODAY: 'Cần lập hôm nay',
+  UPCOMING_7: 'Sắp đến hạn 7 ngày',
+  NOT_DUE: 'Chưa tới hạn',
+  HELD: 'Cần xử lý',
+  NO_DATE: 'Chưa có ngày',
+  PARTIALLY_PLANNED: 'Đã lập một phần',
+  FULLY_PLANNED: 'Đã lập đủ',
+  IN_PROGRESS: 'Đang sản xuất',
+  COMPLETED: 'Hoàn thành',
+};
+
+const DEMAND_LANES: DemandLaneFilter[] = [
+  'ALL',
+  'OVERDUE',
+  'DUE_TODAY',
+  'UPCOMING_7',
+  'NOT_DUE',
+  'HELD',
+  'NO_DATE',
+  'PARTIALLY_PLANNED',
+  'FULLY_PLANNED',
+  'IN_PROGRESS',
+  'COMPLETED',
+];
+
+const PLANNING_STATUS_OPTIONS = Object.entries(PLANNING_STATUS_LABELS).map(([value, label]) => ({ value, label }));
+const PRODUCTION_STATUS_OPTIONS = Object.entries(PRODUCTION_STATUS_LABELS).map(([value, label]) => ({ value, label }));
+const PRODUCT_KIND_OPTIONS = [
+  { value: 'SPECIFIC', label: 'Mã riêng' },
+  { value: 'GENERIC', label: 'Mã chung' },
+];
+const PRIORITY_OPTIONS = Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }));
+
+const ORDERING_FIELD_MAP: Record<string, string> = {
+  planning_due_date: 'planning_due_date',
+  delivery_date: 'delivery_date',
+  product_code: 'product_code',
+  priority: 'priority',
+  created_at: 'created_at',
+};
+
 const formatDate = (value?: string | null) => (value ? dayjs(value).format('DD/MM/YYYY') : '-');
 const formatNumber = (value?: string | number | null) => Number(value || 0).toLocaleString('vi-VN');
 const formatMaybeText = (value?: string | null) => {
@@ -112,16 +208,137 @@ const formatMaybeText = (value?: string | null) => {
   return normalized || '-';
 };
 
+const isDemandLaneFilter = (value: unknown): value is DemandLaneFilter => (
+  typeof value === 'string' && DEMAND_LANES.includes(value as DemandLaneFilter)
+);
+
+const cleanFilters = (filters: DemandFilters): DemandFilters => {
+  const next: DemandFilters = {};
+  if (filters.planning_status) next.planning_status = filters.planning_status;
+  if (filters.production_status) next.production_status = filters.production_status;
+  if (filters.product_kind) next.product_kind = filters.product_kind;
+  if (filters.priority) next.priority = filters.priority;
+  if (filters.product_code?.trim()) next.product_code = filters.product_code.trim();
+  if (filters.customer?.trim()) next.customer = filters.customer.trim();
+  if (filters.delivery_date_from) next.delivery_date_from = filters.delivery_date_from;
+  if (filters.delivery_date_to) next.delivery_date_to = filters.delivery_date_to;
+  if (filters.planning_due_date_from) next.planning_due_date_from = filters.planning_due_date_from;
+  if (filters.planning_due_date_to) next.planning_due_date_to = filters.planning_due_date_to;
+  return next;
+};
+
 const getDemandCode = (demand: ProductionDemand) => demand.demand_code || demand.demand_key;
 const getCustomerDisplay = (demand: ProductionDemand) => (
   demand.customer_display || demand.customer_name_snapshot || '-'
 );
 
-const renderPlanningStatus = (status: ProductionDemandPlanningStatus) => (
-  <Tag color={PLANNING_STATUS_COLORS[status] || 'default'}>
-    {PLANNING_STATUS_LABELS[status] || status}
-  </Tag>
+const getLaneParams = (lane: DemandLaneFilter): ProductionDemandQueryParams => {
+  switch (lane) {
+    case 'OVERDUE':
+      return { planning_bucket: 'overdue' };
+    case 'DUE_TODAY':
+      return { planning_bucket: 'due_today' };
+    case 'UPCOMING_7':
+      return { planning_bucket: 'upcoming_7' };
+    case 'NOT_DUE':
+      return { planning_bucket: 'not_due' };
+    case 'HELD':
+      return { planning_bucket: 'held' };
+    case 'NO_DATE':
+      return { planning_bucket: 'no_date' };
+    case 'PARTIALLY_PLANNED':
+      return { planning_status: 'PARTIALLY_PLANNED' };
+    case 'FULLY_PLANNED':
+      return { planning_status: 'FULLY_PLANNED' };
+    case 'IN_PROGRESS':
+      return { production_status: 'IN_PROGRESS' };
+    case 'COMPLETED':
+      return { production_status: 'COMPLETED' };
+    default:
+      return {};
+  }
+};
+
+const getLaneCount = (lane: DemandLaneFilter, summary: typeof SUMMARY_DEFAULT) => {
+  switch (lane) {
+    case 'OVERDUE':
+      return summary.overdue;
+    case 'DUE_TODAY':
+      return summary.due_today;
+    case 'UPCOMING_7':
+      return summary.upcoming_7_days;
+    case 'NOT_DUE':
+      return summary.not_due;
+    case 'HELD':
+      return summary.held;
+    case 'NO_DATE':
+      return summary.no_date;
+    case 'PARTIALLY_PLANNED':
+      return summary.partially_planned;
+    case 'FULLY_PLANNED':
+      return summary.fully_planned;
+    case 'IN_PROGRESS':
+      return summary.in_progress;
+    case 'COMPLETED':
+      return summary.completed;
+    default:
+      return summary.total;
+  }
+};
+
+const getOrderingFromSorter = (sorter: Parameters<NonNullable<TableProps<ProductionDemand>['onChange']>>[2]) => {
+  const sorterItem = Array.isArray(sorter) ? sorter[0] : sorter;
+  if (!sorterItem?.order) {
+    return 'planning_due_date,delivery_date,id';
+  }
+  const rawField = String(sorterItem.field || sorterItem.columnKey || '');
+  const field = ORDERING_FIELD_MAP[rawField];
+  if (!field) {
+    return 'planning_due_date,delivery_date,id';
+  }
+  return sorterItem.order === 'descend' ? `-${field}` : field;
+};
+
+const dateRangeValue = (from?: string, to?: string): [Dayjs | null, Dayjs | null] | null => {
+  if (!from && !to) return null;
+  return [from ? dayjs(from) : null, to ? dayjs(to) : null];
+};
+
+const normalizePrintColor = (item: unknown): string => {
+  if (typeof item === 'string') {
+    return item.trim();
+  }
+  if (item && typeof item === 'object') {
+    const record = item as Record<string, unknown>;
+    const raw = record.name || record.color || record.code || record.label || record.value;
+    return typeof raw === 'string' ? raw.trim() : '';
+  }
+  return '';
+};
+
+const getPrintColors = (demand: ProductionDemand) => (
+  Array.isArray(demand.print_colors)
+    ? demand.print_colors.map(normalizePrintColor).filter(Boolean)
+    : []
 );
+
+const renderPlanningStatus = (status: ProductionDemandPlanningStatus, row?: ProductionDemand) => {
+  if (row?.is_held || row?.hold_reason) {
+    return (
+      <Space size={4} wrap>
+        <Tag color="error">Cần xử lý</Tag>
+        <Tag color={PLANNING_STATUS_COLORS[status] || 'default'}>
+          {PLANNING_STATUS_LABELS[status] || status}
+        </Tag>
+      </Space>
+    );
+  }
+  return (
+    <Tag color={PLANNING_STATUS_COLORS[status] || 'default'}>
+      {PLANNING_STATUS_LABELS[status] || status}
+    </Tag>
+  );
+};
 
 const renderProductionStatus = (status: ProductionDemandProductionStatus) => (
   <Tag color={PRODUCTION_STATUS_COLORS[status] || 'default'}>
@@ -137,8 +354,9 @@ const renderPriority = (priority: ProductionDemandPriority) => (
 
 const renderProductKind = (kind?: string) => {
   const normalized = String(kind || '').trim() || 'SPECIFIC';
+  const color = PRODUCT_KIND_COLORS[normalized] || 'default';
   return (
-    <Tag color={PRODUCT_KIND_COLORS[normalized] || 'default'}>
+    <Tag color={color}>
       {PRODUCT_KIND_LABELS[normalized] || normalized}
     </Tag>
   );
@@ -146,30 +364,51 @@ const renderProductKind = (kind?: string) => {
 
 export default function ProductionDemandList() {
   const [searchInput, setSearchInput] = useState('');
+  const [filters, setFilters] = useState<DemandFilters>({});
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [page, setPage] = useState(1);
+  const [ordering, setOrdering] = useState('planning_due_date,delivery_date,id');
   const { config, saveConfig } = useUserPreferences(PAGES.PRODUCTION_DEMANDS);
   const configRecord = config as Record<string, unknown>;
+  const storedLane = isDemandLaneFilter(configRecord?.laneFilter) ? configRecord.laneFilter : 'ALL';
+  const [activeLane, setActiveLane] = useState<DemandLaneFilter>(storedLane);
   const pageSize = Number(configRecord?.pageSize ?? 20);
 
-  const { intentSearch } = useSearchFilterIntent({
+  useEffect(() => {
+    setActiveLane(storedLane);
+  }, [storedLane]);
+
+  const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
-    filterValues: {},
+    filterValues: filters,
     searchDebounceMs: 650,
     filterDebounceMs: 300,
-    serializeFilters: (value) => JSON.stringify(value),
-    parseFilters: () => ({}),
+    serializeFilters: (value) => JSON.stringify(cleanFilters(value as DemandFilters)),
+    parseFilters: (value) => {
+      try {
+        return cleanFilters(JSON.parse(value) as DemandFilters);
+      } catch {
+        return {};
+      }
+    },
   });
+
+  const effectiveFilters = useMemo(() => cleanFilters(intentFilters as DemandFilters), [intentFilters]);
+  const laneParams = useMemo(() => getLaneParams(activeLane), [activeLane]);
 
   const listParams = useMemo(() => ({
     search: intentSearch.trim() || undefined,
+    ...effectiveFilters,
+    ...laneParams,
     page,
     page_size: pageSize,
-    ordering: 'planning_due_date,delivery_date,id',
-  }), [intentSearch, page, pageSize]);
+    ordering,
+  }), [effectiveFilters, intentSearch, laneParams, ordering, page, pageSize]);
 
   const summaryParams = useMemo(() => ({
     search: intentSearch.trim() || undefined,
-  }), [intentSearch]);
+    ...effectiveFilters,
+  }), [effectiveFilters, intentSearch]);
 
   const listQuery = useQuery({
     queryKey: ['production-demands', listParams],
@@ -184,60 +423,148 @@ export default function ProductionDemandList() {
   const rows = listQuery.data?.results ?? [];
   const summary = summaryQuery.data ?? SUMMARY_DEFAULT;
   const hasSearch = Boolean(intentSearch.trim());
+  const hasFilters = Object.keys(effectiveFilters).length > 0;
+  const hasActiveView = hasSearch || hasFilters || activeLane !== 'ALL';
   const errorMessage = listQuery.isError ? getToastMessage(listQuery.error) : '';
 
-  const summaryCards = [
-    { key: 'overdue', title: 'Quá hạn', value: summary.overdue, color: '#cf1322' },
-    { key: 'due_today', title: 'Hôm nay', value: summary.due_today, color: '#d48806' },
-    { key: 'upcoming', title: '7 ngày tới', value: summary.upcoming_7_days, color: '#1677ff' },
-    { key: 'held', title: 'Cần xử lý', value: summary.held, color: '#c41d7f' },
-    { key: 'no_date', title: 'Chưa có ngày', value: summary.no_date, color: '#595959' },
-    { key: 'fully_planned', title: 'Đã lập đủ', value: summary.fully_planned, color: '#389e0d' },
-    { key: 'in_progress', title: 'Đang sản xuất', value: summary.in_progress, color: '#fa8c16' },
+  const summaryCards: SummaryCard[] = [
+    { key: 'overdue', title: 'Quá hạn', value: summary.overdue, color: '#cf1322', lane: 'OVERDUE' },
+    { key: 'due_today', title: 'Hôm nay', value: summary.due_today, color: '#d48806', lane: 'DUE_TODAY' },
+    { key: 'upcoming', title: '7 ngày tới', value: summary.upcoming_7_days, color: '#1677ff', lane: 'UPCOMING_7' },
+    { key: 'held', title: 'Cần xử lý', value: summary.held, color: '#c41d7f', lane: 'HELD' },
+    { key: 'no_date', title: 'Chưa có ngày', value: summary.no_date, color: '#595959', lane: 'NO_DATE' },
+    { key: 'fully_planned', title: 'Đã lập đủ', value: summary.fully_planned, color: '#389e0d', lane: 'FULLY_PLANNED' },
+    { key: 'in_progress', title: 'Đang sản xuất', value: summary.in_progress, color: '#fa8c16', lane: 'IN_PROGRESS' },
   ];
+
+  const updateFilters = (patch: Partial<DemandFilters>, options: { resetLane?: boolean } = {}) => {
+    setFilters((previous) => cleanFilters({ ...previous, ...patch }));
+    setPage(1);
+    if (options.resetLane) {
+      setActiveLane('ALL');
+      void saveConfig({ ...(config as Record<string, unknown>), laneFilter: 'ALL' });
+    }
+  };
+
+  const resetAllFilters = () => {
+    setSearchInput('');
+    setFilters({});
+    setActiveLane('ALL');
+    setPage(1);
+    void saveConfig({ ...(config as Record<string, unknown>), laneFilter: 'ALL' });
+  };
+
+  const handleLaneChange = (lane: string) => {
+    const nextLane = isDemandLaneFilter(lane) ? lane : 'ALL';
+    setActiveLane(nextLane);
+    setPage(1);
+    void saveConfig({ ...(config as Record<string, unknown>), laneFilter: nextLane });
+  };
+
+  const handleDateRangeChange = (
+    field: 'delivery_date' | 'planning_due_date',
+    values: [Dayjs | null, Dayjs | null] | null,
+  ) => {
+    updateFilters({
+      [`${field}_from`]: values?.[0]?.format('YYYY-MM-DD') || undefined,
+      [`${field}_to`]: values?.[1]?.format('YYYY-MM-DD') || undefined,
+    });
+  };
+
+  const refreshData = async () => {
+    await Promise.all([
+      listQuery.refetch(),
+      summaryQuery.refetch(),
+    ]);
+  };
+
+  const activeFilterTags = useMemo(() => {
+    const tags: string[] = [];
+    if (intentSearch.trim()) tags.push(`Từ khóa: ${intentSearch.trim()}`);
+    if (activeLane !== 'ALL') tags.push(`Lane: ${LANE_LABELS[activeLane]}`);
+    if (effectiveFilters.product_kind) tags.push(`Loại mã: ${PRODUCT_KIND_LABELS[effectiveFilters.product_kind] || effectiveFilters.product_kind}`);
+    if (effectiveFilters.priority) tags.push(`Ưu tiên: ${PRIORITY_LABELS[effectiveFilters.priority] || effectiveFilters.priority}`);
+    if (effectiveFilters.planning_status) tags.push(`KH: ${PLANNING_STATUS_LABELS[effectiveFilters.planning_status] || effectiveFilters.planning_status}`);
+    if (effectiveFilters.production_status) tags.push(`SX: ${PRODUCTION_STATUS_LABELS[effectiveFilters.production_status] || effectiveFilters.production_status}`);
+    if (effectiveFilters.product_code) tags.push(`Mã hàng: ${effectiveFilters.product_code}`);
+    if (effectiveFilters.customer) tags.push(`Khách hàng: ${effectiveFilters.customer}`);
+    if (effectiveFilters.delivery_date_from || effectiveFilters.delivery_date_to) {
+      tags.push(`Ngày giao: ${formatDate(effectiveFilters.delivery_date_from)} - ${formatDate(effectiveFilters.delivery_date_to)}`);
+    }
+    if (effectiveFilters.planning_due_date_from || effectiveFilters.planning_due_date_to) {
+      tags.push(`Ngày lập KH: ${formatDate(effectiveFilters.planning_due_date_from)} - ${formatDate(effectiveFilters.planning_due_date_to)}`);
+    }
+    return tags;
+  }, [activeLane, effectiveFilters, intentSearch]);
 
   const columns: ColumnsType<ProductionDemand> = [
     {
       title: 'Ngày cần lập KH',
       dataIndex: 'planning_due_date',
+      key: 'planning_due_date',
       width: 140,
-      render: (value: string | null) => formatDate(value),
+      render: (value: string | null, row) => {
+        const isOverdue = row.planning_bucket === 'overdue';
+        return <Text type={isOverdue ? 'danger' : undefined} strong={isOverdue}>{formatDate(value)}</Text>;
+      },
       sorter: true,
     },
     {
       title: 'Ngày giao',
       dataIndex: 'delivery_date',
+      key: 'delivery_date',
       width: 120,
       render: (value: string | null) => formatDate(value),
       sorter: true,
     },
     {
       title: 'Số đơn',
-      width: 160,
+      width: 170,
       render: (_, row) => (
         <Space direction="vertical" size={0}>
           <Text strong>{formatMaybeText(row.sales_order_code)}</Text>
-          <Text type="secondary">{getDemandCode(row)}</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>{getDemandCode(row)}</Text>
         </Space>
       ),
     },
     {
       title: 'Khách hàng',
       width: 200,
-      render: (_, row) => getCustomerDisplay(row),
+      render: (_, row) => (
+        <Tooltip title={getCustomerDisplay(row)}>
+          <Text ellipsis style={{ maxWidth: 180 }}>{getCustomerDisplay(row)}</Text>
+        </Tooltip>
+      ),
     },
     {
       title: 'Mã hàng',
       dataIndex: 'product_code',
+      key: 'product_code',
       width: 150,
-      render: (value: string) => formatMaybeText(value),
+      render: (value: string) => <Text strong>{formatMaybeText(value)}</Text>,
       sorter: true,
     },
     {
       title: 'Tên hàng',
       dataIndex: 'product_name',
-      width: 260,
-      render: (value: string) => formatMaybeText(value),
+      width: 300,
+      render: (value: string, row) => {
+        const colors = getPrintColors(row);
+        const visibleColors = colors.slice(0, 3);
+        const hiddenCount = Math.max(0, colors.length - visibleColors.length);
+        return (
+          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+            <Tooltip title={formatMaybeText(value)}>
+              <Text ellipsis style={{ maxWidth: 270 }}>{formatMaybeText(value)}</Text>
+            </Tooltip>
+            <Space size={4} wrap>
+              {row.size_order ? <Text type="secondary" style={{ fontSize: 12 }}>{row.size_order}</Text> : null}
+              {visibleColors.map((color) => <Tag key={color} color="default">{color}</Tag>)}
+              {hiddenCount > 0 ? <Tag color="default">+{hiddenCount}</Tag> : null}
+            </Space>
+          </Space>
+        );
+      },
     },
     {
       title: 'Loại mã',
@@ -264,13 +591,16 @@ export default function ProductionDemandList() {
       dataIndex: 'qty_remaining_to_plan',
       width: 120,
       align: 'right',
-      render: (value: string) => formatNumber(value),
+      render: (value: string) => {
+        const numericValue = Number(value || 0);
+        return <Text strong={numericValue > 0}>{formatNumber(value)}</Text>;
+      },
     },
     {
       title: 'Trạng thái KH',
       dataIndex: 'planning_status',
-      width: 160,
-      render: (status: ProductionDemandPlanningStatus) => renderPlanningStatus(status),
+      width: 180,
+      render: (status: ProductionDemandPlanningStatus, row) => renderPlanningStatus(status, row),
     },
     {
       title: 'Trạng thái SX',
@@ -281,31 +611,39 @@ export default function ProductionDemandList() {
     {
       title: 'Ưu tiên',
       dataIndex: 'priority',
+      key: 'priority',
       width: 120,
       render: (priority: ProductionDemandPriority) => renderPriority(priority),
+      sorter: true,
     },
     {
       title: 'Hold/Ghi chú',
-      width: 240,
+      width: 260,
       render: (_, row) => {
+        const text = row.hold_reason || row.notes || '-';
         if (row.hold_reason) {
-          return <Text type="danger">{row.hold_reason}</Text>;
+          return (
+            <Tooltip title={row.hold_reason}>
+              <Text type="danger" ellipsis style={{ maxWidth: 230 }}>Cần xử lý: {row.hold_reason}</Text>
+            </Tooltip>
+          );
         }
-        return <Text type="secondary">{row.notes || '-'}</Text>;
+        return (
+          <Tooltip title={text}>
+            <Text type="secondary" ellipsis style={{ maxWidth: 230 }}>{text}</Text>
+          </Tooltip>
+        );
       },
     },
   ];
 
-  const resetSearch = () => {
-    setSearchInput('');
-    setPage(1);
-  };
-
-  const refreshData = async () => {
-    await Promise.all([
-      listQuery.refetch(),
-      summaryQuery.refetch(),
-    ]);
+  const handleTableChange: TableProps<ProductionDemand>['onChange'] = (pagination, _filters, sorter) => {
+    setPage(pagination.current || 1);
+    const nextPageSize = pagination.pageSize || pageSize;
+    if (nextPageSize !== pageSize) {
+      void saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
+    }
+    setOrdering(getOrderingFromSorter(sorter));
   };
 
   return (
@@ -331,7 +669,13 @@ export default function ProductionDemandList() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
         {summaryCards.map((item) => (
-          <Card key={item.key} size="small" style={{ height: '100%', borderRadius: 8 }}>
+          <Card
+            key={item.key}
+            hoverable={Boolean(item.lane)}
+            size="small"
+            style={{ height: '100%', borderRadius: 8 }}
+            onClick={() => item.lane && handleLaneChange(item.lane)}
+          >
             <Statistic title={item.title} value={item.value} valueStyle={{ color: item.color }} />
           </Card>
         ))}
@@ -339,7 +683,16 @@ export default function ProductionDemandList() {
 
       <Card size="small">
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Space wrap>
+          <Tabs
+            activeKey={activeLane}
+            onChange={handleLaneChange}
+            items={DEMAND_LANES.map((lane) => ({
+              key: lane,
+              label: `${LANE_LABELS[lane]} (${formatNumber(getLaneCount(lane, summary))})`,
+            }))}
+          />
+
+          <Space wrap align="start">
             <Input
               value={searchInput}
               onChange={(event) => {
@@ -349,11 +702,87 @@ export default function ProductionDemandList() {
               placeholder="Tìm mã nhu cầu, đơn hàng, khách hàng, mã hàng..."
               style={{ width: 360, maxWidth: '100%' }}
               suffix={searchInput ? (
-                <QuickClearIcon onClear={resetSearch} title="Xóa tìm kiếm" />
+                <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" />
               ) : undefined}
             />
+            <Select
+              value={filters.product_kind || ''}
+              style={{ width: 140 }}
+              options={[{ value: '', label: 'Tất cả mã' }, ...PRODUCT_KIND_OPTIONS]}
+              onChange={(value) => updateFilters({ product_kind: value || undefined })}
+            />
+            <Select
+              value={filters.priority || ''}
+              style={{ width: 140 }}
+              options={[{ value: '', label: 'Mọi ưu tiên' }, ...PRIORITY_OPTIONS]}
+              onChange={(value) => updateFilters({ priority: (value || undefined) as ProductionDemandPriority | undefined })}
+            />
+            <Select
+              value={filters.planning_status || ''}
+              style={{ width: 180 }}
+              options={[{ value: '', label: 'Mọi trạng thái KH' }, ...PLANNING_STATUS_OPTIONS]}
+              onChange={(value) => updateFilters(
+                { planning_status: (value || undefined) as ProductionDemandPlanningStatus | undefined },
+                { resetLane: Boolean(value) },
+              )}
+            />
+            <Select
+              value={filters.production_status || ''}
+              style={{ width: 180 }}
+              options={[{ value: '', label: 'Mọi trạng thái SX' }, ...PRODUCTION_STATUS_OPTIONS]}
+              onChange={(value) => updateFilters(
+                { production_status: (value || undefined) as ProductionDemandProductionStatus | undefined },
+                { resetLane: Boolean(value) },
+              )}
+            />
+            <Button onClick={() => setAdvancedOpen((value) => !value)}>
+              {advancedOpen ? 'Ẩn lọc nâng cao' : 'Bộ lọc nâng cao'}
+            </Button>
+            {hasActiveView ? <Button onClick={resetAllFilters}>Xóa lọc</Button> : null}
+          </Space>
+
+          {advancedOpen ? (
+            <Space wrap align="start">
+              <Input
+                value={filters.product_code || ''}
+                onChange={(event) => updateFilters({ product_code: event.target.value })}
+                placeholder="Mã hàng chứa..."
+                style={{ width: 180 }}
+                suffix={filters.product_code ? (
+                  <QuickClearIcon onClear={() => updateFilters({ product_code: undefined })} title="Xóa mã hàng" />
+                ) : undefined}
+              />
+              <Input
+                value={filters.customer || ''}
+                onChange={(event) => updateFilters({ customer: event.target.value })}
+                placeholder="Khách hàng chứa..."
+                style={{ width: 220 }}
+                suffix={filters.customer ? (
+                  <QuickClearIcon onClear={() => updateFilters({ customer: undefined })} title="Xóa khách hàng" />
+                ) : undefined}
+              />
+              <RangePicker
+                value={dateRangeValue(filters.delivery_date_from, filters.delivery_date_to)}
+                onChange={(values) => handleDateRangeChange('delivery_date', values)}
+                format="DD/MM/YYYY"
+                placeholder={['Giao từ', 'Giao đến']}
+              />
+              <RangePicker
+                value={dateRangeValue(filters.planning_due_date_from, filters.planning_due_date_to)}
+                onChange={(values) => handleDateRangeChange('planning_due_date', values)}
+                format="DD/MM/YYYY"
+                placeholder={['Lập KH từ', 'Lập KH đến']}
+              />
+            </Space>
+          ) : null}
+
+          <Space wrap>
             <Tag color="blue">Tổng: {formatNumber(listQuery.data?.count ?? 0)}</Tag>
-            {hasSearch ? <Tag color="processing">Đang lọc theo tìm kiếm</Tag> : <Tag color="default">Đang xem toàn bộ nhu cầu</Tag>}
+            {activeFilterTags.length ? (
+              activeFilterTags.map((tag) => <Tag key={tag} color="processing">{tag}</Tag>)
+            ) : (
+              <Tag color="default">Đang xem toàn bộ nhu cầu</Tag>
+            )}
           </Space>
         </Space>
       </Card>
@@ -365,25 +794,20 @@ export default function ProductionDemandList() {
           loading={listQuery.isLoading || listQuery.isFetching}
           columns={columns}
           dataSource={rows}
-          scroll={{ x: 1900 }}
+          scroll={{ x: 2050 }}
+          onChange={handleTableChange}
           pagination={{
             current: page,
             pageSize,
             total: listQuery.data?.count ?? 0,
             showSizeChanger: true,
             pageSizeOptions: [10, 20, 50, 100],
-            onChange: async (nextPage, nextPageSize) => {
-              setPage(nextPage);
-              if (nextPageSize !== pageSize) {
-                await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
-              }
-            },
           }}
           locale={{
             emptyText: !listQuery.isLoading ? (
               <div style={{ padding: 32 }}>
-                <Empty description={hasSearch ? 'Không tìm thấy nhu cầu sản xuất phù hợp.' : 'Chưa có nhu cầu sản xuất nào.'} />
-                {hasSearch ? <Button type="link" onClick={resetSearch}>Xóa tìm kiếm</Button> : null}
+                <Empty description={hasActiveView ? 'Không tìm thấy nhu cầu sản xuất phù hợp.' : 'Chưa có nhu cầu sản xuất nào.'} />
+                {hasActiveView ? <Button type="link" onClick={resetAllFilters}>Xóa lọc</Button> : null}
               </div>
             ) : undefined,
           }}

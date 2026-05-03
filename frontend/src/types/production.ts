@@ -138,6 +138,17 @@ export interface ProductionDemandQueryParams {
   product_kind?: ProductionDemandProductKind;
   priority?: ProductionDemandPriority | string;
   planning_bucket?: ProductionDemandPlanningBucket | string;
+  delivery_date_from?: string;
+  delivery_date_to?: string;
+  planning_due_date_from?: string;
+  planning_due_date_to?: string;
+  product_code?: string;
+  customer?: string;
+  assigned_planner?: number | string;
+  sales_order?: number | string;
+  sales_order_line?: number | string;
+  delivery_plan?: number | string;
+  product?: number | string;
   ordering?: string;
 }
 
