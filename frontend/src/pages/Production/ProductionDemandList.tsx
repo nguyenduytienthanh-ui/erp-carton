@@ -4,10 +4,13 @@ import {
   Button,
   Card,
   DatePicker,
+  Descriptions,
+  Drawer,
   Empty,
   Input,
   Select,
   Space,
+  Spin,
   Statistic,
   Table,
   Tabs,
@@ -16,7 +19,7 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType, TableProps } from 'antd/es/table';
-import { ReloadOutlined } from '@ant-design/icons';
+import { EyeOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
 
@@ -322,6 +325,130 @@ const getPrintColors = (demand: ProductionDemand) => (
     : []
 );
 
+const getPrintColorsDisplay = (demand: ProductionDemand) => {
+  const colors = getPrintColors(demand);
+  if (colors.length) return colors;
+  if (typeof demand.print_colors === 'string' && demand.print_colors.trim()) {
+    return [demand.print_colors.trim()];
+  }
+  return [];
+};
+
+const getSalesOrderHref = (demand: ProductionDemand) => {
+  if (demand.sales_order) {
+    return `/sales-orders?focus_id=${demand.sales_order}`;
+  }
+  if (demand.sales_order_code) {
+    return `/sales-orders?q=${encodeURIComponent(demand.sales_order_code)}`;
+  }
+  return '';
+};
+
+const getPlanningBucketLabel = (bucket?: string | null) => {
+  switch (bucket) {
+    case 'held':
+      return 'Cần xử lý';
+    case 'cancelled':
+      return 'Đã hủy';
+    case 'no_date':
+      return 'Chưa có ngày';
+    case 'overdue':
+      return 'Quá hạn';
+    case 'due_today':
+      return 'Cần lập hôm nay';
+    case 'upcoming_7':
+      return 'Sắp đến hạn 7 ngày';
+    case 'not_due':
+      return 'Chưa tới hạn';
+    default:
+      return bucket || '-';
+  }
+};
+
+const formatDetailDate = (value?: string | null) => (value ? dayjs(value).format('DD/MM/YYYY') : 'Chưa có');
+
+const getRecordText = (record: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number') return String(value);
+  }
+  return '';
+};
+
+const formatSummaryItem = (item: unknown, kind: 'operation' | 'routing') => {
+  if (typeof item === 'string') return item.trim();
+  if (!item || typeof item !== 'object') return String(item ?? '').trim();
+
+  const record = item as Record<string, unknown>;
+  const operation = [
+    getRecordText(record, ['operation_code', 'code']),
+    getRecordText(record, ['operation_name', 'name']),
+  ].filter(Boolean).join(' - ');
+  const rate = getRecordText(record, ['applied_rate_per_hour', 'standard_rate_per_hour', 'rate_per_hour']);
+  const note = getRecordText(record, ['note', 'override_reason']);
+
+  if (kind === 'routing') {
+    const step = getRecordText(record, ['display_step', 'step_no', 'display_order']);
+    const stepType = getRecordText(record, ['step_type']);
+    const group = getRecordText(record, ['group_code']);
+    return [
+      step ? `Bước ${step}` : '',
+      operation,
+      rate ? `Định mức ${formatNumber(rate)}` : '',
+      stepType ? `Kiểu ${stepType}` : '',
+      group ? `Nhóm ${group}` : '',
+      note,
+    ].filter(Boolean).join(' · ');
+  }
+
+  return [
+    operation,
+    rate ? `Định mức ${formatNumber(rate)}` : '',
+    note,
+  ].filter(Boolean).join(' · ');
+};
+
+const renderSummaryBlock = (
+  value: ProductionDemand['operations_summary'] | ProductionDemand['routing_summary'],
+  kind: 'operation' | 'routing',
+  emptyText: string,
+) => {
+  if (Array.isArray(value) && value.length) {
+    return (
+      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+        {value.map((item, index) => {
+          const text = formatSummaryItem(item, kind);
+          return (
+            <Text key={`${kind}-${index}`}>
+              {text || JSON.stringify(item)}
+            </Text>
+          );
+        })}
+      </Space>
+    );
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    return <Text style={{ whiteSpace: 'pre-wrap' }}>{value.trim()}</Text>;
+  }
+
+  if (value && typeof value === 'object') {
+    return (
+      <Text style={{ whiteSpace: 'pre-wrap' }}>
+        {JSON.stringify(value, null, 2)}
+      </Text>
+    );
+  }
+
+  return <Text type="secondary">{emptyText}</Text>;
+};
+
+const renderTextBlock = (value?: string | null, emptyText = 'Chưa có') => {
+  const text = String(value || '').trim();
+  return text ? <Text style={{ whiteSpace: 'pre-wrap' }}>{text}</Text> : <Text type="secondary">{emptyText}</Text>;
+};
+
 const renderPlanningStatus = (status: ProductionDemandPlanningStatus, row?: ProductionDemand) => {
   if (row?.is_held || row?.hold_reason) {
     return (
@@ -373,6 +500,8 @@ export default function ProductionDemandList() {
   const storedLane = isDemandLaneFilter(configRecord?.laneFilter) ? configRecord.laneFilter : 'ALL';
   const [activeLane, setActiveLane] = useState<DemandLaneFilter>(storedLane);
   const pageSize = Number(configRecord?.pageSize ?? 20);
+  const [selectedDemandId, setSelectedDemandId] = useState<number | null>(null);
+  const [selectedDemandPreview, setSelectedDemandPreview] = useState<ProductionDemand | null>(null);
 
   useEffect(() => {
     setActiveLane(storedLane);
@@ -420,8 +549,15 @@ export default function ProductionDemandList() {
     queryFn: () => productionApi.getDemandSummary(summaryParams),
   });
 
+  const detailQuery = useQuery({
+    queryKey: ['production-demand-detail', selectedDemandId],
+    queryFn: () => productionApi.getDemand(selectedDemandId as number),
+    enabled: Boolean(selectedDemandId),
+  });
+
   const rows = listQuery.data?.results ?? [];
   const summary = summaryQuery.data ?? SUMMARY_DEFAULT;
+  const selectedDemand = detailQuery.data ?? selectedDemandPreview;
   const hasSearch = Boolean(intentSearch.trim());
   const hasFilters = Object.keys(effectiveFilters).length > 0;
   const hasActiveView = hasSearch || hasFilters || activeLane !== 'ALL';
@@ -478,6 +614,16 @@ export default function ProductionDemandList() {
     ]);
   };
 
+  const openDemandDetail = (demand: ProductionDemand) => {
+    setSelectedDemandPreview(demand);
+    setSelectedDemandId(demand.id);
+  };
+
+  const closeDemandDetail = () => {
+    setSelectedDemandId(null);
+    setSelectedDemandPreview(null);
+  };
+
   const activeFilterTags = useMemo(() => {
     const tags: string[] = [];
     if (intentSearch.trim()) tags.push(`Từ khóa: ${intentSearch.trim()}`);
@@ -523,7 +669,14 @@ export default function ProductionDemandList() {
       render: (_, row) => (
         <Space direction="vertical" size={0}>
           <Text strong>{formatMaybeText(row.sales_order_code)}</Text>
-          <Text type="secondary" style={{ fontSize: 12 }}>{getDemandCode(row)}</Text>
+          <Button
+            type="link"
+            size="small"
+            style={{ height: 'auto', padding: 0, fontSize: 12 }}
+            onClick={() => openDemandDetail(row)}
+          >
+            {getDemandCode(row)}
+          </Button>
         </Space>
       ),
     },
@@ -635,6 +788,20 @@ export default function ProductionDemandList() {
         );
       },
     },
+    {
+      title: 'Hành động',
+      width: 110,
+      fixed: 'right',
+      render: (_, row) => (
+        <Button
+          size="small"
+          icon={<EyeOutlined />}
+          onClick={() => openDemandDetail(row)}
+        >
+          Chi tiết
+        </Button>
+      ),
+    },
   ];
 
   const handleTableChange: TableProps<ProductionDemand>['onChange'] = (pagination, _filters, sorter) => {
@@ -644,6 +811,134 @@ export default function ProductionDemandList() {
       void saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
     }
     setOrdering(getOrderingFromSorter(sorter));
+  };
+
+  const renderDemandDrawerContent = () => {
+    if (detailQuery.isLoading && !selectedDemand) {
+      return (
+        <div style={{ padding: 40, textAlign: 'center' }}>
+          <Spin />
+        </div>
+      );
+    }
+
+    if (!selectedDemand) {
+      return <Empty description="Chưa có dữ liệu chi tiết nhu cầu." />;
+    }
+
+    const salesOrderHref = getSalesOrderHref(selectedDemand);
+    const colors = getPrintColorsDisplay(selectedDemand);
+
+    return (
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        {detailQuery.isFetching ? (
+          <Alert showIcon type="info" message="Đang làm mới dữ liệu chi tiết..." />
+        ) : null}
+        {detailQuery.isError ? (
+          <Alert
+            showIcon
+            type="error"
+            message="Không tải được chi tiết mới nhất"
+            description={getToastMessage(detailQuery.error)}
+          />
+        ) : null}
+
+        <Card size="small" title="Thông tin đơn hàng">
+          <Descriptions column={1} size="small" bordered labelStyle={{ width: 190 }}>
+            <Descriptions.Item label="Số đơn">
+              <Space>
+                <Text strong>{formatMaybeText(selectedDemand.sales_order_code)}</Text>
+                {salesOrderHref ? (
+                  <Button size="small" href={salesOrderHref}>
+                    Xem đơn hàng
+                  </Button>
+                ) : null}
+              </Space>
+            </Descriptions.Item>
+            <Descriptions.Item label="Khách hàng">{getCustomerDisplay(selectedDemand)}</Descriptions.Item>
+            <Descriptions.Item label="Dòng đơn">
+              {selectedDemand.sales_order_line_number ? `Dòng ${selectedDemand.sales_order_line_number}` : formatMaybeText(selectedDemand.delivery_plan_display)}
+            </Descriptions.Item>
+            <Descriptions.Item label="Mã hàng">{formatMaybeText(selectedDemand.product_code || selectedDemand.product_display_code)}</Descriptions.Item>
+            <Descriptions.Item label="Tên hàng">{formatMaybeText(selectedDemand.product_name || selectedDemand.product_display_name)}</Descriptions.Item>
+            <Descriptions.Item label="Loại mã">{renderProductKind(selectedDemand.product_kind)}</Descriptions.Item>
+            <Descriptions.Item label="Đơn vị">{formatMaybeText(selectedDemand.unit_name)}</Descriptions.Item>
+          </Descriptions>
+        </Card>
+
+        <Card size="small" title="Quy cách và màu in">
+          <Descriptions column={1} size="small" bordered labelStyle={{ width: 190 }}>
+            <Descriptions.Item label="Quy cách đặt hàng">{formatMaybeText(selectedDemand.size_order)}</Descriptions.Item>
+            <Descriptions.Item label="Quy cách sản xuất">{formatMaybeText(selectedDemand.size_production)}</Descriptions.Item>
+            <Descriptions.Item label="Màu in">
+              {colors.length ? (
+                <Space size={4} wrap>
+                  {colors.map((color) => <Tag key={color}>{color}</Tag>)}
+                </Space>
+              ) : (
+                <Text type="secondary">Chưa có màu in</Text>
+              )}
+            </Descriptions.Item>
+          </Descriptions>
+        </Card>
+
+        <Card size="small" title="Số lượng và trạng thái">
+          <Descriptions column={1} size="small" bordered labelStyle={{ width: 190 }}>
+            <Descriptions.Item label="SL cần sản xuất">{formatNumber(selectedDemand.qty_required)}</Descriptions.Item>
+            <Descriptions.Item label="SL đã lập KH">{formatNumber(selectedDemand.qty_planned)}</Descriptions.Item>
+            <Descriptions.Item label="SL còn lại">{formatNumber(selectedDemand.qty_remaining_to_plan)}</Descriptions.Item>
+            <Descriptions.Item label="SL đã phát hành">{formatNumber(selectedDemand.qty_released)}</Descriptions.Item>
+            <Descriptions.Item label="SL đã hoàn thành">{formatNumber(selectedDemand.qty_completed)}</Descriptions.Item>
+            <Descriptions.Item label="Trạng thái kế hoạch">{renderPlanningStatus(selectedDemand.planning_status, selectedDemand)}</Descriptions.Item>
+            <Descriptions.Item label="Trạng thái sản xuất">{renderProductionStatus(selectedDemand.production_status)}</Descriptions.Item>
+            <Descriptions.Item label="Ưu tiên">{renderPriority(selectedDemand.priority)}</Descriptions.Item>
+            <Descriptions.Item label="Nhóm thời hạn">
+              <Space size={6} wrap>
+                <Tag color={selectedDemand.is_held ? 'error' : 'default'}>
+                  {getPlanningBucketLabel(selectedDemand.planning_bucket)}
+                </Tag>
+                {selectedDemand.is_held ? <Tag color="error">Đang hold/cần xử lý</Tag> : null}
+              </Space>
+            </Descriptions.Item>
+          </Descriptions>
+        </Card>
+
+        <Card size="small" title="Ngày tháng">
+          <Descriptions column={1} size="small" bordered labelStyle={{ width: 190 }}>
+            <Descriptions.Item label="Ngày đơn">{formatDetailDate(selectedDemand.order_date)}</Descriptions.Item>
+            <Descriptions.Item label="Ngày giao">{formatDetailDate(selectedDemand.delivery_date)}</Descriptions.Item>
+            <Descriptions.Item label="Ngày cần hoàn thành SX">{formatDetailDate(selectedDemand.production_due_date)}</Descriptions.Item>
+            <Descriptions.Item label="Ngày cần lập kế hoạch">{formatDetailDate(selectedDemand.planning_due_date)}</Descriptions.Item>
+            <Descriptions.Item label="Ngày nhắc">{formatDetailDate(selectedDemand.reminder_date)}</Descriptions.Item>
+          </Descriptions>
+        </Card>
+
+        <Card size="small" title="Hold / ghi chú">
+          {selectedDemand.hold_reason ? (
+            <Alert
+              showIcon
+              type="warning"
+              message="Nhu cầu đang cần xử lý"
+              description={selectedDemand.hold_reason}
+              style={{ marginBottom: 12 }}
+            />
+          ) : null}
+          <Descriptions column={1} size="small" bordered labelStyle={{ width: 190 }}>
+            <Descriptions.Item label="Hold reason">{renderTextBlock(selectedDemand.hold_reason)}</Descriptions.Item>
+            <Descriptions.Item label="Ghi chú">{renderTextBlock(selectedDemand.notes)}</Descriptions.Item>
+            <Descriptions.Item label="Ghi chú nhắc">{renderTextBlock(selectedDemand.reminder_note)}</Descriptions.Item>
+          </Descriptions>
+        </Card>
+
+        <Card size="small" title="Công đoạn áp dụng">
+          {renderSummaryBlock(selectedDemand.operations_summary, 'operation', 'Chưa có công đoạn áp dụng')}
+        </Card>
+
+        <Card size="small" title="Thứ tự công đoạn sản xuất">
+          {renderSummaryBlock(selectedDemand.routing_summary, 'routing', 'Chưa có thứ tự công đoạn')}
+        </Card>
+      </Space>
+    );
   };
 
   return (
@@ -794,7 +1089,7 @@ export default function ProductionDemandList() {
           loading={listQuery.isLoading || listQuery.isFetching}
           columns={columns}
           dataSource={rows}
-          scroll={{ x: 2050 }}
+          scroll={{ x: 2160 }}
           onChange={handleTableChange}
           pagination={{
             current: page,
@@ -813,6 +1108,30 @@ export default function ProductionDemandList() {
           }}
         />
       </div>
+
+      <Drawer
+        title={(
+          <Space direction="vertical" size={0}>
+            <Text strong>Chi tiết nhu cầu sản xuất</Text>
+            {selectedDemand ? (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {getDemandCode(selectedDemand)}
+              </Text>
+            ) : null}
+          </Space>
+        )}
+        width={840}
+        open={Boolean(selectedDemandId)}
+        onClose={closeDemandDetail}
+        destroyOnClose
+        footer={(
+          <div style={{ textAlign: 'right' }}>
+            <Button onClick={closeDemandDetail}>Đóng</Button>
+          </div>
+        )}
+      >
+        {renderDemandDrawerContent()}
+      </Drawer>
     </div>
   );
 }

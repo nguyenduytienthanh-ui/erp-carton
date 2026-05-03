@@ -79,9 +79,9 @@ export interface ProductionDemand {
   unit_name?: string;
   size_order?: string;
   size_production?: string;
-  print_colors?: unknown[];
-  operations_summary?: unknown[];
-  routing_summary?: unknown[];
+  print_colors?: unknown[] | string | null;
+  operations_summary?: unknown[] | string | Record<string, unknown> | null;
+  routing_summary?: unknown[] | string | Record<string, unknown> | null;
   qty_required: string;
   qty_planned: string;
   qty_released: string;
