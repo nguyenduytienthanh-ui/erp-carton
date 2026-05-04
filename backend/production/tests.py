@@ -1083,6 +1083,95 @@ class ProductionDemandApiTests(APITestCase):
         data.update(overrides)
         return ProductionDemand.objects.create(**data)
 
+    def _routing_steps_snapshot(self, **overrides):
+        snapshot = {
+            'schema_version': 2,
+            'product_id': self.product.id,
+            'product_code': self.product.code,
+            'product_name': self.product.name,
+            'code': self.product.code,
+            'name': self.product.name,
+            'product_kind': 'GENERIC',
+            'requires_order_spec': True,
+            'requires_order_operations_review': True,
+            'order_spec_confirmed': True,
+            'order_operations_reviewed': True,
+            'cost_price': '26000',
+            'operations': [
+                {'operation_code': 'IN', 'operation_name': 'In', 'sequence': 10, 'applied_rate_per_hour': 20000},
+                {'operation_code': 'BE', 'operation_name': 'Be', 'sequence': 20, 'applied_rate_per_hour': 8500},
+            ],
+            'routing_steps': [
+                {
+                    'operation_code': 'IN',
+                    'operation_name': 'In',
+                    'step_no': 10,
+                    'display_step': 1,
+                    'display_order': 10,
+                    'step_type': 'REQUIRED',
+                    'group_code': 'PRINT',
+                    'is_required': True,
+                    'allow_parallel': False,
+                    'applied_rate_per_hour': 20000,
+                    'standard_rate_per_hour': 18000,
+                },
+                {
+                    'operation_code': 'XA',
+                    'operation_name': 'Xa lan 1',
+                    'step_no': 20,
+                    'display_step': 2,
+                    'display_order': 20,
+                    'step_type': 'REQUIRED',
+                    'group_code': 'CUT',
+                    'is_required': True,
+                    'allow_parallel': False,
+                    'applied_rate_per_hour': 12000,
+                },
+                {
+                    'operation_code': 'XA',
+                    'operation_name': 'Xa lan 2',
+                    'step_no': 30,
+                    'display_step': 3,
+                    'display_order': 30,
+                    'step_type': 'REQUIRED',
+                    'group_code': 'CUT',
+                    'is_required': True,
+                    'allow_parallel': False,
+                    'applied_rate_per_hour': 11000,
+                },
+                {
+                    'operation_code': 'DONG',
+                    'operation_name': 'Dong',
+                    'step_no': 40,
+                    'display_step': 4,
+                    'display_order': 40,
+                    'step_type': 'REQUIRED',
+                    'group_code': 'FINISH',
+                    'is_required': True,
+                    'allow_parallel': True,
+                    'applied_rate_per_hour': 9000,
+                },
+                {
+                    'operation_code': 'DAN',
+                    'operation_name': 'Dan',
+                    'step_no': 40,
+                    'display_step': 4,
+                    'display_order': 50,
+                    'step_type': 'REQUIRED',
+                    'group_code': 'FINISH',
+                    'is_required': True,
+                    'allow_parallel': True,
+                    'applied_rate_per_hour': 8000,
+                },
+            ],
+        }
+        snapshot.update(overrides)
+        return snapshot
+
+    def _set_line_snapshot(self, snapshot):
+        self.line.product_snapshot = snapshot
+        self.line.save(update_fields=['product_snapshot'])
+
     def _results(self, response):
         if isinstance(response.data, dict) and 'results' in response.data:
             return response.data['results']
@@ -1168,6 +1257,150 @@ class ProductionDemandApiTests(APITestCase):
         self.client.force_authenticate(user=self.user)
         allowed_response = self.client.get('/api/production/demands/')
         self.assertEqual(allowed_response.status_code, 200)
+
+    def test_create_order_action_creates_order_and_updates_demand(self):
+        self._set_line_snapshot(self._routing_steps_snapshot())
+        demand = self._create_demand('CREATE-ORDER')
+
+        response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {
+                'qty': '4',
+                'planned_start_date': str(self.today + timedelta(days=2)),
+                'planned_end_date': str(self.today + timedelta(days=5)),
+                'note': 'Tao tu nhu cau san xuat',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['message'], 'Da tao lenh san xuat.')
+        self.assertIn('production_order', response.data)
+        self.assertIn('production_demand', response.data)
+        self.assertEqual(response.data['operation_count'], 5)
+
+        order = ProductionOrder.objects.get(pk=response.data['production_order_id'])
+        self.assertEqual(order.code, response.data['production_order_code'])
+        self.assertEqual(order.production_demand_id, demand.id)
+        self.assertEqual(order.sales_order_id, self.order.id)
+        self.assertEqual(order.sales_order_line_id, self.line.id)
+        self.assertEqual(order.product_id, self.product.id)
+        self.assertEqual(order.status, ProductionOrderStatus.DRAFT)
+        self.assertEqual(order.notes, 'Tao tu nhu cau san xuat')
+        self.assertEqual(order.product_snapshot['product_name'], self.product.name)
+        self.assertEqual(response.data['production_order']['production_demand'], demand.id)
+        self.assertEqual(response.data['production_order']['production_demand_code'], demand.demand_code)
+
+        operations = list(order.operations.order_by('sequence'))
+        self.assertEqual([item.step_code for item in operations], ['IN', 'XA', 'XA', 'DONG', 'DAN'])
+        self.assertEqual([item.sequence for item in operations], [1, 2, 3, 4, 5])
+        self.assertEqual(operations[0].source_field, 'routing_steps')
+        self.assertEqual(operations[0].route_step_no, 10)
+        self.assertEqual(operations[0].display_step, 1)
+        self.assertEqual(operations[0].display_order, 10)
+        self.assertEqual(operations[0].step_type, 'REQUIRED')
+        self.assertEqual(operations[0].group_code, 'PRINT')
+        self.assertTrue(operations[0].is_required)
+        self.assertFalse(operations[0].allow_parallel)
+        self.assertEqual(operations[0].source_operation_code, 'IN')
+        self.assertEqual(operations[3].route_step_no, 40)
+        self.assertEqual(operations[4].route_step_no, 40)
+        self.assertEqual(operations[3].display_step, 4)
+        self.assertEqual(operations[4].display_step, 4)
+
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '4.0000')
+        self.assertEqual(str(demand.qty_remaining_to_plan), '6.0000')
+        self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.PARTIALLY_PLANNED)
+        self.assertEqual(response.data['production_demand']['id'], demand.id)
+        self.assertEqual(response.data['production_demand']['planning_status'], ProductionDemandPlanningStatus.PARTIALLY_PLANNED)
+
+    def test_create_order_action_rejects_qty_above_remaining(self):
+        self._set_line_snapshot(self._routing_steps_snapshot())
+        demand = self._create_demand('API-REMAINING')
+        first_response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {'qty': '6'},
+            format='json',
+        )
+        self.assertEqual(first_response.status_code, 201)
+
+        response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {'qty': '5'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('error', response.data)
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '6.0000')
+
+    def test_create_order_action_validates_qty_and_dates(self):
+        demand = self._create_demand('API-VALIDATION')
+
+        qty_response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {'qty': '0'},
+            format='json',
+        )
+        date_response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {
+                'qty': '1',
+                'planned_start_date': str(self.today + timedelta(days=5)),
+                'planned_end_date': str(self.today + timedelta(days=4)),
+            },
+            format='json',
+        )
+
+        self.assertEqual(qty_response.status_code, 400)
+        self.assertIn('qty', qty_response.data)
+        self.assertEqual(date_response.status_code, 400)
+        self.assertIn('planned_end_date', date_response.data)
+
+    def test_create_order_action_rejects_cancelled_held_and_unconfirmed_generic(self):
+        cancelled_response = self.client.post(
+            f'/api/production/demands/{self.cancelled.id}/create_order/',
+            {'qty': '1'},
+            format='json',
+        )
+        held_response = self.client.post(
+            f'/api/production/demands/{self.held.id}/create_order/',
+            {'qty': '1'},
+            format='json',
+        )
+        self._set_line_snapshot(self._routing_steps_snapshot(
+            order_spec_confirmed=False,
+            order_operations_reviewed=False,
+        ))
+        generic_demand = self._create_demand('API-GENERIC-BLOCK')
+        generic_response = self.client.post(
+            f'/api/production/demands/{generic_demand.id}/create_order/',
+            {'qty': '1'},
+            format='json',
+        )
+
+        self.assertEqual(cancelled_response.status_code, 400)
+        self.assertEqual(held_response.status_code, 400)
+        self.assertEqual(generic_response.status_code, 400)
+        self.assertIn('error', cancelled_response.data)
+        self.assertIn('error', held_response.data)
+        self.assertIn('error', generic_response.data)
+
+    def test_create_order_action_blocks_non_production_user(self):
+        self._set_line_snapshot(self._routing_steps_snapshot())
+        demand = self._create_demand('API-PERMISSION')
+        self.client.force_authenticate(user=self.basic_user)
+
+        response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {'qty': '1'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(ProductionOrder.objects.filter(production_demand=demand).exists())
 
 
 class ProductionWorkflowTests(APITestCase):

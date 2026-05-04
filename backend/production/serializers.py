@@ -161,6 +161,28 @@ class ProductionDemandSerializer(serializers.ModelSerializer):
         ]
 
 
+class ProductionDemandCreateOrderSerializer(serializers.Serializer):
+    qty = serializers.DecimalField(max_digits=18, decimal_places=4)
+    planned_start_date = serializers.DateField(required=False, allow_null=True)
+    planned_end_date = serializers.DateField(required=False, allow_null=True)
+    note = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
+
+    def validate_qty(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError('So luong tao lenh phai > 0.')
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        planned_start_date = attrs.get('planned_start_date')
+        planned_end_date = attrs.get('planned_end_date')
+        if planned_start_date and planned_end_date and planned_end_date < planned_start_date:
+            raise serializers.ValidationError({
+                'planned_end_date': 'Ngay ket thuc ke hoach khong duoc truoc ngay bat dau ke hoach.'
+            })
+        return attrs
+
+
 class ProductionOperationSerializer(serializers.ModelSerializer):
     planned_shift_label = serializers.SerializerMethodField()
     block_reason_label = serializers.SerializerMethodField()
@@ -183,6 +205,14 @@ class ProductionOperationSerializer(serializers.ModelSerializer):
             'step_code',
             'step_name',
             'source_field',
+            'route_step_no',
+            'display_step',
+            'display_order',
+            'step_type',
+            'group_code',
+            'is_required',
+            'allow_parallel',
+            'source_operation_code',
             'rate_per_hour',
             'planned_qty',
             'completed_qty',
@@ -334,6 +364,7 @@ class ProductionOrderSerializer(serializers.ModelSerializer):
     qr_value = serializers.SerializerMethodField()
     sales_order_code = serializers.CharField(source='sales_order.code', read_only=True)
     sales_order_line_number = serializers.IntegerField(source='sales_order_line.line_number', read_only=True)
+    production_demand_code = serializers.CharField(source='production_demand.demand_code', read_only=True)
     target_warehouse_name = serializers.CharField(source='target_warehouse.name', read_only=True)
     target_location_name = serializers.CharField(source='target_location.name', read_only=True)
     remaining_qty = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
@@ -353,6 +384,8 @@ class ProductionOrderSerializer(serializers.ModelSerializer):
             'sales_order_code',
             'sales_order_line',
             'sales_order_line_number',
+            'production_demand',
+            'production_demand_code',
             'product',
             'product_code',
             'product_name',
@@ -403,6 +436,8 @@ class ProductionOrderSerializer(serializers.ModelSerializer):
             'remaining_qty',
             'scrap_qty',
             'estimated_output_value',
+            'production_demand',
+            'production_demand_code',
             'submitted_by',
             'submitted_at',
             'approved_by',

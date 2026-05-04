@@ -51,6 +51,7 @@ from production.permissions import (
     can_submit_production_order,
 )
 from production.serializers import (
+    ProductionDemandCreateOrderSerializer,
     ProductionDemandSerializer,
     ProductionIssueSerializer,
     ProductionOperationSerializer,
@@ -63,6 +64,7 @@ from production.services import (
     build_material_product_snapshot,
     build_operation_planning_snapshot,
     build_production_order_trace_code,
+    create_production_order_from_demand,
     get_shift_capacity_hours,
     get_next_production_issue_code,
     get_next_production_order_code,
@@ -3584,6 +3586,80 @@ class ProductionDemandViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
         queryset = self._apply_filters(self._base_queryset(), include_planning_bucket=False)
         return Response(_production_demand_summary(queryset))
 
+    @action(detail=True, methods=['post'])
+    def create_order(self, request, pk=None):
+        if not _can_manage_production(request.user):
+            raise PermissionDenied('Ban khong co quyen tao lenh san xuat tu nhu cau san xuat.')
+
+        demand = self.get_object()
+        serializer = ProductionDemandCreateOrderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            with transaction.atomic():
+                order = create_production_order_from_demand(
+                    demand,
+                    data['qty'],
+                    planned_start_date=data.get('planned_start_date'),
+                    planned_end_date=data.get('planned_end_date'),
+                    user=request.user,
+                )
+                note = str(data.get('note') or '').strip()
+                if note:
+                    order.notes = note
+                    order.save(update_fields=['notes', 'updated_at'])
+
+                demand.refresh_from_db()
+                order.refresh_from_db()
+                _log_production_audit(
+                    request,
+                    action='CREATE',
+                    entity_type='ProductionOrder',
+                    entity_id=int(order.id),
+                    entity_code=order.code,
+                    old_values={},
+                    new_values={
+                        'status': order.status,
+                        'product': order.product_id,
+                        'planned_qty': str(order.planned_qty),
+                        'production_demand': demand.id,
+                        'production_demand_code': demand.demand_code,
+                    },
+                )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        order = ProductionOrder.objects.select_related(
+            'production_demand',
+            'sales_order',
+            'sales_order__customer',
+            'sales_order_line',
+            'product',
+            'target_warehouse',
+            'target_location',
+            'created_by',
+            'updated_by',
+            'owner',
+            'team',
+        ).prefetch_related(
+            'operations',
+            'material_requirements',
+            'material_requirements__material_product',
+        ).get(pk=order.pk)
+        demand = self._base_queryset().get(pk=demand.pk)
+        return Response(
+            {
+                'message': 'Da tao lenh san xuat.',
+                'production_order_id': order.id,
+                'production_order_code': order.code,
+                'operation_count': order.operations.count(),
+                'production_order': ProductionOrderSerializer(order).data,
+                'production_demand': ProductionDemandSerializer(demand).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
 
 class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
     serializer_class = ProductionOrderSerializer
@@ -3594,6 +3670,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = ProductionOrder.objects.select_related(
+            'production_demand',
             'sales_order',
             'sales_order__customer',
             'sales_order_line',
