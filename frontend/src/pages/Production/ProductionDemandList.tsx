@@ -7,7 +7,10 @@ import {
   Descriptions,
   Drawer,
   Empty,
+  Form,
   Input,
+  InputNumber,
+  Modal,
   Select,
   Space,
   Spin,
@@ -17,10 +20,11 @@ import {
   Tag,
   Tooltip,
   Typography,
+  message,
 } from 'antd';
 import type { ColumnsType, TableProps } from 'antd/es/table';
-import { EyeOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
+import { EyeOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
 
 import { productionApi } from '../../api/production';
@@ -30,12 +34,14 @@ import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { getToastMessage } from '../../shared/apiError';
 import type {
   ProductionDemand,
+  ProductionDemandCreateOrderPayload,
   ProductionDemandPlanningStatus,
   ProductionDemandPriority,
   ProductionDemandProductionStatus,
   ProductionDemandProductKind,
   ProductionDemandQueryParams,
 } from '../../types/production';
+import { canManageProductionData } from '../../utils/authz';
 import { PAGES } from '../../utils/constants';
 
 const { RangePicker } = DatePicker;
@@ -74,6 +80,18 @@ type SummaryCard = {
   color: string;
   lane?: DemandLaneFilter;
 };
+
+type CreateOrderFormValues = {
+  qty?: number | null;
+  planned_start_date?: Dayjs | null;
+  planned_end_date?: Dayjs | null;
+  note?: string;
+};
+
+type CreatedOrderNotice = {
+  id: number;
+  code: string;
+} | null;
 
 const SUMMARY_DEFAULT = {
   total: 0,
@@ -210,6 +228,26 @@ const formatMaybeText = (value?: string | null) => {
   const normalized = String(value || '').trim();
   return normalized || '-';
 };
+const getNumericDemandQty = (value?: string | number | null) => Number(value || 0);
+
+const getCreateOrderBlockedReason = (demand: ProductionDemand | null | undefined, canManageProduction: boolean) => {
+  if (!demand) return 'Chưa có dữ liệu nhu cầu.';
+  if (!canManageProduction) return 'Bạn không có quyền tạo lệnh sản xuất.';
+  if (demand.planning_status === 'CANCELLED' || demand.production_status === 'CANCELLED') {
+    return 'Nhu cầu đã hủy, không thể tạo lệnh.';
+  }
+  if (demand.is_held || String(demand.hold_reason || '').trim()) {
+    return 'Nhu cầu đang cần xử lý hold trước khi tạo lệnh.';
+  }
+  if (getNumericDemandQty(demand.qty_remaining_to_plan) <= 0) {
+    return 'Nhu cầu đã lập đủ số lượng.';
+  }
+  return '';
+};
+
+const getDefaultPlannedEndDate = (demand: ProductionDemand) => (
+  demand.production_due_date || demand.delivery_date || null
+);
 
 const isDemandLaneFilter = (value: unknown): value is DemandLaneFilter => (
   typeof value === 'string' && DEMAND_LANES.includes(value as DemandLaneFilter)
@@ -502,6 +540,12 @@ export default function ProductionDemandList() {
   const pageSize = Number(configRecord?.pageSize ?? 20);
   const [selectedDemandId, setSelectedDemandId] = useState<number | null>(null);
   const [selectedDemandPreview, setSelectedDemandPreview] = useState<ProductionDemand | null>(null);
+  const [createOrderOpen, setCreateOrderOpen] = useState(false);
+  const [createdOrderNotice, setCreatedOrderNotice] = useState<CreatedOrderNotice>(null);
+  const [createOrderForm] = Form.useForm<CreateOrderFormValues>();
+  const [messageApi, contextHolder] = message.useMessage();
+  const queryClient = useQueryClient();
+  const canManageProduction = canManageProductionData();
 
   useEffect(() => {
     setActiveLane(storedLane);
@@ -562,6 +606,7 @@ export default function ProductionDemandList() {
   const hasFilters = Object.keys(effectiveFilters).length > 0;
   const hasActiveView = hasSearch || hasFilters || activeLane !== 'ALL';
   const errorMessage = listQuery.isError ? getToastMessage(listQuery.error) : '';
+  const createOrderBlockedReason = getCreateOrderBlockedReason(selectedDemand, canManageProduction);
 
   const summaryCards: SummaryCard[] = [
     { key: 'overdue', title: 'Quá hạn', value: summary.overdue, color: '#cf1322', lane: 'OVERDUE' },
@@ -611,17 +656,85 @@ export default function ProductionDemandList() {
     await Promise.all([
       listQuery.refetch(),
       summaryQuery.refetch(),
+      selectedDemandId ? detailQuery.refetch() : Promise.resolve(),
     ]);
   };
+
+  const createOrderMutation = useMutation({
+    mutationFn: ({ demandId, payload }: { demandId: number; payload: ProductionDemandCreateOrderPayload }) => (
+      productionApi.createOrderFromDemand(demandId, payload)
+    ),
+    onSuccess: async (response) => {
+      setCreatedOrderNotice({
+        id: response.production_order_id,
+        code: response.production_order_code,
+      });
+      setCreateOrderOpen(false);
+      createOrderForm.resetFields();
+      messageApi.success(`Đã tạo lệnh sản xuất ${response.production_order_code}`);
+      await Promise.all([
+        refreshData(),
+        queryClient.invalidateQueries({ queryKey: ['production-orders'] }),
+        queryClient.invalidateQueries({ queryKey: ['production-orders-summary'] }),
+      ]);
+    },
+    onError: async (error) => {
+      messageApi.error(getToastMessage(error));
+      await refreshData();
+    },
+  });
 
   const openDemandDetail = (demand: ProductionDemand) => {
     setSelectedDemandPreview(demand);
     setSelectedDemandId(demand.id);
+    setCreatedOrderNotice(null);
   };
 
   const closeDemandDetail = () => {
     setSelectedDemandId(null);
     setSelectedDemandPreview(null);
+    setCreateOrderOpen(false);
+    setCreatedOrderNotice(null);
+    createOrderForm.resetFields();
+  };
+
+  const openCreateOrderModal = () => {
+    if (!selectedDemand) return;
+    if (createOrderBlockedReason) {
+      messageApi.warning(createOrderBlockedReason);
+      return;
+    }
+    const plannedEndDate = getDefaultPlannedEndDate(selectedDemand);
+    createOrderForm.setFieldsValue({
+      qty: getNumericDemandQty(selectedDemand.qty_remaining_to_plan),
+      planned_start_date: selectedDemand.planning_due_date ? dayjs(selectedDemand.planning_due_date) : null,
+      planned_end_date: plannedEndDate ? dayjs(plannedEndDate) : null,
+      note: '',
+    });
+    setCreateOrderOpen(true);
+  };
+
+  const closeCreateOrderModal = () => {
+    if (createOrderMutation.isPending) return;
+    setCreateOrderOpen(false);
+    createOrderForm.resetFields();
+  };
+
+  const handleCreateOrderSubmit = async () => {
+    if (!selectedDemand) return;
+    const values = await createOrderForm.validateFields();
+    const qty = getNumericDemandQty(values.qty);
+    const payload: ProductionDemandCreateOrderPayload = {
+      qty: String(qty),
+      planned_start_date: values.planned_start_date ? values.planned_start_date.format('YYYY-MM-DD') : null,
+      planned_end_date: values.planned_end_date ? values.planned_end_date.format('YYYY-MM-DD') : null,
+      note: values.note?.trim() || '',
+    };
+    try {
+      await createOrderMutation.mutateAsync({ demandId: selectedDemand.id, payload });
+    } catch {
+      return;
+    }
   };
 
   const activeFilterTags = useMemo(() => {
@@ -843,6 +956,19 @@ export default function ProductionDemandList() {
           />
         ) : null}
 
+        {createdOrderNotice ? (
+          <Alert
+            showIcon
+            type="success"
+            message={`Đã tạo lệnh sản xuất ${createdOrderNotice.code}`}
+            action={(
+              <Button size="small" href={`/production-orders?focus_id=${createdOrderNotice.id}`}>
+                Xem lệnh
+              </Button>
+            )}
+          />
+        ) : null}
+
         <Card size="small" title="Thông tin đơn hàng">
           <Descriptions column={1} size="small" bordered labelStyle={{ width: 190 }}>
             <Descriptions.Item label="Số đơn">
@@ -943,6 +1069,7 @@ export default function ProductionDemandList() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {contextHolder}
       <div className="list-page-head">
         <div>
           <Title level={2} style={{ marginBottom: 4 }}>Nhu cầu sản xuất</Title>
@@ -1125,13 +1252,125 @@ export default function ProductionDemandList() {
         onClose={closeDemandDetail}
         destroyOnClose
         footer={(
-          <div style={{ textAlign: 'right' }}>
-            <Button onClick={closeDemandDetail}>Đóng</Button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+            <div>
+              {createdOrderNotice ? (
+                <Button type="link" href={`/production-orders?focus_id=${createdOrderNotice.id}`}>
+                  Xem lệnh {createdOrderNotice.code}
+                </Button>
+              ) : null}
+            </div>
+            <Space>
+              <Tooltip title={createOrderBlockedReason || undefined}>
+                <span>
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    disabled={Boolean(createOrderBlockedReason)}
+                    loading={createOrderMutation.isPending}
+                    onClick={openCreateOrderModal}
+                  >
+                    Tạo lệnh sản xuất
+                  </Button>
+                </span>
+              </Tooltip>
+              <Button onClick={closeDemandDetail}>Đóng</Button>
+            </Space>
           </div>
         )}
       >
         {renderDemandDrawerContent()}
       </Drawer>
+
+      <Modal
+        title="Tạo lệnh sản xuất từ nhu cầu"
+        open={createOrderOpen}
+        onCancel={closeCreateOrderModal}
+        onOk={handleCreateOrderSubmit}
+        okText="Tạo lệnh sản xuất"
+        cancelText="Đóng"
+        confirmLoading={createOrderMutation.isPending}
+        okButtonProps={{ disabled: Boolean(createOrderBlockedReason) }}
+        destroyOnClose={false}
+      >
+        {selectedDemand ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            {selectedDemand.product_kind === 'GENERIC' ? (
+              <Alert
+                showIcon
+                type="info"
+                message="Mã chung sẽ được hệ thống kiểm tra xác nhận quy cách và công đoạn khi tạo lệnh."
+              />
+            ) : null}
+
+            <Descriptions column={1} size="small" bordered labelStyle={{ width: 170 }}>
+              <Descriptions.Item label="Nhu cầu">{getDemandCode(selectedDemand)}</Descriptions.Item>
+              <Descriptions.Item label="Đơn hàng">{formatMaybeText(selectedDemand.sales_order_code)}</Descriptions.Item>
+              <Descriptions.Item label="Khách hàng">{getCustomerDisplay(selectedDemand)}</Descriptions.Item>
+              <Descriptions.Item label="Mã hàng">{formatMaybeText(selectedDemand.product_code || selectedDemand.product_display_code)}</Descriptions.Item>
+              <Descriptions.Item label="Tên hàng">{formatMaybeText(selectedDemand.product_name || selectedDemand.product_display_name)}</Descriptions.Item>
+              <Descriptions.Item label="SL cần SX">{formatNumber(selectedDemand.qty_required)}</Descriptions.Item>
+              <Descriptions.Item label="SL đã lập KH">{formatNumber(selectedDemand.qty_planned)}</Descriptions.Item>
+              <Descriptions.Item label="SL còn lại">{formatNumber(selectedDemand.qty_remaining_to_plan)}</Descriptions.Item>
+            </Descriptions>
+
+            <Form form={createOrderForm} layout="vertical">
+              <Form.Item
+                name="qty"
+                label="Số lượng lập lệnh"
+                extra={selectedDemand.unit_name ? `Đơn vị: ${selectedDemand.unit_name}` : undefined}
+                rules={[
+                  { required: true, message: 'Vui lòng nhập số lượng lập lệnh.' },
+                  {
+                    validator: async (_, value) => {
+                      const qty = getNumericDemandQty(value);
+                      const remaining = getNumericDemandQty(selectedDemand.qty_remaining_to_plan);
+                      if (qty <= 0) {
+                        return Promise.reject(new Error('Số lượng lập lệnh phải > 0.'));
+                      }
+                      if (qty > remaining) {
+                        return Promise.reject(new Error('Số lượng lập lệnh không được vượt số lượng còn lại.'));
+                      }
+                      return Promise.resolve();
+                    },
+                  },
+                ]}
+              >
+                <InputNumber min={0} precision={4} style={{ width: '100%' }} />
+              </Form.Item>
+
+              <Form.Item name="planned_start_date" label="Ngày bắt đầu dự kiến">
+                <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} />
+              </Form.Item>
+
+              <Form.Item
+                name="planned_end_date"
+                label="Ngày kết thúc dự kiến"
+                dependencies={['planned_start_date']}
+                rules={[
+                  {
+                    validator: async (_, value?: Dayjs | null) => {
+                      const start = createOrderForm.getFieldValue('planned_start_date') as Dayjs | null | undefined;
+                      if (start && value && value.isBefore(start, 'day')) {
+                        return Promise.reject(new Error('Ngày kết thúc không được trước ngày bắt đầu.'));
+                      }
+                      return Promise.resolve();
+                    },
+                  },
+                ]}
+              >
+                <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} />
+              </Form.Item>
+
+              <Form.Item name="note" label="Ghi chú">
+                <Input.TextArea rows={3} placeholder="Ghi chú cho lệnh sản xuất" />
+              </Form.Item>
+            </Form>
+          </Space>
+        ) : (
+          <Empty description="Chưa có dữ liệu nhu cầu." />
+        )}
+      </Modal>
     </div>
   );
 }

@@ -152,12 +152,36 @@ export interface ProductionDemandQueryParams {
   ordering?: string;
 }
 
+export interface ProductionDemandCreateOrderPayload {
+  qty: string;
+  planned_start_date?: string | null;
+  planned_end_date?: string | null;
+  note?: string;
+}
+
+export interface ProductionDemandCreateOrderResponse {
+  message?: string;
+  production_order_id: number;
+  production_order_code: string;
+  operation_count: number;
+  production_order: ProductionOrder;
+  production_demand: ProductionDemand;
+}
+
 export interface ProductionOperation {
   id: number;
   sequence: number;
   step_code: string;
   step_name: string;
   source_field?: string;
+  route_step_no?: number | null;
+  display_step?: number | null;
+  display_order?: number | null;
+  step_type?: string;
+  group_code?: string;
+  is_required?: boolean;
+  allow_parallel?: boolean;
+  source_operation_code?: string;
   rate_per_hour: string;
   planned_qty: string;
   completed_qty: string;
@@ -1009,6 +1033,8 @@ export interface ProductionOrder {
   sales_order_code?: string | null;
   sales_order_line?: number | null;
   sales_order_line_number?: number | null;
+  production_demand?: number | null;
+  production_demand_code?: string | null;
   product: number;
   product_code?: string | null;
   product_name?: string | null;
