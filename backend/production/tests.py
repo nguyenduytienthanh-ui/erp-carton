@@ -4,6 +4,7 @@ from io import StringIO
 
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
 from rest_framework.test import APITestCase
 from django.utils import timezone
 
@@ -104,6 +105,16 @@ class ProductionDemandModelTests(APITestCase):
         data.update(overrides)
         return ProductionDemand.objects.create(**data)
 
+    def _create_production_order(self, **overrides):
+        data = {
+            'code': 'MO-PD-MODEL-001',
+            'order_date': timezone.localdate(),
+            'product': self.product,
+            'planned_qty': '5',
+        }
+        data.update(overrides)
+        return ProductionOrder.objects.create(**data)
+
     def test_create_production_demand_with_delivery_plan(self):
         demand = self._create_demand()
 
@@ -157,6 +168,100 @@ class ProductionDemandModelTests(APITestCase):
         self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.NOT_DUE)
         self.assertEqual(demand.production_status, ProductionDemandProductionStatus.NOT_RELEASED)
         self.assertEqual(demand.priority, ProductionDemandPriority.NORMAL)
+
+    def test_manual_production_order_allows_empty_production_demand(self):
+        order = self._create_production_order(code='MO-PD-MODEL-MANUAL')
+
+        self.assertIsNone(order.production_demand_id)
+
+    def test_production_order_can_link_to_production_demand(self):
+        demand = self._create_demand(demand_key='SO:1:LINE:1:PLAN:LINKED')
+
+        order = self._create_production_order(
+            code='MO-PD-MODEL-LINKED',
+            production_demand=demand,
+            sales_order=demand.sales_order,
+            sales_order_line=demand.sales_order_line,
+        )
+
+        self.assertEqual(order.production_demand_id, demand.id)
+        self.assertEqual(list(demand.production_orders.values_list('id', flat=True)), [order.id])
+
+    def test_production_demand_is_protected_when_order_is_linked(self):
+        demand = self._create_demand(demand_key='SO:1:LINE:1:PLAN:PROTECT')
+        self._create_production_order(
+            code='MO-PD-MODEL-PROTECT',
+            production_demand=demand,
+        )
+
+        with self.assertRaises(ProtectedError):
+            demand.delete()
+
+    def test_legacy_production_operation_allows_empty_routing_metadata(self):
+        order = self._create_production_order(code='MO-PD-MODEL-OP-LEGACY')
+
+        operation = ProductionOperation.objects.create(
+            production_order=order,
+            sequence=1,
+            step_code='IN',
+            step_name='In',
+        )
+
+        self.assertIsNone(operation.route_step_no)
+        self.assertIsNone(operation.display_step)
+        self.assertIsNone(operation.display_order)
+        self.assertEqual(operation.step_type, '')
+        self.assertEqual(operation.group_code, '')
+        self.assertTrue(operation.is_required)
+        self.assertFalse(operation.allow_parallel)
+        self.assertEqual(operation.source_operation_code, '')
+
+    def test_production_operation_accepts_routing_metadata(self):
+        order = self._create_production_order(code='MO-PD-MODEL-OP-ROUTING')
+
+        operation = ProductionOperation.objects.create(
+            production_order=order,
+            sequence=1,
+            step_code='XA',
+            step_name='Xả',
+            route_step_no=10,
+            display_step=1,
+            display_order=20,
+            step_type='PROCESS',
+            group_code='SHEET-PREP',
+            is_required=False,
+            allow_parallel=True,
+            source_operation_code='XA',
+        )
+
+        self.assertEqual(operation.route_step_no, 10)
+        self.assertEqual(operation.display_step, 1)
+        self.assertEqual(operation.display_order, 20)
+        self.assertEqual(operation.step_type, 'PROCESS')
+        self.assertEqual(operation.group_code, 'SHEET-PREP')
+        self.assertFalse(operation.is_required)
+        self.assertTrue(operation.allow_parallel)
+        self.assertEqual(operation.source_operation_code, 'XA')
+
+    def test_production_operation_sequence_unique_constraint_still_applies(self):
+        order = self._create_production_order(code='MO-PD-MODEL-OP-UNIQUE')
+        ProductionOperation.objects.create(
+            production_order=order,
+            sequence=1,
+            step_code='XA',
+            step_name='Xả',
+            route_step_no=10,
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ProductionOperation.objects.create(
+                    production_order=order,
+                    sequence=1,
+                    step_code='IN',
+                    step_name='In',
+                    route_step_no=20,
+                )
 
 
 class ProductionDemandSyncTests(APITestCase):

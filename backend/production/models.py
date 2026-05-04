@@ -372,6 +372,13 @@ class ProductionOrder(SearchTextModelMixin):
         blank=True,
         related_name='production_orders',
     )
+    production_demand = models.ForeignKey(
+        'production.ProductionDemand',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='production_orders',
+    )
     product = models.ForeignKey(
         'products.Product',
         on_delete=models.PROTECT,
@@ -562,6 +569,14 @@ class ProductionOperation(models.Model):
     step_code = models.CharField(max_length=30)
     step_name = models.CharField(max_length=100)
     source_field = models.CharField(max_length=50, blank=True, default='')
+    route_step_no = models.PositiveIntegerField(null=True, blank=True)
+    display_step = models.PositiveIntegerField(null=True, blank=True)
+    display_order = models.PositiveIntegerField(null=True, blank=True)
+    step_type = models.CharField(max_length=20, blank=True, default='')
+    group_code = models.CharField(max_length=50, blank=True, default='')
+    is_required = models.BooleanField(default=True)
+    allow_parallel = models.BooleanField(default=False)
+    source_operation_code = models.CharField(max_length=50, blank=True, default='')
     rate_per_hour = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
     planned_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
     completed_qty = models.DecimalField(max_digits=18, decimal_places=4, default=Decimal('0'))
