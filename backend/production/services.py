@@ -1,13 +1,20 @@
+from datetime import timedelta
 from decimal import Decimal
 from functools import lru_cache
 
+from django.db import transaction
 from django.utils import timezone
 
 from production.models import (
+    ProductionDemand,
+    ProductionDemandPlanningStatus,
+    ProductionDemandProductionStatus,
+    ProductionMaterialRequirement,
     ProductionOperationBlockReason,
     ProductionShift as ProductionPlanningShift,
     ProductionOperation,
     ProductionOperationStatus,
+    ProductionOrder,
     ProductionOrderStatus,
 )
 from sales.document_policy import round_money, round_qty
@@ -129,17 +136,99 @@ def build_production_order_trace_code(order, product=None):
     return f'{product_code}|{order_date_token}|{order_code}'
 
 
-def rebuild_production_operations(order):
-    order.operations.all().delete()
-    snapshot = order.product_snapshot or {}
+def _to_decimal(value):
+    try:
+        return Decimal(str(value or 0))
+    except Exception:
+        return Decimal('0')
+
+
+def _positive_int_or_none(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _snapshot_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {'1', 'true', 'yes', 'y', 'on'}:
+            return True
+        if normalized in {'0', 'false', 'no', 'n', 'off', ''}:
+            return False
+    return bool(value)
+
+
+def _operation_rate(payload):
+    return round_qty(_to_decimal(
+        payload.get('applied_rate_per_hour')
+        or payload.get('standard_rate_per_hour')
+        or payload.get('rate_per_hour')
+        or 0
+    ))
+
+
+def _build_operation_from_routing_step(order, item, sequence):
+    step_code = str(item.get('operation_code') or '').strip()
+    if not step_code or _snapshot_bool(item.get('is_active'), True) is False:
+        return None
+    return ProductionOperation(
+        production_order=order,
+        sequence=sequence,
+        step_code=step_code,
+        step_name=str(item.get('operation_name') or step_code).strip(),
+        source_field='routing_steps',
+        route_step_no=_positive_int_or_none(item.get('step_no')),
+        display_step=_positive_int_or_none(item.get('display_step')),
+        display_order=_positive_int_or_none(item.get('display_order')),
+        step_type=str(item.get('step_type') or 'REQUIRED').strip(),
+        group_code=str(item.get('group_code') or '').strip(),
+        is_required=_snapshot_bool(item.get('is_required'), True),
+        allow_parallel=_snapshot_bool(item.get('allow_parallel'), False),
+        source_operation_code=step_code,
+        rate_per_hour=_operation_rate(item),
+        planned_qty=round_qty(order.planned_qty or 0),
+        priority_rank=sequence * 10,
+        status=ProductionOperationStatus.PENDING,
+    )
+
+
+def _build_operation_from_snapshot_operation(order, item, sequence):
+    step_code = str(item.get('operation_code') or '').strip()
+    if not step_code or _snapshot_bool(item.get('is_active'), True) is False:
+        return None
+    route_step_no = _positive_int_or_none(item.get('sequence')) or sequence
+    return ProductionOperation(
+        production_order=order,
+        sequence=sequence,
+        step_code=step_code,
+        step_name=str(item.get('operation_name') or step_code).strip(),
+        source_field='operations',
+        route_step_no=route_step_no,
+        display_step=sequence,
+        display_order=route_step_no,
+        step_type='REQUIRED',
+        is_required=True,
+        allow_parallel=False,
+        source_operation_code=step_code,
+        rate_per_hour=_operation_rate(item),
+        planned_qty=round_qty(order.planned_qty or 0),
+        priority_rank=sequence * 10,
+        status=ProductionOperationStatus.PENDING,
+    )
+
+
+def _build_legacy_operations(order, snapshot):
     operations = []
     sequence = 1
     for step_code, step_name, source_field in STEP_DEFINITIONS:
-        raw_rate = snapshot.get(source_field)
-        try:
-            rate = Decimal(str(raw_rate or 0))
-        except Exception:
-            rate = Decimal('0')
+        rate = _to_decimal(snapshot.get(source_field))
         if rate <= 0:
             continue
         operations.append(
@@ -156,8 +245,219 @@ def rebuild_production_operations(order):
             )
         )
         sequence += 1
+    return operations
+
+
+def rebuild_production_operations(order):
+    if order.pk and order.operations.filter(status__in=[ProductionOperationStatus.IN_PROGRESS, ProductionOperationStatus.DONE]).exists():
+        raise ValueError('Khong the tao lai cong doan khi lenh da co cong doan dang chay hoac da hoan thanh.')
+    order.operations.all().delete()
+    snapshot = order.product_snapshot or {}
+    operations = []
+    sequence = 1
+    for item in snapshot.get('routing_steps') or []:
+        if not isinstance(item, dict):
+            continue
+        operation = _build_operation_from_routing_step(order, item, sequence)
+        if operation is None:
+            continue
+        operations.append(operation)
+        sequence += 1
+    if not operations:
+        sequence = 1
+        for item in snapshot.get('operations') or []:
+            if not isinstance(item, dict):
+                continue
+            operation = _build_operation_from_snapshot_operation(order, item, sequence)
+            if operation is None:
+                continue
+            operations.append(operation)
+            sequence += 1
+    if not operations:
+        operations = _build_legacy_operations(order, snapshot)
     if operations:
         ProductionOperation.objects.bulk_create(operations)
+
+
+def _planning_status_from_date(planning_due_date):
+    if not planning_due_date:
+        return ProductionDemandPlanningStatus.NOT_DUE
+    today = timezone.localdate()
+    if planning_due_date < today:
+        return ProductionDemandPlanningStatus.OVERDUE
+    if planning_due_date == today:
+        return ProductionDemandPlanningStatus.DUE
+    if planning_due_date <= today + timedelta(days=7):
+        return ProductionDemandPlanningStatus.UPCOMING
+    return ProductionDemandPlanningStatus.NOT_DUE
+
+
+def recompute_production_demand_counters(demand, user=None):
+    orders = list(demand.production_orders.all())
+    planned_statuses = {
+        ProductionOrderStatus.DRAFT,
+        ProductionOrderStatus.SUBMITTED,
+        ProductionOrderStatus.APPROVED,
+        ProductionOrderStatus.RELEASED,
+        ProductionOrderStatus.IN_PROGRESS,
+        ProductionOrderStatus.COMPLETED,
+    }
+    released_statuses = {
+        ProductionOrderStatus.RELEASED,
+        ProductionOrderStatus.IN_PROGRESS,
+        ProductionOrderStatus.COMPLETED,
+    }
+    counted_completion_statuses = planned_statuses
+    qty_planned = round_qty(sum(
+        _to_decimal(order.planned_qty)
+        for order in orders
+        if order.status in planned_statuses
+    ))
+    qty_released = round_qty(sum(
+        _to_decimal(order.planned_qty)
+        for order in orders
+        if order.status in released_statuses
+    ))
+    qty_completed = round_qty(sum(
+        _to_decimal(order.produced_qty)
+        for order in orders
+        if order.status in counted_completion_statuses
+    ))
+    qty_required = _to_decimal(demand.qty_required)
+
+    if demand.planning_status == ProductionDemandPlanningStatus.CANCELLED:
+        planning_status = ProductionDemandPlanningStatus.CANCELLED
+    elif demand.planning_status == ProductionDemandPlanningStatus.NO_PRODUCTION_NEEDED and qty_planned <= 0:
+        planning_status = ProductionDemandPlanningStatus.NO_PRODUCTION_NEEDED
+    elif qty_required > 0 and qty_planned >= qty_required:
+        planning_status = ProductionDemandPlanningStatus.FULLY_PLANNED
+    elif qty_planned > 0:
+        planning_status = ProductionDemandPlanningStatus.PARTIALLY_PLANNED
+    else:
+        planning_status = _planning_status_from_date(demand.planning_due_date)
+
+    if demand.production_status == ProductionDemandProductionStatus.CANCELLED:
+        production_status = ProductionDemandProductionStatus.CANCELLED
+    elif qty_required > 0 and qty_completed >= qty_required:
+        production_status = ProductionDemandProductionStatus.COMPLETED
+    elif qty_completed > 0:
+        production_status = ProductionDemandProductionStatus.PARTIALLY_COMPLETED
+    elif any(order.status == ProductionOrderStatus.IN_PROGRESS for order in orders):
+        production_status = ProductionDemandProductionStatus.IN_PROGRESS
+    elif qty_required > 0 and qty_released >= qty_required:
+        production_status = ProductionDemandProductionStatus.FULLY_RELEASED
+    elif qty_released > 0:
+        production_status = ProductionDemandProductionStatus.PARTIALLY_RELEASED
+    else:
+        production_status = ProductionDemandProductionStatus.NOT_RELEASED
+
+    demand.qty_planned = qty_planned
+    demand.qty_released = qty_released
+    demand.qty_completed = qty_completed
+    demand.planning_status = planning_status
+    demand.production_status = production_status
+    update_fields = [
+        'qty_planned',
+        'qty_released',
+        'qty_completed',
+        'planning_status',
+        'production_status',
+        'updated_at',
+    ]
+    if user is not None:
+        demand.updated_by = user
+        update_fields.append('updated_by')
+    demand.save(update_fields=update_fields)
+    return demand
+
+
+def _validate_demand_can_create_order(demand, qty):
+    if (
+        demand.planning_status == ProductionDemandPlanningStatus.CANCELLED
+        or demand.production_status == ProductionDemandProductionStatus.CANCELLED
+    ):
+        raise ValueError('Nhu cau san xuat da bi huy.')
+    if str(demand.hold_reason or '').strip():
+        raise ValueError('Nhu cau san xuat dang tam giu.')
+    planned_qty = round_qty(qty)
+    if planned_qty <= 0:
+        raise ValueError('So luong tao lenh phai > 0.')
+    if planned_qty > demand.qty_remaining_to_plan:
+        raise ValueError('So luong tao lenh vuot qua so luong con lai can lap ke hoach.')
+
+    line = getattr(demand, 'sales_order_line', None)
+    snapshot = getattr(line, 'product_snapshot', None) or {}
+    product_kind = str(snapshot.get('product_kind') or demand.product_kind or '').upper()
+    if product_kind == 'GENERIC':
+        if _snapshot_bool(snapshot.get('requires_order_spec'), False) and not _snapshot_bool(snapshot.get('order_spec_confirmed'), False):
+            raise ValueError('San pham generic chua xac nhan quy cach dat hang.')
+        if _snapshot_bool(snapshot.get('requires_order_operations_review'), False) and not _snapshot_bool(snapshot.get('order_operations_reviewed'), False):
+            raise ValueError('San pham generic chua xac nhan cong doan dat hang.')
+    return planned_qty
+
+
+def build_production_order_payload_from_demand(demand, qty, planned_start_date=None, planned_end_date=None):
+    line = getattr(demand, 'sales_order_line', None)
+    product = getattr(demand, 'product', None) or getattr(line, 'product', None)
+    if product is None:
+        raise ValueError('Nhu cau san xuat khong co san pham.')
+    planned_qty = round_qty(qty)
+    order_date = timezone.localdate()
+    product_snapshot = build_production_product_snapshot(
+        product,
+        order_date=order_date,
+        sales_order_line=line,
+    )
+    return {
+        'order_date': order_date,
+        'planned_start_date': planned_start_date or demand.planning_due_date,
+        'planned_end_date': planned_end_date or demand.production_due_date,
+        'status': ProductionOrderStatus.DRAFT,
+        'production_demand': demand,
+        'sales_order': demand.sales_order,
+        'sales_order_line': line,
+        'product': product,
+        'product_snapshot': product_snapshot,
+        'planned_qty': planned_qty,
+        'unit_cost_estimate': Decimal(str((product_snapshot or {}).get('cost_price') or 0)),
+    }
+
+
+def _create_default_material_requirement_rows(order):
+    for item in build_default_material_requirements(order.product, order.planned_qty):
+        ProductionMaterialRequirement.objects.create(
+            production_order=order,
+            **item,
+        )
+
+
+def create_production_order_from_demand(demand, qty, planned_start_date=None, planned_end_date=None, user=None):
+    with transaction.atomic():
+        locked_demand = (
+            ProductionDemand.objects
+            .select_for_update(of=('self',))
+            .select_related('sales_order', 'sales_order_line', 'sales_order_line__product', 'product')
+            .get(pk=demand.pk)
+        )
+        recompute_production_demand_counters(locked_demand, user=user)
+        locked_demand.refresh_from_db()
+        planned_qty = _validate_demand_can_create_order(locked_demand, qty)
+        payload = build_production_order_payload_from_demand(
+            locked_demand,
+            planned_qty,
+            planned_start_date=planned_start_date,
+            planned_end_date=planned_end_date,
+        )
+        payload['code'] = get_next_production_order_code(payload['order_date'])
+        payload['created_by'] = user
+        payload['updated_by'] = user
+        payload['owner'] = user
+        order = ProductionOrder.objects.create(**payload)
+        _create_default_material_requirement_rows(order)
+        rebuild_production_operations(order)
+        order.save(update_fields=['unit_cost_estimate', 'estimated_output_value', 'updated_at'])
+        recompute_production_demand_counters(locked_demand, user=user)
+    return order
 
 
 def add_issued_qty(requirement, quantity):

@@ -19,10 +19,17 @@ from production.models import (
     ProductionIssue,
     ProductionMaterialRequirement,
     ProductionOperation,
+    ProductionOperationStatus,
     ProductionOrder,
+    ProductionOrderStatus,
     ProductionReceipt,
 )
 from production.demand_services import sync_production_demands_for_sales_order
+from production.services import (
+    create_production_order_from_demand,
+    rebuild_production_operations,
+    recompute_production_demand_counters,
+)
 from sales.models import SalesOrder, SalesOrderDeliveryPlan, SalesOrderLine, SalesOrderStatus
 
 
@@ -262,6 +269,412 @@ class ProductionDemandModelTests(APITestCase):
                     step_name='In',
                     route_step_no=20,
                 )
+
+
+class ProductionDemandOrderServiceTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='production_demand_order_service_admin',
+            password='Demo123!',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.customer = Customer.objects.create(
+            code='PD-SVC-CUST',
+            name='Production Demand Service Customer',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.unit = ProductUnit.objects.create(code='PDSVCUNIT', name='Service Unit')
+        self.product = Product.objects.create(
+            code='PD-SVC-FG',
+            name='Production Demand Service Product',
+            unit=self.unit,
+            cost_price=25000,
+            sale_price=40000,
+            process_in=20000,
+            process_be=8500,
+            status='ACTIVE',
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        self.material_product = Product.objects.create(
+            code='PD-SVC-RM',
+            name='Production Demand Service Material',
+            unit=self.unit,
+            cost_price=9000,
+            sale_price=0,
+            parent=self.product,
+            component_quantity=2,
+            status='ACTIVE',
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        self.sales_order = SalesOrder.objects.create(
+            code='SO-PD-SVC-001',
+            order_date=timezone.localdate(),
+            delivery_date=timezone.localdate() + timedelta(days=14),
+            customer=self.customer,
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        self.line = SalesOrderLine.objects.create(
+            sales_order=self.sales_order,
+            line_number=1,
+            product=self.product,
+            qty='10',
+            uom='PD-SVC-UNIT',
+            unit_price='40000',
+        )
+        self.delivery_plan = SalesOrderDeliveryPlan.objects.create(
+            line=self.line,
+            delivery_date=timezone.localdate() + timedelta(days=14),
+            qty='10',
+        )
+        self._set_line_snapshot(self._base_snapshot())
+
+    def _base_routing_steps(self):
+        return [
+            {
+                'operation_code': 'IN',
+                'operation_name': 'In',
+                'step_no': 10,
+                'display_step': 1,
+                'display_order': 10,
+                'step_type': 'REQUIRED',
+                'group_code': 'PRINT',
+                'is_required': True,
+                'allow_parallel': False,
+                'applied_rate_per_hour': 20000,
+                'standard_rate_per_hour': 18000,
+            },
+            {
+                'operation_code': 'XA',
+                'operation_name': 'Xa lan 1',
+                'step_no': 20,
+                'display_step': 2,
+                'display_order': 20,
+                'step_type': 'REQUIRED',
+                'group_code': 'CUT',
+                'is_required': True,
+                'allow_parallel': False,
+                'applied_rate_per_hour': 12000,
+            },
+            {
+                'operation_code': 'XA',
+                'operation_name': 'Xa lan 2',
+                'step_no': 30,
+                'display_step': 3,
+                'display_order': 30,
+                'step_type': 'REQUIRED',
+                'group_code': 'CUT',
+                'is_required': True,
+                'allow_parallel': False,
+                'applied_rate_per_hour': 11000,
+            },
+            {
+                'operation_code': 'DONG',
+                'operation_name': 'Dong',
+                'step_no': 40,
+                'display_step': 4,
+                'display_order': 40,
+                'step_type': 'REQUIRED',
+                'group_code': 'FINISH',
+                'is_required': True,
+                'allow_parallel': True,
+                'applied_rate_per_hour': 9000,
+            },
+            {
+                'operation_code': 'DAN',
+                'operation_name': 'Dan',
+                'step_no': 40,
+                'display_step': 4,
+                'display_order': 50,
+                'step_type': 'REQUIRED',
+                'group_code': 'FINISH',
+                'is_required': True,
+                'allow_parallel': True,
+                'applied_rate_per_hour': 8000,
+            },
+        ]
+
+    def _base_snapshot(self, **overrides):
+        snapshot = {
+            'schema_version': 2,
+            'product_id': self.product.id,
+            'product_code': 'SNAP-PD-SVC-FG',
+            'product_name': 'Snapshot service product',
+            'code': 'SNAP-PD-SVC-FG',
+            'name': 'Snapshot service product',
+            'product_kind': 'SPECIFIC',
+            'requires_order_spec': False,
+            'requires_order_operations_review': False,
+            'order_spec_confirmed': True,
+            'order_operations_reviewed': True,
+            'cost_price': '26000',
+            'operations': [
+                {'operation_code': 'IN', 'operation_name': 'In', 'sequence': 10, 'applied_rate_per_hour': 20000},
+                {'operation_code': 'BE', 'operation_name': 'Be', 'sequence': 20, 'applied_rate_per_hour': 8500},
+            ],
+            'routing_steps': self._base_routing_steps(),
+            'process_in': 20000,
+            'process_be': 8500,
+        }
+        snapshot.update(overrides)
+        return snapshot
+
+    def _set_line_snapshot(self, snapshot):
+        self.line.product_snapshot = snapshot
+        self.line.save(update_fields=['product_snapshot'])
+
+    def _create_demand(self, **overrides):
+        snapshot = self.line.product_snapshot or {}
+        suffix = overrides.pop('suffix', 'DEFAULT')
+        data = {
+            'demand_key': f'SO:{self.sales_order.id}:LINE:{self.line.id}:SVC:{suffix}',
+            'sales_order': self.sales_order,
+            'sales_order_line': self.line,
+            'delivery_plan': self.delivery_plan,
+            'product': self.product,
+            'customer_id_snapshot': self.customer.id,
+            'customer_name_snapshot': self.customer.name,
+            'product_code': snapshot.get('product_code') or self.product.code,
+            'product_name': snapshot.get('product_name') or self.product.name,
+            'product_kind': snapshot.get('product_kind') or 'SPECIFIC',
+            'unit_name': self.unit.name,
+            'operations_summary': snapshot.get('operations') or [],
+            'routing_summary': snapshot.get('routing_steps') or [],
+            'qty_required': '10',
+            'order_date': self.sales_order.order_date,
+            'delivery_date': self.delivery_plan.delivery_date,
+            'planning_due_date': timezone.localdate() + timedelta(days=5),
+            'production_due_date': timezone.localdate() + timedelta(days=10),
+            'source': 'SALES_ORDER',
+            'created_by': self.user,
+            'updated_by': self.user,
+        }
+        data.update(overrides)
+        return ProductionDemand.objects.create(**data)
+
+    def test_create_order_from_demand_links_order_snapshot_operations_and_materials(self):
+        demand = self._create_demand()
+        self.product.name = 'Changed current product name'
+        self.product.save(update_fields=['name'])
+
+        order = create_production_order_from_demand(demand, '4', user=self.user)
+
+        self.assertEqual(order.production_demand_id, demand.id)
+        self.assertEqual(order.sales_order_id, self.sales_order.id)
+        self.assertEqual(order.sales_order_line_id, self.line.id)
+        self.assertEqual(order.product_id, self.product.id)
+        self.assertEqual(order.status, ProductionOrderStatus.DRAFT)
+        self.assertEqual(order.product_snapshot['name'], 'Snapshot service product')
+        self.assertEqual(order.product_snapshot['product_name'], 'Snapshot service product')
+        self.assertEqual(str(order.unit_cost_estimate), '26000')
+        self.assertEqual(str(order.estimated_output_value), '104000.00')
+
+        requirement = order.material_requirements.get(line_number=1)
+        self.assertEqual(requirement.material_product_id, self.material_product.id)
+        self.assertEqual(str(requirement.required_qty), '8.0000')
+
+        operations = list(order.operations.order_by('sequence'))
+        self.assertEqual([item.step_code for item in operations], ['IN', 'XA', 'XA', 'DONG', 'DAN'])
+        self.assertEqual([item.sequence for item in operations], [1, 2, 3, 4, 5])
+        self.assertEqual(operations[0].source_field, 'routing_steps')
+        self.assertEqual(operations[0].route_step_no, 10)
+        self.assertEqual(operations[0].display_step, 1)
+        self.assertEqual(operations[0].display_order, 10)
+        self.assertEqual(operations[0].step_type, 'REQUIRED')
+        self.assertEqual(operations[0].group_code, 'PRINT')
+        self.assertTrue(operations[0].is_required)
+        self.assertFalse(operations[0].allow_parallel)
+        self.assertEqual(operations[0].source_operation_code, 'IN')
+        self.assertEqual(str(operations[0].rate_per_hour), '20000.0000')
+        self.assertEqual(operations[3].route_step_no, 40)
+        self.assertEqual(operations[4].route_step_no, 40)
+        self.assertEqual(operations[3].display_step, 4)
+        self.assertEqual(operations[4].display_step, 4)
+        self.assertTrue(operations[3].allow_parallel)
+        self.assertTrue(operations[4].allow_parallel)
+
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '4.0000')
+        self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.PARTIALLY_PLANNED)
+
+    def test_create_order_from_demand_sets_fully_planned_when_qty_matches_required(self):
+        demand = self._create_demand(suffix='FULL')
+
+        create_production_order_from_demand(demand, '10', user=self.user)
+
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '10.0000')
+        self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.FULLY_PLANNED)
+
+    def test_create_order_from_demand_blocks_qty_above_remaining(self):
+        demand = self._create_demand(suffix='REMAINING')
+        create_production_order_from_demand(demand, '6', user=self.user)
+
+        with self.assertRaises(ValueError):
+            create_production_order_from_demand(demand, '5', user=self.user)
+
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '6.0000')
+
+    def test_create_order_from_demand_blocks_cancelled_and_held_demands(self):
+        cancelled = self._create_demand(
+            suffix='CANCELLED',
+            planning_status=ProductionDemandPlanningStatus.CANCELLED,
+        )
+        held = self._create_demand(
+            suffix='HELD',
+            hold_reason='Planner review required',
+        )
+
+        with self.assertRaises(ValueError):
+            create_production_order_from_demand(cancelled, '1', user=self.user)
+        with self.assertRaises(ValueError):
+            create_production_order_from_demand(held, '1', user=self.user)
+
+    def test_create_order_from_demand_blocks_unconfirmed_generic_snapshot(self):
+        self._set_line_snapshot(self._base_snapshot(
+            product_kind='GENERIC',
+            requires_order_spec=True,
+            requires_order_operations_review=True,
+            order_spec_confirmed=False,
+            order_operations_reviewed=False,
+        ))
+        demand = self._create_demand(suffix='GENERIC-BLOCK')
+
+        with self.assertRaises(ValueError):
+            create_production_order_from_demand(demand, '1', user=self.user)
+
+    def test_create_order_from_demand_allows_confirmed_generic_snapshot(self):
+        self._set_line_snapshot(self._base_snapshot(
+            product_kind='GENERIC',
+            requires_order_spec=True,
+            requires_order_operations_review=True,
+            order_spec_confirmed=True,
+            order_operations_reviewed=True,
+        ))
+        demand = self._create_demand(suffix='GENERIC-OK')
+
+        order = create_production_order_from_demand(demand, '2', user=self.user)
+
+        self.assertEqual(order.product_snapshot['product_kind'], 'GENERIC')
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '2.0000')
+
+    def test_rebuild_operations_falls_back_to_snapshot_operations(self):
+        self._set_line_snapshot(self._base_snapshot(
+            routing_steps=[],
+            operations=[
+                {'operation_code': 'IN', 'operation_name': 'In', 'sequence': 10, 'applied_rate_per_hour': 20000},
+                {'operation_code': 'BE', 'operation_name': 'Be', 'sequence': 20, 'standard_rate_per_hour': 8500},
+            ],
+        ))
+        demand = self._create_demand(suffix='OPS-FALLBACK')
+
+        order = create_production_order_from_demand(demand, '3', user=self.user)
+
+        operations = list(order.operations.order_by('sequence'))
+        self.assertEqual([item.step_code for item in operations], ['IN', 'BE'])
+        self.assertTrue(all(item.source_field == 'operations' for item in operations))
+        self.assertEqual(operations[0].route_step_no, 10)
+        self.assertEqual(operations[1].route_step_no, 20)
+
+    def test_rebuild_operations_falls_back_to_legacy_process_fields(self):
+        self._set_line_snapshot({
+            'schema_version': 1,
+            'product_id': self.product.id,
+            'product_code': 'LEGACY-PD-SVC-FG',
+            'product_name': 'Legacy service product',
+            'code': 'LEGACY-PD-SVC-FG',
+            'name': 'Legacy service product',
+            'product_kind': 'SPECIFIC',
+            'cost_price': '25000',
+            'process_in': 20000,
+            'process_be': 8500,
+        })
+        demand = self._create_demand(suffix='LEGACY-FALLBACK')
+
+        order = create_production_order_from_demand(demand, '3', user=self.user)
+
+        operations = list(order.operations.order_by('sequence'))
+        self.assertEqual([item.step_code for item in operations], ['IN', 'BE'])
+        self.assertEqual([item.source_field for item in operations], ['process_in', 'process_be'])
+
+    def test_rebuild_operations_blocks_when_operation_already_started(self):
+        demand = self._create_demand(suffix='REBUILD-BLOCK')
+        order = create_production_order_from_demand(demand, '3', user=self.user)
+        operation = order.operations.order_by('sequence').first()
+        operation.status = ProductionOperationStatus.IN_PROGRESS
+        operation.save(update_fields=['status'])
+
+        with self.assertRaises(ValueError):
+            rebuild_production_operations(order)
+
+        self.assertEqual(order.operations.count(), 5)
+
+    def test_recompute_demand_counters_uses_linked_order_statuses(self):
+        demand = self._create_demand(suffix='RECOMPUTE')
+        common = {
+            'order_date': timezone.localdate(),
+            'production_demand': demand,
+            'sales_order': self.sales_order,
+            'sales_order_line': self.line,
+            'product': self.product,
+        }
+        ProductionOrder.objects.create(
+            code='MO-PD-SVC-REL',
+            status=ProductionOrderStatus.RELEASED,
+            planned_qty='4',
+            **common,
+        )
+        ProductionOrder.objects.create(
+            code='MO-PD-SVC-COMP',
+            status=ProductionOrderStatus.COMPLETED,
+            planned_qty='3',
+            produced_qty='3',
+            **common,
+        )
+        ProductionOrder.objects.create(
+            code='MO-PD-SVC-REJ',
+            status=ProductionOrderStatus.REJECTED,
+            planned_qty='5',
+            produced_qty='5',
+            **common,
+        )
+
+        recompute_production_demand_counters(demand, user=self.user)
+
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '7.0000')
+        self.assertEqual(str(demand.qty_released), '7.0000')
+        self.assertEqual(str(demand.qty_completed), '3.0000')
+        self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.PARTIALLY_PLANNED)
+        self.assertEqual(demand.production_status, ProductionDemandProductionStatus.PARTIALLY_COMPLETED)
+
+    def test_recompute_demand_counters_marks_in_progress_without_completion(self):
+        demand = self._create_demand(suffix='RECOMPUTE-IN-PROGRESS')
+        ProductionOrder.objects.create(
+            code='MO-PD-SVC-IP',
+            order_date=timezone.localdate(),
+            status=ProductionOrderStatus.IN_PROGRESS,
+            production_demand=demand,
+            sales_order=self.sales_order,
+            sales_order_line=self.line,
+            product=self.product,
+            planned_qty='4',
+        )
+
+        recompute_production_demand_counters(demand, user=self.user)
+
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_released), '4.0000')
+        self.assertEqual(demand.production_status, ProductionDemandProductionStatus.IN_PROGRESS)
 
 
 class ProductionDemandSyncTests(APITestCase):
