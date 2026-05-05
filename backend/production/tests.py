@@ -1284,12 +1284,85 @@ class ProductionDemandApiTests(APITestCase):
         self.assertIn('is_held', first)
         self.assertIn('customer_display', first)
         self.assertIn('delivery_plan_display', first)
+        self.assertNotIn('production_orders', first)
 
         detail_response = self.client.get(f'/api/production/demands/{self.overdue.id}/')
 
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(detail_response.data['planning_bucket'], 'overdue')
         self.assertFalse(detail_response.data['is_held'])
+        self.assertEqual(detail_response.data['production_orders'], [])
+
+    def test_detail_returns_linked_orders_only(self):
+        demand = self._create_demand('LINKED-ORDERS')
+        older_order = ProductionOrder.objects.create(
+            code='MO-PD-API-LINKED-OLD',
+            order_date=self.today + timedelta(days=1),
+            planned_start_date=self.today + timedelta(days=2),
+            planned_end_date=self.today + timedelta(days=4),
+            status=ProductionOrderStatus.DRAFT,
+            production_demand=demand,
+            sales_order=self.order,
+            sales_order_line=self.line,
+            product=self.product,
+            planned_qty='3',
+            produced_qty='1',
+            scrap_qty='0.5',
+        )
+        newer_order = ProductionOrder.objects.create(
+            code='MO-PD-API-LINKED-NEW',
+            order_date=self.today + timedelta(days=2),
+            planned_start_date=self.today + timedelta(days=3),
+            planned_end_date=self.today + timedelta(days=5),
+            status=ProductionOrderStatus.RELEASED,
+            production_demand=demand,
+            sales_order=self.order,
+            sales_order_line=self.line,
+            product=self.product,
+            planned_qty='2',
+            produced_qty='0',
+            released_at=timezone.now(),
+        )
+        manual_order = ProductionOrder.objects.create(
+            code='MO-PD-API-LINKED-MANUAL',
+            order_date=self.today + timedelta(days=3),
+            product=self.product,
+            planned_qty='9',
+        )
+        ProductionOperation.objects.create(
+            production_order=older_order,
+            sequence=1,
+            step_code='IN',
+            step_name='In',
+        )
+        ProductionOperation.objects.create(
+            production_order=older_order,
+            sequence=2,
+            step_code='BE',
+            step_name='Be',
+        )
+        ProductionOperation.objects.create(
+            production_order=newer_order,
+            sequence=1,
+            step_code='DAN',
+            step_name='Dan',
+        )
+
+        response = self.client.get(f'/api/production/demands/{demand.id}/')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        linked_orders = response.data['production_orders']
+        self.assertEqual([item['id'] for item in linked_orders], [newer_order.id, older_order.id])
+        self.assertNotIn(manual_order.id, [item['id'] for item in linked_orders])
+        self.assertEqual(linked_orders[0]['code'], 'MO-PD-API-LINKED-NEW')
+        self.assertEqual(linked_orders[0]['status'], ProductionOrderStatus.RELEASED)
+        self.assertEqual(linked_orders[0]['planned_qty'], '2.0000')
+        self.assertEqual(linked_orders[0]['produced_qty'], '0.0000')
+        self.assertEqual(linked_orders[0]['operation_count'], 1)
+        self.assertEqual(linked_orders[1]['planned_qty'], '3.0000')
+        self.assertEqual(linked_orders[1]['produced_qty'], '1.0000')
+        self.assertEqual(linked_orders[1]['scrap_qty'], '0.5000')
+        self.assertEqual(linked_orders[1]['operation_count'], 2)
 
     def test_filters_search_and_planning_bucket_work(self):
         self.assertEqual(self._count(self.client.get('/api/production/demands/', {'planning_status': 'CANCELLED'})), 1)
@@ -1406,6 +1479,9 @@ class ProductionDemandApiTests(APITestCase):
         self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.PARTIALLY_PLANNED)
         self.assertEqual(response.data['production_demand']['id'], demand.id)
         self.assertEqual(response.data['production_demand']['planning_status'], ProductionDemandPlanningStatus.PARTIALLY_PLANNED)
+        self.assertEqual(len(response.data['production_demand']['production_orders']), 1)
+        self.assertEqual(response.data['production_demand']['production_orders'][0]['id'], order.id)
+        self.assertEqual(response.data['production_demand']['production_orders'][0]['code'], order.code)
 
     def test_order_api_returns_demand_fields_and_filters_source_type(self):
         self._set_line_snapshot(self._routing_steps_snapshot())

@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 
 from django.db import transaction
-from django.db.models import Q, Sum
+from django.db.models import Prefetch, Q, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rest_framework import filters, status, viewsets
@@ -52,6 +52,7 @@ from production.permissions import (
 )
 from production.serializers import (
     ProductionDemandCreateOrderSerializer,
+    ProductionDemandDetailSerializer,
     ProductionDemandSerializer,
     ProductionIssueSerializer,
     ProductionOperationSerializer,
@@ -3514,8 +3515,19 @@ class ProductionDemandViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
     ordering_fields = ['planning_due_date', 'delivery_date', 'priority', 'product_code', 'created_at']
     ordering = ['planning_due_date', 'delivery_date', 'id']
 
+    def get_serializer_class(self):
+        if getattr(self, 'action', None) == 'retrieve':
+            return ProductionDemandDetailSerializer
+        return super().get_serializer_class()
+
+    def _linked_orders_prefetch(self):
+        return Prefetch(
+            'production_orders',
+            queryset=ProductionOrder.objects.order_by('-order_date', '-id').prefetch_related('operations'),
+        )
+
     def _base_queryset(self):
-        return ProductionDemand.objects.select_related(
+        queryset = ProductionDemand.objects.select_related(
             'sales_order',
             'sales_order__customer',
             'sales_order_line',
@@ -3523,6 +3535,9 @@ class ProductionDemandViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
             'product',
             'assigned_planner',
         )
+        if getattr(self, 'action', None) == 'retrieve':
+            queryset = queryset.prefetch_related(self._linked_orders_prefetch())
+        return queryset
 
     def _apply_filters(self, queryset, *, include_planning_bucket=True):
         params = self.request.query_params
@@ -3650,7 +3665,7 @@ class ProductionDemandViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
             'material_requirements',
             'material_requirements__material_product',
         ).get(pk=order.pk)
-        demand = self._base_queryset().get(pk=demand.pk)
+        demand = self._base_queryset().prefetch_related(self._linked_orders_prefetch()).get(pk=demand.pk)
         return Response(
             {
                 'message': 'Da tao lenh san xuat.',
@@ -3658,7 +3673,7 @@ class ProductionDemandViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
                 'production_order_code': order.code,
                 'operation_count': order.operations.count(),
                 'production_order': ProductionOrderSerializer(order).data,
-                'production_demand': ProductionDemandSerializer(demand).data,
+                'production_demand': ProductionDemandDetailSerializer(demand).data,
             },
             status=status.HTTP_201_CREATED,
         )

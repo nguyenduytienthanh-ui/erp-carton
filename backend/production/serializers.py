@@ -161,6 +161,44 @@ class ProductionDemandSerializer(serializers.ModelSerializer):
         ]
 
 
+class ProductionDemandLinkedOrderSerializer(serializers.ModelSerializer):
+    operation_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductionOrder
+        fields = [
+            'id',
+            'code',
+            'status',
+            'planned_qty',
+            'produced_qty',
+            'scrap_qty',
+            'planned_start_date',
+            'planned_end_date',
+            'released_at',
+            'completed_at',
+            'operation_count',
+        ]
+        read_only_fields = fields
+
+    def get_operation_count(self, obj):
+        annotated_count = getattr(obj, 'operation_count', None)
+        if annotated_count is not None:
+            return annotated_count
+        prefetched_operations = getattr(obj, '_prefetched_objects_cache', {}).get('operations')
+        if prefetched_operations is not None:
+            return len(prefetched_operations)
+        return obj.operations.count()
+
+
+class ProductionDemandDetailSerializer(ProductionDemandSerializer):
+    production_orders = ProductionDemandLinkedOrderSerializer(many=True, read_only=True)
+
+    class Meta(ProductionDemandSerializer.Meta):
+        fields = [*ProductionDemandSerializer.Meta.fields, 'production_orders']
+        read_only_fields = [*ProductionDemandSerializer.Meta.read_only_fields, 'production_orders']
+
+
 class ProductionDemandCreateOrderSerializer(serializers.Serializer):
     qty = serializers.DecimalField(max_digits=18, decimal_places=4)
     planned_start_date = serializers.DateField(required=False, allow_null=True)

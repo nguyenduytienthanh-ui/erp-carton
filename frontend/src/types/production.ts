@@ -57,6 +57,20 @@ export interface PaginatedResponse<T> {
   results: T[];
 }
 
+export interface ProductionDemandLinkedOrder {
+  id: number;
+  code: string;
+  status: ProductionOrderStatus;
+  planned_qty: string;
+  produced_qty: string;
+  scrap_qty: string;
+  planned_start_date?: string | null;
+  planned_end_date?: string | null;
+  released_at?: string | null;
+  completed_at?: string | null;
+  operation_count: number;
+}
+
 export interface ProductionDemand {
   id: number;
   demand_code?: string | null;
@@ -110,6 +124,7 @@ export interface ProductionDemand {
   updated_by?: number | null;
   created_at: string;
   updated_at: string;
+  production_orders?: ProductionDemandLinkedOrder[];
 }
 
 export interface ProductionDemandSummary {

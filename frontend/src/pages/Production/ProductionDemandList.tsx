@@ -35,6 +35,7 @@ import { getToastMessage } from '../../shared/apiError';
 import type {
   ProductionDemand,
   ProductionDemandCreateOrderPayload,
+  ProductionDemandLinkedOrder,
   ProductionDemandPlanningStatus,
   ProductionDemandPriority,
   ProductionDemandProductionStatus,
@@ -176,6 +177,28 @@ const PRIORITY_COLORS: Record<ProductionDemandPriority, string> = {
   NORMAL: 'blue',
   HIGH: 'orange',
   URGENT: 'red',
+};
+
+const ORDER_STATUS_LABELS: Record<ProductionDemandLinkedOrder['status'], string> = {
+  DRAFT: 'Lệnh nháp',
+  SUBMITTED: 'Chờ duyệt',
+  APPROVED: 'Đã duyệt kế hoạch',
+  REJECTED: 'Từ chối',
+  RELEASED: 'Đã phát lệnh',
+  IN_PROGRESS: 'Đang sản xuất',
+  COMPLETED: 'Hoàn thành',
+  CANCELLED: 'Đã hủy',
+};
+
+const ORDER_STATUS_COLORS: Record<ProductionDemandLinkedOrder['status'], string> = {
+  DRAFT: 'default',
+  SUBMITTED: 'processing',
+  APPROVED: 'blue',
+  REJECTED: 'error',
+  RELEASED: 'cyan',
+  IN_PROGRESS: 'gold',
+  COMPLETED: 'success',
+  CANCELLED: 'magenta',
 };
 
 const LANE_LABELS: Record<DemandLaneFilter, string> = {
@@ -381,6 +404,10 @@ const getSalesOrderHref = (demand: ProductionDemand) => {
   }
   return '';
 };
+const getProductionOrderSearchHref = (orderCode?: string | null) => (
+  orderCode ? `/production-orders?q=${encodeURIComponent(orderCode)}` : '/production-orders'
+);
+const getProductionOrderHref = (order: ProductionDemandLinkedOrder) => getProductionOrderSearchHref(order.code);
 
 const getPlanningBucketLabel = (bucket?: string | null) => {
   switch (bucket) {
@@ -516,6 +543,71 @@ const renderPriority = (priority: ProductionDemandPriority) => (
     {PRIORITY_LABELS[priority] || priority}
   </Tag>
 );
+
+const renderLinkedOrderStatus = (status: ProductionDemandLinkedOrder['status']) => (
+  <Tag color={ORDER_STATUS_COLORS[status] || 'default'}>
+    {ORDER_STATUS_LABELS[status] || status}
+  </Tag>
+);
+
+const LINKED_ORDER_COLUMNS: ColumnsType<ProductionDemandLinkedOrder> = [
+  {
+    title: 'Mã lệnh',
+    dataIndex: 'code',
+    width: 170,
+    render: (code: string, order) => (
+      <Space direction="vertical" size={0}>
+        <Text strong>{code}</Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {formatNumber(order.operation_count)} công đoạn
+        </Text>
+      </Space>
+    ),
+  },
+  {
+    title: 'Trạng thái',
+    dataIndex: 'status',
+    width: 150,
+    render: (status: ProductionDemandLinkedOrder['status']) => renderLinkedOrderStatus(status),
+  },
+  {
+    title: 'SL lập',
+    dataIndex: 'planned_qty',
+    align: 'right',
+    width: 110,
+    render: (value: string) => formatNumber(value),
+  },
+  {
+    title: 'SL hoàn thành',
+    dataIndex: 'produced_qty',
+    align: 'right',
+    width: 130,
+    render: (value: string) => formatNumber(value),
+  },
+  {
+    title: 'Bắt đầu',
+    dataIndex: 'planned_start_date',
+    width: 110,
+    render: (value?: string | null) => formatDate(value),
+  },
+  {
+    title: 'Kết thúc',
+    dataIndex: 'planned_end_date',
+    width: 110,
+    render: (value?: string | null) => formatDate(value),
+  },
+  {
+    title: 'Hành động',
+    key: 'action',
+    fixed: 'right',
+    width: 110,
+    render: (_, order) => (
+      <Button size="small" href={getProductionOrderHref(order)}>
+        Xem lệnh
+      </Button>
+    ),
+  },
+];
 
 const renderProductKind = (kind?: string) => {
   const normalized = String(kind || '').trim() || 'SPECIFIC';
@@ -962,7 +1054,7 @@ export default function ProductionDemandList() {
             type="success"
             message={`Đã tạo lệnh sản xuất ${createdOrderNotice.code}`}
             action={(
-              <Button size="small" href={`/production-orders?focus_id=${createdOrderNotice.id}`}>
+              <Button size="small" href={getProductionOrderSearchHref(createdOrderNotice.code)}>
                 Xem lệnh
               </Button>
             )}
@@ -1027,6 +1119,21 @@ export default function ProductionDemandList() {
               </Space>
             </Descriptions.Item>
           </Descriptions>
+        </Card>
+
+        <Card size="small" title="Lệnh sản xuất đã tạo">
+          {selectedDemand.production_orders?.length ? (
+            <Table<ProductionDemandLinkedOrder>
+              size="small"
+              rowKey="id"
+              columns={LINKED_ORDER_COLUMNS}
+              dataSource={selectedDemand.production_orders}
+              pagination={false}
+              scroll={{ x: 890 }}
+            />
+          ) : (
+            <Empty description="Chưa có lệnh sản xuất nào được tạo từ nhu cầu này." />
+          )}
         </Card>
 
         <Card size="small" title="Ngày tháng">
@@ -1255,7 +1362,7 @@ export default function ProductionDemandList() {
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
             <div>
               {createdOrderNotice ? (
-                <Button type="link" href={`/production-orders?focus_id=${createdOrderNotice.id}`}>
+                <Button type="link" href={getProductionOrderSearchHref(createdOrderNotice.code)}>
                   Xem lệnh {createdOrderNotice.code}
                 </Button>
               ) : null}
