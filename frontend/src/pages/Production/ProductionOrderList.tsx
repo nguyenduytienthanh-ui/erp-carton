@@ -294,7 +294,7 @@ export default function ProductionOrderList() {
     });
   };
 
-  const createMutation = useMutation({ mutationFn: (payload: ProductionOrderFormValues) => productionApi.createOrder(payload), onSuccess: async () => { await invalidateOrders(); messageApi.success('Đã tạo lệnh sản xuất'); setFormOpen(false); setEditingOrder(null); setPage(1); }, onError: (error) => messageApi.error(getToastMessage(error)) });
+  const createMutation = useMutation({ mutationFn: (payload: ProductionOrderFormValues) => productionApi.createOrder(payload), onSuccess: async () => { await invalidateOrders(); messageApi.success('Đã tạo lệnh nháp'); setFormOpen(false); setEditingOrder(null); setPage(1); }, onError: (error) => messageApi.error(getToastMessage(error)) });
   const updateMutation = useMutation({ mutationFn: ({ id, payload }: { id: number; payload: ProductionOrderFormValues }) => productionApi.updateOrder(id, payload), onSuccess: async () => { await invalidateOrders(); messageApi.success('Đã cập nhật lệnh sản xuất'); setFormOpen(false); setEditingOrder(null); }, onError: (error) => messageApi.error(getToastMessage(error)) });
   const deleteMutation = useMutation({ mutationFn: productionApi.deleteOrder, onSuccess: async () => { await invalidateOrders(); messageApi.success('Đã xóa lệnh sản xuất'); }, onError: (error) => messageApi.error(getToastMessage(error)) });
   const submitMutation = useMutation({ mutationFn: productionApi.submitOrder, onSuccess: async () => { await invalidateOrders(); messageApi.success('Đã gửi duyệt lệnh sản xuất'); }, onError: (error) => messageApi.error(getToastMessage(error)) });
@@ -669,7 +669,7 @@ export default function ProductionOrderList() {
           </div>
           <Space wrap>
             <Button icon={<DownloadOutlined />} onClick={handleExportCSV} disabled={!visibleRows.length}>Xuất CSV</Button>
-            <Button data-testid="production-orders-open-create" type="primary" icon={<PlusOutlined />} onClick={() => { setEditingOrder(null); setFormOpen(true); }}>Tạo lệnh</Button>
+            <Button data-testid="production-orders-open-create" type="primary" icon={<PlusOutlined />} onClick={() => { setEditingOrder(null); setFormOpen(true); }}>Tạo lệnh nháp</Button>
           </Space>
         </div>
         <Alert showIcon type={statusAlert.type} message={statusAlert.message} />

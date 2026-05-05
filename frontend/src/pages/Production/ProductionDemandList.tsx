@@ -255,7 +255,7 @@ const getNumericDemandQty = (value?: string | number | null) => Number(value || 
 
 const getCreateOrderBlockedReason = (demand: ProductionDemand | null | undefined, canManageProduction: boolean) => {
   if (!demand) return 'Chưa có dữ liệu nhu cầu.';
-  if (!canManageProduction) return 'Bạn không có quyền tạo lệnh sản xuất.';
+  if (!canManageProduction) return 'Bạn không có quyền tạo lệnh nháp.';
   if (demand.planning_status === 'CANCELLED' || demand.production_status === 'CANCELLED') {
     return 'Nhu cầu đã hủy, không thể tạo lệnh.';
   }
@@ -544,11 +544,17 @@ const renderPriority = (priority: ProductionDemandPriority) => (
   </Tag>
 );
 
-const renderLinkedOrderStatus = (status: ProductionDemandLinkedOrder['status']) => (
-  <Tag color={ORDER_STATUS_COLORS[status] || 'default'}>
-    {ORDER_STATUS_LABELS[status] || status}
-  </Tag>
-);
+const renderLinkedOrderStatus = (status: ProductionDemandLinkedOrder['status']) => {
+  const tag = (
+    <Tag color={ORDER_STATUS_COLORS[status] || 'default'}>
+      {ORDER_STATUS_LABELS[status] || status}
+    </Tag>
+  );
+  if (status === 'DRAFT') {
+    return <Tooltip title="Lệnh nháp chưa được phát cho xưởng.">{tag}</Tooltip>;
+  }
+  return tag;
+};
 
 const LINKED_ORDER_COLUMNS: ColumnsType<ProductionDemandLinkedOrder> = [
   {
@@ -763,7 +769,7 @@ export default function ProductionDemandList() {
       });
       setCreateOrderOpen(false);
       createOrderForm.resetFields();
-      messageApi.success(`Đã tạo lệnh sản xuất ${response.production_order_code}`);
+      messageApi.success(`Đã tạo lệnh nháp ${response.production_order_code}`);
       await Promise.all([
         refreshData(),
         queryClient.invalidateQueries({ queryKey: ['production-orders'] }),
@@ -1052,7 +1058,7 @@ export default function ProductionDemandList() {
           <Alert
             showIcon
             type="success"
-            message={`Đã tạo lệnh sản xuất ${createdOrderNotice.code}`}
+            message={`Đã tạo lệnh nháp ${createdOrderNotice.code}`}
             action={(
               <Button size="small" href={getProductionOrderSearchHref(createdOrderNotice.code)}>
                 Xem lệnh
@@ -1377,7 +1383,7 @@ export default function ProductionDemandList() {
                     loading={createOrderMutation.isPending}
                     onClick={openCreateOrderModal}
                   >
-                    Tạo lệnh sản xuất
+                    Tạo lệnh nháp
                   </Button>
                 </span>
               </Tooltip>
@@ -1390,11 +1396,11 @@ export default function ProductionDemandList() {
       </Drawer>
 
       <Modal
-        title="Tạo lệnh sản xuất từ nhu cầu"
+        title="Tạo lệnh nháp từ nhu cầu"
         open={createOrderOpen}
         onCancel={closeCreateOrderModal}
         onOk={handleCreateOrderSubmit}
-        okText="Tạo lệnh sản xuất"
+        okText="Tạo lệnh nháp"
         cancelText="Đóng"
         confirmLoading={createOrderMutation.isPending}
         okButtonProps={{ disabled: Boolean(createOrderBlockedReason) }}
@@ -1402,11 +1408,17 @@ export default function ProductionDemandList() {
       >
         {selectedDemand ? (
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Alert
+              showIcon
+              type="info"
+              message="Lệnh nháp chưa phát cho xưởng."
+              description="Cần duyệt và phát lệnh ở màn Lệnh sản xuất."
+            />
             {selectedDemand.product_kind === 'GENERIC' ? (
               <Alert
                 showIcon
                 type="info"
-                message="Mã chung sẽ được hệ thống kiểm tra xác nhận quy cách và công đoạn khi tạo lệnh."
+                message="Mã chung sẽ được hệ thống kiểm tra xác nhận quy cách và công đoạn khi tạo lệnh nháp."
               />
             ) : null}
 
@@ -1470,7 +1482,7 @@ export default function ProductionDemandList() {
               </Form.Item>
 
               <Form.Item name="note" label="Ghi chú">
-                <Input.TextArea rows={3} placeholder="Ghi chú cho lệnh sản xuất" />
+                <Input.TextArea rows={3} placeholder="Ghi chú cho lệnh nháp" />
               </Form.Item>
             </Form>
           </Space>

@@ -195,11 +195,11 @@ export default function ProductionOrderForm({
   return (
     <Modal
       data-testid="production-order-form-modal"
-      title={editing ? `Sửa lệnh sản xuất ${editing.code}` : 'Tạo lệnh sản xuất'}
+      title={editing ? `Sửa lệnh sản xuất ${editing.code}` : 'Tạo lệnh nháp'}
       open={open}
       onCancel={onCancel}
       onOk={() => void handleOk()}
-      okText={editing ? 'Lưu thay đổi' : 'Tạo lệnh'}
+      okText={editing ? 'Lưu thay đổi' : 'Tạo lệnh nháp'}
       cancelText="Đóng"
       confirmLoading={submitting}
       width={1120}
