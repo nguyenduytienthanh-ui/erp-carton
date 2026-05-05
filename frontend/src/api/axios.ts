@@ -2,6 +2,13 @@ import axios from 'axios';
 import { API_BASE_URL } from '../utils/constants';
 import { storage } from '../utils/storage';
 
+const AUTH_ENDPOINTS = ['/auth/login/', '/auth/logout/', '/auth/refresh/'];
+
+function isAuthEndpoint(url?: string): boolean {
+  if (!url) return false;
+  return AUTH_ENDPOINTS.some((endpoint) => url.endsWith(endpoint));
+}
+
 const axiosInstance = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -32,7 +39,7 @@ axiosInstance.interceptors.response.use(
     const originalRequest = error.config;
 
     // Nếu lỗi 401 và chưa retry
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint(originalRequest.url)) {
       originalRequest._retry = true;
 
       try {
