@@ -69,10 +69,13 @@ from production.services import (
     get_next_production_issue_code,
     get_next_production_order_code,
     get_next_production_receipt_code,
+    recompute_linked_production_demand,
+    recompute_production_demand_by_id,
     subtract_issued_qty,
     subtract_produced_qty,
-    sync_production_order_status,
+    sync_order_status_and_demand_counters,
     update_operation_status,
+    validate_production_order_can_release,
 )
 
 
@@ -3751,11 +3754,13 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             old_values={},
             new_values={'status': order.status, 'product': order.product_id, 'planned_qty': str(order.planned_qty)},
         )
+        recompute_linked_production_demand(order, user=self.request.user)
 
     def perform_update(self, serializer):
         if not can_edit_production_order(self.request.user, serializer.instance):
             raise PermissionDenied('Chỉ được sửa lệnh sản xuất ở trạng thái Nháp hoặc Từ chối.')
         previous = serializer.instance
+        old_demand_id = previous.production_demand_id
         old_values = {
             'status': previous.status,
             'product': previous.product_id,
@@ -3772,6 +3777,9 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             old_values=old_values,
             new_values={'status': order.status, 'product': order.product_id, 'planned_qty': str(order.planned_qty), 'version': order.version},
         )
+        recompute_linked_production_demand(order, user=self.request.user)
+        if old_demand_id and old_demand_id != order.production_demand_id:
+            recompute_production_demand_by_id(old_demand_id, user=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
         order = self.get_object()
@@ -3780,7 +3788,9 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         if order.issues.exclude(status=ProductionIssueStatus.CANCELLED).exists() or order.receipts.exclude(status=ProductionReceiptStatus.CANCELLED).exists():
             return Response({'error': 'Lệnh sản xuất đã phát sinh cấp vật tư hoặc nhập thành phẩm, không thể xóa.'}, status=status.HTTP_400_BAD_REQUEST)
         old_values = {'code': order.code, 'status': order.status}
+        demand_id = order.production_demand_id
         response = super().destroy(request, *args, **kwargs)
+        recompute_production_demand_by_id(demand_id, user=request.user)
         _log_production_audit(
             request,
             action='DELETE',
@@ -3825,6 +3835,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             new_values={'status': order.status},
         )
         generate_tasks_for_entity('ProductionOrder', order.id, order.code, 'SUBMIT', triggered_by=request.user)
+        recompute_linked_production_demand(order, user=request.user)
         return Response({'status': order.status})
 
     @action(detail=True, methods=['post'])
@@ -3858,6 +3869,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             new_values={'status': order.status},
         )
         generate_tasks_for_entity('ProductionOrder', order.id, order.code, 'APPROVE', triggered_by=request.user)
+        recompute_linked_production_demand(order, user=request.user)
         return Response({'status': order.status})
 
     @action(detail=True, methods=['post'])
@@ -3893,6 +3905,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             new_values={'status': order.status, 'reason': reason},
         )
         generate_tasks_for_entity('ProductionOrder', order.id, order.code, 'REJECT', triggered_by=request.user)
+        recompute_linked_production_demand(order, user=request.user)
         return Response({'status': order.status})
 
     @action(detail=True, methods=['post'])
@@ -3900,13 +3913,23 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         order = self.get_object()
         if not can_release_production_order(request.user, order):
             return Response({'error': 'Không có quyền hoặc trạng thái không hợp lệ.'}, status=status.HTTP_403_FORBIDDEN)
-        old_status = order.status
-        now = timezone.now()
-        order.status = ProductionOrderStatus.RELEASED
-        order.released_by = request.user
-        order.released_at = now
-        order.save(update_fields=['status', 'released_by', 'released_at', 'updated_at'])
-        order.operations.filter(status=ProductionOperationStatus.PENDING).update(status=ProductionOperationStatus.READY, updated_at=now)
+        try:
+            with transaction.atomic():
+                order = ProductionOrder.objects.select_for_update().get(pk=order.pk)
+                if not can_release_production_order(request.user, order):
+                    return Response({'error': 'Không có quyền hoặc trạng thái không hợp lệ.'}, status=status.HTTP_403_FORBIDDEN)
+                old_status = order.status
+                recompute_linked_production_demand(order, user=request.user)
+                validate_production_order_can_release(order)
+                now = timezone.now()
+                order.status = ProductionOrderStatus.RELEASED
+                order.released_by = request.user
+                order.released_at = now
+                order.save(update_fields=['status', 'released_by', 'released_at', 'updated_at'])
+                order.operations.filter(status=ProductionOperationStatus.PENDING).update(status=ProductionOperationStatus.READY, updated_at=now)
+                demand = recompute_linked_production_demand(order, user=request.user)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         _log_production_audit(
             request,
             action='RELEASE',
@@ -3917,7 +3940,10 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             new_values={'status': order.status},
         )
         generate_tasks_for_entity('ProductionOrder', order.id, order.code, 'RELEASE', triggered_by=request.user)
-        return Response({'status': order.status})
+        response_data = {'status': order.status}
+        if demand is not None:
+            response_data['production_demand'] = ProductionDemandSerializer(demand).data
+        return Response(response_data)
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
@@ -3939,7 +3965,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             entity_type='ProductionOrder',
             entity_id=order.id,
             entity_code=order.code,
-            action='REJECT',
+            action='CANCEL',
             user=request.user,
             comments=reason,
             level=1,
@@ -3954,7 +3980,11 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             new_values={'status': order.status, 'reason': reason},
         )
         generate_tasks_for_entity('ProductionOrder', order.id, order.code, 'CANCEL', triggered_by=request.user)
-        return Response({'status': order.status})
+        demand = recompute_linked_production_demand(order, user=request.user)
+        response_data = {'status': order.status}
+        if demand is not None:
+            response_data['production_demand'] = ProductionDemandSerializer(demand).data
+        return Response(response_data)
 
     @action(detail=True, methods=['post'])
     def update_operation(self, request, pk=None):
@@ -4091,7 +4121,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         if planning_update_fields:
             planning_update_fields.append('updated_at')
             operation.save(update_fields=planning_update_fields)
-        sync_production_order_status(order, actor=request.user)
+        sync_order_status_and_demand_counters(order, actor=request.user)
         if hasattr(order, '_prefetched_objects_cache'):
             order._prefetched_objects_cache = {}
         order.save(update_fields=['updated_at'])
@@ -4384,7 +4414,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             response_rows = []
             for order_id, rows in updated_by_order.items():
                 order = orders[order_id]
-                sync_production_order_status(order, actor=request.user)
+                sync_order_status_and_demand_counters(order, actor=request.user)
                 if hasattr(order, '_prefetched_objects_cache'):
                     order._prefetched_objects_cache = {}
                 order.save(update_fields=['updated_at'])
@@ -4761,7 +4791,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                     update_fields.extend(['handover_at', 'updated_at'])
                     operation.save(update_fields=update_fields)
 
-                sync_production_order_status(order, actor=request.user)
+                sync_order_status_and_demand_counters(order, actor=request.user)
                 touched_orders.add(order.id)
                 refreshed_order = ProductionOrder.objects.get(pk=order.id)
                 refreshed_operation = refreshed_order.operations.get(pk=operation.id)
@@ -4888,7 +4918,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 update_fields.extend(['handover_at', 'updated_at'])
                 operation.save(update_fields=list(dict.fromkeys(update_fields)))
 
-                sync_production_order_status(order, actor=request.user)
+                sync_order_status_and_demand_counters(order, actor=request.user)
                 touched_orders.add(order.id)
                 refreshed_order = ProductionOrder.objects.get(pk=order.id)
                 refreshed_operation = refreshed_order.operations.get(pk=operation.id)
@@ -5057,7 +5087,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 )
                 add_issued_qty(requirement, quantity)
             issue.recalc_totals()
-            sync_production_order_status(order_locked, actor=request.user)
+            sync_order_status_and_demand_counters(order_locked, actor=request.user)
 
         _log_production_audit(
             request,
@@ -5201,7 +5231,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 if product and actual_unit_cost > 0 and Decimal(str(product.cost_price or 0)) != actual_unit_cost:
                     product.cost_price = actual_unit_cost
                     product.save(update_fields=['cost_price', 'updated_at'])
-            sync_production_order_status(order_locked, actor=request.user)
+            sync_order_status_and_demand_counters(order_locked, actor=request.user)
 
         _log_production_audit(
             request,
@@ -5721,7 +5751,7 @@ class ProductionIssueViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
             locked_issue.cancel_reason = reason
             locked_issue.updated_by = request.user
             locked_issue.save(update_fields=['status', 'cancelled_at', 'cancelled_by', 'cancel_reason', 'updated_by', 'updated_at'])
-            sync_production_order_status(locked_issue.production_order, actor=request.user)
+            sync_order_status_and_demand_counters(locked_issue.production_order, actor=request.user)
 
         _log_production_audit(
             request,
@@ -5822,7 +5852,7 @@ class ProductionReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
             locked_receipt.cancel_reason = reason
             locked_receipt.updated_by = request.user
             locked_receipt.save(update_fields=['status', 'cancelled_at', 'cancelled_by', 'cancel_reason', 'updated_by', 'updated_at'])
-            sync_production_order_status(locked_receipt.production_order, actor=request.user)
+            sync_order_status_and_demand_counters(locked_receipt.production_order, actor=request.user)
 
         _log_production_audit(
             request,

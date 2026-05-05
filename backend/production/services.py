@@ -371,6 +371,71 @@ def recompute_production_demand_counters(demand, user=None):
     return demand
 
 
+def recompute_production_demand_by_id(demand_id, user=None):
+    if not demand_id:
+        return None
+    queryset = ProductionDemand.objects
+    if transaction.get_connection().in_atomic_block:
+        queryset = queryset.select_for_update(of=('self',))
+    demand = queryset.get(pk=demand_id)
+    return recompute_production_demand_counters(demand, user=user)
+
+
+def recompute_linked_production_demand(order, user=None):
+    return recompute_production_demand_by_id(getattr(order, 'production_demand_id', None), user=user)
+
+
+def validate_production_order_can_release(order):
+    if order.status != ProductionOrderStatus.APPROVED:
+        raise ValueError('Lenh san xuat phai o trang thai da duyet truoc khi phat hanh.')
+    planned_qty = round_qty(order.planned_qty)
+    if planned_qty <= 0:
+        raise ValueError('So luong ke hoach phai > 0.')
+    if not order.planned_start_date or not order.planned_end_date:
+        raise ValueError('Lenh san xuat thieu ngay bat dau hoac ngay ket thuc ke hoach.')
+    if order.planned_end_date < order.planned_start_date:
+        raise ValueError('Ngay ket thuc ke hoach khong duoc truoc ngay bat dau.')
+    snapshot = order.product_snapshot or {}
+    if not snapshot:
+        raise ValueError('Lenh san xuat thieu snapshot san pham.')
+    if not order.operations.exists():
+        raise ValueError('Lenh san xuat chua co cong doan san xuat.')
+
+    product_kind = str(snapshot.get('product_kind') or '').upper()
+    if product_kind == 'GENERIC':
+        if _snapshot_bool(snapshot.get('requires_order_spec'), False) and not _snapshot_bool(snapshot.get('order_spec_confirmed'), False):
+            raise ValueError('San pham generic chua xac nhan quy cach dat hang.')
+        if _snapshot_bool(snapshot.get('requires_order_operations_review'), False) and not _snapshot_bool(snapshot.get('order_operations_reviewed'), False):
+            raise ValueError('San pham generic chua xac nhan cong doan dat hang.')
+
+    if order.production_demand_id:
+        queryset = ProductionDemand.objects
+        if transaction.get_connection().in_atomic_block:
+            queryset = queryset.select_for_update(of=('self',))
+        demand = queryset.get(pk=order.production_demand_id)
+        if (
+            demand.planning_status == ProductionDemandPlanningStatus.CANCELLED
+            or demand.production_status == ProductionDemandProductionStatus.CANCELLED
+        ):
+            raise ValueError('Nhu cau san xuat da bi huy.')
+        if str(demand.hold_reason or '').strip():
+            raise ValueError('Nhu cau san xuat dang tam giu.')
+        released_statuses = {
+            ProductionOrderStatus.RELEASED,
+            ProductionOrderStatus.IN_PROGRESS,
+            ProductionOrderStatus.COMPLETED,
+        }
+        already_released = round_qty(sum(
+            _to_decimal(item.planned_qty)
+            for item in demand.production_orders.exclude(pk=order.pk)
+            if item.status in released_statuses
+        ))
+        qty_required = _to_decimal(demand.qty_required)
+        if qty_required > 0 and round_qty(already_released + planned_qty) > qty_required:
+            raise ValueError('Phat hanh vuot qua so luong con lai can release cua nhu cau.')
+    return True
+
+
 def _validate_demand_can_create_order(demand, qty):
     if (
         demand.planning_status == ProductionDemandPlanningStatus.CANCELLED
@@ -533,6 +598,12 @@ def sync_production_order_status(order, *, actor=None):
         updates.append('updated_at')
         order.save(update_fields=updates)
     return order.status
+
+
+def sync_order_status_and_demand_counters(order, *, actor=None):
+    status = sync_production_order_status(order, actor=actor)
+    recompute_linked_production_demand(order, user=actor)
+    return status
 
 
 def update_operation_status(operation, *, status=None, completed_qty=None, scrap_qty=None, note=None):

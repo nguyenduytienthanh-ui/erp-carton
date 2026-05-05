@@ -29,6 +29,8 @@ from production.services import (
     create_production_order_from_demand,
     rebuild_production_operations,
     recompute_production_demand_counters,
+    sync_order_status_and_demand_counters,
+    validate_production_order_can_release,
 )
 from sales.models import SalesOrder, SalesOrderDeliveryPlan, SalesOrderLine, SalesOrderStatus
 
@@ -676,6 +678,96 @@ class ProductionDemandOrderServiceTests(APITestCase):
         self.assertEqual(str(demand.qty_released), '4.0000')
         self.assertEqual(demand.production_status, ProductionDemandProductionStatus.IN_PROGRESS)
 
+    def test_validate_release_blocks_invalid_order_or_demand_state(self):
+        demand = self._create_demand(suffix='RELEASE-VALIDATION')
+        order = create_production_order_from_demand(demand, '4', user=self.user)
+        order.status = ProductionOrderStatus.APPROVED
+        order.approved_by = self.user
+        order.approved_at = timezone.now()
+        order.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
+
+        order.planned_start_date = None
+        order.save(update_fields=['planned_start_date', 'updated_at'])
+        with self.assertRaises(ValueError) as missing_dates:
+            validate_production_order_can_release(order)
+        self.assertIn('thieu ngay', str(missing_dates.exception))
+
+        order.planned_start_date = timezone.localdate()
+        order.save(update_fields=['planned_start_date', 'updated_at'])
+        order.operations.all().delete()
+        with self.assertRaises(ValueError) as missing_operations:
+            validate_production_order_can_release(order)
+        self.assertIn('chua co cong doan', str(missing_operations.exception))
+
+        rebuild_production_operations(order)
+        demand.hold_reason = 'Can xu ly hold'
+        demand.save(update_fields=['hold_reason', 'updated_at'])
+        with self.assertRaises(ValueError) as held:
+            validate_production_order_can_release(order)
+        self.assertIn('tam giu', str(held.exception))
+
+        demand.hold_reason = ''
+        demand.save(update_fields=['hold_reason', 'updated_at'])
+        order.product_snapshot = {
+            **order.product_snapshot,
+            'product_kind': 'GENERIC',
+            'requires_order_spec': True,
+            'order_spec_confirmed': False,
+        }
+        order.save(update_fields=['product_snapshot', 'updated_at'])
+        with self.assertRaises(ValueError) as unconfirmed:
+            validate_production_order_can_release(order)
+        self.assertIn('chua xac nhan quy cach', str(unconfirmed.exception))
+
+    def test_validate_release_blocks_over_remaining_release(self):
+        demand = self._create_demand(suffix='RELEASE-OVER')
+        order = create_production_order_from_demand(demand, '4', user=self.user)
+        order.status = ProductionOrderStatus.APPROVED
+        order.approved_by = self.user
+        order.approved_at = timezone.now()
+        order.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
+        ProductionOrder.objects.create(
+            code='MO-PD-SVC-ALREADY-REL',
+            order_date=timezone.localdate(),
+            status=ProductionOrderStatus.RELEASED,
+            production_demand=demand,
+            sales_order=self.sales_order,
+            sales_order_line=self.line,
+            product=self.product,
+            planned_qty='7',
+        )
+
+        with self.assertRaises(ValueError) as released_over:
+            validate_production_order_can_release(order)
+        self.assertIn('vuot qua so luong', str(released_over.exception))
+
+    def test_sync_order_status_and_demand_counters_updates_downstream_status(self):
+        demand = self._create_demand(suffix='SYNC-STATUS')
+        order = create_production_order_from_demand(demand, '10', user=self.user)
+        order.status = ProductionOrderStatus.RELEASED
+        order.released_at = timezone.now()
+        order.save(update_fields=['status', 'released_at', 'updated_at'])
+        operation = order.operations.order_by('sequence').first()
+        operation.status = ProductionOperationStatus.IN_PROGRESS
+        operation.save(update_fields=['status', 'updated_at'])
+
+        sync_order_status_and_demand_counters(order, actor=self.user)
+
+        demand.refresh_from_db()
+        order.refresh_from_db()
+        self.assertEqual(order.status, ProductionOrderStatus.IN_PROGRESS)
+        self.assertEqual(demand.production_status, ProductionDemandProductionStatus.IN_PROGRESS)
+
+        order.produced_qty = '10'
+        order.save(update_fields=['produced_qty', 'updated_at'])
+        sync_order_status_and_demand_counters(order, actor=self.user)
+
+        demand.refresh_from_db()
+        order.refresh_from_db()
+        self.assertEqual(order.status, ProductionOrderStatus.COMPLETED)
+        self.assertEqual(str(demand.qty_completed), '10.0000')
+        self.assertEqual(demand.production_status, ProductionDemandProductionStatus.COMPLETED)
+
 
 class ProductionDemandSyncTests(APITestCase):
     def setUp(self):
@@ -1314,6 +1406,148 @@ class ProductionDemandApiTests(APITestCase):
         self.assertEqual(demand.planning_status, ProductionDemandPlanningStatus.PARTIALLY_PLANNED)
         self.assertEqual(response.data['production_demand']['id'], demand.id)
         self.assertEqual(response.data['production_demand']['planning_status'], ProductionDemandPlanningStatus.PARTIALLY_PLANNED)
+
+    def test_release_order_action_updates_linked_demand_release_counters(self):
+        self._set_line_snapshot(self._routing_steps_snapshot())
+        demand = self._create_demand('API-RELEASE')
+        create_response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {
+                'qty': '4',
+                'planned_start_date': str(self.today + timedelta(days=2)),
+                'planned_end_date': str(self.today + timedelta(days=5)),
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        order_id = create_response.data['production_order_id']
+
+        self.assertEqual(self.client.post(f'/api/production/orders/{order_id}/submit/', format='json').status_code, 200)
+        self.assertEqual(self.client.post(f'/api/production/orders/{order_id}/approve/', format='json').status_code, 200)
+        release_response = self.client.post(f'/api/production/orders/{order_id}/release/', format='json')
+
+        self.assertEqual(release_response.status_code, 200, release_response.data)
+        self.assertEqual(release_response.data['status'], ProductionOrderStatus.RELEASED)
+        self.assertIn('production_demand', release_response.data)
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_released), '4.0000')
+        self.assertEqual(demand.production_status, ProductionDemandProductionStatus.PARTIALLY_RELEASED)
+        self.assertEqual(release_response.data['production_demand']['production_status'], ProductionDemandProductionStatus.PARTIALLY_RELEASED)
+        self.assertEqual(
+            list(ProductionOperation.objects.filter(production_order_id=order_id).order_by('sequence').values_list('status', flat=True)),
+            [ProductionOperationStatus.READY] * 5,
+        )
+
+    def test_release_order_action_blocks_over_remaining_release(self):
+        self._set_line_snapshot(self._routing_steps_snapshot())
+        demand = self._create_demand('API-RELEASE-OVER')
+        first_response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {
+                'qty': '8',
+                'planned_start_date': str(self.today + timedelta(days=2)),
+                'planned_end_date': str(self.today + timedelta(days=5)),
+            },
+            format='json',
+        )
+        second_response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {
+                'qty': '2',
+                'planned_start_date': str(self.today + timedelta(days=2)),
+                'planned_end_date': str(self.today + timedelta(days=5)),
+            },
+            format='json',
+        )
+        self.assertEqual(first_response.status_code, 201, first_response.data)
+        self.assertEqual(second_response.status_code, 201, second_response.data)
+        first_order_id = first_response.data['production_order_id']
+        second_order = ProductionOrder.objects.get(pk=second_response.data['production_order_id'])
+        second_order.planned_qty = '3'
+        second_order.save(update_fields=['planned_qty', 'updated_at'])
+
+        for order_id in [first_order_id, second_order.id]:
+            self.assertEqual(self.client.post(f'/api/production/orders/{order_id}/submit/', format='json').status_code, 200)
+            self.assertEqual(self.client.post(f'/api/production/orders/{order_id}/approve/', format='json').status_code, 200)
+        release_first = self.client.post(f'/api/production/orders/{first_order_id}/release/', format='json')
+        release_second = self.client.post(f'/api/production/orders/{second_order.id}/release/', format='json')
+
+        self.assertEqual(release_first.status_code, 200, release_first.data)
+        self.assertEqual(release_second.status_code, 400, release_second.data)
+        self.assertIn('error', release_second.data)
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_released), '8.0000')
+
+    def test_order_update_delete_cancel_and_reject_recompute_demand_planned_qty(self):
+        self._set_line_snapshot(self._routing_steps_snapshot())
+        demand = self._create_demand('API-ORDER-LIFECYCLE')
+        create_response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {
+                'qty': '4',
+                'planned_start_date': str(self.today + timedelta(days=2)),
+                'planned_end_date': str(self.today + timedelta(days=5)),
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        order = ProductionOrder.objects.get(pk=create_response.data['production_order_id'])
+        update_response = self.client.patch(
+            f'/api/production/orders/{order.id}/',
+            {'version': order.version, 'planned_qty': '6'},
+            format='json',
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.data)
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '6.0000')
+
+        self.assertEqual(self.client.post(f'/api/production/orders/{order.id}/submit/', format='json').status_code, 200)
+        reject_response = self.client.post(
+            f'/api/production/orders/{order.id}/reject/',
+            {'reason': 'Can sua lai ke hoach'},
+            format='json',
+        )
+        self.assertEqual(reject_response.status_code, 200, reject_response.data)
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '0.0000')
+
+        create_delete_response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {
+                'qty': '4',
+                'planned_start_date': str(self.today + timedelta(days=2)),
+                'planned_end_date': str(self.today + timedelta(days=5)),
+            },
+            format='json',
+        )
+        self.assertEqual(create_delete_response.status_code, 201, create_delete_response.data)
+        delete_order_id = create_delete_response.data['production_order_id']
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '4.0000')
+        delete_response = self.client.delete(f'/api/production/orders/{delete_order_id}/')
+        self.assertEqual(delete_response.status_code, 204, delete_response.data)
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '0.0000')
+
+        create_cancel_response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {
+                'qty': '3',
+                'planned_start_date': str(self.today + timedelta(days=2)),
+                'planned_end_date': str(self.today + timedelta(days=5)),
+            },
+            format='json',
+        )
+        self.assertEqual(create_cancel_response.status_code, 201, create_cancel_response.data)
+        cancel_order_id = create_cancel_response.data['production_order_id']
+        cancel_response = self.client.post(
+            f'/api/production/orders/{cancel_order_id}/cancel/',
+            {'reason': 'Huy lenh nhap'},
+            format='json',
+        )
+        self.assertEqual(cancel_response.status_code, 200, cancel_response.data)
+        demand.refresh_from_db()
+        self.assertEqual(str(demand.qty_planned), '0.0000')
 
     def test_create_order_action_rejects_qty_above_remaining(self):
         self._set_line_snapshot(self._routing_steps_snapshot())
@@ -3018,5 +3252,5 @@ class ProductionWorkflowTests(APITestCase):
             .order_by('created_at', 'id')
             .values_list('action', flat=True)
         )
-        self.assertEqual(history_actions, ['SUBMIT', 'REJECT', 'SUBMIT', 'APPROVE', 'REJECT'])
+        self.assertEqual(history_actions, ['SUBMIT', 'REJECT', 'SUBMIT', 'APPROVE', 'CANCEL'])
         self.assertTrue(AuditLog.objects.filter(entity_type='ProductionOrder', entity_id=order_id, action='CANCEL').exists())
