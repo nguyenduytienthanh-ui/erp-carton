@@ -7,6 +7,7 @@ export type ProductionOrderStatus =
   | 'IN_PROGRESS'
   | 'COMPLETED'
   | 'CANCELLED';
+export type ProductionOrderSourceFilter = 'ALL' | 'DEMAND' | 'MANUAL';
 
 export type ProductionOperationStatus = 'PENDING' | 'READY' | 'IN_PROGRESS' | 'DONE' | 'SKIPPED';
 export type ProductionOperationHandoverStatus = 'ACTIVE' | 'READY' | 'ACCEPTED';
@@ -1035,6 +1036,16 @@ export interface ProductionOrder {
   sales_order_line_number?: number | null;
   production_demand?: number | null;
   production_demand_code?: string | null;
+  production_demand_display_code?: string | null;
+  production_demand_key?: string | null;
+  production_demand_qty_required?: string | null;
+  production_demand_qty_planned?: string | null;
+  production_demand_qty_released?: string | null;
+  production_demand_qty_completed?: string | null;
+  production_demand_qty_remaining_to_plan?: string | null;
+  production_demand_qty_remaining_to_release?: string | null;
+  production_demand_planning_status?: ProductionDemandPlanningStatus | null;
+  production_demand_production_status?: ProductionDemandProductionStatus | null;
   product: number;
   product_code?: string | null;
   product_name?: string | null;

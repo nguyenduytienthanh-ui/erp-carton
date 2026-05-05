@@ -14,6 +14,7 @@ import type {
   ProductionPlannerDigest,
   ProductionOrder,
   ProductionOrderFormValues,
+  ProductionOrderSourceFilter,
   ProductionOrderStatus,
 } from '../../types/production';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
@@ -24,13 +25,14 @@ import { getToastMessage } from '../../shared/apiError';
 import { downloadCSV } from '../../utils/csvExport';
 import ProductionOrderForm from './ProductionOrderForm';
 
-type Filters = { status?: ProductionOrderStatus };
+type Filters = { status?: ProductionOrderStatus; source_type?: ProductionOrderSourceFilter };
 type ActionFormValues = { reason: string };
 type ActionModalState = { type: 'reject' | 'cancel'; order: ProductionOrder } | null;
 type ProductionOrderLaneFilter = 'ALL' | 'DRAFT_QUEUE' | 'PENDING_APPROVAL' | 'READY_TO_RELEASE' | 'ACTIVE_EXECUTION' | 'OVERDUE_PLAN';
 type ProductionOrderViewSnapshot = {
   search_input: string;
   status: ProductionOrderStatus | '';
+  source_type: ProductionOrderSourceFilter;
   laneFilter: ProductionOrderLaneFilter;
 };
 type ProductionOrderNamedPreset = {
@@ -40,8 +42,9 @@ type ProductionOrderNamedPreset = {
 };
 
 const { Text, Title } = Typography;
-const STATUS_LABELS: Record<ProductionOrderStatus, string> = { DRAFT: 'Nháp', SUBMITTED: 'Chờ duyệt', APPROVED: 'Đã duyệt', REJECTED: 'Từ chối', RELEASED: 'Đã phát lệnh', IN_PROGRESS: 'Đang sản xuất', COMPLETED: 'Hoàn thành', CANCELLED: 'Đã hủy' };
+const STATUS_LABELS: Record<ProductionOrderStatus, string> = { DRAFT: 'Lệnh nháp', SUBMITTED: 'Chờ duyệt', APPROVED: 'Đã duyệt kế hoạch', REJECTED: 'Từ chối', RELEASED: 'Đã phát lệnh', IN_PROGRESS: 'Đang sản xuất', COMPLETED: 'Hoàn thành', CANCELLED: 'Đã hủy' };
 const STATUS_COLORS: Record<ProductionOrderStatus, string> = { DRAFT: 'default', SUBMITTED: 'processing', APPROVED: 'blue', REJECTED: 'error', RELEASED: 'cyan', IN_PROGRESS: 'gold', COMPLETED: 'success', CANCELLED: 'magenta' };
+const SOURCE_FILTER_LABELS: Record<ProductionOrderSourceFilter, string> = { ALL: 'Tất cả nguồn', DEMAND: 'Từ nhu cầu', MANUAL: 'Thủ công' };
 const TILE_STYLE = { height: '100%', borderRadius: 14 };
 const LANE_LABELS: Record<ProductionOrderLaneFilter, string> = {
   ALL: 'Toàn bộ lệnh',
@@ -103,6 +106,17 @@ const getProgressPercent = (order: ProductionOrder) => {
 };
 const isOverdue = (order: ProductionOrder) => Boolean(order.planned_end_date && !['COMPLETED', 'CANCELLED'].includes(order.status) && dayjs(order.planned_end_date).isBefore(dayjs(), 'day'));
 const canEditOrder = (order: ProductionOrder) => order.status === 'DRAFT' || order.status === 'REJECTED';
+const formatQuantity = (value?: string | null) => Number(value || 0).toLocaleString('vi-VN');
+const getProductionDemandDisplayCode = (order: ProductionOrder) => (
+  order.production_demand_display_code
+  || order.production_demand_code
+  || order.production_demand_key
+  || (order.production_demand ? `#${order.production_demand}` : '')
+);
+const buildProductionDemandSearchUrl = (order: ProductionOrder) => {
+  const demandCode = getProductionDemandDisplayCode(order);
+  return demandCode ? `/production-demands?q=${encodeURIComponent(demandCode)}` : '/production-demands';
+};
 const normalizeInternalUrl = (targetUrl: string | undefined, fallbackUrl: string) => {
   if (!targetUrl) {
     return fallbackUrl;
@@ -147,12 +161,20 @@ export default function ProductionOrderList() {
     || initialStatusParam === 'CANCELLED'
       ? initialStatusParam
       : undefined;
+  const initialSourceTypeParam = searchParams.get('source_type');
+  const initialSourceType: ProductionOrderSourceFilter | undefined =
+    initialSourceTypeParam === 'DEMAND' || initialSourceTypeParam === 'MANUAL'
+      ? initialSourceTypeParam
+      : undefined;
   const focusCode = searchParams.get('focus');
   const focusId = Number(searchParams.get('focus_id') || 0) || null;
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState(initialSearch);
-  const [filters, setFilters] = useState<Filters>(initialStatus ? { status: initialStatus } : {});
+  const [filters, setFilters] = useState<Filters>({
+    ...(initialStatus ? { status: initialStatus } : {}),
+    ...(initialSourceType ? { source_type: initialSourceType } : {}),
+  });
   const [laneFilter, setLaneFilter] = useState<ProductionOrderLaneFilter>('ALL');
   const [page, setPage] = useState(1);
   const [detailOrderId, setDetailOrderId] = useState<number | null>(null);
@@ -180,8 +202,12 @@ export default function ProductionOrderList() {
         if (!id || !name || !filters || typeof filters !== 'object') return null;
         const filterRecord = filters as Record<string, unknown>;
         const statusValue = filterRecord.status;
+        const sourceTypeValue = filterRecord.source_type;
         const laneFilterValue = typeof filterRecord.laneFilter === 'string' ? filterRecord.laneFilter : 'ALL';
         if (statusValue !== '' && statusValue !== undefined && !['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED', 'RELEASED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'].includes(String(statusValue))) {
+          return null;
+        }
+        if (sourceTypeValue !== undefined && !['ALL', 'DEMAND', 'MANUAL'].includes(String(sourceTypeValue))) {
           return null;
         }
         return {
@@ -190,6 +216,7 @@ export default function ProductionOrderList() {
           filters: {
             search_input: typeof filterRecord.search_input === 'string' ? filterRecord.search_input : '',
             status: statusValue === 'DRAFT' || statusValue === 'SUBMITTED' || statusValue === 'APPROVED' || statusValue === 'REJECTED' || statusValue === 'RELEASED' || statusValue === 'IN_PROGRESS' || statusValue === 'COMPLETED' || statusValue === 'CANCELLED' ? statusValue : '',
+            source_type: sourceTypeValue === 'DEMAND' || sourceTypeValue === 'MANUAL' ? sourceTypeValue : 'ALL',
             laneFilter:
               laneFilterValue === 'DRAFT_QUEUE'
               || laneFilterValue === 'PENDING_APPROVAL'
@@ -219,8 +246,24 @@ export default function ProductionOrderList() {
     },
   });
 
-  const params = useMemo(() => ({ search: intentSearch.trim() || undefined, status: intentFilters.status || undefined, page, page_size: pageSize }), [intentFilters.status, intentSearch, page, pageSize]);
-  const summaryParams = useMemo(() => ({ search: intentSearch.trim() || undefined, status: intentFilters.status || undefined }), [intentFilters.status, intentSearch]);
+  const params = useMemo(
+    () => ({
+      search: intentSearch.trim() || undefined,
+      status: intentFilters.status || undefined,
+      source_type: intentFilters.source_type && intentFilters.source_type !== 'ALL' ? intentFilters.source_type : undefined,
+      page,
+      page_size: pageSize,
+    }),
+    [intentFilters.source_type, intentFilters.status, intentSearch, page, pageSize],
+  );
+  const summaryParams = useMemo(
+    () => ({
+      search: intentSearch.trim() || undefined,
+      status: intentFilters.status || undefined,
+      source_type: intentFilters.source_type && intentFilters.source_type !== 'ALL' ? intentFilters.source_type : undefined,
+    }),
+    [intentFilters.source_type, intentFilters.status, intentSearch],
+  );
 
   const listQuery = useQuery({ queryKey: ['production-orders', params], queryFn: () => productionApi.getOrders(params) });
   const summaryQuery = useQuery({ queryKey: ['production-orders-summary', summaryParams], queryFn: () => productionApi.getOrderSummary(summaryParams) });
@@ -231,13 +274,24 @@ export default function ProductionOrderList() {
   const focusKey = `${focusId ?? ''}:${focusCode ?? ''}`;
 
   const invalidateOrders = async () => {
-    await queryClient.invalidateQueries({ queryKey: ['production-orders'] });
-    await queryClient.invalidateQueries({ queryKey: ['production-orders-summary'] });
-    await queryClient.invalidateQueries({ queryKey: ['production-order-detail'] });
-    await queryClient.invalidateQueries({ queryKey: ['production-order-issues'] });
-    await queryClient.invalidateQueries({ queryKey: ['production-order-receipts'] });
-    await queryClient.invalidateQueries({ queryKey: ['production-order-approval-history'] });
-    await queryClient.invalidateQueries({ queryKey: ['production-order-next-states'] });
+    const queryFamilies = new Set([
+      'production-orders',
+      'production-orders-summary',
+      'production-order-detail',
+      'production-order-issues',
+      'production-order-receipts',
+      'production-order-approval-history',
+      'production-order-next-states',
+      'production-demands',
+      'production-demand-summary',
+      'production-demand-detail',
+    ]);
+    await queryClient.invalidateQueries({
+      predicate: (query) => {
+        const key = query.queryKey[0];
+        return typeof key === 'string' && (queryFamilies.has(key) || key.startsWith('production-planning'));
+      },
+    });
   };
 
   const createMutation = useMutation({ mutationFn: (payload: ProductionOrderFormValues) => productionApi.createOrder(payload), onSuccess: async () => { await invalidateOrders(); messageApi.success('Đã tạo lệnh sản xuất'); setFormOpen(false); setEditingOrder(null); setPage(1); }, onError: (error) => messageApi.error(getToastMessage(error)) });
@@ -302,10 +356,11 @@ export default function ProductionOrderList() {
     const tags: string[] = [];
     if (intentSearch.trim()) tags.push(`Tìm kiếm: ${intentSearch.trim()}`);
     if (filters.status) tags.push(`Trạng thái: ${STATUS_LABELS[filters.status]}`);
+    if (filters.source_type && filters.source_type !== 'ALL') tags.push(`Nguồn: ${SOURCE_FILTER_LABELS[filters.source_type]}`);
     if (laneFilter !== 'ALL') tags.push(`Làn điều phối: ${LANE_LABELS[laneFilter]}`);
     if (selectedViewPreset) tags.push(`Mẫu đang dùng: ${selectedViewPreset.name}`);
     return tags;
-  }, [filters.status, intentSearch, laneFilter, selectedViewPreset]);
+  }, [filters.source_type, filters.status, intentSearch, laneFilter, selectedViewPreset]);
   const statusAlert = useMemo(() => {
     if (summary.overdue_plan_count > 0) return { type: 'error' as const, message: `${summary.overdue_plan_count} lệnh đang trễ kế hoạch, nên ưu tiên kiểm tra công đoạn và khả năng cấp vật tư.` };
     if (summary.pending_approval_count > 0) return { type: 'warning' as const, message: `${summary.pending_approval_count} lệnh đang chờ duyệt, phù hợp để trưởng bộ phận chốt trong ca này.` };
@@ -377,12 +432,16 @@ export default function ProductionOrderList() {
   const buildCurrentSnapshot = (): ProductionOrderViewSnapshot => ({
     search_input: searchInput,
     status: filters.status ?? '',
+    source_type: filters.source_type ?? 'ALL',
     laneFilter,
   });
 
   const applySnapshot = (snapshot: ProductionOrderViewSnapshot) => {
     setSearchInput(snapshot.search_input);
-    setFilters({ status: snapshot.status || undefined });
+    setFilters({
+      status: snapshot.status || undefined,
+      source_type: snapshot.source_type && snapshot.source_type !== 'ALL' ? snapshot.source_type : undefined,
+    });
     setLaneFilter(snapshot.laneFilter ?? 'ALL');
     setPage(1);
   };
@@ -403,10 +462,12 @@ export default function ProductionOrderList() {
 
   const applySavedView = () => {
     const rawStatus = configRecord?.status;
+    const rawSourceType = configRecord?.source_type;
     const rawLaneFilter = typeof configRecord?.laneFilter === 'string' ? configRecord.laneFilter : 'ALL';
     applySnapshot({
       search_input: typeof configRecord?.search_input === 'string' ? configRecord.search_input : '',
       status: rawStatus === 'DRAFT' || rawStatus === 'SUBMITTED' || rawStatus === 'APPROVED' || rawStatus === 'REJECTED' || rawStatus === 'RELEASED' || rawStatus === 'IN_PROGRESS' || rawStatus === 'COMPLETED' || rawStatus === 'CANCELLED' ? rawStatus : '',
+      source_type: rawSourceType === 'DEMAND' || rawSourceType === 'MANUAL' ? rawSourceType : 'ALL',
       laneFilter:
         rawLaneFilter === 'DRAFT_QUEUE'
         || rawLaneFilter === 'PENDING_APPROVAL'
@@ -489,9 +550,47 @@ export default function ProductionOrderList() {
 
   const columns: ColumnsType<ProductionOrder> = [
     { title: 'Mã LSX', dataIndex: 'code', width: 120 },
+    {
+      title: 'Nguồn / Nhu cầu',
+      key: 'source',
+      width: 210,
+      render: (_, row) => {
+        const demandCode = getProductionDemandDisplayCode(row);
+        if (!row.production_demand) {
+          return <Tag>Thủ công</Tag>;
+        }
+        return (
+          <Space direction="vertical" size={4}>
+            <Tag color="blue">Từ nhu cầu</Tag>
+            <Button
+              type="link"
+              size="small"
+              style={{ padding: 0, height: 'auto' }}
+              onClick={() => navigate(buildProductionDemandSearchUrl(row))}
+            >
+              {demandCode || 'Xem nhu cầu'}
+            </Button>
+            {row.sales_order_code ? <Text type="secondary">SO: {row.sales_order_code}</Text> : null}
+          </Space>
+        );
+      },
+    },
     { title: 'Sản phẩm', width: 240, render: (_, row) => [row.product_code, row.product_name].filter(Boolean).join(' - ') || row.product_name || '-' },
     { title: 'SL kế hoạch', dataIndex: 'planned_qty', width: 130, align: 'right', render: (value: string) => Number(value || 0).toLocaleString('vi-VN') },
     { title: 'Đã hoàn thành', dataIndex: 'produced_qty', width: 130, align: 'right', render: (value: string) => Number(value || 0).toLocaleString('vi-VN') },
+    {
+      title: 'Số liệu nhu cầu',
+      key: 'demand_quantities',
+      width: 220,
+      render: (_, row) => row.production_demand ? (
+        <Space direction="vertical" size={2}>
+          <Text>Cần SX: {formatQuantity(row.production_demand_qty_required)}</Text>
+          <Text type="secondary">Đã lập: {formatQuantity(row.production_demand_qty_planned)}</Text>
+          <Text type="secondary">Đã phát: {formatQuantity(row.production_demand_qty_released)}</Text>
+          <Text type="secondary">Còn phát: {formatQuantity(row.production_demand_qty_remaining_to_release)}</Text>
+        </Space>
+      ) : '-',
+    },
     { title: 'Trạng thái', dataIndex: 'status', width: 150, render: (status: ProductionOrderStatus, row) => <Space size={4} wrap><Tag color={STATUS_COLORS[status]}>{STATUS_LABELS[status]}</Tag>{isOverdue(row) ? <Tag color="error">Trễ kế hoạch</Tag> : null}</Space> },
     { title: 'Tiến độ', width: 180, render: (_, row) => <div style={{ minWidth: 130 }}><Progress percent={getProgressPercent(row)} size="small" status={row.status === 'COMPLETED' ? 'success' : 'active'} /></div> },
     { title: 'Hạn kế hoạch', dataIndex: 'planned_end_date', width: 130, render: (value: string | null) => (value ? dayjs(value).format('DD/MM/YYYY') : '-') },
@@ -525,7 +624,7 @@ export default function ProductionOrderList() {
 
   const handleExportCSV = () => {
     if (!visibleRows.length) return;
-    downloadCSV(visibleRows.map((order) => ({ 'Mã LSX': order.code, 'Sản phẩm': [order.product_code, order.product_name].filter(Boolean).join(' - '), 'SL kế hoạch': Number(order.planned_qty || 0).toLocaleString('vi-VN'), 'SL hoàn thành': Number(order.produced_qty || 0).toLocaleString('vi-VN'), 'Trạng thái': STATUS_LABELS[order.status], 'Tiến độ': `${getProgressPercent(order)}%`, 'Hạn kế hoạch': order.planned_end_date ? dayjs(order.planned_end_date).format('DD/MM/YYYY') : '' })), 'lenh-san-xuat');
+    downloadCSV(visibleRows.map((order) => ({ 'Mã LSX': order.code, 'Nguồn': order.production_demand ? 'Từ nhu cầu' : 'Thủ công', 'Mã nhu cầu': getProductionDemandDisplayCode(order), 'Sản phẩm': [order.product_code, order.product_name].filter(Boolean).join(' - '), 'SL kế hoạch': Number(order.planned_qty || 0).toLocaleString('vi-VN'), 'SL hoàn thành': Number(order.produced_qty || 0).toLocaleString('vi-VN'), 'Trạng thái': STATUS_LABELS[order.status], 'Tiến độ': `${getProgressPercent(order)}%`, 'Hạn kế hoạch': order.planned_end_date ? dayjs(order.planned_end_date).format('DD/MM/YYYY') : '' })), 'lenh-san-xuat');
   };
   const handleActionSubmit = async () => {
     if (!actionModal) return;
@@ -634,9 +733,19 @@ export default function ProductionOrderList() {
       <Card bordered={false} data-testid="production-orders-command-strip" style={{ borderRadius: 18 }} styles={{ body: { display: 'flex', flexDirection: 'column', gap: 12 } }}>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <div data-testid="production-orders-command-search">
-            <Input value={searchInput} onChange={(event) => { setSearchInput(event.target.value); setPage(1); }} placeholder="Tìm mã lệnh, mã hàng, sản phẩm..." style={{ width: 300 }} suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined} />
+            <Input value={searchInput} onChange={(event) => { setSearchInput(event.target.value); setPage(1); }} placeholder="Tìm mã lệnh, mã nhu cầu, mã hàng, sản phẩm..." style={{ width: 340 }} suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined} />
           </div>
           <Select allowClear placeholder="Trạng thái" style={{ width: 220 }} value={filters.status} onChange={(value) => { setFilters((prev) => ({ ...prev, status: value })); setPage(1); }} options={Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))} />
+          <Select
+            placeholder="Nguồn"
+            style={{ width: 180 }}
+            value={filters.source_type ?? 'ALL'}
+            onChange={(value: ProductionOrderSourceFilter) => {
+              setFilters((prev) => ({ ...prev, source_type: value === 'ALL' ? undefined : value }));
+              setPage(1);
+            }}
+            options={Object.entries(SOURCE_FILTER_LABELS).map(([value, label]) => ({ value, label }))}
+          />
           <Button data-testid="production-orders-save-view" onClick={() => void saveCurrentView()}>Lưu chế độ xem</Button>
           <Button data-testid="production-orders-restore-view" onClick={applySavedView}>Khôi phục</Button>
           <Button data-testid="production-orders-open-preset-modal" onClick={() => setIsViewPresetModalOpen(true)}>Tạo mẫu lọc</Button>
@@ -666,7 +775,7 @@ export default function ProductionOrderList() {
         loading={listQuery.isLoading}
         columns={columns}
         dataSource={visibleRows}
-        scroll={{ x: 1750 }}
+        scroll={{ x: 2180 }}
         pagination={{ current: page, pageSize, total: listQuery.data?.count ?? 0, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], onChange: async (nextPage, nextPageSize) => { setPage(nextPage); if (nextPageSize !== pageSize) await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize }); } }}
         locale={{ emptyText: visibleRows.length === 0 && !listQuery.isLoading ? (activeFilterTags.length ? <div style={{ padding: 32 }}><Empty description="Không tìm thấy lệnh sản xuất phù hợp." /><Button type="link" onClick={resetFilters}>Xóa bộ lọc</Button></div> : <Empty description="Chưa có lệnh sản xuất nào." />) : undefined }}
       />
@@ -744,10 +853,36 @@ export default function ProductionOrderList() {
           <Card size="small" title="Tổng quan lệnh">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
               <div><strong>Mã lệnh:</strong> {detailData.code}</div>
+              <div>
+                <strong>Nguồn:</strong>{' '}
+                {detailData.production_demand ? (
+                  <Space size={6} wrap>
+                    <Tag color="blue">Từ nhu cầu</Tag>
+                    <Button
+                      type="link"
+                      size="small"
+                      style={{ padding: 0, height: 'auto' }}
+                      onClick={() => navigate(buildProductionDemandSearchUrl(detailData))}
+                    >
+                      {getProductionDemandDisplayCode(detailData)}
+                    </Button>
+                  </Space>
+                ) : (
+                  <Tag>Thủ công</Tag>
+                )}
+              </div>
               <div><strong>Sản phẩm:</strong> {[detailData.product_code, detailData.product_name].filter(Boolean).join(' - ') || '-'}</div>
               <div><strong>Trạng thái:</strong> <Tag color={STATUS_COLORS[detailData.status]}>{STATUS_LABELS[detailData.status]}</Tag></div>
               <div><strong>Ngày lệnh:</strong> {dayjs(detailData.order_date).format('DD/MM/YYYY')}</div>
               <div><strong>Hạn kế hoạch:</strong> {detailData.planned_end_date ? dayjs(detailData.planned_end_date).format('DD/MM/YYYY') : '-'}</div>
+              {detailData.production_demand ? (
+                <>
+                  <div><strong>SL demand:</strong> {formatQuantity(detailData.production_demand_qty_required)}</div>
+                  <div><strong>Đã lập:</strong> {formatQuantity(detailData.production_demand_qty_planned)}</div>
+                  <div><strong>Đã phát:</strong> {formatQuantity(detailData.production_demand_qty_released)}</div>
+                  <div><strong>Còn phát:</strong> {formatQuantity(detailData.production_demand_qty_remaining_to_release)}</div>
+                </>
+              ) : null}
               <div><strong>Kho đích:</strong> {detailData.target_warehouse_name || '-'}</div>
               <div><strong>Vị trí đích:</strong> {detailData.target_location_name || '-'}</div>
             </div>

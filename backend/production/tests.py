@@ -1407,6 +1407,56 @@ class ProductionDemandApiTests(APITestCase):
         self.assertEqual(response.data['production_demand']['id'], demand.id)
         self.assertEqual(response.data['production_demand']['planning_status'], ProductionDemandPlanningStatus.PARTIALLY_PLANNED)
 
+    def test_order_api_returns_demand_fields_and_filters_source_type(self):
+        self._set_line_snapshot(self._routing_steps_snapshot())
+        demand = self._create_demand('ORDER-SOURCE')
+        create_response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {
+                'qty': '4',
+                'planned_start_date': str(self.today + timedelta(days=2)),
+                'planned_end_date': str(self.today + timedelta(days=5)),
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        linked_order = ProductionOrder.objects.get(pk=create_response.data['production_order_id'])
+        manual_order = ProductionOrder.objects.create(
+            code='MO-PD-API-MANUAL',
+            order_date=self.today,
+            product=self.product,
+            planned_qty='2',
+        )
+
+        demand_response = self.client.get('/api/production/orders/', {'source_type': 'DEMAND'})
+        manual_response = self.client.get('/api/production/orders/', {'source_type': 'MANUAL'})
+        all_response = self.client.get('/api/production/orders/', {'source_type': 'ALL'})
+
+        self.assertEqual(demand_response.status_code, 200, demand_response.data)
+        self.assertEqual(manual_response.status_code, 200, manual_response.data)
+        self.assertEqual(all_response.status_code, 200, all_response.data)
+        self.assertEqual(self._count(demand_response), 1)
+        self.assertEqual(self._count(manual_response), 1)
+        self.assertEqual(self._count(all_response), 2)
+        demand_row = self._results(demand_response)[0]
+        manual_row = self._results(manual_response)[0]
+        self.assertEqual(demand_row['id'], linked_order.id)
+        self.assertEqual(demand_row['production_demand'], demand.id)
+        self.assertEqual(demand_row['production_demand_display_code'], demand.demand_code or demand.demand_key)
+        self.assertEqual(demand_row['production_demand_key'], demand.demand_key)
+        self.assertEqual(demand_row['production_demand_qty_required'], '10.0000')
+        self.assertEqual(demand_row['production_demand_qty_planned'], '4.0000')
+        self.assertEqual(demand_row['production_demand_qty_released'], '0.0000')
+        self.assertEqual(demand_row['production_demand_qty_completed'], '0.0000')
+        self.assertEqual(demand_row['production_demand_qty_remaining_to_plan'], '6.0000')
+        self.assertEqual(demand_row['production_demand_qty_remaining_to_release'], '10.0000')
+        self.assertEqual(demand_row['production_demand_planning_status'], ProductionDemandPlanningStatus.PARTIALLY_PLANNED)
+        self.assertEqual(demand_row['production_demand_production_status'], ProductionDemandProductionStatus.NOT_RELEASED)
+        self.assertEqual(manual_row['id'], manual_order.id)
+        self.assertIsNone(manual_row['production_demand'])
+        self.assertIsNone(manual_row['production_demand_display_code'])
+        self.assertIsNone(manual_row.get('production_demand_qty_required'))
+
     def test_release_order_action_updates_linked_demand_release_counters(self):
         self._set_line_snapshot(self._routing_steps_snapshot())
         demand = self._create_demand('API-RELEASE')

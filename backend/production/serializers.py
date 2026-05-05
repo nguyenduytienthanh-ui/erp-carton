@@ -365,6 +365,16 @@ class ProductionOrderSerializer(serializers.ModelSerializer):
     sales_order_code = serializers.CharField(source='sales_order.code', read_only=True)
     sales_order_line_number = serializers.IntegerField(source='sales_order_line.line_number', read_only=True)
     production_demand_code = serializers.CharField(source='production_demand.demand_code', read_only=True)
+    production_demand_display_code = serializers.SerializerMethodField()
+    production_demand_key = serializers.CharField(source='production_demand.demand_key', read_only=True)
+    production_demand_qty_required = serializers.DecimalField(source='production_demand.qty_required', max_digits=18, decimal_places=4, read_only=True, allow_null=True)
+    production_demand_qty_planned = serializers.DecimalField(source='production_demand.qty_planned', max_digits=18, decimal_places=4, read_only=True, allow_null=True)
+    production_demand_qty_released = serializers.DecimalField(source='production_demand.qty_released', max_digits=18, decimal_places=4, read_only=True, allow_null=True)
+    production_demand_qty_completed = serializers.DecimalField(source='production_demand.qty_completed', max_digits=18, decimal_places=4, read_only=True, allow_null=True)
+    production_demand_qty_remaining_to_plan = serializers.DecimalField(source='production_demand.qty_remaining_to_plan', max_digits=18, decimal_places=4, read_only=True, allow_null=True)
+    production_demand_qty_remaining_to_release = serializers.DecimalField(source='production_demand.qty_remaining_to_release', max_digits=18, decimal_places=4, read_only=True, allow_null=True)
+    production_demand_planning_status = serializers.CharField(source='production_demand.planning_status', read_only=True)
+    production_demand_production_status = serializers.CharField(source='production_demand.production_status', read_only=True)
     target_warehouse_name = serializers.CharField(source='target_warehouse.name', read_only=True)
     target_location_name = serializers.CharField(source='target_location.name', read_only=True)
     remaining_qty = serializers.DecimalField(max_digits=18, decimal_places=4, read_only=True)
@@ -386,6 +396,16 @@ class ProductionOrderSerializer(serializers.ModelSerializer):
             'sales_order_line_number',
             'production_demand',
             'production_demand_code',
+            'production_demand_display_code',
+            'production_demand_key',
+            'production_demand_qty_required',
+            'production_demand_qty_planned',
+            'production_demand_qty_released',
+            'production_demand_qty_completed',
+            'production_demand_qty_remaining_to_plan',
+            'production_demand_qty_remaining_to_release',
+            'production_demand_planning_status',
+            'production_demand_production_status',
             'product',
             'product_code',
             'product_name',
@@ -438,6 +458,16 @@ class ProductionOrderSerializer(serializers.ModelSerializer):
             'estimated_output_value',
             'production_demand',
             'production_demand_code',
+            'production_demand_display_code',
+            'production_demand_key',
+            'production_demand_qty_required',
+            'production_demand_qty_planned',
+            'production_demand_qty_released',
+            'production_demand_qty_completed',
+            'production_demand_qty_remaining_to_plan',
+            'production_demand_qty_remaining_to_release',
+            'production_demand_planning_status',
+            'production_demand_production_status',
             'submitted_by',
             'submitted_at',
             'approved_by',
@@ -467,6 +497,12 @@ class ProductionOrderSerializer(serializers.ModelSerializer):
 
     def get_qr_value(self, obj):
         return self.get_trace_code(obj)
+
+    def get_production_demand_display_code(self, obj):
+        demand = getattr(obj, 'production_demand', None)
+        if not demand:
+            return None
+        return demand.demand_code or demand.demand_key
 
     def validate_planned_qty(self, value):
         if value is None or value <= 0:

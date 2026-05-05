@@ -3708,6 +3708,11 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         status_value = (self.request.query_params.get('status') or '').strip()
         if status_value:
             queryset = queryset.filter(status=status_value)
+        source_type = (self.request.query_params.get('source_type') or '').strip().upper()
+        if source_type == 'DEMAND':
+            queryset = queryset.filter(production_demand__isnull=False)
+        elif source_type == 'MANUAL':
+            queryset = queryset.filter(production_demand__isnull=True)
         product_id = self.request.query_params.get('product')
         if product_id:
             queryset = queryset.filter(product_id=product_id)
