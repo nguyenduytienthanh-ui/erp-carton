@@ -164,7 +164,7 @@ export default function Login() {
             size="large"
             autoComplete="off"
             onFinish={onFinish}
-            initialValues={{ username: 'admin', password: 'admin123' }}
+            initialValues={{ username: 'uat_admin' }}
           >
             <Form.Item
               name="username"
@@ -227,7 +227,7 @@ export default function Login() {
             <Text strong style={{ display: 'block', marginBottom: 4 }}>
               Tài khoản mẫu
             </Text>
-            <Text type="secondary">`admin / admin123`</Text>
+            <Text type="secondary">uat_admin</Text>
           </div>
           <div
             style={{
