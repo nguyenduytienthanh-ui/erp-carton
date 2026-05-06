@@ -21,6 +21,7 @@ import {
   Table,
   Tag,
   Timeline,
+  Tooltip,
   Typography,
   message,
 } from 'antd';
@@ -113,6 +114,12 @@ type SavedScenario = {
   };
 };
 type DispatchPresetKey = 'OVERDUE_RESCUE' | 'TODAY_READY' | 'TODAY_HANDOVER' | 'TOMORROW_LOAD' | 'UNSCHEDULED_QUEUE';
+type OperationReadinessMeta = {
+  label: string;
+  color: string;
+  reason: string;
+  canAdvance: boolean;
+};
 type BulkFormValues = {
   status?: string;
   planned_date?: dayjs.Dayjs | null;
@@ -159,6 +166,13 @@ const statusColor = {
   IN_PROGRESS: 'gold',
   DONE: 'success',
   SKIPPED: 'magenta',
+} as const;
+const operationStatusLabel = {
+  PENDING: 'Chưa sẵn sàng',
+  READY: 'Sẵn sàng',
+  IN_PROGRESS: 'Đang làm',
+  DONE: 'Hoàn thành',
+  SKIPPED: 'Bỏ qua',
 } as const;
 const DEFAULT_SHIFT_FILTER_OPTIONS = [
   { label: 'Tất cả ca', value: 'ALL' },
@@ -366,6 +380,85 @@ const getCapacityColor = (value?: ProductionCapacityState | '') => {
   if (value === 'AT_LIMIT') return 'gold';
   if (value === 'UNASSIGNED_MACHINE' || value === 'UNASSIGNED_WORK_CENTER') return 'default';
   return 'processing';
+};
+const isDependencyBlocked = (card: ProductionPlanningCard) => (
+  card.exceptions.dependency_state === 'WAIT_PREVIOUS_STEP'
+  || card.operation.dependency_state === 'WAIT_PREVIOUS_STEP'
+);
+const canAdvanceOperation = (card: ProductionPlanningCard) => (
+  !isDependencyBlocked(card)
+  && !['DONE', 'SKIPPED'].includes(card.operation.status)
+);
+const isAdvancingStatus = (value?: unknown) => ['READY', 'IN_PROGRESS', 'DONE', 'SKIPPED'].includes(String(value || '').toUpperCase());
+const isStatusChangeBlockedByDependency = (card: ProductionPlanningCard, status?: unknown) => (
+  isDependencyBlocked(card)
+  && isAdvancingStatus(status)
+  && String(status || '').toUpperCase() !== card.operation.status
+);
+const getBlockedStatusChangeCount = (cards: ProductionPlanningCard[], status?: unknown) => (
+  cards.filter((card) => isStatusChangeBlockedByDependency(card, status)).length
+);
+const getOperationReadinessMeta = (card: ProductionPlanningCard): OperationReadinessMeta => {
+  if (card.operation.status === 'DONE') {
+    return { label: 'Hoàn thành', color: 'success', reason: 'Công đoạn đã hoàn thành.', canAdvance: false };
+  }
+  if (card.operation.status === 'SKIPPED') {
+    return { label: 'Bỏ qua', color: 'magenta', reason: 'Công đoạn đã được bỏ qua.', canAdvance: false };
+  }
+  if (card.operation.status === 'IN_PROGRESS') {
+    return { label: 'Đang làm', color: 'gold', reason: 'Công đoạn đang được thực hiện.', canAdvance: true };
+  }
+  if (card.operation.status === 'READY') {
+    return { label: 'Sẵn sàng', color: 'processing', reason: 'Công đoạn đã sẵn sàng để bắt đầu.', canAdvance: true };
+  }
+  if (isDependencyBlocked(card)) {
+    const previousStep = card.operation.previous_step_name || card.operation.previous_step_code || 'công đoạn trước';
+    return {
+      label: 'Chờ công đoạn trước',
+      color: 'warning',
+      reason: `Cần hoàn thành ${previousStep} trước khi bắt đầu công đoạn này.`,
+      canAdvance: false,
+    };
+  }
+  return {
+    label: 'Chưa sẵn sàng',
+    color: 'default',
+    reason: 'Công đoạn chưa được mở để bắt đầu.',
+    canAdvance: canAdvanceOperation(card),
+  };
+};
+const getPlanningActionErrorMessage = (error: unknown) => {
+  const rawMessage = getToastMessage(error);
+  const normalized = rawMessage.toLowerCase();
+  if (
+    normalized.includes('chờ công đoạn trước')
+    || normalized.includes('công đoạn trước chưa')
+    || normalized.includes('cong doan truoc')
+    || normalized.includes('wait_previous_step')
+    || normalized.includes('wait previous step')
+    || normalized.includes('dependency')
+    || normalized.includes('phụ thuộc')
+  ) {
+    return 'Chưa thể thao tác công đoạn này vì công đoạn trước chưa hoàn thành. Vui lòng tải lại bàn điều độ nếu trạng thái vừa thay đổi.';
+  }
+  return rawMessage;
+};
+const getDependencyBlockedSelectionMessage = (count: number) => (
+  count > 0
+    ? `Có ${count} công đoạn đang chờ công đoạn trước. Bỏ chọn các công đoạn này trước khi đổi trạng thái.`
+    : ''
+);
+const isPlanningDependencyError = (error: unknown) => {
+  const normalized = getToastMessage(error).toLowerCase();
+  return (
+    normalized.includes('chờ công đoạn trước')
+    || normalized.includes('công đoạn trước chưa')
+    || normalized.includes('cong doan truoc')
+    || normalized.includes('wait_previous_step')
+    || normalized.includes('wait previous step')
+    || normalized.includes('dependency')
+    || normalized.includes('phụ thuộc')
+  );
 };
 const formatCapacityLoad = (ratio?: string | number | null) => {
   if (ratio === null || ratio === undefined) {
@@ -601,6 +694,12 @@ export default function ProductionPlanningBoard() {
     () => activeSelectedCardKeys.map((cardKey) => cards.find((card) => card.card_key === cardKey)).filter(Boolean) as ProductionPlanningCard[],
     [activeSelectedCardKeys, cards],
   );
+  const blockedSelectedCards = useMemo(() => selectedCards.filter(isDependencyBlocked), [selectedCards]);
+  const blockedSelectedCount = blockedSelectedCards.length;
+  const selectedCardReadiness = selectedCard ? getOperationReadinessMeta(selectedCard) : null;
+  const selectedCardDependencyBlocked = Boolean(selectedCard && isDependencyBlocked(selectedCard));
+  const selectedBlockedReason = selectedCardReadiness?.reason || 'Công đoạn này đang chờ công đoạn trước hoàn thành.';
+  const blockedSelectionMessage = getDependencyBlockedSelectionMessage(blockedSelectedCount);
   const activeSelectedSuggestionKeys = useMemo(
     () => selectedSuggestionKeys.filter((suggestionKey) => (workspace?.rebalance_suggestions ?? []).some((item) => item.key === suggestionKey)),
     [selectedSuggestionKeys, workspace?.rebalance_suggestions],
@@ -1121,8 +1220,10 @@ export default function ProductionPlanningBoard() {
       && (
         (previewPayload.block_reason_code === 'OTHER' && !String(previewPayload.block_reason_note || '').trim())
         || (String(previewPayload.machine_code || '').trim() && !String(previewPayload.work_center_code || '').trim())
+        || (selectedCard && isStatusChangeBlockedByDependency(selectedCard, previewPayload.status))
       ),
   );
+  const previewBlockedByDependency = Boolean(selectedCard && previewPayload && isStatusChangeBlockedByDependency(selectedCard, previewPayload.status));
   const hasPreviewChanges = Boolean(
     selectedCard
       && previewPayload
@@ -1209,7 +1310,10 @@ export default function ProductionPlanningBoard() {
         queryClient.invalidateQueries({ queryKey: ['production-planning-timeline'] }),
       ]);
     },
-    onError: (error) => messageApi.error(getToastMessage(error)),
+    onError: (error) => {
+      messageApi.error(getPlanningActionErrorMessage(error));
+      void queryClient.invalidateQueries({ queryKey: ['production-planning-board'] });
+    },
   });
   const buildBulkChanges = (values: BulkFormValues) => {
     const changes: Record<string, unknown> = {};
@@ -1296,13 +1400,28 @@ export default function ProductionPlanningBoard() {
       && (
         (bulkPreviewPayload.changes.block_reason_code === 'OTHER' && !String(bulkPreviewPayload.changes.block_reason_note || '').trim())
         || (String(bulkPreviewPayload.changes.machine_code || '').trim() && !String(bulkPreviewPayload.changes.work_center_code || '').trim())
+        || getBlockedStatusChangeCount(selectedCards, bulkPreviewPayload.changes.status) > 0
       ),
+  );
+  const bulkPreviewBlockedByDependency = Boolean(
+    bulkPreviewPayload
+    && getBlockedStatusChangeCount(selectedCards, bulkPreviewPayload.changes.status) > 0
   );
   const bulkPreviewQuery = useQuery({
     queryKey: ['production-planning-bulk-preview', bulkPreviewPayload],
     queryFn: () => productionApi.previewBulkUpdateOperations(bulkPreviewPayload!),
     enabled: Boolean(bulkPreviewPayload && !bulkPreviewBlockedByValidation),
   });
+  useEffect(() => {
+    if (previewQuery.error && isPlanningDependencyError(previewQuery.error)) {
+      void queryClient.invalidateQueries({ queryKey: ['production-planning-board'] });
+    }
+  }, [previewQuery.error, queryClient]);
+  useEffect(() => {
+    if (bulkPreviewQuery.error && isPlanningDependencyError(bulkPreviewQuery.error)) {
+      void queryClient.invalidateQueries({ queryKey: ['production-planning-board'] });
+    }
+  }, [bulkPreviewQuery.error, queryClient]);
   const bulkUpdateMutation = useMutation({
     mutationFn: (values: BulkFormValues) => {
       const changes = buildBulkChanges(values);
@@ -1314,6 +1433,10 @@ export default function ProductionPlanningBoard() {
       }
       if (String(changes.machine_code || '').trim() && !String(changes.work_center_code || '').trim()) {
         throw new Error('Cần nhập work center trước khi gán máy.');
+      }
+      const blockedStatusChangeCount = getBlockedStatusChangeCount(selectedCards, changes.status);
+      if (blockedStatusChangeCount > 0) {
+        throw new Error(getDependencyBlockedSelectionMessage(blockedStatusChangeCount));
       }
       return productionApi.bulkUpdateOperations({
         items: selectedCards.map((card) => ({
@@ -1332,7 +1455,10 @@ export default function ProductionPlanningBoard() {
         queryClient.invalidateQueries({ queryKey: ['dashboard-production-summary'] }),
       ]);
     },
-    onError: (error) => messageApi.error(getToastMessage(error)),
+    onError: (error) => {
+      messageApi.error(getPlanningActionErrorMessage(error));
+      void queryClient.invalidateQueries({ queryKey: ['production-planning-board'] });
+    },
   });
   const rebalancePreviewQuery = useQuery({
     queryKey: ['production-planning-rebalance-preview', rebalancePreviewPayload],
@@ -1349,7 +1475,10 @@ export default function ProductionPlanningBoard() {
         queryClient.invalidateQueries({ queryKey: ['dashboard-production-summary'] }),
       ]);
     },
-    onError: (error) => messageApi.error(getToastMessage(error)),
+    onError: (error) => {
+      messageApi.error(getPlanningActionErrorMessage(error));
+      void queryClient.invalidateQueries({ queryKey: ['production-planning-board'] });
+    },
   });
   const queueCandidates = useMemo(() => {
     const merged = new Map<string, ProductionPlanningMachineQueue>();
@@ -1486,11 +1615,18 @@ export default function ProductionPlanningBoard() {
         queryClient.invalidateQueries({ queryKey: ['dashboard-production-summary'] }),
       ]);
     },
-    onError: (error) => messageApi.error(getToastMessage(error)),
+    onError: (error) => {
+      messageApi.error(getPlanningActionErrorMessage(error));
+      void queryClient.invalidateQueries({ queryKey: ['production-planning-board'] });
+    },
   });
 
   const runQuickUpdate = (patch: Record<string, unknown>) => {
     if (!selectedCard || !canEditSelectedCard) {
+      return;
+    }
+    if (isStatusChangeBlockedByDependency(selectedCard, patch.status)) {
+      messageApi.warning(getOperationReadinessMeta(selectedCard).reason);
       return;
     }
     const currentValues = form.getFieldsValue();
@@ -1513,11 +1649,19 @@ export default function ProductionPlanningBoard() {
       messageApi.info('Chọn ít nhất một công đoạn để gửi tín hiệu floor.');
       return;
     }
+    if (signalCode === 'CLEAR_TO_RUN' && blockedSelectedCount > 0) {
+      messageApi.warning(`Có ${blockedSelectedCount} công đoạn đang chờ công đoạn trước. Không thể báo sẵn chạy cho nhóm này.`);
+      return;
+    }
     await shopFloorSignalMutation.mutateAsync({ signalCode, note, handoverStatus });
   };
   const handleSendShopFloorHandover = async (handoverStatusValue: string, note: string, options?: { clearPreviousWait?: boolean; setReady?: boolean }) => {
     if (!selectedCards.length) {
       messageApi.info('Chọn ít nhất một công đoạn để chốt handover.');
+      return;
+    }
+    if (options?.setReady && blockedSelectedCount > 0) {
+      messageApi.warning(`Có ${blockedSelectedCount} công đoạn đang chờ công đoạn trước. Không thể set ready qua handover.`);
       return;
     }
     await shopFloorHandoverMutation.mutateAsync({
@@ -1526,6 +1670,25 @@ export default function ProductionPlanningBoard() {
       clearPreviousWait: options?.clearPreviousWait,
       setReady: options?.setReady,
     });
+  };
+  const renderOperationMetaTags = (card: ProductionPlanningCard) => {
+    const readiness = getOperationReadinessMeta(card);
+    const stepLabel = card.operation.display_step ?? card.operation.route_step_no;
+    return (
+      <Space wrap size={4}>
+        <Tooltip title={readiness.reason}>
+          <Tag color={readiness.color}>{readiness.label}</Tag>
+        </Tooltip>
+        <Tag color={statusColor[card.operation.status]}>{operationStatusLabel[card.operation.status]}</Tag>
+        {stepLabel ? <Tag>{`Bước ${stepLabel}`}</Tag> : null}
+        {card.operation.group_code ? <Tag>{`Nhóm ${card.operation.group_code}`}</Tag> : null}
+        {card.operation.allow_parallel ? (
+          <Tooltip title="Các công đoạn cùng bước có thể được điều độ song song khi backend mở READY.">
+            <Tag color="cyan">Có thể chạy song song</Tag>
+          </Tooltip>
+        ) : null}
+      </Space>
+    );
   };
 
   const listColumns: ColumnsType<ProductionPlanningCard> = [
@@ -1544,8 +1707,14 @@ export default function ProductionPlanningBoard() {
     {
       title: 'Công đoạn',
       key: 'step',
-      width: 190,
-      render: (_, card) => <Space direction="vertical" size={2}><span>{`${card.operation.step_code} · ${card.operation.step_name}`}</span><span style={{ color: 'rgba(0,0,0,0.65)' }}>{card.exceptions.dependency_state_label}</span></Space>,
+      width: 250,
+      render: (_, card) => (
+        <Space direction="vertical" size={6}>
+          <span>{`${card.operation.step_code} · ${card.operation.step_name}`}</span>
+          {renderOperationMetaTags(card)}
+          <Text type="secondary">{card.exceptions.dependency_state_label}</Text>
+        </Space>
+      ),
     },
     { title: 'Kế hoạch', key: 'schedule', width: 160, render: (_, card) => <Space direction="vertical" size={2}><span>{formatDate(card.operation.planned_date)}</span><span style={{ color: 'rgba(0,0,0,0.65)' }}>{card.operation.planned_shift_label || 'Chưa xếp ca'}</span></Space> },
     {
@@ -1593,13 +1762,19 @@ export default function ProductionPlanningBoard() {
       title: 'Tiến độ',
       key: 'progress',
       width: 170,
-      render: (_, card) => (
-        <Space direction="vertical" size={6} style={{ width: '100%' }}>
-          <Tag color={statusColor[card.operation.status]}>{card.operation.status}</Tag>
-          <Progress percent={getOperationProgressPercent(card)} size="small" showInfo={false} />
-          <Text type="secondary">{`${formatQty(card.operation.completed_qty)}/${formatQty(card.operation.planned_qty)}`}</Text>
-        </Space>
-      ),
+      render: (_, card) => {
+        const readiness = getOperationReadinessMeta(card);
+        return (
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <Tag color={statusColor[card.operation.status]}>{operationStatusLabel[card.operation.status]}</Tag>
+            <Tooltip title={readiness.reason}>
+              <Tag color={readiness.color}>{readiness.label}</Tag>
+            </Tooltip>
+            <Progress percent={getOperationProgressPercent(card)} size="small" showInfo={false} />
+            <Text type="secondary">{`${formatQty(card.operation.completed_qty)}/${formatQty(card.operation.planned_qty)}`}</Text>
+          </Space>
+        );
+      },
     },
     { title: 'Tác vụ', key: 'action', width: 120, fixed: 'right', render: (_, card) => <Button type="primary" size="small" onClick={() => openCard(card)}>Xem</Button> },
   ];
@@ -2919,15 +3094,27 @@ export default function ProductionPlanningBoard() {
             <Button size="small" onClick={() => void handleSendShopFloorSignal('WAIT_MATERIAL', 'Floor báo chờ cấp vật tư trước khi vào máy', 'ACTIVE')} disabled={!selectedCards.length}>
               Báo chờ vật tư
             </Button>
-            <Button size="small" onClick={() => void handleSendShopFloorSignal('CLEAR_TO_RUN', 'Floor đã sẵn sàng tiếp tục', 'ACTIVE')} disabled={!selectedCards.length}>
-              Báo sẵn chạy
-            </Button>
-            <Button size="small" onClick={() => void handleSendShopFloorHandover('READY', 'Đã chốt xong gói bàn giao cho ca sau', { setReady: true })} disabled={!selectedCards.length} data-testid="production-planning-handover-ready">
-              Chốt sẵn sàng bàn giao
-            </Button>
-            <Button size="small" onClick={() => void handleSendShopFloorHandover('ACCEPTED', 'Người nhận đã tiếp quản và clear cho công đoạn trước', { clearPreviousWait: true, setReady: true })} disabled={!selectedCards.length} data-testid="production-planning-handover-accepted">
-              Chốt đã tiếp quản
-            </Button>
+            <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
+              <span>
+                <Button size="small" onClick={() => void handleSendShopFloorSignal('CLEAR_TO_RUN', 'Floor đã sẵn sàng tiếp tục', 'ACTIVE')} disabled={!selectedCards.length || blockedSelectedCount > 0}>
+                  Báo sẵn chạy
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
+              <span>
+                <Button size="small" onClick={() => void handleSendShopFloorHandover('READY', 'Đã chốt xong gói bàn giao cho ca sau', { setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-ready">
+                  Chốt sẵn sàng bàn giao
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
+              <span>
+                <Button size="small" onClick={() => void handleSendShopFloorHandover('ACCEPTED', 'Người nhận đã tiếp quản và clear cho công đoạn trước', { clearPreviousWait: true, setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-accepted">
+                  Chốt đã tiếp quản
+                </Button>
+              </span>
+            </Tooltip>
           </Space>
         </Space>
       </Card>
@@ -3014,13 +3201,19 @@ export default function ProductionPlanningBoard() {
                       <div key={`${lane.key}-${bucket.key}`} style={{ border: '1px solid #eef2f7', borderRadius: 14, padding: 12, background: '#fafcff', display: 'flex', flexDirection: 'column', gap: 10 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><strong>{bucket.label}</strong><Tag>{bucket.count}</Tag></div>
                         {bucket.cards.length ? bucket.cards.map((card) => (
-                          <div key={card.card_key} style={{ border: '1px solid #dbe7f3', borderRadius: 12, padding: 12, background: '#fff', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <div key={card.card_key} style={{ border: '1px solid #dbe7f3', borderRadius: 12, padding: 12, background: '#fff', display: 'flex', flexDirection: 'column', gap: 8, opacity: isDependencyBlocked(card) ? 0.78 : 1 }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                               <Space wrap>
                                 <Tag color={riskColor[card.exceptions.risk_state]}>{card.exceptions.risk_state_label}</Tag>
-                                <Tag color={statusColor[card.operation.status]}>{card.operation.status}</Tag>
+                                <Tooltip title={getOperationReadinessMeta(card).reason}>
+                                  <Tag color={getOperationReadinessMeta(card).color}>{getOperationReadinessMeta(card).label}</Tag>
+                                </Tooltip>
+                                <Tag color={statusColor[card.operation.status]}>{operationStatusLabel[card.operation.status]}</Tag>
                                 <Tag color={readinessColor[card.materials.material_readiness]}>{card.materials.material_readiness_label}</Tag>
                                 <Tag color={getCapacityColor(card.capacity.capacity_state)}>{card.capacity.capacity_state_label}</Tag>
+                                {card.operation.display_step || card.operation.route_step_no ? <Tag>{`Bước ${card.operation.display_step ?? card.operation.route_step_no}`}</Tag> : null}
+                                {card.operation.group_code ? <Tag>{`Nhóm ${card.operation.group_code}`}</Tag> : null}
+                                {card.operation.allow_parallel ? <Tag color="cyan">Có thể chạy song song</Tag> : null}
                                 {card.shop_floor.handover_status ? (
                                   <Tag color={getHandoverColor(card.shop_floor.handover_status)}>{card.shop_floor.handover_status_label}</Tag>
                                 ) : null}
@@ -3147,6 +3340,7 @@ export default function ProductionPlanningBoard() {
         }}
         onOk={() => void handleSubmitBulk()}
         okText="Áp dụng hàng loạt"
+        okButtonProps={{ disabled: bulkPreviewBlockedByDependency }}
         confirmLoading={bulkUpdateMutation.isPending}
         data-testid="production-planning-bulk-modal"
       >
@@ -3157,6 +3351,14 @@ export default function ProductionPlanningBoard() {
             message="Bulk action chỉ áp dụng cho những công đoạn đang được chọn."
             description="Nếu có lệnh chưa phát lệnh hoặc dữ liệu không hợp lệ, backend sẽ chặn để tránh phá vỡ kế hoạch hiện tại."
           />
+          {blockedSelectedCount ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="Một số công đoạn đang chờ công đoạn trước."
+              description="Có thể tiếp tục xếp ngày/ca, gán máy hoặc ghi chú nghẽn, nhưng không thể đổi sang READY/IN_PROGRESS/DONE/SKIPPED cho các công đoạn này."
+            />
+          ) : null}
           <Space wrap>
             <Button size="small" onClick={() => bulkForm.setFieldsValue({ planned_date: dayjs(), planned_shift: 'FULLDAY' })} data-testid="production-planning-bulk-today">
               Xếp hôm nay
@@ -3170,9 +3372,13 @@ export default function ProductionPlanningBoard() {
             <Button size="small" onClick={() => bulkForm.setFieldsValue({ block_reason_code: 'WAIT_PREVIOUS_STEP', block_reason_note: 'Chờ công đoạn trước bàn giao' })}>
               Chờ công đoạn trước
             </Button>
-            <Button size="small" onClick={() => bulkForm.setFieldsValue({ status: 'READY', block_reason_code: '__CLEAR__', block_reason_note: '' })} data-testid="production-planning-bulk-ready">
-              Đánh dấu sẵn chạy
-            </Button>
+            <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
+              <span>
+                <Button size="small" onClick={() => bulkForm.setFieldsValue({ status: 'READY', block_reason_code: '__CLEAR__', block_reason_note: '' })} disabled={blockedSelectedCount > 0} data-testid="production-planning-bulk-ready">
+                  Đánh dấu sẵn chạy
+                </Button>
+              </span>
+            </Tooltip>
             <Button size="small" onClick={() => bulkForm.setFieldsValue({ block_reason_code: '__CLEAR__', block_reason_note: '' })} data-testid="production-planning-bulk-clear-block">
               Gỡ nghẽn
             </Button>
@@ -3184,10 +3390,10 @@ export default function ProductionPlanningBoard() {
                   allowClear
                   options={[
                     { value: 'PENDING', label: 'Chưa bắt đầu' },
-                    { value: 'READY', label: 'Sẵn chạy' },
-                    { value: 'IN_PROGRESS', label: 'Đang làm' },
-                    { value: 'DONE', label: 'Hoàn thành' },
-                    { value: 'SKIPPED', label: 'Bỏ qua' },
+                    { value: 'READY', label: 'Sẵn sàng', disabled: getBlockedStatusChangeCount(selectedCards, 'READY') > 0 },
+                    { value: 'IN_PROGRESS', label: 'Đang làm', disabled: getBlockedStatusChangeCount(selectedCards, 'IN_PROGRESS') > 0 },
+                    { value: 'DONE', label: 'Hoàn thành', disabled: getBlockedStatusChangeCount(selectedCards, 'DONE') > 0 },
+                    { value: 'SKIPPED', label: 'Bỏ qua', disabled: getBlockedStatusChangeCount(selectedCards, 'SKIPPED') > 0 },
                   ]}
                 />
               </Form.Item>
@@ -3282,8 +3488,8 @@ export default function ProductionPlanningBoard() {
             <Alert
               type="info"
               showIcon
-              message="Bổ sung đủ thông tin để preview bulk."
-              description="Nếu gán máy hàng loạt thì cần chốt work center; khi chọn lý do nghẽn là Khác thì cần mô tả cụ thể."
+              message={bulkPreviewBlockedByDependency ? 'Không thể đổi trạng thái khi còn công đoạn chờ công đoạn trước.' : 'Bổ sung đủ thông tin để preview bulk.'}
+              description={bulkPreviewBlockedByDependency ? blockedSelectionMessage : 'Nếu gán máy hàng loạt thì cần chốt work center; khi chọn lý do nghẽn là Khác thì cần mô tả cụ thể.'}
             />
           ) : bulkPreviewQuery.data ? (
             <Card size="small" data-testid="production-planning-bulk-preview">
@@ -3316,6 +3522,13 @@ export default function ProductionPlanningBoard() {
                 />
               </Space>
             </Card>
+          ) : bulkPreviewQuery.error ? (
+            <Alert
+              type="error"
+              showIcon
+              message="Không xem trước được bulk action."
+              description={getPlanningActionErrorMessage(bulkPreviewQuery.error)}
+            />
           ) : bulkPreviewQuery.isFetching ? (
             <Card size="small" data-testid="production-planning-bulk-preview">
               <Skeleton active paragraph={{ rows: 2 }} title={false} />
@@ -3406,7 +3619,15 @@ export default function ProductionPlanningBoard() {
               <Tag color={riskColor[selectedCard.exceptions.risk_state]}>{selectedCard.exceptions.risk_state_label}</Tag>
               <Tag color={readinessColor[selectedCard.materials.material_readiness]}>{selectedCard.materials.material_readiness_label}</Tag>
               <Tag color={dependencyColor[selectedCard.exceptions.dependency_state]}>{selectedCard.exceptions.dependency_state_label}</Tag>
-              <Tag color={statusColor[selectedCard.operation.status]}>{selectedCard.operation.status}</Tag>
+              {selectedCardReadiness ? (
+                <Tooltip title={selectedCardReadiness.reason}>
+                  <Tag color={selectedCardReadiness.color}>{selectedCardReadiness.label}</Tag>
+                </Tooltip>
+              ) : null}
+              <Tag color={statusColor[selectedCard.operation.status]}>{operationStatusLabel[selectedCard.operation.status]}</Tag>
+              {selectedCard.operation.display_step || selectedCard.operation.route_step_no ? <Tag>{`Bước ${selectedCard.operation.display_step ?? selectedCard.operation.route_step_no}`}</Tag> : null}
+              {selectedCard.operation.group_code ? <Tag>{`Nhóm ${selectedCard.operation.group_code}`}</Tag> : null}
+              {selectedCard.operation.allow_parallel ? <Tag color="cyan">Có thể chạy song song</Tag> : null}
               {selectedCard.shop_floor.handover_status ? <Tag color={getHandoverColor(selectedCard.shop_floor.handover_status)}>{selectedCard.shop_floor.handover_status_label}</Tag> : null}
               {selectedCard.operation.block_reason_label ? <Tag color="volcano">{selectedCard.operation.block_reason_label}</Tag> : null}
             </Space>
@@ -3435,6 +3656,9 @@ export default function ProductionPlanningBoard() {
                 <div><strong>Công suất:</strong> {`${selectedCard.capacity.capacity_state_label} · ${formatHours(selectedCard.capacity.scheduled_hours)} · Tải ${formatCapacityLoad(selectedCard.capacity.work_center_load_ratio)}`}</div>
                 <div><strong>Floor owner:</strong> {selectedCard.shop_floor.dispatch_owner || 'Chưa gán'}</div>
                 <div><strong>Handover:</strong> {selectedCard.shop_floor.handover_status_label || 'Chưa chốt'}</div>
+                <div><strong>Routing step:</strong> {selectedCard.operation.display_step ? `Bước ${selectedCard.operation.display_step}` : selectedCard.operation.route_step_no ? `Route ${selectedCard.operation.route_step_no}` : 'Theo thứ tự sequence'}</div>
+                <div><strong>Nhóm routing:</strong> {selectedCard.operation.group_code || 'Không có'}</div>
+                <div><strong>Song song:</strong> {selectedCard.operation.allow_parallel ? 'Có thể chạy song song trong cùng bước' : 'Không đánh dấu song song'}</div>
                 <div><strong>Công đoạn trước:</strong> {selectedCard.operation.previous_step_name || selectedCard.operation.previous_step_code || 'Không có'}</div>
                 <div><strong>Công đoạn sau:</strong> {selectedCard.operation.next_step_name || selectedCard.operation.next_step_code || 'Không có'}</div>
                 <div><strong>Ngày bắt đầu / kết thúc:</strong> {`${formatDateTime(selectedCard.operation.started_at)} → ${formatDateTime(selectedCard.operation.finished_at)}`}</div>
@@ -3453,6 +3677,15 @@ export default function ProductionPlanningBoard() {
                   style={{ marginBottom: 16 }}
                 />
               ) : null}
+              {canEditSelectedCard && selectedCardDependencyBlocked ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Công đoạn đang chờ công đoạn trước."
+                  description="Bạn vẫn có thể xếp ngày/ca, gán máy hoặc ghi chú nghẽn, nhưng không thể bắt đầu/hoàn thành/bỏ qua công đoạn này cho tới khi dependency được backend mở."
+                  style={{ marginBottom: 16 }}
+                />
+              ) : null}
               {canEditSelectedCard ? (
                 <Space wrap style={{ marginBottom: 16 }}>
                   <Button onClick={() => runQuickUpdate({ planned_date: dayjs(), planned_shift: form.getFieldValue('planned_shift') || 'FULLDAY' })}>
@@ -3467,9 +3700,13 @@ export default function ProductionPlanningBoard() {
                   <Button onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_PREVIOUS_STEP', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ công đoạn trước bàn giao' })}>
                     Chờ công đoạn trước
                   </Button>
-                  <Button onClick={() => runQuickUpdate({ status: 'READY', block_reason_code: '', block_reason_note: '' })}>
-                    Đánh dấu sẵn chạy
-                  </Button>
+                  <Tooltip title={selectedCardDependencyBlocked ? selectedBlockedReason : ''}>
+                    <span>
+                      <Button onClick={() => runQuickUpdate({ status: 'READY', block_reason_code: '', block_reason_note: '' })} disabled={selectedCardDependencyBlocked}>
+                        Đánh dấu sẵn chạy
+                      </Button>
+                    </span>
+                  </Tooltip>
                   <Button onClick={() => runQuickUpdate({ block_reason_code: '', block_reason_note: '' })}>
                     Gỡ nghẽn
                   </Button>
@@ -3480,8 +3717,8 @@ export default function ProductionPlanningBoard() {
                   type="info"
                   showIcon
                   style={{ marginBottom: 16 }}
-                  message="Bổ sung mô tả nghẽn để xem trước tác động."
-                  description="Khi chọn lý do nghẽn là Khác, planner cần mô tả cụ thể mới tính được preview."
+                  message={previewBlockedByDependency ? 'Công đoạn chưa sẵn sàng để đổi trạng thái.' : 'Bổ sung mô tả nghẽn để xem trước tác động.'}
+                  description={previewBlockedByDependency ? selectedBlockedReason : 'Khi chọn lý do nghẽn là Khác hoặc gán máy, planner cần nhập đủ thông tin mới tính được preview.'}
                 />
               ) : null}
               {canEditSelectedCard && !previewBlockedByValidation && hasPreviewChanges && previewQuery.error ? (
@@ -3490,7 +3727,7 @@ export default function ProductionPlanningBoard() {
                   showIcon
                   style={{ marginBottom: 16 }}
                   message="Không xem trước được tác động điều độ."
-                  description={getToastMessage(previewQuery.error)}
+                  description={getPlanningActionErrorMessage(previewQuery.error)}
                   action={<Button size="small" onClick={() => void previewQuery.refetch()}>Thử lại</Button>}
                 />
               ) : null}
@@ -3527,17 +3764,28 @@ export default function ProductionPlanningBoard() {
                   message="Dang tinh tac dong dieu do..."
                 />
               ) : null}
-              <Form layout="vertical" form={form} onFinish={(values) => void updateMutation.mutateAsync(values)} data-testid="production-planning-quick-update-form">
+              <Form
+                layout="vertical"
+                form={form}
+                onFinish={(values) => {
+                  if (selectedCard && isStatusChangeBlockedByDependency(selectedCard, (values as Record<string, unknown>).status)) {
+                    messageApi.warning(selectedBlockedReason);
+                    return;
+                  }
+                  void updateMutation.mutateAsync(values);
+                }}
+                data-testid="production-planning-quick-update-form"
+              >
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
                   <Form.Item name="status" label="Trạng thái">
                     <Select
                       disabled={!canEditSelectedCard}
                       options={[
                         { value: 'PENDING', label: 'Chưa bắt đầu' },
-                        { value: 'READY', label: 'Sẵn chạy' },
-                        { value: 'IN_PROGRESS', label: 'Đang làm' },
-                        { value: 'DONE', label: 'Hoàn thành' },
-                        { value: 'SKIPPED', label: 'B\u1ecf qua' },
+                        { value: 'READY', label: 'Sẵn sàng', disabled: Boolean(selectedCard && isStatusChangeBlockedByDependency(selectedCard, 'READY')) },
+                        { value: 'IN_PROGRESS', label: 'Đang làm', disabled: Boolean(selectedCard && isStatusChangeBlockedByDependency(selectedCard, 'IN_PROGRESS')) },
+                        { value: 'DONE', label: 'Hoàn thành', disabled: Boolean(selectedCard && isStatusChangeBlockedByDependency(selectedCard, 'DONE')) },
+                        { value: 'SKIPPED', label: 'Bỏ qua', disabled: Boolean(selectedCard && isStatusChangeBlockedByDependency(selectedCard, 'SKIPPED')) },
                       ]}
                     />
                   </Form.Item>
