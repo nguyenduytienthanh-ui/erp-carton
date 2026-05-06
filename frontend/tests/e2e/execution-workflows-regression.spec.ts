@@ -1,12 +1,12 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-import { login } from './helpers/auth';
+import { adminUser, login } from './helpers/auth';
 import { apiGet, apiPost, getAccessToken } from './helpers/adminApi';
 import { createExecutionSeedData, createShipmentSeed, createWarehouseTransferSeed } from './helpers/operationsApi';
 
 const executionAdminUser = {
-  username: process.env.E2E_EXECUTION_ADMIN_USERNAME || 'admin',
-  password: process.env.E2E_EXECUTION_ADMIN_PASSWORD || 'admin123',
+  username: process.env.E2E_EXECUTION_ADMIN_USERNAME || adminUser.username,
+  password: process.env.E2E_EXECUTION_ADMIN_PASSWORD || adminUser.password,
 };
 
 type PaginatedResponse<T> = {

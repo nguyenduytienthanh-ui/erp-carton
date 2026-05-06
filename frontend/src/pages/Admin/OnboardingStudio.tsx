@@ -829,8 +829,8 @@ export default function OnboardingStudio() {
     <>
       {contextHolder}
       <PageHeader
-        title="Trợ lý triển khai công việc"
-        subtitle="Thiết kế preset rollout để triển khai quyền, nhóm, checklist và workflow cho người dùng một cách nhất quán."
+        title="Xưởng preset onboarding"
+        subtitle="Trợ lý triển khai công việc: thiết kế preset rollout để triển khai quyền, nhóm, checklist và workflow cho người dùng một cách nhất quán."
         extra={[
           <Button
             key="reload"
