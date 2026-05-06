@@ -5,8 +5,9 @@ from io import StringIO
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import connection
+from django.db import connection, transaction
 from django.db.models import Q
+from django.db.utils import OperationalError, ProgrammingError
 from django.utils import timezone
 
 from core.management.commands.bootstrap_uat_demo import (
@@ -15,7 +16,22 @@ from core.management.commands.bootstrap_uat_demo import (
     TEAM_MATRIX,
     USER_MATRIX,
 )
-from core.models import Customer, NumberSequence, Permission, Role, Setting, Team
+from core.models import (
+    ApprovalHistory,
+    Attachment,
+    AuditLog,
+    Comment,
+    Customer,
+    Notification,
+    NumberSequence,
+    Permission,
+    Role,
+    Setting,
+    Task,
+    TaskWatcher,
+    Team,
+    WorkflowPipelineEvent,
+)
 from finance.models import GeneralLedgerAccount
 from finance.posting import save_finance_gl_control_mappings
 from inventory.models import (
@@ -28,9 +44,16 @@ from inventory.models import (
 )
 from products.models import (
     Operation,
+    BundlePriceChange,
+    PriceChange,
     Product,
     ProductBoxType,
+    ProductBundle,
+    ProductBundleComponent,
     ProductCategory,
+    ProductMaterialGroup,
+    ProductMaterialOption,
+    ProductMaterialTemplate,
     ProductOperation,
     ProductRoutingStep,
     ProductUnit,
@@ -45,14 +68,25 @@ from production.models import (
     ProductionDemandPlanningStatus,
     ProductionDemandPriority,
     ProductionDemandProductionStatus,
+    ProductionIssue,
+    ProductionIssueLine,
+    ProductionMaterialRequirement,
+    ProductionOperation,
+    ProductionOrder,
+    ProductionReceipt,
+    ProductionReceiptLine,
 )
 from sales.models import (
     DeliveryCarrier,
     OutboundShipment as SalesOutboundShipment,
+    SalesLineMaterialPlan,
+    SalesLineMaterialPlanItem,
     SalesOrder,
     SalesOrderDeliveryPlan,
     SalesOrderLine,
+    SalesOrderPostingLog,
     SalesOrderStatus,
+    ShipmentLine,
 )
 from sales.services import build_sales_order_line_product_snapshot
 
@@ -887,4 +921,370 @@ def reset_dev_qa_data(confirm=False, dry_run=False):
         summary,
         dry_run,
     )
+    return summary
+
+
+TMP_DEFAULT_PREFIX = 'TMP'
+TMP_EXTRA_TOKENS = ('T5B',)
+
+
+def _model_text_fields(model, field_names):
+    available = {field.name for field in model._meta.fields}
+    return [field_name for field_name in field_names if field_name in available]
+
+
+def _tmp_tokens(prefix=TMP_DEFAULT_PREFIX):
+    token = str(prefix or TMP_DEFAULT_PREFIX).strip().upper()
+    tokens = [token]
+    if token == TMP_DEFAULT_PREFIX:
+        tokens.extend(TMP_EXTRA_TOKENS)
+    return tuple(dict.fromkeys(value for value in tokens if value))
+
+
+def is_qa_text(value):
+    return str(value or '').strip().upper().startswith(QA_PREFIX)
+
+
+def is_tmp_text(value, prefix=TMP_DEFAULT_PREFIX):
+    text = str(value or '').strip().upper()
+    if not text or is_qa_text(text):
+        return False
+    return any(token in text for token in _tmp_tokens(prefix))
+
+
+def build_tmp_q_for_fields(fields, prefix=TMP_DEFAULT_PREFIX):
+    query = Q()
+    for field_name in fields:
+        for token in _tmp_tokens(prefix):
+            query |= Q(**{f'{field_name}__icontains': token})
+    return query
+
+
+def _build_qa_q_for_fields(fields):
+    query = Q()
+    for field_name in fields:
+        query |= Q(**{f'{field_name}__istartswith': QA_PREFIX})
+    return query
+
+
+def _tmp_queryset(model, fields, prefix=TMP_DEFAULT_PREFIX):
+    text_fields = _model_text_fields(model, fields)
+    if not text_fields:
+        return model.objects.none()
+    tmp_q = build_tmp_q_for_fields(text_fields, prefix=prefix)
+    qa_q = _build_qa_q_for_fields(text_fields)
+    return model.objects.filter(tmp_q).exclude(qa_q).distinct()
+
+
+def _ids(queryset):
+    try:
+        return list(queryset.values_list('id', flat=True))
+    except (OperationalError, ProgrammingError):
+        return []
+
+
+def _existing_ids(model, ids):
+    if not ids:
+        return []
+    return list(model.objects.filter(id__in=ids).values_list('id', flat=True))
+
+
+def _expand_product_ids(product_ids):
+    expanded = set(product_ids)
+    while True:
+        child_ids = set(Product.objects.filter(parent_id__in=expanded).values_list('id', flat=True))
+        new_ids = child_ids - expanded
+        if not new_ids:
+            break
+        expanded.update(new_ids)
+    return list(expanded)
+
+
+def _delete_or_count_safe(queryset, label, summary, dry_run):
+    try:
+        return _delete_or_count(queryset, label, summary, dry_run)
+    except (OperationalError, ProgrammingError):
+        summary[label] = 0
+        return 0
+
+
+def _generic_entity_q(entity_ids_by_type):
+    query = Q()
+    for entity_type, ids in entity_ids_by_type.items():
+        if ids:
+            query |= Q(entity_type=entity_type, entity_id__in=ids)
+    return query
+
+
+def _notification_entity_q(entity_ids_by_type):
+    query = Q()
+    for entity_type, ids in entity_ids_by_type.items():
+        if ids:
+            query |= Q(entity_type=entity_type, entity_id__in=ids)
+    return query
+
+
+def _tmp_root_ids(prefix=TMP_DEFAULT_PREFIX):
+    customer_fields = _model_text_fields(Customer, ['code', 'name', 'company_name', 'email', 'contact_person'])
+    customers = _tmp_queryset(Customer, customer_fields, prefix=prefix)
+    customer_ids = _ids(customers)
+
+    carrier_fields = _model_text_fields(DeliveryCarrier, ['code', 'name', 'description'])
+    delivery_carrier_ids = _ids(_tmp_queryset(DeliveryCarrier, carrier_fields, prefix=prefix))
+
+    product_fields = _model_text_fields(
+        Product,
+        ['code', 'name', 'description', 'note', 'note_other', 'film_code', 'mold_code', 'search_text'],
+    )
+    product_ids = _ids(_tmp_queryset(Product, product_fields, prefix=prefix))
+    product_ids = _expand_product_ids(product_ids)
+
+    sales_fields = _model_text_fields(SalesOrder, ['code', 'reference', 'notes', 'post_number'])
+    sales_order_ids = _ids(SalesOrder.objects.filter(
+        Q(id__in=_ids(_tmp_queryset(SalesOrder, sales_fields, prefix=prefix)))
+        | Q(customer_id__in=customer_ids)
+    ).distinct())
+
+    sales_line_ids = _ids(
+        SalesOrderLine.objects.filter(Q(sales_order_id__in=sales_order_ids) | Q(product_id__in=product_ids)).distinct()
+    )
+
+    demand_fields = _model_text_fields(
+        ProductionDemand,
+        [
+            'demand_code',
+            'demand_key',
+            'source',
+            'product_code',
+            'product_name',
+            'customer_name_snapshot',
+            'notes',
+            'reminder_note',
+            'hold_reason',
+            'search_text',
+        ],
+    )
+    production_demand_ids = _ids(ProductionDemand.objects.filter(
+        Q(id__in=_ids(_tmp_queryset(ProductionDemand, demand_fields, prefix=prefix)))
+        | Q(sales_order_id__in=sales_order_ids)
+        | Q(sales_order_line_id__in=sales_line_ids)
+        | Q(product_id__in=product_ids)
+    ).distinct())
+
+    production_order_fields = _model_text_fields(
+        ProductionOrder,
+        ['code', 'reference', 'notes', 'search_text'],
+    )
+    production_order_ids = _ids(ProductionOrder.objects.filter(
+        Q(id__in=_ids(_tmp_queryset(ProductionOrder, production_order_fields, prefix=prefix)))
+        | Q(production_demand_id__in=production_demand_ids)
+        | Q(sales_order_id__in=sales_order_ids)
+        | Q(sales_order_line_id__in=sales_line_ids)
+        | Q(product_id__in=product_ids)
+    ).distinct())
+
+    return {
+        'customer_ids': customer_ids,
+        'delivery_carrier_ids': delivery_carrier_ids,
+        'product_ids': product_ids,
+        'sales_order_ids': sales_order_ids,
+        'sales_order_line_ids': sales_line_ids,
+        'production_demand_ids': production_demand_ids,
+        'production_order_ids': production_order_ids,
+    }
+
+
+def _tmp_cleanup_querysets(prefix=TMP_DEFAULT_PREFIX):
+    roots = _tmp_root_ids(prefix=prefix)
+    customer_ids = roots['customer_ids']
+    delivery_carrier_ids = roots['delivery_carrier_ids']
+    product_ids = roots['product_ids']
+    sales_order_ids = roots['sales_order_ids']
+    sales_order_line_ids = roots['sales_order_line_ids']
+    production_demand_ids = roots['production_demand_ids']
+    production_order_ids = roots['production_order_ids']
+
+    production_issue_fields = _model_text_fields(ProductionIssue, ['code', 'reference', 'note', 'search_text'])
+    production_issue_ids = _ids(ProductionIssue.objects.filter(
+        Q(id__in=_ids(_tmp_queryset(ProductionIssue, production_issue_fields, prefix=prefix)))
+        | Q(production_order_id__in=production_order_ids)
+    ).distinct())
+    production_receipt_fields = _model_text_fields(ProductionReceipt, ['code', 'reference', 'note', 'search_text'])
+    production_receipt_ids = _ids(ProductionReceipt.objects.filter(
+        Q(id__in=_ids(_tmp_queryset(ProductionReceipt, production_receipt_fields, prefix=prefix)))
+        | Q(production_order_id__in=production_order_ids)
+    ).distinct())
+
+    sales_shipment_fields = _model_text_fields(
+        SalesOutboundShipment,
+        ['code', 'reference', 'carrier', 'tracking_number', 'shipping_address', 'delivery_notes', 'notes'],
+    )
+    sales_shipment_ids = _ids(SalesOutboundShipment.objects.filter(
+        Q(id__in=_ids(_tmp_queryset(SalesOutboundShipment, sales_shipment_fields, prefix=prefix)))
+        | Q(sales_order_id__in=sales_order_ids)
+        | Q(customer_id__in=customer_ids)
+        | Q(carrier_master_id__in=delivery_carrier_ids)
+    ).distinct())
+
+    inventory_shipment_fields = _model_text_fields(
+        InventoryOutboundShipment,
+        [
+            'code',
+            'reference',
+            'carrier_name',
+            'tracking_number',
+            'loading_reference',
+            'delivery_reference',
+            'note',
+        ],
+    )
+    inventory_shipment_ids = _ids(InventoryOutboundShipment.objects.filter(
+        Q(id__in=_ids(_tmp_queryset(InventoryOutboundShipment, inventory_shipment_fields, prefix=prefix)))
+        | Q(sales_order_id__in=sales_order_ids)
+        | Q(carrier_id__in=delivery_carrier_ids)
+    ).distinct())
+
+    reservation_fields = _model_text_fields(InventoryReservation, ['code', 'reference', 'note'])
+    reservation_ids = _ids(InventoryReservation.objects.filter(
+        Q(id__in=_ids(_tmp_queryset(InventoryReservation, reservation_fields, prefix=prefix)))
+        | Q(sales_order_id__in=sales_order_ids)
+        | Q(sales_order_line_id__in=sales_order_line_ids)
+        | Q(product_id__in=product_ids)
+    ).distinct())
+
+    inventory_transaction_fields = _model_text_fields(InventoryTransaction, ['code', 'reference', 'reason', 'note'])
+    inventory_transaction_ids = _ids(InventoryTransaction.objects.filter(
+        Q(id__in=_ids(_tmp_queryset(InventoryTransaction, inventory_transaction_fields, prefix=prefix)))
+        | Q(product_id__in=product_ids)
+        | Q(sales_order_id__in=sales_order_ids)
+        | Q(sales_order_line_id__in=sales_order_line_ids)
+        | Q(production_order_id__in=production_order_ids)
+        | Q(production_issue_id__in=production_issue_ids)
+        | Q(production_receipt_id__in=production_receipt_ids)
+        | Q(reservation_id__in=reservation_ids)
+        | Q(shipment_batch_id__in=inventory_shipment_ids)
+    ).distinct())
+
+    package_fields = _model_text_fields(
+        OutboundShipmentPackage,
+        ['package_code', 'label_qr_value', 'package_type', 'note'],
+    )
+    inventory_package_ids = _ids(OutboundShipmentPackage.objects.filter(
+        Q(id__in=_ids(_tmp_queryset(OutboundShipmentPackage, package_fields, prefix=prefix)))
+        | Q(shipment_id__in=inventory_shipment_ids)
+        | Q(inventory_transaction_id__in=inventory_transaction_ids)
+        | Q(sales_order_line_id__in=sales_order_line_ids)
+    ).distinct())
+
+    bundle_ids = _ids(ProductBundle.objects.filter(
+        Q(sellable_product_id__in=product_ids) | Q(primary_product_id__in=product_ids)
+    ).distinct())
+    product_material_template_ids = _ids(ProductMaterialTemplate.objects.filter(finished_product_id__in=product_ids))
+    product_material_group_ids = _ids(ProductMaterialGroup.objects.filter(template_id__in=product_material_template_ids))
+
+    entity_ids_by_type = {
+        'Customer': customer_ids,
+        'Product': product_ids,
+        'SalesOrder': sales_order_ids,
+        'SalesOrderLine': sales_order_line_ids,
+        'ProductionDemand': production_demand_ids,
+        'ProductionOrder': production_order_ids,
+        'ProductionOperation': _ids(ProductionOperation.objects.filter(production_order_id__in=production_order_ids)),
+        'ProductionIssue': production_issue_ids,
+        'ProductionReceipt': production_receipt_ids,
+        'InventoryTransaction': inventory_transaction_ids,
+        'InventoryReservation': reservation_ids,
+        'OutboundShipment': list(set(sales_shipment_ids + inventory_shipment_ids)),
+        'DeliveryCarrier': delivery_carrier_ids,
+    }
+    generic_entity_q = _generic_entity_q(entity_ids_by_type)
+    notification_entity_q = _notification_entity_q(entity_ids_by_type)
+
+    task_queryset = Task.objects.filter(generic_entity_q) if generic_entity_q else Task.objects.none()
+    task_ids = _ids(task_queryset)
+
+    return [
+        ('attachments', Attachment.objects.filter(generic_entity_q) if generic_entity_q else Attachment.objects.none()),
+        ('comments', Comment.objects.filter(generic_entity_q) if generic_entity_q else Comment.objects.none()),
+        (
+            'notifications',
+            Notification.objects.filter(notification_entity_q) if notification_entity_q else Notification.objects.none(),
+        ),
+        (
+            'approval_history',
+            ApprovalHistory.objects.filter(generic_entity_q) if generic_entity_q else ApprovalHistory.objects.none(),
+        ),
+        (
+            'workflow_pipeline_events',
+            WorkflowPipelineEvent.objects.filter(generic_entity_q) if generic_entity_q else WorkflowPipelineEvent.objects.none(),
+        ),
+        ('task_watchers', TaskWatcher.objects.filter(task_id__in=task_ids)),
+        ('tasks', task_queryset),
+        ('audit_logs', AuditLog.objects.filter(generic_entity_q) if generic_entity_q else AuditLog.objects.none()),
+        ('inventory_shipment_packages', OutboundShipmentPackage.objects.filter(id__in=inventory_package_ids)),
+        ('inventory_transactions', InventoryTransaction.objects.filter(id__in=inventory_transaction_ids)),
+        ('inventory_reservations', InventoryReservation.objects.filter(id__in=reservation_ids)),
+        ('inventory_shipments', InventoryOutboundShipment.objects.filter(id__in=inventory_shipment_ids)),
+        ('sales_shipment_lines', ShipmentLine.objects.filter(shipment_id__in=sales_shipment_ids)),
+        ('sales_shipments', SalesOutboundShipment.objects.filter(id__in=sales_shipment_ids)),
+        ('production_issue_lines', ProductionIssueLine.objects.filter(issue_id__in=production_issue_ids)),
+        ('production_receipt_lines', ProductionReceiptLine.objects.filter(receipt_id__in=production_receipt_ids)),
+        ('production_issues', ProductionIssue.objects.filter(id__in=production_issue_ids)),
+        ('production_receipts', ProductionReceipt.objects.filter(id__in=production_receipt_ids)),
+        ('production_material_requirements', ProductionMaterialRequirement.objects.filter(production_order_id__in=production_order_ids)),
+        ('production_operations', ProductionOperation.objects.filter(production_order_id__in=production_order_ids)),
+        ('production_orders', ProductionOrder.objects.filter(id__in=production_order_ids)),
+        ('production_demands', ProductionDemand.objects.filter(id__in=production_demand_ids)),
+        ('sales_line_material_plan_items', SalesLineMaterialPlanItem.objects.filter(
+            Q(plan__sales_order_id__in=sales_order_ids) | Q(material_product_id__in=product_ids)
+        )),
+        ('sales_line_material_plans', SalesLineMaterialPlan.objects.filter(
+            Q(sales_order_id__in=sales_order_ids)
+            | Q(sales_order_line_id__in=sales_order_line_ids)
+            | Q(finished_product_id__in=product_ids)
+        )),
+        ('sales_order_delivery_plans', SalesOrderDeliveryPlan.objects.filter(line__sales_order_id__in=sales_order_ids)),
+        ('sales_order_posting_logs', SalesOrderPostingLog.objects.filter(sales_order_id__in=sales_order_ids)),
+        ('sales_order_lines', SalesOrderLine.objects.filter(id__in=sales_order_line_ids)),
+        ('sales_orders', SalesOrder.objects.filter(id__in=sales_order_ids)),
+        ('product_material_options', ProductMaterialOption.objects.filter(
+            Q(group_id__in=product_material_group_ids) | Q(material_product_id__in=product_ids)
+        )),
+        ('product_material_groups', ProductMaterialGroup.objects.filter(id__in=product_material_group_ids)),
+        ('product_material_templates', ProductMaterialTemplate.objects.filter(id__in=product_material_template_ids)),
+        ('bundle_price_changes', BundlePriceChange.objects.filter(bundle_id__in=bundle_ids)),
+        ('product_bundle_components', ProductBundleComponent.objects.filter(
+            Q(bundle_id__in=bundle_ids) | Q(component_product_id__in=product_ids)
+        )),
+        ('product_bundles', ProductBundle.objects.filter(id__in=bundle_ids)),
+        ('product_price_changes', PriceChange.objects.filter(product_id__in=product_ids)),
+        ('product_routing_steps', ProductRoutingStep.objects.filter(product_id__in=product_ids)),
+        ('product_operations', ProductOperation.objects.filter(product_id__in=product_ids)),
+        ('products', Product.objects.filter(id__in=product_ids).exclude(code__startswith=QA_PREFIX)),
+        ('customers', Customer.objects.filter(id__in=customer_ids).exclude(code__startswith=QA_PREFIX)),
+        ('delivery_carriers', DeliveryCarrier.objects.filter(id__in=delivery_carrier_ids).exclude(code__startswith=QA_PREFIX)),
+    ]
+
+
+def reset_dev_tmp_data(confirm=False, dry_run=False, prefix=TMP_DEFAULT_PREFIX):
+    should_delete = bool(confirm)
+    effective_dry_run = bool(dry_run) or not should_delete
+    if should_delete and not _database_is_safe_for_reset():
+        raise DevSeedSafetyError('Refusing to reset TMP data because the database does not look local/dev/test/clean.')
+
+    summary = {
+        'dry_run': effective_dry_run,
+        'confirmed': should_delete,
+        'prefix': str(prefix or TMP_DEFAULT_PREFIX),
+    }
+    querysets = _tmp_cleanup_querysets(prefix=summary['prefix'])
+
+    if effective_dry_run:
+        for label, queryset in querysets:
+            _delete_or_count_safe(queryset, label, summary, dry_run=True)
+        return summary
+
+    with transaction.atomic():
+        for label, queryset in querysets:
+            _delete_or_count_safe(queryset, label, summary, dry_run=False)
     return summary
