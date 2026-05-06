@@ -93,7 +93,7 @@ test('admin can create, preview, and apply an onboarding preset for a disposable
   await expect(page.getByText(/Đã áp dụng preset onboarding cho người dùng\./)).toBeVisible();
 
   const activityCard = page.locator('.ant-card').filter({ hasText: 'Nhật ký hoạt động' }).first();
-  await expect(activityCard.getByText(presetName, { exact: false })).toBeVisible();
+  await expect(activityCard.locator('strong').filter({ hasText: `Apply preset ${presetName}` })).toBeVisible();
 });
 
 test('admin can preview and apply lifecycle offboarding for a disposable user', async ({ page }) => {
