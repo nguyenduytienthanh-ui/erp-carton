@@ -26,10 +26,12 @@ from production.models import (
 )
 from production.demand_services import sync_production_demands_for_sales_order
 from production.services import (
+    advance_ready_operations,
     create_production_order_from_demand,
     rebuild_production_operations,
     recompute_production_demand_counters,
     sync_order_status_and_demand_counters,
+    validate_operation_status_transition,
     validate_production_order_can_release,
 )
 from sales.models import SalesOrder, SalesOrderDeliveryPlan, SalesOrderLine, SalesOrderStatus
@@ -607,6 +609,42 @@ class ProductionDemandOrderServiceTests(APITestCase):
         operations = list(order.operations.order_by('sequence'))
         self.assertEqual([item.step_code for item in operations], ['IN', 'BE'])
         self.assertEqual([item.source_field for item in operations], ['process_in', 'process_be'])
+
+    def test_legacy_dependency_fallback_runs_by_sequence(self):
+        self._set_line_snapshot({
+            'schema_version': 1,
+            'product_id': self.product.id,
+            'product_code': 'LEGACY-PD-SVC-FG',
+            'product_name': 'Legacy service product',
+            'code': 'LEGACY-PD-SVC-FG',
+            'name': 'Legacy service product',
+            'product_kind': 'SPECIFIC',
+            'cost_price': '25000',
+            'process_in': 20000,
+            'process_be': 8500,
+        })
+        demand = self._create_demand(suffix='LEGACY-DEPENDENCY')
+        order = create_production_order_from_demand(demand, '3', user=self.user)
+
+        advance_ready_operations(order)
+        operations = list(order.operations.order_by('sequence'))
+
+        self.assertEqual([item.status for item in operations], [
+            ProductionOperationStatus.READY,
+            ProductionOperationStatus.PENDING,
+        ])
+        with self.assertRaises(ValueError):
+            validate_operation_status_transition(
+                operations[1],
+                ProductionOperationStatus.READY,
+                operations=operations,
+            )
+
+        operations[0].status = ProductionOperationStatus.DONE
+        operations[0].save(update_fields=['status', 'updated_at'])
+        advance_ready_operations(order)
+        operations = list(order.operations.order_by('sequence'))
+        self.assertEqual(operations[1].status, ProductionOperationStatus.READY)
 
     def test_rebuild_operations_blocks_when_operation_already_started(self):
         demand = self._create_demand(suffix='REBUILD-BLOCK')
@@ -1264,6 +1302,28 @@ class ProductionDemandApiTests(APITestCase):
         self.line.product_snapshot = snapshot
         self.line.save(update_fields=['product_snapshot'])
 
+    def _create_released_order_from_demand(self, suffix, *, snapshot=None, qty='4'):
+        self._set_line_snapshot(snapshot or self._routing_steps_snapshot())
+        demand = self._create_demand(suffix)
+        create_response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {
+                'qty': qty,
+                'planned_start_date': str(self.today + timedelta(days=2)),
+                'planned_end_date': str(self.today + timedelta(days=5)),
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        order_id = create_response.data['production_order_id']
+        self.assertEqual(self.client.post(f'/api/production/orders/{order_id}/submit/', format='json').status_code, 200)
+        self.assertEqual(self.client.post(f'/api/production/orders/{order_id}/approve/', format='json').status_code, 200)
+        release_response = self.client.post(f'/api/production/orders/{order_id}/release/', format='json')
+        self.assertEqual(release_response.status_code, 200, release_response.data)
+        order = ProductionOrder.objects.get(pk=order_id)
+        operations = list(order.operations.order_by('sequence'))
+        return demand, order, operations, release_response
+
     def _results(self, response):
         if isinstance(response.data, dict) and 'results' in response.data:
             return response.data['results']
@@ -1561,8 +1621,173 @@ class ProductionDemandApiTests(APITestCase):
         self.assertEqual(release_response.data['production_demand']['production_status'], ProductionDemandProductionStatus.PARTIALLY_RELEASED)
         self.assertEqual(
             list(ProductionOperation.objects.filter(production_order_id=order_id).order_by('sequence').values_list('status', flat=True)),
-            [ProductionOperationStatus.READY] * 5,
+            [
+                ProductionOperationStatus.READY,
+                ProductionOperationStatus.PENDING,
+                ProductionOperationStatus.PENDING,
+                ProductionOperationStatus.PENDING,
+                ProductionOperationStatus.PENDING,
+            ],
         )
+
+    def test_release_order_action_only_readies_first_dependency_group(self):
+        _demand, _order, operations, _release_response = self._create_released_order_from_demand('DEP-FIRST')
+
+        self.assertEqual(
+            [operation.status for operation in operations],
+            [
+                ProductionOperationStatus.READY,
+                ProductionOperationStatus.PENDING,
+                ProductionOperationStatus.PENDING,
+                ProductionOperationStatus.PENDING,
+                ProductionOperationStatus.PENDING,
+            ],
+        )
+
+    def test_release_readies_operations_in_same_first_display_step(self):
+        snapshot = self._routing_steps_snapshot()
+        routing_steps = list(snapshot['routing_steps'])
+        routing_steps[1] = {**routing_steps[1], 'step_no': 10, 'display_step': 1, 'display_order': 20}
+        snapshot['routing_steps'] = routing_steps
+
+        _demand, _order, operations, _release_response = self._create_released_order_from_demand(
+            'DEP-PARALLEL-FIRST',
+            snapshot=snapshot,
+        )
+
+        self.assertEqual(
+            [operation.status for operation in operations],
+            [
+                ProductionOperationStatus.READY,
+                ProductionOperationStatus.READY,
+                ProductionOperationStatus.PENDING,
+                ProductionOperationStatus.PENDING,
+                ProductionOperationStatus.PENDING,
+            ],
+        )
+
+    def test_done_and_skipped_operations_advance_next_dependency_group(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('DEP-ADVANCE')
+
+        done_response = self.client.post(
+            f'/api/production/orders/{order.id}/update_operation/',
+            {
+                'operation_id': operations[0].id,
+                'status': ProductionOperationStatus.DONE,
+                'completed_qty': '4',
+            },
+            format='json',
+        )
+        self.assertEqual(done_response.status_code, 200, done_response.data)
+        operations = list(ProductionOperation.objects.filter(production_order=order).order_by('sequence'))
+        self.assertEqual(operations[1].status, ProductionOperationStatus.READY)
+        self.assertEqual(operations[2].status, ProductionOperationStatus.PENDING)
+
+        skipped_response = self.client.post(
+            f'/api/production/orders/{order.id}/update_operation/',
+            {
+                'operation_id': operations[1].id,
+                'status': ProductionOperationStatus.SKIPPED,
+                'note': 'Skip for dependency QA',
+            },
+            format='json',
+        )
+        self.assertEqual(skipped_response.status_code, 200, skipped_response.data)
+        operations = list(ProductionOperation.objects.filter(production_order=order).order_by('sequence'))
+        self.assertEqual(operations[2].status, ProductionOperationStatus.READY)
+        self.assertEqual(operations[3].status, ProductionOperationStatus.PENDING)
+
+        second_xa_response = self.client.post(
+            f'/api/production/orders/{order.id}/update_operation/',
+            {
+                'operation_id': operations[2].id,
+                'status': ProductionOperationStatus.DONE,
+                'completed_qty': '4',
+            },
+            format='json',
+        )
+        self.assertEqual(second_xa_response.status_code, 200, second_xa_response.data)
+        operations = list(ProductionOperation.objects.filter(production_order=order).order_by('sequence'))
+        self.assertEqual(operations[3].status, ProductionOperationStatus.READY)
+        self.assertEqual(operations[4].status, ProductionOperationStatus.READY)
+
+    def test_update_operation_blocks_start_or_done_when_dependency_is_waiting(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('DEP-BLOCK')
+
+        start_response = self.client.post(
+            f'/api/production/orders/{order.id}/update_operation/',
+            {
+                'operation_id': operations[1].id,
+                'status': ProductionOperationStatus.IN_PROGRESS,
+            },
+            format='json',
+        )
+        done_response = self.client.post(
+            f'/api/production/orders/{order.id}/update_operation/',
+            {
+                'operation_id': operations[1].id,
+                'status': ProductionOperationStatus.DONE,
+                'completed_qty': '4',
+            },
+            format='json',
+        )
+
+        self.assertEqual(start_response.status_code, 400, start_response.data)
+        self.assertEqual(done_response.status_code, 400, done_response.data)
+        operations[1].refresh_from_db()
+        self.assertEqual(operations[1].status, ProductionOperationStatus.PENDING)
+
+    def test_update_operation_allows_start_when_operation_is_ready(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('DEP-READY')
+
+        response = self.client.post(
+            f'/api/production/orders/{order.id}/update_operation/',
+            {
+                'operation_id': operations[0].id,
+                'status': ProductionOperationStatus.IN_PROGRESS,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        operations[0].refresh_from_db()
+        self.assertEqual(operations[0].status, ProductionOperationStatus.IN_PROGRESS)
+
+    def test_bulk_and_shop_floor_paths_cannot_ready_blocked_operation(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('DEP-BYPASS')
+        blocked_operation = operations[1]
+
+        bulk_response = self.client.post(
+            '/api/production/orders/bulk_update_operations/',
+            {
+                'items': [{'order_id': order.id, 'operation_id': blocked_operation.id}],
+                'changes': {'status': ProductionOperationStatus.READY},
+            },
+            format='json',
+        )
+        signal_response = self.client.post(
+            '/api/production/orders/shop_floor_signal/',
+            {
+                'items': [{'order_id': order.id, 'operation_id': blocked_operation.id}],
+                'signal_code': 'READY',
+            },
+            format='json',
+        )
+        handover_response = self.client.post(
+            '/api/production/orders/shop_floor_handover/',
+            {
+                'items': [{'order_id': order.id, 'operation_id': blocked_operation.id}],
+                'handover_status': 'READY',
+                'set_ready': True,
+            },
+            format='json',
+        )
+
+        self.assertEqual(bulk_response.status_code, 400, bulk_response.data)
+        self.assertEqual(signal_response.status_code, 400, signal_response.data)
+        self.assertEqual(handover_response.status_code, 400, handover_response.data)
+        blocked_operation.refresh_from_db()
+        self.assertEqual(blocked_operation.status, ProductionOperationStatus.PENDING)
 
     def test_release_order_action_blocks_over_remaining_release(self):
         self._set_line_snapshot(self._routing_steps_snapshot())
@@ -2280,7 +2505,6 @@ class ProductionWorkflowTests(APITestCase):
             f'/api/production/orders/{order_id}/update_operation/',
             {
                 'operation_id': operations[1].id,
-                'status': 'READY',
                 'planned_date': today.isoformat(),
                 'planned_shift': 'MORNING',
                 'work_center_code': 'IN',
@@ -2298,7 +2522,6 @@ class ProductionWorkflowTests(APITestCase):
             f'/api/production/orders/{order_id}/update_operation/',
             {
                 'operation_id': operations[2].id,
-                'status': 'READY',
                 'planned_date': (today + timedelta(days=1)).isoformat(),
                 'planned_shift': 'AFTERNOON',
                 'work_center_code': 'BE',
@@ -2681,7 +2904,6 @@ class ProductionWorkflowTests(APITestCase):
             f'/api/production/orders/{order_id}/update_operation/',
             {
                 'operation_id': operations[1].id,
-                'status': 'READY',
                 'planned_date': today,
                 'planned_shift': 'MORNING',
                 'dispatch_sequence': 20,
@@ -2700,7 +2922,6 @@ class ProductionWorkflowTests(APITestCase):
             f'/api/production/orders/{order_id}/update_operation/',
             {
                 'operation_id': operations[2].id,
-                'status': 'READY',
                 'planned_date': today,
                 'planned_shift': 'AFTERNOON',
                 'dispatch_sequence': 30,

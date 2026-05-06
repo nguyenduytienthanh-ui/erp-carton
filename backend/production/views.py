@@ -62,6 +62,7 @@ from production.serializers import (
 from production.services import (
     add_issued_qty,
     add_produced_qty,
+    advance_ready_operations,
     build_material_product_snapshot,
     build_operation_planning_snapshot,
     build_production_order_trace_code,
@@ -76,6 +77,7 @@ from production.services import (
     subtract_produced_qty,
     sync_order_status_and_demand_counters,
     update_operation_status,
+    validate_operation_status_transition,
     validate_production_order_can_release,
 )
 
@@ -3946,7 +3948,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 order.released_by = request.user
                 order.released_at = now
                 order.save(update_fields=['status', 'released_by', 'released_at', 'updated_at'])
-                order.operations.filter(status=ProductionOperationStatus.PENDING).update(status=ProductionOperationStatus.READY, updated_at=now)
+                advance_ready_operations(order)
                 demand = recompute_linked_production_demand(order, user=request.user)
         except ValueError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -4094,6 +4096,12 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             block_reason_code_value = ''
             block_reason_note_value = ''
 
+        try:
+            operation_rows = list(order.operations.all().order_by('sequence'))
+            validate_operation_status_transition(operation, next_status, operations=operation_rows)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         update_operation_status(
             operation,
             status=next_status,
@@ -4141,6 +4149,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         if planning_update_fields:
             planning_update_fields.append('updated_at')
             operation.save(update_fields=planning_update_fields)
+        if next_status in {ProductionOperationStatus.DONE, ProductionOperationStatus.SKIPPED}:
+            advance_ready_operations(order)
         sync_order_status_and_demand_counters(order, actor=request.user)
         if hasattr(order, '_prefetched_objects_cache'):
             order._prefetched_objects_cache = {}
@@ -4221,6 +4231,10 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 if not operation:
                     raise ValidationError({'error': f'Khong tim thay cong doan {item["operation_id"]} trong lenh {order.code}.'})
                 values = _resolve_operation_update_inputs(item['changes'], operation=operation)
+                try:
+                    validate_operation_status_transition(operation, values['status'], operations=operations)
+                except ValueError as exc:
+                    raise ValidationError({'error': str(exc)}) from exc
                 item['resolved_values'] = values
                 _apply_operation_preview_values(preview_by_id[operation.id], values=values)
 
@@ -4345,6 +4359,11 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             if not operation:
                 raise ValidationError({'error': f'Khong tim thay cong doan {item["operation_id"]} trong lenh {order.code}.'})
             values = _resolve_operation_update_inputs(item['changes'], operation=operation)
+            try:
+                operation_rows = list(order.operations.all().order_by('sequence'))
+                validate_operation_status_transition(operation, values['status'], operations=operation_rows)
+            except ValueError as exc:
+                raise ValidationError({'error': str(exc)}) from exc
             targets.append({
                 'order': order,
                 'operation': operation,
@@ -4434,6 +4453,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             response_rows = []
             for order_id, rows in updated_by_order.items():
                 order = orders[order_id]
+                advance_ready_operations(order)
                 sync_order_status_and_demand_counters(order, actor=request.user)
                 if hasattr(order, '_prefetched_objects_cache'):
                     order._prefetched_objects_cache = {}
@@ -4529,6 +4549,10 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         today = timezone.localdate()
         requirements = list(order.material_requirements.all())
         operations = list(order.operations.all().order_by('sequence'))
+        try:
+            validate_operation_status_transition(operation, values['status'], operations=operations)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         current_snapshot = build_operation_planning_snapshot(
             operation,
@@ -4781,6 +4805,11 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 }
 
                 if status_override:
+                    try:
+                        operation_rows = list(order.operations.all().order_by('sequence'))
+                        validate_operation_status_transition(operation, status_override, operations=operation_rows)
+                    except ValueError as exc:
+                        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
                     update_operation_status(
                         operation,
                         status=status_override,
@@ -4788,6 +4817,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                         scrap_qty=None,
                         note=operation.note or '',
                     )
+                    if status_override in {ProductionOperationStatus.DONE, ProductionOperationStatus.SKIPPED}:
+                        advance_ready_operations(order)
                 update_fields = []
                 if operation.block_reason_code != resolved_signal_code:
                     operation.block_reason_code = resolved_signal_code
@@ -4909,6 +4940,11 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 }
 
                 if set_ready and operation.status == ProductionOperationStatus.PENDING:
+                    try:
+                        operation_rows = list(order.operations.all().order_by('sequence'))
+                        validate_operation_status_transition(operation, ProductionOperationStatus.READY, operations=operation_rows)
+                    except ValueError as exc:
+                        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
                     update_operation_status(
                         operation,
                         status=ProductionOperationStatus.READY,

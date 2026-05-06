@@ -632,6 +632,129 @@ def update_operation_status(operation, *, status=None, completed_qty=None, scrap
     return operation
 
 
+def get_operation_dependency_group(operation):
+    for field_name in ('display_step', 'route_step_no', 'sequence'):
+        value = getattr(operation, field_name, None)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _operation_dependency_sort_key(operation):
+    display_order = getattr(operation, 'display_order', None)
+    try:
+        display_order_value = int(display_order) if display_order is not None else int(getattr(operation, 'sequence', 0) or 0)
+    except (TypeError, ValueError):
+        display_order_value = int(getattr(operation, 'sequence', 0) or 0)
+    return (
+        get_operation_dependency_group(operation),
+        display_order_value,
+        int(getattr(operation, 'sequence', 0) or 0),
+        int(getattr(operation, 'id', 0) or 0),
+    )
+
+
+def _ordered_dependency_operations(operations):
+    return sorted(list(operations), key=_operation_dependency_sort_key)
+
+
+def _operation_dependency_groups(operations):
+    groups = []
+    for operation in _ordered_dependency_operations(operations):
+        group_key = get_operation_dependency_group(operation)
+        if not groups or groups[-1][0] != group_key:
+            groups.append((group_key, []))
+        groups[-1][1].append(operation)
+    return groups
+
+
+def _operation_identity_matches(left, right):
+    left_id = getattr(left, 'id', None)
+    right_id = getattr(right, 'id', None)
+    if left_id is not None and right_id is not None:
+        return int(left_id) == int(right_id)
+    return int(getattr(left, 'sequence', 0) or 0) == int(getattr(right, 'sequence', 0) or 0)
+
+
+def _is_operation_dependency_complete(operation):
+    return getattr(operation, 'status', None) in {
+        ProductionOperationStatus.DONE,
+        ProductionOperationStatus.SKIPPED,
+    }
+
+
+def _find_operation_dependency_group(operation, groups):
+    for index, (_group_key, group_operations) in enumerate(groups):
+        for candidate in group_operations:
+            if _operation_identity_matches(candidate, operation):
+                return index, group_operations
+    return None, []
+
+
+def can_start_production_operation(operation, *, operations=None):
+    operation_rows = list(
+        operations
+        if operations is not None
+        else ProductionOperation.objects.filter(production_order=operation.production_order).order_by('sequence')
+    )
+    dependency_state, previous_step, _next_step = get_operation_dependency_state(operation, operations=operation_rows)
+    if dependency_state in {'ROOT', 'CLEAR'}:
+        return True, ''
+    previous_label = getattr(previous_step, 'step_name', None) or getattr(previous_step, 'step_code', None) or 'cong doan truoc'
+    return False, f'Cong doan nay dang cho {previous_label} hoan thanh.'
+
+
+def validate_operation_status_transition(operation, next_status, *, operations=None):
+    if not next_status or next_status == getattr(operation, 'status', None):
+        return True
+    if next_status in {
+        ProductionOperationStatus.READY,
+        ProductionOperationStatus.IN_PROGRESS,
+        ProductionOperationStatus.DONE,
+        ProductionOperationStatus.SKIPPED,
+    }:
+        can_start, reason = can_start_production_operation(operation, operations=operations)
+        if not can_start:
+            raise ValueError(reason)
+    return True
+
+
+def advance_ready_operations(order, *, operations=None):
+    operation_rows = list(
+        operations
+        if operations is not None
+        else ProductionOperation.objects.filter(production_order=order).order_by('sequence')
+    )
+    groups = _operation_dependency_groups(operation_rows)
+    for _group_key, group_operations in groups:
+        if all(_is_operation_dependency_complete(operation) for operation in group_operations):
+            continue
+        pending_ids = [
+            operation.id
+            for operation in group_operations
+            if operation.id and operation.status == ProductionOperationStatus.PENDING
+        ]
+        if not pending_ids:
+            return 0
+        updated_count = ProductionOperation.objects.filter(
+            production_order=order,
+            id__in=pending_ids,
+            status=ProductionOperationStatus.PENDING,
+        ).update(
+            status=ProductionOperationStatus.READY,
+            updated_at=timezone.now(),
+        )
+        for operation in group_operations:
+            if operation.id in pending_ids:
+                operation.status = ProductionOperationStatus.READY
+        return updated_count
+    return 0
+
+
 def get_shift_label(value):
     shift_key = str(value or '').strip().upper()
     shift = _get_shift_catalog_map().get(shift_key)
@@ -689,22 +812,25 @@ def get_order_material_readiness(order, requirements=None):
 
 
 def get_operation_dependency_state(operation, operations=None):
-    operation_rows = list(operations if operations is not None else operation.production_order.operations.all())
-    previous = None
-    next_step = None
-    for index, candidate in enumerate(operation_rows):
-        if int(getattr(candidate, 'id', 0) or 0) != int(getattr(operation, 'id', 0) or 0):
-            continue
-        if index > 0:
-            previous = operation_rows[index - 1]
-        if index + 1 < len(operation_rows):
-            next_step = operation_rows[index + 1]
-        break
-    if previous is None:
+    operation_rows = list(
+        operations
+        if operations is not None
+        else ProductionOperation.objects.filter(production_order=operation.production_order).order_by('sequence')
+    )
+    groups = _operation_dependency_groups(operation_rows)
+    group_index, _group_operations = _find_operation_dependency_group(operation, groups)
+    if group_index is None:
+        return 'ROOT', None, None
+    next_step = groups[group_index + 1][1][0] if group_index + 1 < len(groups) else None
+    if group_index == 0:
         return 'ROOT', None, next_step
-    if previous.status in {ProductionOperationStatus.DONE, ProductionOperationStatus.SKIPPED}:
-        return 'CLEAR', previous, next_step
-    return 'WAIT_PREVIOUS_STEP', previous, next_step
+    previous_groups = groups[:group_index]
+    previous_step = previous_groups[-1][1][-1] if previous_groups else None
+    for _previous_key, previous_operations in previous_groups:
+        for previous_operation in previous_operations:
+            if not _is_operation_dependency_complete(previous_operation):
+                return 'WAIT_PREVIOUS_STEP', previous_operation, next_step
+    return 'CLEAR', previous_step, next_step
 
 
 def get_operation_risk_state(operation, *, material_readiness=None, dependency_state=None, today=None):
