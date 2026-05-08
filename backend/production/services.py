@@ -5,6 +5,7 @@ from functools import lru_cache
 from django.db import transaction
 from django.utils import timezone
 
+from core.models import AuditLog
 from production.models import (
     ProductionDemand,
     ProductionDemandPlanningStatus,
@@ -890,6 +891,111 @@ def build_operation_planning_snapshot(operation, *, order=None, requirements=Non
         'runtime_hours': get_operation_runtime_hours(operation),
         'setup_hours': get_operation_setup_hours(operation),
         'shift_capacity_hours': get_shift_capacity_hours(getattr(operation, 'planned_shift', '')),
+    }
+
+
+def validate_skip_production_operation(operation, user, reason):
+    reason_text = str(reason or '').strip()
+    if not reason_text:
+        raise ValueError('Bat buoc nhap ly do bo qua cong doan.')
+    max_length = ProductionOperation._meta.get_field('skip_reason').max_length
+    if len(reason_text) > max_length:
+        raise ValueError(f'Ly do bo qua cong doan khong duoc vuot qua {max_length} ky tu.')
+    if not getattr(operation, 'production_order_id', None):
+        raise ValueError('Cong doan khong thuoc lenh san xuat hop le.')
+    if operation.status not in {
+        ProductionOperationStatus.PENDING,
+        ProductionOperationStatus.READY,
+        ProductionOperationStatus.IN_PROGRESS,
+    }:
+        if operation.status == ProductionOperationStatus.DONE:
+            raise ValueError('Cong doan da hoan thanh, khong the bo qua.')
+        if operation.status == ProductionOperationStatus.SKIPPED:
+            raise ValueError('Cong doan da duoc bo qua truoc do.')
+        raise ValueError('Trang thai cong doan khong cho phep bo qua.')
+    return reason_text
+
+
+def skip_production_operation(operation, user, reason):
+    reason_text = validate_skip_production_operation(operation, user, reason)
+    order = operation.production_order
+    operation_rows = list(order.operations.all().order_by('sequence'))
+    dependency_state, previous_step, _next_step = get_operation_dependency_state(operation, operations=operation_rows)
+    previous_status = operation.status
+    previous_block_reason_code = operation.block_reason_code or ''
+    previous_block_reason_note = operation.block_reason_note or ''
+    now = timezone.now()
+
+    operation.status = ProductionOperationStatus.SKIPPED
+    if operation.finished_at is None:
+        operation.finished_at = now
+    operation.skipped_at = now
+    operation.skipped_by = user
+    operation.skip_reason = reason_text
+    operation.block_reason_code = ''
+    operation.block_reason_note = ''
+    operation.save(update_fields=[
+        'status',
+        'finished_at',
+        'skipped_at',
+        'skipped_by',
+        'skip_reason',
+        'block_reason_code',
+        'block_reason_note',
+        'updated_at',
+    ])
+
+    advance_ready_operations(order)
+    sync_order_status_and_demand_counters(order, actor=user)
+    demand = None
+    if getattr(order, 'production_demand_id', None):
+        demand = ProductionDemand.objects.filter(pk=order.production_demand_id).first()
+
+    AuditLog.objects.create(
+        user=user,
+        action='SKIP_OPERATION',
+        entity_type='ProductionOperation',
+        entity_id=int(operation.id),
+        entity_code=f'{order.code}-OP{operation.sequence}',
+        old_values={
+            'status': previous_status,
+            'block_reason_code': previous_block_reason_code,
+            'block_reason_note': previous_block_reason_note,
+        },
+        new_values={
+            'operation_id': int(operation.id),
+            'operation_code': operation.step_code or '',
+            'operation_name': operation.step_name or '',
+            'production_order_id': int(order.id),
+            'production_order_code': order.code or '',
+            'previous_status': previous_status,
+            'new_status': operation.status,
+            'reason': reason_text,
+            'dependency_state': dependency_state,
+            'route_step_no': operation.route_step_no,
+            'display_step': operation.display_step,
+            'group_code': operation.group_code or '',
+            'skipped_by': getattr(user, 'username', '') if user else '',
+            'skipped_at': now.isoformat(),
+            'previous_step_code': getattr(previous_step, 'step_code', None),
+            'previous_step_name': getattr(previous_step, 'step_name', None),
+        },
+        changed_fields=[
+            'status',
+            'finished_at',
+            'skipped_at',
+            'skipped_by',
+            'skip_reason',
+            'block_reason_code',
+            'block_reason_note',
+        ],
+    )
+    operation.refresh_from_db()
+    order.refresh_from_db()
+    return {
+        'operation': operation,
+        'order': order,
+        'production_demand': demand,
     }
 
 

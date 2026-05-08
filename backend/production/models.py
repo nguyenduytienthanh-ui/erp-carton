@@ -605,6 +605,15 @@ class ProductionOperation(models.Model):
     priority_rank = models.PositiveIntegerField(default=100)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    skipped_at = models.DateTimeField(null=True, blank=True)
+    skipped_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='skipped_production_operations',
+    )
+    skip_reason = models.CharField(max_length=500, blank=True, default='')
     dispatch_owner = models.CharField(max_length=120, blank=True, default='')
     handover_at = models.DateTimeField(null=True, blank=True)
     handover_note = models.CharField(max_length=255, blank=True, default='')

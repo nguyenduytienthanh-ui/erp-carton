@@ -1324,6 +1324,16 @@ class ProductionDemandApiTests(APITestCase):
         operations = list(order.operations.order_by('sequence'))
         return demand, order, operations, release_response
 
+    def _skip_operation(self, order, operation, reason='Bo qua cong doan theo QA'):
+        return self.client.post(
+            f'/api/production/orders/{order.id}/skip_operation/',
+            {
+                'operation_id': operation.id,
+                'reason': reason,
+            },
+            format='json',
+        )
+
     def _results(self, response):
         if isinstance(response.data, dict) and 'results' in response.data:
             return response.data['results']
@@ -1683,15 +1693,7 @@ class ProductionDemandApiTests(APITestCase):
         self.assertEqual(operations[1].status, ProductionOperationStatus.READY)
         self.assertEqual(operations[2].status, ProductionOperationStatus.PENDING)
 
-        skipped_response = self.client.post(
-            f'/api/production/orders/{order.id}/update_operation/',
-            {
-                'operation_id': operations[1].id,
-                'status': ProductionOperationStatus.SKIPPED,
-                'note': 'Skip for dependency QA',
-            },
-            format='json',
-        )
+        skipped_response = self._skip_operation(order, operations[1], reason='Skip for dependency QA')
         self.assertEqual(skipped_response.status_code, 200, skipped_response.data)
         operations = list(ProductionOperation.objects.filter(production_order=order).order_by('sequence'))
         self.assertEqual(operations[2].status, ProductionOperationStatus.READY)
@@ -1710,6 +1712,173 @@ class ProductionDemandApiTests(APITestCase):
         operations = list(ProductionOperation.objects.filter(production_order=order).order_by('sequence'))
         self.assertEqual(operations[3].status, ProductionOperationStatus.READY)
         self.assertEqual(operations[4].status, ProductionOperationStatus.READY)
+
+    def test_skip_ready_operation_requires_reason_fields_and_audit(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('SKIP-READY')
+        operation = operations[0]
+        operation.block_reason_code = 'WAIT_MATERIAL'
+        operation.block_reason_note = 'Cho vat tu nhung duoc bo qua'
+        operation.save(update_fields=['block_reason_code', 'block_reason_note', 'updated_at'])
+
+        response = self._skip_operation(order, operation, reason='Khong can in mau cho don hang nay')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['message'], 'Da bo qua cong doan.')
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, ProductionOperationStatus.SKIPPED)
+        self.assertIsNotNone(operation.finished_at)
+        self.assertIsNotNone(operation.skipped_at)
+        self.assertEqual(operation.skipped_by_id, self.user.id)
+        self.assertEqual(operation.skip_reason, 'Khong can in mau cho don hang nay')
+        self.assertEqual(operation.block_reason_code, '')
+        self.assertEqual(operation.block_reason_note, '')
+        self.assertEqual(response.data['operation']['skip_reason'], operation.skip_reason)
+        self.assertEqual(response.data['operation']['skipped_by'], self.user.id)
+        self.assertTrue(response.data['operation']['skipped_by_display'])
+        audit = AuditLog.objects.filter(entity_type='ProductionOperation', entity_id=operation.id).latest('id')
+        self.assertEqual(audit.action, 'SKIP_OPERATION')
+        self.assertEqual(audit.new_values['reason'], operation.skip_reason)
+        self.assertEqual(audit.new_values['previous_status'], ProductionOperationStatus.READY)
+        self.assertEqual(audit.new_values['new_status'], ProductionOperationStatus.SKIPPED)
+        self.assertEqual(audit.new_values['dependency_state'], 'ROOT')
+
+    def test_skip_in_progress_operation_with_reason_succeeds(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('SKIP-IN-PROGRESS')
+        start_response = self.client.post(
+            f'/api/production/orders/{order.id}/update_operation/',
+            {
+                'operation_id': operations[0].id,
+                'status': ProductionOperationStatus.IN_PROGRESS,
+            },
+            format='json',
+        )
+        self.assertEqual(start_response.status_code, 200, start_response.data)
+
+        response = self._skip_operation(order, operations[0], reason='Dung lai va bo qua theo quyet dinh san xuat')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        operations[0].refresh_from_db()
+        self.assertEqual(operations[0].status, ProductionOperationStatus.SKIPPED)
+        self.assertEqual(operations[0].skip_reason, 'Dung lai va bo qua theo quyet dinh san xuat')
+
+    def test_skip_pending_dependency_blocked_operation_with_reason_succeeds(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('SKIP-PENDING-BLOCKED')
+
+        response = self._skip_operation(order, operations[1], reason='Bo qua cong doan cat lan 1')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        operations = list(ProductionOperation.objects.filter(production_order=order).order_by('sequence'))
+        self.assertEqual(operations[0].status, ProductionOperationStatus.READY)
+        self.assertEqual(operations[1].status, ProductionOperationStatus.SKIPPED)
+        self.assertEqual(operations[2].status, ProductionOperationStatus.PENDING)
+        audit = AuditLog.objects.filter(entity_type='ProductionOperation', entity_id=operations[1].id).latest('id')
+        self.assertEqual(audit.new_values['dependency_state'], 'WAIT_PREVIOUS_STEP')
+        self.assertEqual(audit.new_values['previous_step_code'], operations[0].step_code)
+
+    def test_skip_operation_rejects_missing_or_blank_reason(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('SKIP-NO-REASON')
+
+        missing = self.client.post(
+            f'/api/production/orders/{order.id}/skip_operation/',
+            {'operation_id': operations[0].id},
+            format='json',
+        )
+        blank = self.client.post(
+            f'/api/production/orders/{order.id}/skip_operation/',
+            {'operation_id': operations[0].id, 'reason': '   '},
+            format='json',
+        )
+
+        self.assertEqual(missing.status_code, 400, missing.data)
+        self.assertEqual(blank.status_code, 400, blank.data)
+        operations[0].refresh_from_db()
+        self.assertEqual(operations[0].status, ProductionOperationStatus.READY)
+        self.assertEqual(operations[0].skip_reason, '')
+
+    def test_skip_done_and_skipped_operations_are_rejected(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('SKIP-DONE')
+        done_response = self.client.post(
+            f'/api/production/orders/{order.id}/update_operation/',
+            {
+                'operation_id': operations[0].id,
+                'status': ProductionOperationStatus.DONE,
+                'completed_qty': '4',
+            },
+            format='json',
+        )
+        self.assertEqual(done_response.status_code, 200, done_response.data)
+
+        done_skip = self._skip_operation(order, operations[0], reason='Khong duoc bo qua sau khi xong')
+        self.assertEqual(done_skip.status_code, 400, done_skip.data)
+
+        operations = list(ProductionOperation.objects.filter(production_order=order).order_by('sequence'))
+        first_skip = self._skip_operation(order, operations[1], reason='Bo qua lan dau')
+        second_skip = self._skip_operation(order, operations[1], reason='Bo qua lan hai')
+
+        self.assertEqual(first_skip.status_code, 200, first_skip.data)
+        self.assertEqual(second_skip.status_code, 400, second_skip.data)
+
+    def test_skip_operation_requires_manage_permission(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('SKIP-PERMISSION')
+        self.client.force_authenticate(user=self.basic_user)
+
+        response = self._skip_operation(order, operations[0], reason='User thuong khong duoc bo qua')
+
+        self.assertEqual(response.status_code, 403, response.data)
+        operations[0].refresh_from_db()
+        self.assertEqual(operations[0].status, ProductionOperationStatus.READY)
+        self.client.force_authenticate(user=self.user)
+
+    def test_update_operation_rejects_skipped_status_and_requires_skip_action(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('SKIP-UPDATE-BLOCK')
+
+        response = self.client.post(
+            f'/api/production/orders/{order.id}/update_operation/',
+            {
+                'operation_id': operations[0].id,
+                'status': ProductionOperationStatus.SKIPPED,
+                'note': 'Khong duoc skip qua update_operation',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('Bo qua cong doan', response.data['error'])
+        operations[0].refresh_from_db()
+        self.assertEqual(operations[0].status, ProductionOperationStatus.READY)
+
+    def test_bulk_preview_and_shop_floor_reject_skipped_status(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('SKIP-BULK-BLOCK')
+
+        preview = self.client.post(
+            '/api/production/orders/preview_bulk_update_operations/',
+            {
+                'items': [{'order_id': order.id, 'operation_id': operations[0].id}],
+                'changes': {'status': ProductionOperationStatus.SKIPPED},
+            },
+            format='json',
+        )
+        bulk = self.client.post(
+            '/api/production/orders/bulk_update_operations/',
+            {
+                'items': [{'order_id': order.id, 'operation_id': operations[0].id}],
+                'changes': {'status': ProductionOperationStatus.SKIPPED},
+            },
+            format='json',
+        )
+        signal = self.client.post(
+            '/api/production/orders/shop_floor_signal/',
+            {
+                'items': [{'order_id': order.id, 'operation_id': operations[0].id}],
+                'signal_code': 'READY',
+                'status': ProductionOperationStatus.SKIPPED,
+            },
+            format='json',
+        )
+
+        self.assertEqual(preview.status_code, 400, preview.data)
+        self.assertEqual(bulk.status_code, 400, bulk.data)
+        self.assertEqual(signal.status_code, 400, signal.data)
 
     def test_update_operation_blocks_start_or_done_when_dependency_is_waiting(self):
         _demand, order, operations, _release_response = self._create_released_order_from_demand('DEP-BLOCK')

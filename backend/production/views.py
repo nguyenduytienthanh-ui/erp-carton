@@ -73,6 +73,7 @@ from production.services import (
     get_next_production_receipt_code,
     recompute_linked_production_demand,
     recompute_production_demand_by_id,
+    skip_production_operation,
     subtract_issued_qty,
     subtract_produced_qty,
     sync_order_status_and_demand_counters,
@@ -291,6 +292,8 @@ PLANNING_CAPACITY_STATES = {
     'UNASSIGNED_MACHINE': {'label': 'Chua gan may', 'sort': 4},
     'UNASSIGNED_WORK_CENTER': {'label': 'Chua gan work center', 'sort': 5},
 }
+
+SKIP_OPERATION_REQUIRED_MESSAGE = 'Vui long dung chuc nang Bo qua cong doan va nhap ly do.'
 
 
 def _parse_optional_date(value, *, field_label):
@@ -2923,6 +2926,8 @@ def _resolve_operation_update_inputs(data, *, operation):
     next_status = data.get('status') or operation.status
     if next_status not in dict(ProductionOperationStatus.CHOICES):
         raise ValidationError({'error': 'Trang thai cong doan khong hop le.'})
+    if 'status' in data and next_status == ProductionOperationStatus.SKIPPED:
+        raise ValidationError({'error': SKIP_OPERATION_REQUIRED_MESSAGE})
 
     completed_qty = data.get('completed_qty')
     scrap_qty = data.get('scrap_qty')
@@ -4023,6 +4028,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         next_status = request.data.get('status') or operation.status
         if next_status not in dict(ProductionOperationStatus.CHOICES):
             return Response({'error': 'Trạng thái công đoạn không hợp lệ.'}, status=status.HTTP_400_BAD_REQUEST)
+        if 'status' in request.data and next_status == ProductionOperationStatus.SKIPPED:
+            return Response({'error': SKIP_OPERATION_REQUIRED_MESSAGE}, status=status.HTTP_400_BAD_REQUEST)
         completed_qty = request.data.get('completed_qty')
         scrap_qty = request.data.get('scrap_qty')
         try:
@@ -4192,6 +4199,49 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             'order_status': ProductionOrder.objects.get(pk=order.id).status,
             'operation': ProductionOperationSerializer(operation).data,
         })
+
+    @action(detail=True, methods=['post'])
+    def skip_operation(self, request, pk=None):
+        if not _can_manage_production(request.user):
+            return Response({'error': 'Khong co quyen bo qua cong doan san xuat.'}, status=status.HTTP_403_FORBIDDEN)
+        order = self.get_object()
+        if order.status not in {ProductionOrderStatus.RELEASED, ProductionOrderStatus.IN_PROGRESS}:
+            return Response({'error': 'Chi lenh da phat lenh hoac dang lam moi duoc bo qua cong doan.'}, status=status.HTTP_400_BAD_REQUEST)
+        operation_id = request.data.get('operation_id')
+        if not operation_id:
+            return Response({'error': 'Thieu operation_id.'}, status=status.HTTP_400_BAD_REQUEST)
+        reason = request.data.get('reason')
+
+        with transaction.atomic():
+            locked_order = ProductionOrder.objects.select_for_update().get(pk=order.pk)
+            operation = locked_order.operations.select_for_update().filter(pk=operation_id).first()
+            if not operation:
+                return Response({'error': 'Khong tim thay cong doan thuoc lenh nay.'}, status=status.HTTP_404_NOT_FOUND)
+            try:
+                result = skip_production_operation(operation, request.user, reason)
+            except ValueError as exc:
+                return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        skipped_operation = result['operation']
+        refreshed_order = result['order']
+        refreshed_operations = list(refreshed_order.operations.all().order_by('sequence'))
+        refreshed_requirements = list(refreshed_order.material_requirements.all())
+        snapshot = build_operation_planning_snapshot(
+            skipped_operation,
+            order=refreshed_order,
+            requirements=refreshed_requirements,
+            operations=refreshed_operations,
+            today=timezone.localdate(),
+        )
+        setattr(skipped_operation, '_planning_snapshot', snapshot)
+        response_data = {
+            'message': 'Da bo qua cong doan.',
+            'order_status': refreshed_order.status,
+            'operation': ProductionOperationSerializer(skipped_operation).data,
+        }
+        if result.get('production_demand') is not None:
+            response_data['production_demand'] = ProductionDemandSerializer(result['production_demand']).data
+        return Response(response_data)
 
     def _preview_change_items(self, change_items):
         order_ids = {item['order_id'] for item in change_items}
@@ -4759,6 +4809,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             return Response({'error': 'Ghi chu floor khong duoc vuot qua 255 ky tu.'}, status=status.HTTP_400_BAD_REQUEST)
         if status_override and status_override not in dict(ProductionOperationStatus.CHOICES):
             return Response({'error': 'Trang thai cong doan khong hop le.'}, status=status.HTTP_400_BAD_REQUEST)
+        if status_override == ProductionOperationStatus.SKIPPED:
+            return Response({'error': SKIP_OPERATION_REQUIRED_MESSAGE}, status=status.HTTP_400_BAD_REQUEST)
         if handover_status and handover_status not in dict(ProductionOperationHandoverStatus.CHOICES):
             return Response({'error': 'Trang thai handover khong hop le.'}, status=status.HTTP_400_BAD_REQUEST)
 

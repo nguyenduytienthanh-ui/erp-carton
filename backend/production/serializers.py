@@ -225,6 +225,7 @@ class ProductionOperationSerializer(serializers.ModelSerializer):
     planned_shift_label = serializers.SerializerMethodField()
     block_reason_label = serializers.SerializerMethodField()
     handover_status_label = serializers.SerializerMethodField()
+    skipped_by_display = serializers.SerializerMethodField()
     material_readiness = serializers.SerializerMethodField()
     dependency_state = serializers.SerializerMethodField()
     risk_state = serializers.SerializerMethodField()
@@ -278,6 +279,10 @@ class ProductionOperationSerializer(serializers.ModelSerializer):
             'status',
             'started_at',
             'finished_at',
+            'skipped_at',
+            'skipped_by',
+            'skipped_by_display',
+            'skip_reason',
             'note',
             'material_readiness',
             'dependency_state',
@@ -309,6 +314,13 @@ class ProductionOperationSerializer(serializers.ModelSerializer):
 
     def get_handover_status_label(self, obj):
         return getattr(obj, 'get_handover_status_display', lambda: '')() or ''
+
+    def get_skipped_by_display(self, obj):
+        user = getattr(obj, 'skipped_by', None)
+        if not user:
+            return ''
+        full_name = str(getattr(user, 'get_full_name', lambda: '')() or '').strip()
+        return full_name or getattr(user, 'username', '') or ''
 
     def get_material_readiness(self, obj):
         return self._get_planning_snapshot(obj).get('material_readiness', '')
