@@ -10,6 +10,8 @@ import type {
   ProductionDemandQueryParams,
   ProductionDemandSummary,
   ProductionOperation,
+  ProductionOperationSkipPayload,
+  ProductionOperationSkipResponse,
   ProductionOrderSummary,
   ProductionIssue,
   ProductionOrder,
@@ -135,6 +137,13 @@ export const productionApi = {
     operation: ProductionOperation;
   }> => {
     const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTION_ORDERS}${id}/update_operation/`, payload);
+    return response.data;
+  },
+  skipOperation: async (
+    id: number,
+    payload: ProductionOperationSkipPayload,
+  ): Promise<ProductionOperationSkipResponse> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PRODUCTION_ORDERS}${id}/skip_operation/`, payload);
     return response.data;
   },
   previewOperationUpdate: async (

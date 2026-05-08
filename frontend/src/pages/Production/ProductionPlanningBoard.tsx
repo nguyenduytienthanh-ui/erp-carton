@@ -54,6 +54,7 @@ import type {
   ProductionPlanningSummary,
   ProductionPlanningShiftFilter,
 } from '../../types/production';
+import { canManageProductionData } from '../../utils/authz';
 import { PAGES } from '../../utils/constants';
 import { downloadCSV } from '../../utils/csvExport';
 
@@ -135,6 +136,9 @@ type BulkFormValues = {
   block_reason_code?: string;
   block_reason_note?: string;
   note?: string;
+};
+type SkipFormValues = {
+  reason?: string;
 };
 
 const riskColor: Record<ProductionOperationRiskState, string> = {
@@ -427,6 +431,38 @@ const getOperationReadinessMeta = (card: ProductionPlanningCard): OperationReadi
     canAdvance: canAdvanceOperation(card),
   };
 };
+const getSkippedByDisplay = (operation: ProductionPlanningCard['operation']) => {
+  const display = String(operation.skipped_by_display || '').trim();
+  if (display) {
+    return display;
+  }
+  return operation.skipped_by ? `Người dùng #${operation.skipped_by}` : 'Không rõ';
+};
+const getSkipReasonDisplay = (operation: ProductionPlanningCard['operation']) => (
+  String(operation.skip_reason || '').trim() || 'Không rõ'
+);
+const getSkippedAtDisplay = (operation: ProductionPlanningCard['operation']) => (
+  operation.skipped_at ? formatDateTime(operation.skipped_at) : 'Chưa ghi nhận'
+);
+const renderOperationStatusTag = (operation: ProductionPlanningCard['operation']) => {
+  const tag = <Tag color={statusColor[operation.status]}>{operationStatusLabel[operation.status]}</Tag>;
+  if (operation.status !== 'SKIPPED') {
+    return tag;
+  }
+  return (
+    <Tooltip
+      title={(
+        <Space direction="vertical" size={0}>
+          <span>{`Lý do: ${getSkipReasonDisplay(operation)}`}</span>
+          <span>{`Người bỏ qua: ${getSkippedByDisplay(operation)}`}</span>
+          <span>{`Thời điểm: ${getSkippedAtDisplay(operation)}`}</span>
+        </Space>
+      )}
+    >
+      {tag}
+    </Tooltip>
+  );
+};
 const getPlanningActionErrorMessage = (error: unknown) => {
   const rawMessage = getToastMessage(error);
   const normalized = rawMessage.toLowerCase();
@@ -527,10 +563,12 @@ export default function ProductionPlanningBoard() {
   const [isPresetModalOpen, setIsPresetModalOpen] = useState(false);
   const [isScenarioModalOpen, setIsScenarioModalOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [isSkipModalOpen, setIsSkipModalOpen] = useState(false);
   const [presetName, setPresetName] = useState('');
   const [scenarioName, setScenarioName] = useState('');
   const [form] = Form.useForm();
   const [bulkForm] = Form.useForm<BulkFormValues>();
+  const [skipForm] = Form.useForm<SkipFormValues>();
   const watchedStatus = Form.useWatch('status', form);
   const watchedPlannedDate = Form.useWatch('planned_date', form);
   const watchedPlannedShift = Form.useWatch('planned_shift', form);
@@ -685,7 +723,14 @@ export default function ProductionPlanningBoard() {
   const savedScenarios = useMemo<SavedScenario[]>(() => Array.isArray(configRecord.saved_scenarios) ? (configRecord.saved_scenarios as SavedScenario[]) : [], [configRecord.saved_scenarios]);
   const selectedPreset = useMemo(() => namedPresets.find((item) => item.id === selectedPresetId) ?? null, [namedPresets, selectedPresetId]);
   const selectedSavedScenario = useMemo(() => savedScenarios.find((item) => item.id === selectedScenarioId) ?? null, [savedScenarios, selectedScenarioId]);
+  const canManageProduction = canManageProductionData();
   const canEditSelectedCard = Boolean(selectedCard && ['RELEASED', 'IN_PROGRESS'].includes(selectedCard.order.status));
+  const canSkipSelectedCard = Boolean(
+    canManageProduction
+      && canEditSelectedCard
+      && selectedCard
+      && ['PENDING', 'READY', 'IN_PROGRESS'].includes(selectedCard.operation.status),
+  );
   const activeSelectedCardKeys = useMemo(
     () => selectedCardKeys.filter((cardKey) => cards.some((card) => card.card_key === cardKey)),
     [cards, selectedCardKeys],
@@ -1215,11 +1260,13 @@ export default function ProductionPlanningBoard() {
     watchedWorkCenterName,
   ]);
 
+  const previewBlockedBySkip = Boolean(previewPayload?.status === 'SKIPPED');
   const previewBlockedByValidation = Boolean(
     previewPayload
       && (
         (previewPayload.block_reason_code === 'OTHER' && !String(previewPayload.block_reason_note || '').trim())
         || (String(previewPayload.machine_code || '').trim() && !String(previewPayload.work_center_code || '').trim())
+        || previewBlockedBySkip
         || (selectedCard && isStatusChangeBlockedByDependency(selectedCard, previewPayload.status))
       ),
   );
@@ -1315,6 +1362,39 @@ export default function ProductionPlanningBoard() {
       void queryClient.invalidateQueries({ queryKey: ['production-planning-board'] });
     },
   });
+  const skipMutation = useMutation({
+    mutationFn: (values: SkipFormValues) => {
+      if (!selectedCard) throw new Error('Thiếu công đoạn.');
+      const reason = String(values.reason || '').trim();
+      return productionApi.skipOperation(selectedCard.order.id, {
+        operation_id: selectedCard.operation.id,
+        reason,
+      });
+    },
+    onSuccess: async (result) => {
+      const operationLabel = result.operation?.step_name || result.operation?.step_code || selectedCard?.operation.step_name || 'công đoạn';
+      messageApi.success(`Đã bỏ qua công đoạn ${operationLabel}.`);
+      setIsSkipModalOpen(false);
+      skipForm.resetFields();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['production-planning-board'] }),
+        queryClient.invalidateQueries({ queryKey: ['production-planning-issues'] }),
+        queryClient.invalidateQueries({ queryKey: ['production-planning-receipts'] }),
+        queryClient.invalidateQueries({ queryKey: ['production-planning-timeline'] }),
+        queryClient.invalidateQueries({ queryKey: ['production-orders'] }),
+        queryClient.invalidateQueries({ queryKey: ['production-orders-summary'] }),
+        queryClient.invalidateQueries({ queryKey: ['production-order-detail'] }),
+        queryClient.invalidateQueries({ queryKey: ['production-demands'] }),
+        queryClient.invalidateQueries({ queryKey: ['production-demands-summary'] }),
+        queryClient.invalidateQueries({ queryKey: ['production-demand-detail'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard-production-summary'] }),
+      ]);
+    },
+    onError: (error) => {
+      messageApi.error(getPlanningActionErrorMessage(error));
+      void queryClient.invalidateQueries({ queryKey: ['production-planning-board'] });
+    },
+  });
   const buildBulkChanges = (values: BulkFormValues) => {
     const changes: Record<string, unknown> = {};
     if (values.status) {
@@ -1395,11 +1475,13 @@ export default function ProductionPlanningBoard() {
       changes,
     };
   }, [isBulkModalOpen, selectedCards, watchedBulkBlockReasonCode, watchedBulkBlockReasonNote, watchedBulkDispatchSequence, watchedBulkEstimatedRuntimeHours, watchedBulkMachineCode, watchedBulkMachineName, watchedBulkNote, watchedBulkPlannedDate, watchedBulkPlannedShift, watchedBulkPriorityRank, watchedBulkSetupMinutes, watchedBulkStatus, watchedBulkWorkCenterCode, watchedBulkWorkCenterName]);
+  const bulkPreviewBlockedBySkip = Boolean(bulkPreviewPayload?.changes.status === 'SKIPPED');
   const bulkPreviewBlockedByValidation = Boolean(
     bulkPreviewPayload
       && (
         (bulkPreviewPayload.changes.block_reason_code === 'OTHER' && !String(bulkPreviewPayload.changes.block_reason_note || '').trim())
         || (String(bulkPreviewPayload.changes.machine_code || '').trim() && !String(bulkPreviewPayload.changes.work_center_code || '').trim())
+        || bulkPreviewBlockedBySkip
         || getBlockedStatusChangeCount(selectedCards, bulkPreviewPayload.changes.status) > 0
       ),
   );
@@ -1625,12 +1707,32 @@ export default function ProductionPlanningBoard() {
     if (!selectedCard || !canEditSelectedCard) {
       return;
     }
+    if (String(patch.status || '').toUpperCase() === 'SKIPPED') {
+      messageApi.warning('Vui lòng dùng nút Bỏ qua và nhập lý do.');
+      return;
+    }
     if (isStatusChangeBlockedByDependency(selectedCard, patch.status)) {
       messageApi.warning(getOperationReadinessMeta(selectedCard).reason);
       return;
     }
     const currentValues = form.getFieldsValue();
     void updateMutation.mutateAsync({ ...currentValues, ...patch });
+  };
+  const handleOpenSkipModal = () => {
+    if (!selectedCard || !canSkipSelectedCard) {
+      return;
+    }
+    skipForm.resetFields();
+    setIsSkipModalOpen(true);
+  };
+  const handleSubmitSkip = async () => {
+    const values = await skipForm.validateFields();
+    const reason = String(values.reason || '').trim();
+    if (!reason) {
+      skipForm.setFields([{ name: 'reason', errors: ['Vui lòng nhập lý do bỏ qua công đoạn.'] }]);
+      return;
+    }
+    await skipMutation.mutateAsync({ reason });
   };
   const handleOpenBulkModal = () => {
     if (!selectedCards.length) {
@@ -1642,6 +1744,10 @@ export default function ProductionPlanningBoard() {
   };
   const handleSubmitBulk = async () => {
     const values = await bulkForm.validateFields();
+    if (String(values.status || '').toUpperCase() === 'SKIPPED') {
+      messageApi.warning('Không hỗ trợ bỏ qua hàng loạt. Vui lòng dùng nút Bỏ qua trong từng công đoạn và nhập lý do.');
+      return;
+    }
     await bulkUpdateMutation.mutateAsync(values);
   };
   const handleSendShopFloorSignal = async (signalCode: string, note: string, handoverStatus?: string) => {
@@ -1679,7 +1785,7 @@ export default function ProductionPlanningBoard() {
         <Tooltip title={readiness.reason}>
           <Tag color={readiness.color}>{readiness.label}</Tag>
         </Tooltip>
-        <Tag color={statusColor[card.operation.status]}>{operationStatusLabel[card.operation.status]}</Tag>
+        {renderOperationStatusTag(card.operation)}
         {stepLabel ? <Tag>{`Bước ${stepLabel}`}</Tag> : null}
         {card.operation.group_code ? <Tag>{`Nhóm ${card.operation.group_code}`}</Tag> : null}
         {card.operation.allow_parallel ? (
@@ -1766,7 +1872,7 @@ export default function ProductionPlanningBoard() {
         const readiness = getOperationReadinessMeta(card);
         return (
           <Space direction="vertical" size={6} style={{ width: '100%' }}>
-            <Tag color={statusColor[card.operation.status]}>{operationStatusLabel[card.operation.status]}</Tag>
+            {renderOperationStatusTag(card.operation)}
             <Tooltip title={readiness.reason}>
               <Tag color={readiness.color}>{readiness.label}</Tag>
             </Tooltip>
@@ -3208,7 +3314,7 @@ export default function ProductionPlanningBoard() {
                                 <Tooltip title={getOperationReadinessMeta(card).reason}>
                                   <Tag color={getOperationReadinessMeta(card).color}>{getOperationReadinessMeta(card).label}</Tag>
                                 </Tooltip>
-                                <Tag color={statusColor[card.operation.status]}>{operationStatusLabel[card.operation.status]}</Tag>
+                                {renderOperationStatusTag(card.operation)}
                                 <Tag color={readinessColor[card.materials.material_readiness]}>{card.materials.material_readiness_label}</Tag>
                                 <Tag color={getCapacityColor(card.capacity.capacity_state)}>{card.capacity.capacity_state_label}</Tag>
                                 {card.operation.display_step || card.operation.route_step_no ? <Tag>{`Bước ${card.operation.display_step ?? card.operation.route_step_no}`}</Tag> : null}
@@ -3393,7 +3499,7 @@ export default function ProductionPlanningBoard() {
                     { value: 'READY', label: 'Sẵn sàng', disabled: getBlockedStatusChangeCount(selectedCards, 'READY') > 0 },
                     { value: 'IN_PROGRESS', label: 'Đang làm', disabled: getBlockedStatusChangeCount(selectedCards, 'IN_PROGRESS') > 0 },
                     { value: 'DONE', label: 'Hoàn thành', disabled: getBlockedStatusChangeCount(selectedCards, 'DONE') > 0 },
-                    { value: 'SKIPPED', label: 'Bỏ qua', disabled: getBlockedStatusChangeCount(selectedCards, 'SKIPPED') > 0 },
+                    { value: 'SKIPPED', label: 'Bỏ qua (dùng nút Bỏ qua)', disabled: true },
                   ]}
                 />
               </Form.Item>
@@ -3488,8 +3594,8 @@ export default function ProductionPlanningBoard() {
             <Alert
               type="info"
               showIcon
-              message={bulkPreviewBlockedByDependency ? 'Không thể đổi trạng thái khi còn công đoạn chờ công đoạn trước.' : 'Bổ sung đủ thông tin để preview bulk.'}
-              description={bulkPreviewBlockedByDependency ? blockedSelectionMessage : 'Nếu gán máy hàng loạt thì cần chốt work center; khi chọn lý do nghẽn là Khác thì cần mô tả cụ thể.'}
+              message={bulkPreviewBlockedBySkip ? 'Không hỗ trợ bỏ qua hàng loạt.' : bulkPreviewBlockedByDependency ? 'Không thể đổi trạng thái khi còn công đoạn chờ công đoạn trước.' : 'Bổ sung đủ thông tin để preview bulk.'}
+              description={bulkPreviewBlockedBySkip ? 'Bỏ qua công đoạn phải thao tác từng công đoạn và nhập lý do để ghi audit.' : bulkPreviewBlockedByDependency ? blockedSelectionMessage : 'Nếu gán máy hàng loạt thì cần chốt work center; khi chọn lý do nghẽn là Khác thì cần mô tả cụ thể.'}
             />
           ) : bulkPreviewQuery.data ? (
             <Card size="small" data-testid="production-planning-bulk-preview">
@@ -3535,6 +3641,69 @@ export default function ProductionPlanningBoard() {
             </Card>
           ) : null}
         </Space>
+      </Modal>
+
+      <Modal
+        title="Bỏ qua công đoạn"
+        open={isSkipModalOpen}
+        onCancel={() => {
+          setIsSkipModalOpen(false);
+          skipForm.resetFields();
+        }}
+        onOk={() => void handleSubmitSkip()}
+        okText="Xác nhận bỏ qua"
+        cancelText="Hủy"
+        confirmLoading={skipMutation.isPending}
+        okButtonProps={{ danger: true, disabled: !selectedCard }}
+        data-testid="production-planning-skip-modal"
+      >
+        {selectedCard ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Alert
+              showIcon
+              type={selectedCardDependencyBlocked ? 'warning' : 'info'}
+              message={`${selectedCard.operation.step_code} · ${selectedCard.operation.step_name}`}
+              description={(
+                <Space direction="vertical" size={2}>
+                  <span>{`LSX: ${selectedCard.order.code}`}</span>
+                  <span>{`Trạng thái hiện tại: ${operationStatusLabel[selectedCard.operation.status]}`}</span>
+                  <span>{`Bước: ${selectedCard.operation.display_step ?? selectedCard.operation.route_step_no ?? 'Theo sequence'}${selectedCard.operation.group_code ? ` · Nhóm ${selectedCard.operation.group_code}` : ''}`}</span>
+                  {selectedCardDependencyBlocked ? <span>Ngoại lệ có audit: công đoạn này đang chờ công đoạn trước.</span> : null}
+                </Space>
+              )}
+            />
+            <Text type="secondary">
+              Bỏ qua công đoạn này sẽ được ghi audit và có thể mở công đoạn kế tiếp nếu đủ điều kiện.
+            </Text>
+            <Form form={skipForm} layout="vertical">
+              <Form.Item
+                name="reason"
+                label="Lý do bỏ qua"
+                rules={[
+                  { required: true, message: 'Vui lòng nhập lý do bỏ qua công đoạn.' },
+                  { max: 500, message: 'Lý do tối đa 500 ký tự.' },
+                  {
+                    validator(_, value) {
+                      if (!String(value || '').trim()) {
+                        return Promise.reject(new Error('Vui lòng nhập lý do bỏ qua công đoạn.'));
+                      }
+                      return Promise.resolve();
+                    },
+                  },
+                ]}
+              >
+                <Input.TextArea
+                  rows={4}
+                  maxLength={500}
+                  showCount
+                  placeholder="Ví dụ: công đoạn này không cần chạy do quy cách đơn hàng đã thay đổi."
+                  disabled={skipMutation.isPending}
+                  data-testid="production-planning-skip-reason"
+                />
+              </Form.Item>
+            </Form>
+          </Space>
+        ) : null}
       </Modal>
 
       <Drawer
@@ -3624,7 +3793,7 @@ export default function ProductionPlanningBoard() {
                   <Tag color={selectedCardReadiness.color}>{selectedCardReadiness.label}</Tag>
                 </Tooltip>
               ) : null}
-              <Tag color={statusColor[selectedCard.operation.status]}>{operationStatusLabel[selectedCard.operation.status]}</Tag>
+              {renderOperationStatusTag(selectedCard.operation)}
               {selectedCard.operation.display_step || selectedCard.operation.route_step_no ? <Tag>{`Bước ${selectedCard.operation.display_step ?? selectedCard.operation.route_step_no}`}</Tag> : null}
               {selectedCard.operation.group_code ? <Tag>{`Nhóm ${selectedCard.operation.group_code}`}</Tag> : null}
               {selectedCard.operation.allow_parallel ? <Tag color="cyan">Có thể chạy song song</Tag> : null}
@@ -3666,6 +3835,21 @@ export default function ProductionPlanningBoard() {
               </div>
               {selectedCard.exceptions.block_reason_note ? <div style={{ marginTop: 12 }}><strong>Ghi chú nghẽn:</strong> {selectedCard.exceptions.block_reason_note}</div> : null}
               {selectedCard.shop_floor.handover_note ? <div style={{ marginTop: 12 }}><strong>Ghi chú handover:</strong> {selectedCard.shop_floor.handover_note}</div> : null}
+              {selectedCard.operation.status === 'SKIPPED' ? (
+                <Alert
+                  showIcon
+                  type="info"
+                  style={{ marginTop: 12 }}
+                  message="Công đoạn đã được bỏ qua"
+                  description={(
+                    <Space direction="vertical" size={2}>
+                      <span>{`Lý do: ${getSkipReasonDisplay(selectedCard.operation)}`}</span>
+                      <span>{`Người bỏ qua: ${getSkippedByDisplay(selectedCard.operation)}`}</span>
+                      <span>{`Thời điểm: ${getSkippedAtDisplay(selectedCard.operation)}`}</span>
+                    </Space>
+                  )}
+                />
+              ) : null}
             </Card>
             <Card size="small" title="Cập nhật nhanh">
               {!canEditSelectedCard ? (
@@ -3682,7 +3866,7 @@ export default function ProductionPlanningBoard() {
                   type="warning"
                   showIcon
                   message="Công đoạn đang chờ công đoạn trước."
-                  description="Bạn vẫn có thể xếp ngày/ca, gán máy hoặc ghi chú nghẽn, nhưng không thể bắt đầu/hoàn thành/bỏ qua công đoạn này cho tới khi dependency được backend mở."
+                  description="Công đoạn này chưa sẵn sàng để bắt đầu hoặc hoàn thành vì đang chờ công đoạn trước. Nếu cần bỏ qua công đoạn, hãy dùng nút Bỏ qua và nhập lý do; thao tác này sẽ được ghi audit."
                   style={{ marginBottom: 16 }}
                 />
               ) : null}
@@ -3700,6 +3884,13 @@ export default function ProductionPlanningBoard() {
                   <Button onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_PREVIOUS_STEP', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ công đoạn trước bàn giao' })}>
                     Chờ công đoạn trước
                   </Button>
+                  {canSkipSelectedCard ? (
+                    <Tooltip title={selectedCardDependencyBlocked ? 'Ngoại lệ có audit: bỏ qua công đoạn này dù đang chờ công đoạn trước.' : 'Bỏ qua công đoạn này và ghi lý do/audit.'}>
+                      <Button danger onClick={handleOpenSkipModal} loading={skipMutation.isPending} data-testid="production-planning-skip-operation">
+                        Bỏ qua
+                      </Button>
+                    </Tooltip>
+                  ) : null}
                   <Tooltip title={selectedCardDependencyBlocked ? selectedBlockedReason : ''}>
                     <span>
                       <Button onClick={() => runQuickUpdate({ status: 'READY', block_reason_code: '', block_reason_note: '' })} disabled={selectedCardDependencyBlocked}>
@@ -3717,8 +3908,8 @@ export default function ProductionPlanningBoard() {
                   type="info"
                   showIcon
                   style={{ marginBottom: 16 }}
-                  message={previewBlockedByDependency ? 'Công đoạn chưa sẵn sàng để đổi trạng thái.' : 'Bổ sung mô tả nghẽn để xem trước tác động.'}
-                  description={previewBlockedByDependency ? selectedBlockedReason : 'Khi chọn lý do nghẽn là Khác hoặc gán máy, planner cần nhập đủ thông tin mới tính được preview.'}
+                  message={previewBlockedBySkip ? 'Bỏ qua công đoạn cần lý do riêng.' : previewBlockedByDependency ? 'Công đoạn chưa sẵn sàng để đổi trạng thái.' : 'Bổ sung mô tả nghẽn để xem trước tác động.'}
+                  description={previewBlockedBySkip ? 'Vui lòng dùng nút Bỏ qua để nhập lý do và ghi audit.' : previewBlockedByDependency ? selectedBlockedReason : 'Khi chọn lý do nghẽn là Khác hoặc gán máy, planner cần nhập đủ thông tin mới tính được preview.'}
                 />
               ) : null}
               {canEditSelectedCard && !previewBlockedByValidation && hasPreviewChanges && previewQuery.error ? (
@@ -3768,6 +3959,10 @@ export default function ProductionPlanningBoard() {
                 layout="vertical"
                 form={form}
                 onFinish={(values) => {
+                  if (String((values as Record<string, unknown>).status || '').toUpperCase() === 'SKIPPED') {
+                    messageApi.warning('Vui lòng dùng nút Bỏ qua và nhập lý do.');
+                    return;
+                  }
                   if (selectedCard && isStatusChangeBlockedByDependency(selectedCard, (values as Record<string, unknown>).status)) {
                     messageApi.warning(selectedBlockedReason);
                     return;
@@ -3785,7 +3980,7 @@ export default function ProductionPlanningBoard() {
                         { value: 'READY', label: 'Sẵn sàng', disabled: Boolean(selectedCard && isStatusChangeBlockedByDependency(selectedCard, 'READY')) },
                         { value: 'IN_PROGRESS', label: 'Đang làm', disabled: Boolean(selectedCard && isStatusChangeBlockedByDependency(selectedCard, 'IN_PROGRESS')) },
                         { value: 'DONE', label: 'Hoàn thành', disabled: Boolean(selectedCard && isStatusChangeBlockedByDependency(selectedCard, 'DONE')) },
-                        { value: 'SKIPPED', label: 'Bỏ qua', disabled: Boolean(selectedCard && isStatusChangeBlockedByDependency(selectedCard, 'SKIPPED')) },
+                        { value: 'SKIPPED', label: 'Bỏ qua (dùng nút Bỏ qua)', disabled: true },
                       ]}
                     />
                   </Form.Item>

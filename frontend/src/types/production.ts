@@ -225,6 +225,10 @@ export interface ProductionOperation {
   status: ProductionOperationStatus;
   started_at?: string | null;
   finished_at?: string | null;
+  skipped_at?: string | null;
+  skipped_by?: number | null;
+  skipped_by_display?: string;
+  skip_reason?: string;
   note?: string;
   material_readiness?: ProductionOperationMaterialReadiness;
   dependency_state?: ProductionOperationDependencyState;
@@ -237,6 +241,18 @@ export interface ProductionOperation {
   remaining_issue_line_count?: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProductionOperationSkipPayload {
+  operation_id: number;
+  reason: string;
+}
+
+export interface ProductionOperationSkipResponse {
+  message?: string;
+  order_status?: ProductionOrderStatus;
+  operation: ProductionOperation;
+  production_demand?: ProductionDemand | null;
 }
 
 export interface ProductionPlanningCard {
