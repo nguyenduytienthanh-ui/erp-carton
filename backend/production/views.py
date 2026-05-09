@@ -2926,6 +2926,81 @@ def _serialize_planning_exception_groups(cards):
     ]
 
 
+def _normalize_resource_code(value):
+    return str(value or '').strip().upper()
+
+
+def _resolve_operation_resource_assignment(data, *, operation):
+    work_center_code_touched = 'work_center_code' in data
+    machine_code_touched = 'machine_code' in data
+    work_center_name_touched = 'work_center_name' in data
+    machine_name_touched = 'machine_name' in data
+
+    old_work_center_code = _normalize_resource_code(operation.work_center_code)
+    old_machine_code = _normalize_resource_code(operation.machine_code)
+    work_center_code_value = _normalize_resource_code(
+        data.get('work_center_code') if work_center_code_touched else operation.work_center_code
+    )
+    work_center_name_value = str(
+        data.get('work_center_name') if work_center_name_touched else (operation.work_center_name or '')
+    ).strip()
+    machine_code_value = _normalize_resource_code(
+        data.get('machine_code') if machine_code_touched else operation.machine_code
+    )
+    machine_name_value = str(
+        data.get('machine_name') if machine_name_touched else (operation.machine_name or '')
+    ).strip()
+
+    if work_center_code_touched and not work_center_code_value:
+        return {
+            'work_center_code': '',
+            'work_center_name': '',
+            'machine_code': '',
+            'machine_name': '',
+        }
+    if machine_code_touched and not machine_code_value:
+        machine_name_value = ''
+
+    if machine_code_value:
+        machine = ProductionMachine.objects.select_related('work_center').filter(code=machine_code_value).first()
+        if machine is not None:
+            machine_active = bool(machine.is_active and machine.work_center_id and machine.work_center.is_active)
+            if not machine_active:
+                if machine_code_touched:
+                    raise ValidationError({'error': 'May san xuat khong dang hoat dong.'})
+                machine = None
+            else:
+                if work_center_code_touched and work_center_code_value and work_center_code_value != machine.work_center.code:
+                    raise ValidationError({'error': 'May khong thuoc to san xuat da chon.'})
+                return {
+                    'work_center_code': machine.work_center.code,
+                    'work_center_name': machine.work_center.name,
+                    'machine_code': machine.code,
+                    'machine_name': machine.name,
+                }
+        if machine is None and not work_center_code_value and (machine_code_touched or work_center_code_touched):
+            raise ValidationError({'error': 'Can gan work center truoc khi chon may.'})
+
+    if work_center_code_value:
+        work_center = ProductionWorkCenter.objects.filter(code=work_center_code_value).first()
+        if work_center is not None:
+            if not work_center.is_active:
+                if work_center_code_touched or work_center_code_value != old_work_center_code:
+                    raise ValidationError({'error': 'To san xuat khong dang hoat dong.'})
+            else:
+                work_center_name_value = work_center.name
+
+    if machine_code_value and old_machine_code and not machine_code_touched and machine_code_value != old_machine_code:
+        machine_name_value = ''
+
+    return {
+        'work_center_code': work_center_code_value,
+        'work_center_name': work_center_name_value,
+        'machine_code': machine_code_value,
+        'machine_name': machine_name_value,
+    }
+
+
 def _resolve_operation_update_inputs(data, *, operation):
     next_status = data.get('status') or operation.status
     if next_status not in dict(ProductionOperationStatus.CHOICES):
@@ -2961,12 +3036,7 @@ def _resolve_operation_update_inputs(data, *, operation):
         if planned_shift_value and planned_shift_value not in dict(ProductionPlanningShift.CHOICES):
             raise ValidationError({'error': 'Ca ke hoach khong hop le.'})
 
-    work_center_code_value = str(data.get('work_center_code') if 'work_center_code' in data else (operation.work_center_code or '')).strip().upper()
-    work_center_name_value = str(data.get('work_center_name') if 'work_center_name' in data else (operation.work_center_name or '')).strip()
-    machine_code_value = str(data.get('machine_code') if 'machine_code' in data else (operation.machine_code or '')).strip().upper()
-    machine_name_value = str(data.get('machine_name') if 'machine_name' in data else (operation.machine_name or '')).strip()
-    if machine_code_value and not work_center_code_value:
-        raise ValidationError({'error': 'Can gan work center truoc khi chon may.'})
+    resource_values = _resolve_operation_resource_assignment(data, operation=operation)
 
     block_reason_code_value = operation.block_reason_code
     if 'block_reason_code' in data:
@@ -2994,10 +3064,10 @@ def _resolve_operation_update_inputs(data, *, operation):
         'planned_shift': planned_shift_value,
         'priority_rank': priority_rank_value,
         'dispatch_sequence': dispatch_sequence_value,
-        'work_center_code': work_center_code_value,
-        'work_center_name': work_center_name_value,
-        'machine_code': machine_code_value,
-        'machine_name': machine_name_value,
+        'work_center_code': resource_values['work_center_code'],
+        'work_center_name': resource_values['work_center_name'],
+        'machine_code': resource_values['machine_code'],
+        'machine_name': resource_values['machine_name'],
         'estimated_runtime_hours': estimated_runtime_hours_value,
         'setup_minutes': setup_minutes_value,
         'block_reason_code': block_reason_code_value,
@@ -4273,12 +4343,14 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             planned_shift_value = str(request.data.get('planned_shift') or '').strip().upper()
             if planned_shift_value and planned_shift_value not in dict(ProductionPlanningShift.CHOICES):
                 return Response({'error': 'Ca ke hoach khong hop le.'}, status=status.HTTP_400_BAD_REQUEST)
-        work_center_code_value = str(request.data.get('work_center_code') if 'work_center_code' in request.data else (operation.work_center_code or '')).strip().upper()
-        work_center_name_value = str(request.data.get('work_center_name') if 'work_center_name' in request.data else (operation.work_center_name or '')).strip()
-        machine_code_value = str(request.data.get('machine_code') if 'machine_code' in request.data else (operation.machine_code or '')).strip().upper()
-        machine_name_value = str(request.data.get('machine_name') if 'machine_name' in request.data else (operation.machine_name or '')).strip()
-        if machine_code_value and not work_center_code_value:
-            return Response({'error': 'Can gan work center truoc khi chon may.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            resource_values = _resolve_operation_resource_assignment(request.data, operation=operation)
+        except ValidationError as exc:
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+        work_center_code_value = resource_values['work_center_code']
+        work_center_name_value = resource_values['work_center_name']
+        machine_code_value = resource_values['machine_code']
+        machine_name_value = resource_values['machine_name']
 
         block_reason_code_value = operation.block_reason_code
         if 'block_reason_code' in request.data:

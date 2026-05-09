@@ -2418,6 +2418,22 @@ class ProductionWorkflowTests(APITestCase):
         self.assertEqual(response.status_code, 201, response.data)
         return response.data
 
+    def _create_capacity_resource(self, *, work_center_code='CAT', machine_code='CAT-01', active=True):
+        work_center = ProductionWorkCenter.objects.create(
+            code=work_center_code,
+            name=f'To {work_center_code}',
+            default_capacity_hours='12.00',
+            is_active=active,
+        )
+        machine = ProductionMachine.objects.create(
+            code=machine_code,
+            name=f'May {machine_code}',
+            work_center=work_center,
+            default_capacity_hours='8.00',
+            is_active=active,
+        )
+        return work_center, machine
+
     def test_production_flow_creates_operations_issue_and_receipt(self):
         order = self._create_production_order(planned_qty='5')
         order_id = order['id']
@@ -2996,6 +3012,188 @@ class ProductionWorkflowTests(APITestCase):
         self.assertEqual(audit.new_values['setup_minutes'], 45)
         self.assertEqual(audit.new_values['block_reason_code'], 'WAIT_MATERIAL')
         self.assertEqual(audit.new_values['risk_state'], 'BLOCKED')
+
+    def test_update_operation_resolves_active_machine_catalog(self):
+        work_center, machine = self._create_capacity_resource(work_center_code='CAT', machine_code='CAT-01')
+        order = self._create_production_order(planned_qty='3')
+        order_id = order['id']
+        self._release_order(order_id)
+        operation = ProductionOperation.objects.get(production_order_id=order_id, sequence=1)
+
+        response = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operation.id,
+                'machine_code': 'cat-01',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        operation.refresh_from_db()
+        self.assertEqual(operation.work_center_code, work_center.code)
+        self.assertEqual(operation.work_center_name, work_center.name)
+        self.assertEqual(operation.machine_code, machine.code)
+        self.assertEqual(operation.machine_name, machine.name)
+        self.assertEqual(response.data['operation']['work_center_code'], work_center.code)
+        self.assertEqual(response.data['operation']['machine_name'], machine.name)
+
+    def test_update_operation_rejects_catalog_machine_work_center_mismatch(self):
+        self._create_capacity_resource(work_center_code='CAT', machine_code='CAT-01')
+        other_work_center = ProductionWorkCenter.objects.create(code='OTHER', name='To khac')
+        order = self._create_production_order(planned_qty='3')
+        order_id = order['id']
+        self._release_order(order_id)
+        operation = ProductionOperation.objects.get(production_order_id=order_id, sequence=1)
+
+        response = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operation.id,
+                'work_center_code': other_work_center.code,
+                'machine_code': 'CAT-01',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('May', response.data['error'])
+
+    def test_update_operation_rejects_inactive_catalog_resources_for_new_assignment(self):
+        active_work_center = ProductionWorkCenter.objects.create(code='ACTIVE', name='To active')
+        inactive_machine = ProductionMachine.objects.create(
+            code='OFF-01',
+            name='May dung',
+            work_center=active_work_center,
+            is_active=False,
+        )
+        inactive_work_center = ProductionWorkCenter.objects.create(code='OFFWC', name='To dung', is_active=False)
+        order = self._create_production_order(planned_qty='3')
+        order_id = order['id']
+        self._release_order(order_id)
+        operation = ProductionOperation.objects.get(production_order_id=order_id, sequence=1)
+
+        inactive_machine_response = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operation.id,
+                'work_center_code': active_work_center.code,
+                'machine_code': inactive_machine.code,
+            },
+            format='json',
+        )
+        inactive_work_center_response = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operation.id,
+                'work_center_code': inactive_work_center.code,
+            },
+            format='json',
+        )
+
+        self.assertEqual(inactive_machine_response.status_code, 400, inactive_machine_response.data)
+        self.assertIn('May', inactive_machine_response.data['error'])
+        self.assertEqual(inactive_work_center_response.status_code, 400, inactive_work_center_response.data)
+        self.assertIn('To', inactive_work_center_response.data['error'])
+
+    def test_update_operation_keeps_legacy_resource_text_outside_catalog(self):
+        order = self._create_production_order(planned_qty='3')
+        order_id = order['id']
+        self._release_order(order_id)
+        operation = ProductionOperation.objects.get(production_order_id=order_id, sequence=1)
+
+        response = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operation.id,
+                'work_center_code': 'LEGACY',
+                'work_center_name': 'To cu',
+                'machine_code': 'LEGACY-01',
+                'machine_name': 'May cu 01',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        operation.refresh_from_db()
+        self.assertEqual(operation.work_center_code, 'LEGACY')
+        self.assertEqual(operation.work_center_name, 'To cu')
+        self.assertEqual(operation.machine_code, 'LEGACY-01')
+        self.assertEqual(operation.machine_name, 'May cu 01')
+
+    def test_preview_and_bulk_operations_resolve_catalog_resources_consistently(self):
+        work_center, machine = self._create_capacity_resource(work_center_code='PLAN', machine_code='PLAN-01')
+        order = self._create_production_order(planned_qty='3')
+        order_id = order['id']
+        self._release_order(order_id)
+        operation = ProductionOperation.objects.get(production_order_id=order_id, sequence=1)
+
+        preview = self.client.post(
+            f'/api/production/orders/{order_id}/preview_operation_update/',
+            {
+                'operation_id': operation.id,
+                'machine_code': machine.code,
+            },
+            format='json',
+        )
+        bulk_preview = self.client.post(
+            '/api/production/orders/preview_bulk_update_operations/',
+            {
+                'items': [{'order_id': order_id, 'operation_id': operation.id}],
+                'changes': {'machine_code': machine.code},
+            },
+            format='json',
+        )
+        bulk_update = self.client.post(
+            '/api/production/orders/bulk_update_operations/',
+            {
+                'items': [{'order_id': order_id, 'operation_id': operation.id}],
+                'changes': {'machine_code': machine.code},
+            },
+            format='json',
+        )
+
+        self.assertEqual(preview.status_code, 200, preview.data)
+        self.assertEqual(preview.data['preview']['operation']['work_center_code'], work_center.code)
+        self.assertEqual(preview.data['preview']['operation']['machine_name'], machine.name)
+        self.assertEqual(bulk_preview.status_code, 200, bulk_preview.data)
+        self.assertEqual(bulk_preview.data['operations'][0]['preview']['operation']['work_center_code'], work_center.code)
+        self.assertEqual(bulk_preview.data['operations'][0]['preview']['operation']['machine_name'], machine.name)
+        self.assertEqual(bulk_update.status_code, 200, bulk_update.data)
+        self.assertEqual(bulk_update.data['operations'][0]['operation']['work_center_code'], work_center.code)
+        self.assertEqual(bulk_update.data['operations'][0]['operation']['machine_name'], machine.name)
+
+    def test_update_operation_does_not_block_unrelated_update_with_inactive_existing_resource(self):
+        inactive_work_center, inactive_machine = self._create_capacity_resource(
+            work_center_code='OLDWC',
+            machine_code='OLD-01',
+            active=False,
+        )
+        order = self._create_production_order(planned_qty='3')
+        order_id = order['id']
+        self._release_order(order_id)
+        operation = ProductionOperation.objects.get(production_order_id=order_id, sequence=1)
+        operation.work_center_code = inactive_work_center.code
+        operation.work_center_name = inactive_work_center.name
+        operation.machine_code = inactive_machine.code
+        operation.machine_name = inactive_machine.name
+        operation.save(update_fields=['work_center_code', 'work_center_name', 'machine_code', 'machine_name', 'updated_at'])
+        planned_date = timezone.localdate().isoformat()
+
+        response = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operation.id,
+                'planned_date': planned_date,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        operation.refresh_from_db()
+        self.assertEqual(str(operation.planned_date), planned_date)
+        self.assertEqual(operation.work_center_code, inactive_work_center.code)
+        self.assertEqual(operation.machine_code, inactive_machine.code)
 
     def test_update_operation_rejects_planning_change_when_order_not_released(self):
         order = self._create_production_order(planned_qty='3')
