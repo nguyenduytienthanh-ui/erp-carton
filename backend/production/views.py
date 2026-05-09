@@ -26,6 +26,7 @@ from production.models import (
     ProductionIssueLine,
     ProductionIssueStatus,
     ProductionMaterialRequirement,
+    ProductionMachine,
     ProductionOperation,
     ProductionOperationBlockReason,
     ProductionHandoverStatus as ProductionOperationHandoverStatus,
@@ -36,6 +37,7 @@ from production.models import (
     ProductionReceipt,
     ProductionReceiptLine,
     ProductionReceiptStatus,
+    ProductionWorkCenter,
 )
 from production.permissions import (
     can_approve_production_order,
@@ -55,9 +57,11 @@ from production.serializers import (
     ProductionDemandDetailSerializer,
     ProductionDemandSerializer,
     ProductionIssueSerializer,
+    ProductionMachineSerializer,
     ProductionOperationSerializer,
     ProductionOrderSerializer,
     ProductionReceiptSerializer,
+    ProductionWorkCenterSerializer,
 )
 from production.services import (
     add_issued_qty,
@@ -3448,6 +3452,34 @@ def _split_filter_values(value):
     return [item.strip() for item in str(value or '').split(',') if item.strip()]
 
 
+def _parse_bool_filter(value):
+    if value in (None, ''):
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {'1', 'true', 'yes', 'y'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'n'}:
+        return False
+    return None
+
+
+def _resource_catalog_snapshot(obj):
+    payload = {
+        'code': obj.code,
+        'name': obj.name,
+        'default_capacity_hours': str(obj.default_capacity_hours),
+        'description': obj.description,
+        'sort_order': obj.sort_order,
+        'is_active': obj.is_active,
+    }
+    work_center = getattr(obj, 'work_center', None)
+    if work_center is not None:
+        payload['work_center'] = obj.work_center_id
+        payload['work_center_code'] = work_center.code
+        payload['work_center_name'] = work_center.name
+    return payload
+
+
 def _active_bucket_queryset(queryset):
     return (
         queryset
@@ -3513,6 +3545,156 @@ def _production_demand_summary(queryset, today=None):
         'in_progress': queryset.filter(production_status=ProductionDemandProductionStatus.IN_PROGRESS).count(),
         'completed': queryset.filter(production_status=ProductionDemandProductionStatus.COMPLETED).count(),
     }
+
+
+class ProductionWorkCenterViewSet(viewsets.ModelViewSet):
+    serializer_class = ProductionWorkCenterSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['sort_order', 'code', 'name', 'default_capacity_hours', 'created_at']
+    ordering = ['sort_order', 'name', 'code']
+
+    def get_queryset(self):
+        queryset = ProductionWorkCenter.objects.all()
+        is_active = _parse_bool_filter(self.request.query_params.get('is_active'))
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active)
+        search = str(self.request.query_params.get('q') or self.request.query_params.get('search') or '').strip()
+        if search:
+            queryset = queryset.filter(
+                Q(code__icontains=search)
+                | Q(name__icontains=search)
+                | Q(description__icontains=search)
+            )
+        return queryset
+
+    def _check_write_permission(self):
+        if not _can_manage_production(self.request.user):
+            raise PermissionDenied('Ban khong co quyen quan ly danh muc to san xuat.')
+
+    def perform_create(self, serializer):
+        self._check_write_permission()
+        instance = serializer.save()
+        _log_production_audit(
+            self.request,
+            action='CREATE',
+            entity_type='ProductionWorkCenter',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values={},
+            new_values=_resource_catalog_snapshot(instance),
+        )
+
+    def perform_update(self, serializer):
+        self._check_write_permission()
+        old_values = _resource_catalog_snapshot(serializer.instance)
+        instance = serializer.save()
+        _log_production_audit(
+            self.request,
+            action='UPDATE',
+            entity_type='ProductionWorkCenter',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values=old_values,
+            new_values=_resource_catalog_snapshot(instance),
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        self._check_write_permission()
+        instance = self.get_object()
+        old_values = _resource_catalog_snapshot(instance)
+        if instance.is_active:
+            instance.is_active = False
+            instance.save(update_fields=['is_active', 'updated_at'])
+        _log_production_audit(
+            request,
+            action='DELETE',
+            entity_type='ProductionWorkCenter',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values=old_values,
+            new_values=_resource_catalog_snapshot(instance),
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ProductionMachineViewSet(viewsets.ModelViewSet):
+    serializer_class = ProductionMachineSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['sort_order', 'code', 'name', 'work_center', 'default_capacity_hours', 'created_at']
+    ordering = ['work_center__sort_order', 'work_center__name', 'sort_order', 'name', 'code']
+
+    def get_queryset(self):
+        queryset = ProductionMachine.objects.select_related('work_center')
+        is_active = _parse_bool_filter(self.request.query_params.get('is_active'))
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active)
+        work_center = str(self.request.query_params.get('work_center') or '').strip()
+        if work_center:
+            queryset = queryset.filter(work_center_id=work_center)
+        work_center_code = str(self.request.query_params.get('work_center_code') or '').strip().upper()
+        if work_center_code:
+            queryset = queryset.filter(work_center__code=work_center_code)
+        search = str(self.request.query_params.get('q') or self.request.query_params.get('search') or '').strip()
+        if search:
+            queryset = queryset.filter(
+                Q(code__icontains=search)
+                | Q(name__icontains=search)
+                | Q(description__icontains=search)
+                | Q(work_center__code__icontains=search)
+                | Q(work_center__name__icontains=search)
+            )
+        return queryset
+
+    def _check_write_permission(self):
+        if not _can_manage_production(self.request.user):
+            raise PermissionDenied('Ban khong co quyen quan ly danh muc may san xuat.')
+
+    def perform_create(self, serializer):
+        self._check_write_permission()
+        instance = serializer.save()
+        _log_production_audit(
+            self.request,
+            action='CREATE',
+            entity_type='ProductionMachine',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values={},
+            new_values=_resource_catalog_snapshot(instance),
+        )
+
+    def perform_update(self, serializer):
+        self._check_write_permission()
+        old_values = _resource_catalog_snapshot(serializer.instance)
+        instance = serializer.save()
+        _log_production_audit(
+            self.request,
+            action='UPDATE',
+            entity_type='ProductionMachine',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values=old_values,
+            new_values=_resource_catalog_snapshot(instance),
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        self._check_write_permission()
+        instance = self.get_object()
+        old_values = _resource_catalog_snapshot(instance)
+        if instance.is_active:
+            instance.is_active = False
+            instance.save(update_fields=['is_active', 'updated_at'])
+        _log_production_audit(
+            request,
+            action='DELETE',
+            entity_type='ProductionMachine',
+            entity_id=int(instance.id),
+            entity_code=instance.code,
+            old_values=old_values,
+            new_values=_resource_catalog_snapshot(instance),
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ProductionDemandViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
@@ -3828,6 +4010,19 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             new_values={},
         )
         return response
+
+    @action(detail=False, methods=['get'])
+    def capacity_options(self, request):
+        work_centers = ProductionWorkCenter.objects.filter(is_active=True).order_by('sort_order', 'name', 'code')
+        machines = (
+            ProductionMachine.objects.select_related('work_center')
+            .filter(is_active=True, work_center__is_active=True)
+            .order_by('work_center__sort_order', 'work_center__name', 'sort_order', 'name', 'code')
+        )
+        return Response({
+            'work_centers': ProductionWorkCenterSerializer(work_centers, many=True).data,
+            'machines': ProductionMachineSerializer(machines, many=True).data,
+        })
 
     @action(detail=True, methods=['post'])
     def submit(self, request, pk=None):

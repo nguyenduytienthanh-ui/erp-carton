@@ -12,11 +12,13 @@ from production.models import (
     ProductionIssue,
     ProductionIssueLine,
     ProductionMaterialRequirement,
+    ProductionMachine,
     ProductionOperation,
     ProductionOrder,
     ProductionOrderStatus,
     ProductionReceipt,
     ProductionReceiptLine,
+    ProductionWorkCenter,
 )
 from production.services import (
     build_default_material_requirements,
@@ -219,6 +221,68 @@ class ProductionDemandCreateOrderSerializer(serializers.Serializer):
                 'planned_end_date': 'Ngay ket thuc ke hoach khong duoc truoc ngay bat dau ke hoach.'
             })
         return attrs
+
+
+class ProductionWorkCenterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductionWorkCenter
+        fields = [
+            'id',
+            'code',
+            'name',
+            'default_capacity_hours',
+            'description',
+            'sort_order',
+            'is_active',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_code(self, value):
+        code = str(value or '').strip().upper()
+        if not code:
+            raise serializers.ValidationError('Ma to san xuat la bat buoc.')
+        queryset = ProductionWorkCenter.objects.filter(code=code)
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError('Ma to san xuat da ton tai.')
+        return code
+
+
+class ProductionMachineSerializer(serializers.ModelSerializer):
+    work_center_code = serializers.CharField(source='work_center.code', read_only=True)
+    work_center_name = serializers.CharField(source='work_center.name', read_only=True)
+
+    class Meta:
+        model = ProductionMachine
+        fields = [
+            'id',
+            'code',
+            'name',
+            'work_center',
+            'work_center_code',
+            'work_center_name',
+            'default_capacity_hours',
+            'description',
+            'sort_order',
+            'is_active',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'work_center_code', 'work_center_name', 'created_at', 'updated_at']
+
+    def validate_code(self, value):
+        code = str(value or '').strip().upper()
+        if not code:
+            raise serializers.ValidationError('Ma may la bat buoc.')
+        queryset = ProductionMachine.objects.filter(code=code)
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError('Ma may da ton tai.')
+        return code
 
 
 class ProductionOperationSerializer(serializers.ModelSerializer):

@@ -18,11 +18,13 @@ from production.models import (
     ProductionDemandProductionStatus,
     ProductionIssue,
     ProductionMaterialRequirement,
+    ProductionMachine,
     ProductionOperation,
     ProductionOperationStatus,
     ProductionOrder,
     ProductionOrderStatus,
     ProductionReceipt,
+    ProductionWorkCenter,
 )
 from production.demand_services import sync_production_demands_for_sales_order
 from production.services import (
@@ -1071,6 +1073,145 @@ class ProductionDemandSyncTests(APITestCase):
         self.assertEqual(payload['order_count'], 1)
         self.assertEqual(payload['would_create'], 1)
         self.assertEqual(ProductionDemand.objects.count(), 0)
+
+
+class ProductionResourceCatalogApiTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='production_resource_catalog_admin',
+            password='Demo123!',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.basic_user = User.objects.create_user(
+            username='production_resource_catalog_basic',
+            password='Demo123!',
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _results(self, response):
+        if isinstance(response.data, dict) and 'results' in response.data:
+            return response.data['results']
+        return response.data
+
+    def test_work_center_crud_normalizes_code_and_soft_deactivates(self):
+        create_response = self.client.post(
+            '/api/production/work-centers/',
+            {
+                'code': ' in ',
+                'name': 'To in',
+                'default_capacity_hours': '16.50',
+                'description': 'Khu in offset',
+                'sort_order': 10,
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        self.assertEqual(create_response.data['code'], 'IN')
+
+        work_center = ProductionWorkCenter.objects.get(code='IN')
+        list_response = self.client.get('/api/production/work-centers/', {'q': 'in'})
+        self.assertEqual(list_response.status_code, 200, list_response.data)
+        self.assertEqual(self._results(list_response)[0]['code'], 'IN')
+
+        update_response = self.client.patch(
+            f'/api/production/work-centers/{work_center.id}/',
+            {'name': 'To in offset', 'is_active': True},
+            format='json',
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.data)
+        self.assertEqual(update_response.data['name'], 'To in offset')
+
+        delete_response = self.client.delete(f'/api/production/work-centers/{work_center.id}/')
+        self.assertEqual(delete_response.status_code, 204, delete_response.data)
+        work_center.refresh_from_db()
+        self.assertFalse(work_center.is_active)
+        self.assertEqual(
+            AuditLog.objects.filter(entity_type='ProductionWorkCenter', entity_id=work_center.id).count(),
+            3,
+        )
+
+    def test_machine_crud_filters_by_work_center_and_includes_work_center_display(self):
+        work_center = ProductionWorkCenter.objects.create(
+            code='SONG',
+            name='To song',
+            default_capacity_hours='12',
+        )
+        create_response = self.client.post(
+            '/api/production/machines/',
+            {
+                'code': ' song-01 ',
+                'name': 'May song 01',
+                'work_center': work_center.id,
+                'default_capacity_hours': '8.00',
+                'sort_order': 5,
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        self.assertEqual(create_response.data['code'], 'SONG-01')
+        self.assertEqual(create_response.data['work_center_code'], 'SONG')
+        self.assertEqual(create_response.data['work_center_name'], 'To song')
+
+        machine = ProductionMachine.objects.get(code='SONG-01')
+        by_id_response = self.client.get('/api/production/machines/', {'work_center': work_center.id})
+        by_code_response = self.client.get('/api/production/machines/', {'work_center_code': 'song'})
+        self.assertEqual(by_id_response.status_code, 200, by_id_response.data)
+        self.assertEqual(by_code_response.status_code, 200, by_code_response.data)
+        self.assertEqual(self._results(by_id_response)[0]['id'], machine.id)
+        self.assertEqual(self._results(by_code_response)[0]['id'], machine.id)
+
+        update_response = self.client.patch(
+            f'/api/production/machines/{machine.id}/',
+            {'name': 'May song 01A'},
+            format='json',
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.data)
+        self.assertEqual(update_response.data['name'], 'May song 01A')
+
+        delete_response = self.client.delete(f'/api/production/machines/{machine.id}/')
+        self.assertEqual(delete_response.status_code, 204, delete_response.data)
+        machine.refresh_from_db()
+        self.assertFalse(machine.is_active)
+        self.assertEqual(
+            AuditLog.objects.filter(entity_type='ProductionMachine', entity_id=machine.id).count(),
+            3,
+        )
+
+    def test_capacity_options_returns_only_active_resources(self):
+        active_work_center = ProductionWorkCenter.objects.create(code='BE', name='To be')
+        inactive_work_center = ProductionWorkCenter.objects.create(code='INACTIVE', name='Inactive', is_active=False)
+        ProductionMachine.objects.create(code='BE-01', name='May be 01', work_center=active_work_center)
+        ProductionMachine.objects.create(code='BE-OLD', name='May be cu', work_center=active_work_center, is_active=False)
+        ProductionMachine.objects.create(code='INACTIVE-01', name='May inactive', work_center=inactive_work_center)
+
+        response = self.client.get('/api/production/orders/capacity_options/')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual([item['code'] for item in response.data['work_centers']], ['BE'])
+        self.assertEqual([item['code'] for item in response.data['machines']], ['BE-01'])
+        self.assertEqual(response.data['machines'][0]['work_center_code'], 'BE')
+
+    def test_catalog_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get('/api/production/work-centers/')
+
+        self.assertIn(response.status_code, {401, 403})
+
+    def test_catalog_mutation_requires_manage_permission(self):
+        self.client.force_authenticate(user=self.basic_user)
+        ProductionWorkCenter.objects.create(code='CAT', name='Catalog')
+
+        read_response = self.client.get('/api/production/work-centers/')
+        create_response = self.client.post(
+            '/api/production/work-centers/',
+            {'code': 'NEW', 'name': 'New work center'},
+            format='json',
+        )
+
+        self.assertEqual(read_response.status_code, 200, read_response.data)
+        self.assertEqual(create_response.status_code, 403, create_response.data)
 
 
 class ProductionDemandApiTests(APITestCase):

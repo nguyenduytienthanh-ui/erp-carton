@@ -45,7 +45,14 @@ from purchasing.views import (
     PurchaseRequestViewSet,
     PurchaseReturnViewSet,
 )
-from production.views import ProductionDemandViewSet, ProductionOrderViewSet, ProductionIssueViewSet, ProductionReceiptViewSet
+from production.views import (
+    ProductionDemandViewSet,
+    ProductionIssueViewSet,
+    ProductionMachineViewSet,
+    ProductionOrderViewSet,
+    ProductionReceiptViewSet,
+    ProductionWorkCenterViewSet,
+)
 from workforce.views import (
     AttendanceRecordViewSet,
     BonusPenaltyRecordViewSet,
@@ -119,6 +126,8 @@ router.register(r'purchasing/requests', PurchaseRequestViewSet, basename='purcha
 router.register(r'purchasing/returns', PurchaseReturnViewSet, basename='purchasing-return')
 router.register(r'production/orders', ProductionOrderViewSet, basename='production-order')
 router.register(r'production/demands', ProductionDemandViewSet, basename='production-demand')
+router.register(r'production/work-centers', ProductionWorkCenterViewSet, basename='production-work-center')
+router.register(r'production/machines', ProductionMachineViewSet, basename='production-machine')
 router.register(r'production/issues', ProductionIssueViewSet, basename='production-issue')
 router.register(r'production/receipts', ProductionReceiptViewSet, basename='production-receipt')
 router.register(r'sales/orders', SalesOrderViewSet, basename='salesorder')
