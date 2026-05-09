@@ -835,6 +835,15 @@ export interface ProductionWorkCenter {
   updated_at: string;
 }
 
+export interface ProductionWorkCenterPayload {
+  code?: string;
+  name?: string;
+  default_capacity_hours?: string | number;
+  description?: string;
+  sort_order?: number;
+  is_active?: boolean;
+}
+
 export interface ProductionMachine {
   id: number;
   code: string;
@@ -848,6 +857,16 @@ export interface ProductionMachine {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProductionMachinePayload {
+  code?: string;
+  name?: string;
+  work_center?: number;
+  default_capacity_hours?: string | number;
+  description?: string;
+  sort_order?: number;
+  is_active?: boolean;
 }
 
 export interface ProductionCapacityOptionsResponse {

@@ -16,6 +16,7 @@ import type {
   ProductionOrderSummary,
   ProductionIssue,
   ProductionMachine,
+  ProductionMachinePayload,
   ProductionOrder,
   ProductionOrderFormValues,
   ProductionPlanningBoardResponse,
@@ -24,6 +25,7 @@ import type {
   ProductionReceipt,
   ProductionReceiptScanResponse,
   ProductionWorkCenter,
+  ProductionWorkCenterPayload,
   ProductionWorkflowStateSummary,
 } from '../types/production';
 
@@ -90,8 +92,24 @@ export const productionApi = {
     const response = await axiosInstance.get(PRODUCTION_WORK_CENTERS_ENDPOINT, { params });
     return response.data;
   },
+  createProductionWorkCenter: async (payload: ProductionWorkCenterPayload): Promise<ProductionWorkCenter> => {
+    const response = await axiosInstance.post(PRODUCTION_WORK_CENTERS_ENDPOINT, payload);
+    return response.data;
+  },
+  updateProductionWorkCenter: async (id: number, payload: ProductionWorkCenterPayload): Promise<ProductionWorkCenter> => {
+    const response = await axiosInstance.patch(`${PRODUCTION_WORK_CENTERS_ENDPOINT}${id}/`, payload);
+    return response.data;
+  },
   getProductionMachines: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ProductionMachine>> => {
     const response = await axiosInstance.get(PRODUCTION_MACHINES_ENDPOINT, { params });
+    return response.data;
+  },
+  createProductionMachine: async (payload: ProductionMachinePayload): Promise<ProductionMachine> => {
+    const response = await axiosInstance.post(PRODUCTION_MACHINES_ENDPOINT, payload);
+    return response.data;
+  },
+  updateProductionMachine: async (id: number, payload: ProductionMachinePayload): Promise<ProductionMachine> => {
+    const response = await axiosInstance.patch(`${PRODUCTION_MACHINES_ENDPOINT}${id}/`, payload);
     return response.data;
   },
   getOrder: async (id: number): Promise<ProductionOrder> => {
