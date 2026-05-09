@@ -522,6 +522,114 @@ def _get_capacity_ratio(load_hours, capacity_hours):
     return (load_hours / capacity_hours).quantize(Decimal('0.01'))
 
 
+def _is_capacity_load_card(card):
+    status_value = str(card['operation'].get('status') or '').strip().upper()
+    return status_value not in {ProductionOperationStatus.DONE, ProductionOperationStatus.SKIPPED}
+
+
+def _get_card_active_scheduled_hours(card):
+    return _get_card_scheduled_hours(card) if _is_capacity_load_card(card) else Decimal('0')
+
+
+def _get_card_active_runtime_hours(card):
+    return _get_card_runtime_hours(card) if _is_capacity_load_card(card) else Decimal('0')
+
+
+def _get_card_active_setup_hours(card):
+    return _get_card_setup_hours(card) if _is_capacity_load_card(card) else Decimal('0')
+
+
+def _get_capacity_decimal(value):
+    try:
+        return Decimal(str(value or 0))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal('0')
+
+
+def _get_card_capacity_active_scheduled_hours(card):
+    capacity = card.get('capacity', {})
+    return _get_capacity_decimal(
+        capacity.get('active_scheduled_hours')
+        if 'active_scheduled_hours' in capacity
+        else capacity.get('scheduled_hours')
+    )
+
+
+def _load_capacity_resource_catalogs():
+    work_centers = {
+        _normalize_resource_code(item.code): item
+        for item in ProductionWorkCenter.objects.filter(is_active=True)
+    }
+    machines = {
+        _normalize_resource_code(item.code): item
+        for item in ProductionMachine.objects.select_related('work_center').filter(
+            is_active=True,
+            work_center__is_active=True,
+        )
+    }
+    return work_centers, machines
+
+
+def _get_resource_capacity_hours(resource, fallback_capacity):
+    capacity = _get_capacity_decimal(getattr(resource, 'default_capacity_hours', 0))
+    return capacity if capacity > 0 else fallback_capacity
+
+
+def _resolve_capacity_resource_context(operation, *, work_centers, machines, shift_capacity):
+    work_center_code = str(operation.get('work_center_code') or '').strip()
+    work_center_name = str(operation.get('work_center_name') or '').strip()
+    machine_code = str(operation.get('machine_code') or '').strip()
+    machine_name = str(operation.get('machine_name') or '').strip()
+    work_center = work_centers.get(_normalize_resource_code(work_center_code)) if work_center_code else None
+    machine = machines.get(_normalize_resource_code(machine_code)) if machine_code else None
+
+    if machine is not None:
+        machine_code = machine.code
+        machine_name = machine.name
+        work_center = machine.work_center
+        work_center_code = work_center.code
+        work_center_name = work_center.name
+    elif work_center is not None:
+        work_center_code = work_center.code
+        work_center_name = work_center.name
+
+    work_center_capacity = (
+        _get_resource_capacity_hours(work_center, shift_capacity)
+        if work_center_code
+        else Decimal('0')
+    )
+    if machine_code:
+        machine_capacity = _get_resource_capacity_hours(
+            machine,
+            work_center_capacity if work_center_capacity > 0 else shift_capacity,
+        ) if machine is not None else (work_center_capacity if work_center_capacity > 0 else shift_capacity)
+    else:
+        machine_capacity = Decimal('0')
+
+    return {
+        'work_center_code': work_center_code,
+        'work_center_name': work_center_name,
+        'machine_code': machine_code,
+        'machine_name': machine_name,
+        'work_center_capacity_hours': work_center_capacity,
+        'machine_capacity_hours': machine_capacity,
+        'work_center_catalog_matched': work_center is not None,
+        'machine_catalog_matched': machine is not None,
+    }
+
+
+def _get_calendar_capacity_slot_key(card):
+    capacity = card.get('capacity', {})
+    shift_key = _get_planning_shift_key(card.get('operation', {}).get('planned_shift'))
+    if card.get('operation', {}).get('planned_date') is None or shift_key == 'UNASSIGNED':
+        return '', Decimal('0')
+    if capacity.get('machine_catalog_matched') and capacity.get('machine_code'):
+        return f"M|{capacity['machine_code']}", _get_capacity_decimal(capacity.get('machine_capacity_hours'))
+    if capacity.get('work_center_catalog_matched') and capacity.get('work_center_code'):
+        return f"W|{capacity['work_center_code']}", _get_capacity_decimal(capacity.get('work_center_capacity_hours'))
+    return f"SHIFT|{shift_key}", Decimal(str(get_shift_capacity_hours(shift_key)))
+
+
 def _build_work_center_group_item(group_key, *, work_center_code, work_center_name, planned_date, shift_key):
     shift_meta = PLANNING_SHIFT_FILTERS.get(shift_key, PLANNING_SHIFT_FILTERS['UNASSIGNED'])
     return {
@@ -655,6 +763,7 @@ def _finalize_machine_queues(items):
 
 
 def _annotate_capacity_context(cards):
+    work_centers, machines = _load_capacity_resource_catalogs()
     work_center_slots = {}
     machine_slots = {}
     work_center_groups = {}
@@ -672,24 +781,35 @@ def _annotate_capacity_context(cards):
 
     for card in cards:
         operation = card['operation']
-        work_center_code = str(operation.get('work_center_code') or '').strip()
-        work_center_name = str(operation.get('work_center_name') or '').strip()
-        machine_code = str(operation.get('machine_code') or '').strip()
-        machine_name = str(operation.get('machine_name') or '').strip()
         planned_date = operation.get('planned_date')
         shift_key = _get_planning_shift_key(operation.get('planned_shift'))
+        shift_capacity_hours = Decimal('0') if shift_key == 'UNASSIGNED' else Decimal(str(get_shift_capacity_hours(shift_key)))
+        resource_context = _resolve_capacity_resource_context(
+            operation,
+            work_centers=work_centers,
+            machines=machines,
+            shift_capacity=shift_capacity_hours,
+        )
+        work_center_code = resource_context['work_center_code']
+        work_center_name = resource_context['work_center_name']
+        machine_code = resource_context['machine_code']
+        machine_name = resource_context['machine_name']
+        work_center_capacity_hours = resource_context['work_center_capacity_hours']
+        machine_capacity_hours = resource_context['machine_capacity_hours']
         scheduled_hours = _get_card_scheduled_hours(card)
         runtime_hours = _get_card_runtime_hours(card)
         setup_hours = _get_card_setup_hours(card)
-        capacity_hours = Decimal('0') if shift_key == 'UNASSIGNED' else Decimal(str(get_shift_capacity_hours(shift_key)))
+        active_scheduled_hours = _get_card_active_scheduled_hours(card)
+        active_runtime_hours = _get_card_active_runtime_hours(card)
+        active_setup_hours = _get_card_active_setup_hours(card)
 
-        summary['total_runtime_hours'] += runtime_hours
-        summary['total_setup_hours'] += setup_hours
-        summary['total_scheduled_hours'] += scheduled_hours
+        summary['total_runtime_hours'] += active_runtime_hours
+        summary['total_setup_hours'] += active_setup_hours
+        summary['total_scheduled_hours'] += active_scheduled_hours
 
         if work_center_code:
             slot_key = f'{work_center_code}|{planned_date or ""}|{shift_key}'
-            work_center_slots[slot_key] = work_center_slots.get(slot_key, Decimal('0')) + scheduled_hours
+            work_center_slots[slot_key] = work_center_slots.get(slot_key, Decimal('0')) + active_scheduled_hours
             group = work_center_groups.setdefault(
                 slot_key,
                 _build_work_center_group_item(
@@ -701,10 +821,10 @@ def _annotate_capacity_context(cards):
                 ),
             )
             group['total_operations'] += 1
-            group['runtime_hours'] += runtime_hours
-            group['setup_hours'] += setup_hours
-            group['scheduled_hours'] += scheduled_hours
-            group['capacity_hours'] = capacity_hours
+            group['runtime_hours'] += active_runtime_hours
+            group['setup_hours'] += active_setup_hours
+            group['scheduled_hours'] += active_scheduled_hours
+            group['capacity_hours'] = work_center_capacity_hours
             if _is_ready_to_run_card(card):
                 group['ready_to_run_count'] += 1
             if card['exceptions'].get('risk_state') == 'BLOCKED':
@@ -719,7 +839,7 @@ def _annotate_capacity_context(cards):
 
         if machine_code:
             queue_key = f'{machine_code}|{planned_date or ""}|{shift_key}'
-            machine_slots[queue_key] = machine_slots.get(queue_key, Decimal('0')) + scheduled_hours
+            machine_slots[queue_key] = machine_slots.get(queue_key, Decimal('0')) + active_scheduled_hours
             queue = machine_queues.setdefault(
                 queue_key,
                 _build_machine_queue_item(
@@ -733,10 +853,10 @@ def _annotate_capacity_context(cards):
                 ),
             )
             queue['total_operations'] += 1
-            queue['runtime_hours'] += runtime_hours
-            queue['setup_hours'] += setup_hours
-            queue['scheduled_hours'] += scheduled_hours
-            queue['capacity_hours'] = capacity_hours
+            queue['runtime_hours'] += active_runtime_hours
+            queue['setup_hours'] += active_setup_hours
+            queue['scheduled_hours'] += active_scheduled_hours
+            queue['capacity_hours'] = machine_capacity_hours
             if _is_ready_to_run_card(card):
                 queue['ready_to_run_count'] += 1
             if card['exceptions'].get('risk_state') == 'OVERDUE':
@@ -748,31 +868,51 @@ def _annotate_capacity_context(cards):
     overloaded_slots = set()
     for card in cards:
         operation = card['operation']
-        work_center_code = str(operation.get('work_center_code') or '').strip()
-        work_center_name = str(operation.get('work_center_name') or '').strip()
-        machine_code = str(operation.get('machine_code') or '').strip()
-        machine_name = str(operation.get('machine_name') or '').strip()
         planned_date = operation.get('planned_date')
         shift_key = _get_planning_shift_key(operation.get('planned_shift'))
         shift_meta = PLANNING_SHIFT_FILTERS.get(shift_key, PLANNING_SHIFT_FILTERS['UNASSIGNED'])
+        shift_capacity_hours = Decimal('0') if shift_key == 'UNASSIGNED' else Decimal(str(get_shift_capacity_hours(shift_key)))
+        resource_context = _resolve_capacity_resource_context(
+            operation,
+            work_centers=work_centers,
+            machines=machines,
+            shift_capacity=shift_capacity_hours,
+        )
+        work_center_code = resource_context['work_center_code']
+        work_center_name = resource_context['work_center_name']
+        machine_code = resource_context['machine_code']
+        machine_name = resource_context['machine_name']
+        work_center_capacity_hours = resource_context['work_center_capacity_hours']
+        machine_capacity_hours = resource_context['machine_capacity_hours']
         scheduled_hours = _get_card_scheduled_hours(card)
         runtime_hours = _get_card_runtime_hours(card)
         setup_hours = _get_card_setup_hours(card)
-        capacity_hours = Decimal('0') if shift_key == 'UNASSIGNED' else Decimal(str(get_shift_capacity_hours(shift_key)))
+        active_scheduled_hours = _get_card_active_scheduled_hours(card)
         work_center_slot_key = f'{work_center_code}|{planned_date or ""}|{shift_key}' if work_center_code else ''
         machine_slot_key = f'{machine_code}|{planned_date or ""}|{shift_key}' if machine_code else ''
         work_center_load = work_center_slots.get(work_center_slot_key, Decimal('0'))
         machine_load = machine_slots.get(machine_slot_key, Decimal('0'))
-        work_center_ratio = _get_capacity_ratio(work_center_load, capacity_hours)
-        machine_ratio = _get_capacity_ratio(machine_load, capacity_hours)
+        work_center_ratio = _get_capacity_ratio(work_center_load, work_center_capacity_hours)
+        machine_ratio = _get_capacity_ratio(machine_load, machine_capacity_hours)
+        work_center_overloaded = (
+            work_center_capacity_hours > 0
+            and work_center_load > work_center_capacity_hours
+        )
+        machine_overloaded = (
+            machine_capacity_hours > 0
+            and machine_load > machine_capacity_hours
+        )
         if not work_center_code:
             capacity_state = 'UNASSIGNED_WORK_CENTER'
         elif not machine_code:
             capacity_state = 'UNASSIGNED_MACHINE'
-        elif capacity_hours > 0 and (work_center_load > capacity_hours or machine_load > capacity_hours):
+        elif work_center_overloaded or machine_overloaded:
             capacity_state = 'OVER_CAPACITY'
-            overloaded_slots.add(work_center_slot_key or machine_slot_key)
-        elif work_center_ratio is not None and work_center_ratio >= Decimal('0.85'):
+            overloaded_slots.add(work_center_slot_key if work_center_overloaded else machine_slot_key)
+        elif (
+            (work_center_ratio is not None and work_center_ratio >= Decimal('0.85'))
+            or (machine_ratio is not None and machine_ratio >= Decimal('0.85'))
+        ):
             capacity_state = 'AT_LIMIT'
         else:
             capacity_state = 'BALANCED'
@@ -789,11 +929,16 @@ def _annotate_capacity_context(cards):
             'runtime_hours': str(runtime_hours),
             'setup_hours': str(setup_hours),
             'scheduled_hours': str(scheduled_hours),
-            'shift_capacity_hours': str(capacity_hours),
+            'active_scheduled_hours': str(active_scheduled_hours),
+            'shift_capacity_hours': str(shift_capacity_hours),
+            'work_center_capacity_hours': str(work_center_capacity_hours),
+            'machine_capacity_hours': str(machine_capacity_hours),
             'work_center_load_hours': str(work_center_load),
             'machine_load_hours': str(machine_load),
             'work_center_load_ratio': str(work_center_ratio) if work_center_ratio is not None else None,
             'machine_load_ratio': str(machine_ratio) if machine_ratio is not None else None,
+            'work_center_catalog_matched': resource_context['work_center_catalog_matched'],
+            'machine_catalog_matched': resource_context['machine_catalog_matched'],
             'capacity_state': capacity_state,
             'capacity_state_label': PLANNING_CAPACITY_STATES[capacity_state]['label'],
             'over_capacity': capacity_state == 'OVER_CAPACITY',
@@ -841,6 +986,7 @@ def _build_capacity_calendar_shift_item(date_key, shift_key):
         'setup_hours': Decimal('0'),
         'scheduled_hours': Decimal('0'),
         'capacity_hours': Decimal('0'),
+        'capacity_slot_keys': set(),
         'affected_sales_order_ids': set(),
     }
 
@@ -935,19 +1081,23 @@ def _build_capacity_calendar(cards):
         )
         shift_key = _get_planning_shift_key(card['operation'].get('planned_shift'))
         shift_item = row['shift_map'].setdefault(shift_key, _build_capacity_calendar_shift_item(row_key, shift_key))
-        if planned_date is not None and shift_key != 'UNASSIGNED':
-            shift_item['capacity_hours'] = Decimal(str(get_shift_capacity_hours(shift_key)))
+        capacity_slot_key, capacity_slot_hours = _get_calendar_capacity_slot_key(card)
+        if capacity_slot_key and capacity_slot_hours > 0 and capacity_slot_key not in shift_item['capacity_slot_keys']:
+            shift_item['capacity_slot_keys'].add(capacity_slot_key)
+            shift_item['capacity_hours'] += capacity_slot_hours
         runtime_hours = Decimal(str(card['capacity'].get('runtime_hours') or 0))
         setup_hours = Decimal(str(card['capacity'].get('setup_hours') or 0))
-        scheduled_hours = Decimal(str(card['capacity'].get('scheduled_hours') or 0))
+        active_scheduled_hours = _get_card_capacity_active_scheduled_hours(card)
+        active_runtime_hours = runtime_hours if active_scheduled_hours > 0 else Decimal('0')
+        active_setup_hours = setup_hours if active_scheduled_hours > 0 else Decimal('0')
         row['total_operations'] += 1
         shift_item['total_operations'] += 1
-        row['runtime_hours'] += runtime_hours
-        row['setup_hours'] += setup_hours
-        row['scheduled_hours'] += scheduled_hours
-        shift_item['runtime_hours'] += runtime_hours
-        shift_item['setup_hours'] += setup_hours
-        shift_item['scheduled_hours'] += scheduled_hours
+        row['runtime_hours'] += active_runtime_hours
+        row['setup_hours'] += active_setup_hours
+        row['scheduled_hours'] += active_scheduled_hours
+        shift_item['runtime_hours'] += active_runtime_hours
+        shift_item['setup_hours'] += active_setup_hours
+        shift_item['scheduled_hours'] += active_scheduled_hours
         if _is_ready_to_run_card(card):
             row['ready_to_run_count'] += 1
             shift_item['ready_to_run_count'] += 1
@@ -1867,7 +2017,7 @@ def _build_planner_shift_watch(cards, capacity_calendar, *, limit=6):
         if card.get('exceptions', {}).get('needs_attention'):
             item['needs_attention_count'] += 1
         try:
-            item['total_scheduled_hours'] += Decimal(str(card.get('capacity', {}).get('scheduled_hours') or 0))
+            item['total_scheduled_hours'] += _get_card_capacity_active_scheduled_hours(card)
         except (InvalidOperation, TypeError, ValueError):
             pass
         sales_order_id = card.get('sales', {}).get('sales_order_id')
@@ -2033,7 +2183,7 @@ def _build_planner_date_watch(cards, capacity_calendar, *, limit=6):
         if card.get('exceptions', {}).get('needs_attention'):
             item['needs_attention_count'] += 1
         try:
-            item['total_scheduled_hours'] += Decimal(str(card.get('capacity', {}).get('scheduled_hours') or 0))
+            item['total_scheduled_hours'] += _get_card_capacity_active_scheduled_hours(card)
             load_ratio = Decimal(str(card.get('capacity', {}).get('work_center_load_ratio') or 0))
         except (InvalidOperation, TypeError, ValueError):
             load_ratio = Decimal('0')
@@ -2202,7 +2352,7 @@ def _build_planner_dispatch_owner_capacity_watch(cards, *, limit=6):
         elif capacity_state == 'AT_LIMIT':
             item['at_limit_count'] += 1
         try:
-            item['total_scheduled_hours'] += Decimal(str(card.get('capacity', {}).get('scheduled_hours') or 0))
+            item['total_scheduled_hours'] += _get_card_capacity_active_scheduled_hours(card)
             work_center_ratio = Decimal(str(card.get('capacity', {}).get('work_center_load_ratio') or 0))
             machine_ratio = Decimal(str(card.get('capacity', {}).get('machine_load_ratio') or 0))
             item['peak_load_ratio'] = max(item['peak_load_ratio'], work_center_ratio, machine_ratio)
@@ -2301,7 +2451,7 @@ def _build_planner_step_watch(cards, *, limit=6):
         if str(card.get('materials', {}).get('material_readiness') or '').strip().upper() != 'READY':
             item['wait_material_count'] += 1
         try:
-            item['total_scheduled_hours'] += Decimal(str(card.get('capacity', {}).get('scheduled_hours') or 0))
+            item['total_scheduled_hours'] += _get_card_capacity_active_scheduled_hours(card)
         except (InvalidOperation, TypeError, ValueError):
             pass
         order_id = card.get('order', {}).get('id')
@@ -2477,7 +2627,7 @@ def _build_planning_summary(cards, *, today):
             capacity_state_counts[capacity_state_key] += 1
         total_runtime_hours += Decimal(str(card['capacity'].get('runtime_hours') or 0))
         total_setup_hours += Decimal(str(card['capacity'].get('setup_hours') or 0))
-        total_scheduled_hours += Decimal(str(card['capacity'].get('scheduled_hours') or 0))
+        total_scheduled_hours += _get_card_capacity_active_scheduled_hours(card)
         if card['capacity'].get('over_capacity'):
             over_capacity_slot_keys.add(
                 f"{card['capacity'].get('work_center_code') or card['capacity'].get('machine_code') or 'UNASSIGNED'}|{card['operation'].get('planned_date') or ''}|{card['capacity'].get('shift_key') or 'UNASSIGNED'}"
@@ -2565,7 +2715,7 @@ def _build_rebalance_suggestions(cards, *, work_center_groups):
 
     def _card_priority(card):
         return (
-            -(Decimal(str(card['capacity'].get('scheduled_hours') or 0))),
+            -_get_card_capacity_active_scheduled_hours(card),
             -(card['operation'].get('priority_rank') or 0),
             -(card['operation'].get('dispatch_sequence') or 0),
             str(card['order'].get('code') or ''),
@@ -2707,7 +2857,7 @@ def _build_rebalance_suggestions(cards, *, work_center_groups):
             key=lambda card: (
                 -(card['operation'].get('priority_rank') or 0),
                 -(card['operation'].get('dispatch_sequence') or 0),
-                -(Decimal(str(card['capacity'].get('scheduled_hours') or 0))),
+                -_get_card_capacity_active_scheduled_hours(card),
             ),
         )[0]
         kind_key = (candidate['card_key'], 'RELIEVE_CAPACITY')
@@ -2717,7 +2867,7 @@ def _build_rebalance_suggestions(cards, *, work_center_groups):
         current_date = str(candidate['operation'].get('planned_date') or '')
         current_shift = str(candidate['capacity'].get('shift_key') or '').strip().upper()
         current_wc = str(candidate['capacity'].get('work_center_code') or '').strip().upper()
-        card_hours = Decimal(str(candidate['capacity'].get('scheduled_hours') or 0))
+        card_hours = _get_card_capacity_active_scheduled_hours(candidate)
 
         candidate_targets = []
         step_targets = work_center_candidates_by_step.get(step_code, [])
@@ -3198,7 +3348,7 @@ def _summarize_preview_rows(rows):
         ),
         'total_runtime_hours': str(sum(Decimal(str(card['capacity'].get('runtime_hours') or 0)) for card in rows)),
         'total_setup_hours': str(sum(Decimal(str(card['capacity'].get('setup_hours') or 0)) for card in rows)),
-        'total_scheduled_hours': str(sum(Decimal(str(card['capacity'].get('scheduled_hours') or 0)) for card in rows)),
+        'total_scheduled_hours': str(sum(_get_card_capacity_active_scheduled_hours(card) for card in rows)),
         'shift_loads': _finalize_shift_loads(shift_items.values(), include_empty=True),
     }
 

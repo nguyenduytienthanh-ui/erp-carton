@@ -2418,21 +2418,36 @@ class ProductionWorkflowTests(APITestCase):
         self.assertEqual(response.status_code, 201, response.data)
         return response.data
 
-    def _create_capacity_resource(self, *, work_center_code='CAT', machine_code='CAT-01', active=True):
+    def _create_capacity_resource(
+        self,
+        *,
+        work_center_code='CAT',
+        machine_code='CAT-01',
+        active=True,
+        work_center_capacity='12.00',
+        machine_capacity='8.00',
+    ):
         work_center = ProductionWorkCenter.objects.create(
             code=work_center_code,
             name=f'To {work_center_code}',
-            default_capacity_hours='12.00',
+            default_capacity_hours=work_center_capacity,
             is_active=active,
         )
         machine = ProductionMachine.objects.create(
             code=machine_code,
             name=f'May {machine_code}',
             work_center=work_center,
-            default_capacity_hours='8.00',
+            default_capacity_hours=machine_capacity,
             is_active=active,
         )
         return work_center, machine
+
+    def _planning_cards(self, response):
+        cards = []
+        for lane in response.data.get('lanes', []):
+            for bucket in lane.get('buckets', []):
+                cards.extend(bucket.get('cards', []))
+        return cards
 
     def test_production_flow_creates_operations_issue_and_receipt(self):
         order = self._create_production_order(planned_qty='5')
@@ -3511,6 +3526,199 @@ class ProductionWorkflowTests(APITestCase):
         machine_filtered = self.client.get('/api/production/orders/planning_board/', {'machine_code': 'IN-01'})
         self.assertEqual(machine_filtered.status_code, 200, machine_filtered.data)
         self.assertEqual(machine_filtered.data['summary']['total_operations'], 2)
+
+    def test_planning_board_uses_catalog_work_center_name_and_capacity(self):
+        work_center, _machine = self._create_capacity_resource(
+            work_center_code='CATWC',
+            machine_code='CATWC-01',
+            work_center_capacity='4.00',
+        )
+        order = self._create_production_order(planned_qty='3')
+        order_id = order['id']
+        self._release_order(order_id)
+        operation = ProductionOperation.objects.get(production_order_id=order_id, sequence=1)
+        planned_date = timezone.localdate().isoformat()
+
+        update = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operation.id,
+                'planned_date': planned_date,
+                'planned_shift': 'MORNING',
+                'work_center_code': work_center.code,
+                'work_center_name': 'Legacy work center name',
+                'estimated_runtime_hours': '3.00',
+                'setup_minutes': 0,
+            },
+            format='json',
+        )
+        self.assertEqual(update.status_code, 200, update.data)
+
+        response = self.client.get('/api/production/orders/planning_board/', {'production_order_id': order_id})
+        self.assertEqual(response.status_code, 200, response.data)
+        group = next(item for item in response.data['work_center_groups'] if item['work_center_code'] == work_center.code)
+        card = next(item for item in self._planning_cards(response) if item['operation']['id'] == operation.id)
+        self.assertEqual(group['work_center_name'], work_center.name)
+        self.assertEqual(group['capacity_hours'], '4.00')
+        self.assertEqual(group['scheduled_hours'], '3.00')
+        self.assertEqual(card['capacity']['work_center_name'], work_center.name)
+        self.assertEqual(card['capacity']['work_center_capacity_hours'], '4.00')
+        self.assertTrue(card['capacity']['work_center_catalog_matched'])
+
+    def test_planning_board_uses_catalog_machine_capacity(self):
+        work_center, machine = self._create_capacity_resource(
+            work_center_code='CATM',
+            machine_code='CATM-01',
+            work_center_capacity='12.00',
+            machine_capacity='4.00',
+        )
+        order = self._create_production_order(planned_qty='3')
+        order_id = order['id']
+        self._release_order(order_id)
+        operation = ProductionOperation.objects.get(production_order_id=order_id, sequence=1)
+        planned_date = timezone.localdate().isoformat()
+
+        update = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operation.id,
+                'planned_date': planned_date,
+                'planned_shift': 'MORNING',
+                'machine_code': machine.code,
+                'estimated_runtime_hours': '5.00',
+                'setup_minutes': 0,
+            },
+            format='json',
+        )
+        self.assertEqual(update.status_code, 200, update.data)
+
+        response = self.client.get('/api/production/orders/planning_board/', {'production_order_id': order_id})
+        self.assertEqual(response.status_code, 200, response.data)
+        queue = next(item for item in response.data['machine_queues'] if item['machine_code'] == machine.code)
+        card = next(item for item in self._planning_cards(response) if item['operation']['id'] == operation.id)
+        self.assertEqual(queue['work_center_code'], work_center.code)
+        self.assertEqual(queue['machine_name'], machine.name)
+        self.assertEqual(queue['capacity_hours'], '4.00')
+        self.assertEqual(queue['scheduled_hours'], '5.00')
+        self.assertTrue(queue['overloaded'])
+        self.assertEqual(card['capacity']['machine_capacity_hours'], '4.00')
+        self.assertEqual(card['capacity']['capacity_state'], 'OVER_CAPACITY')
+        self.assertTrue(card['capacity']['machine_catalog_matched'])
+
+    def test_planning_board_keeps_legacy_resource_capacity_fallback(self):
+        order = self._create_production_order(planned_qty='3')
+        order_id = order['id']
+        self._release_order(order_id)
+        operation = ProductionOperation.objects.get(production_order_id=order_id, sequence=1)
+        planned_date = timezone.localdate().isoformat()
+
+        update = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operation.id,
+                'planned_date': planned_date,
+                'planned_shift': 'MORNING',
+                'work_center_code': 'LEGACY',
+                'work_center_name': 'To cu',
+                'machine_code': 'LEGACY-01',
+                'machine_name': 'May cu 01',
+                'estimated_runtime_hours': '7.00',
+                'setup_minutes': 0,
+            },
+            format='json',
+        )
+        self.assertEqual(update.status_code, 200, update.data)
+
+        response = self.client.get('/api/production/orders/planning_board/', {'production_order_id': order_id})
+        self.assertEqual(response.status_code, 200, response.data)
+        queue = next(item for item in response.data['machine_queues'] if item['machine_code'] == 'LEGACY-01')
+        card = next(item for item in self._planning_cards(response) if item['operation']['id'] == operation.id)
+        self.assertEqual(queue['work_center_name'], 'To cu')
+        self.assertEqual(queue['machine_name'], 'May cu 01')
+        self.assertEqual(queue['capacity_hours'], '8')
+        self.assertEqual(card['capacity']['work_center_capacity_hours'], '8')
+        self.assertEqual(card['capacity']['machine_capacity_hours'], '8')
+        self.assertFalse(card['capacity']['work_center_catalog_matched'])
+        self.assertFalse(card['capacity']['machine_catalog_matched'])
+        self.assertEqual(card['capacity']['capacity_state'], 'AT_LIMIT')
+
+    def test_planning_board_excludes_done_and_skipped_from_active_capacity_load(self):
+        _work_center, machine = self._create_capacity_resource(
+            work_center_code='ACT',
+            machine_code='ACT-01',
+            work_center_capacity='4.00',
+            machine_capacity='4.00',
+        )
+        order = self._create_production_order(planned_qty='3')
+        order_id = order['id']
+        self._release_order(order_id)
+        operations = list(ProductionOperation.objects.filter(production_order_id=order_id).order_by('sequence'))
+        planned_date = timezone.localdate().isoformat()
+
+        for operation in operations[:2]:
+            update = self.client.post(
+                f'/api/production/orders/{order_id}/update_operation/',
+                {
+                    'operation_id': operation.id,
+                    'planned_date': planned_date,
+                    'planned_shift': 'MORNING',
+                    'machine_code': machine.code,
+                    'estimated_runtime_hours': '5.00',
+                    'setup_minutes': 0,
+                },
+                format='json',
+            )
+            self.assertEqual(update.status_code, 200, update.data)
+
+        done = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operations[0].id,
+                'status': 'DONE',
+            },
+            format='json',
+        )
+        self.assertEqual(done.status_code, 200, done.data)
+        skipped = self.client.post(
+            f'/api/production/orders/{order_id}/skip_operation/',
+            {
+                'operation_id': operations[1].id,
+                'reason': 'Khong can chay cong doan trong QA',
+            },
+            format='json',
+        )
+        self.assertEqual(skipped.status_code, 200, skipped.data)
+
+        response = self.client.get('/api/production/orders/planning_board/', {'production_order_id': order_id})
+        self.assertEqual(response.status_code, 200, response.data)
+        queue = next(item for item in response.data['machine_queues'] if item['machine_code'] == machine.code)
+        assigned_cards = [
+            item
+            for item in queue['cards']
+            if item['operation']['id'] in {operations[0].id, operations[1].id}
+        ]
+        self.assertEqual(queue['scheduled_hours'], '0')
+        self.assertFalse(queue['overloaded'])
+        self.assertEqual(response.data['summary']['over_capacity_count'], 0)
+        self.assertEqual({item['operation']['status'] for item in assigned_cards}, {'DONE', 'SKIPPED'})
+        for card in assigned_cards:
+            self.assertEqual(card['capacity']['scheduled_hours'], '5.00')
+            self.assertEqual(card['capacity']['active_scheduled_hours'], '0')
+            self.assertEqual(card['capacity']['machine_load_hours'], '0')
+            self.assertEqual(card['capacity']['capacity_state'], 'BALANCED')
+
+    def test_planning_board_keeps_unassigned_capacity_state(self):
+        order = self._create_production_order(planned_qty='3')
+        order_id = order['id']
+        self._release_order(order_id)
+
+        response = self.client.get('/api/production/orders/planning_board/', {'production_order_id': order_id})
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['summary']['unassigned_work_center_count'], 3)
+        self.assertEqual(response.data['summary']['unassigned_machine_count'], 0)
+        cards = self._planning_cards(response)
+        self.assertEqual({card['capacity']['capacity_state'] for card in cards}, {'UNASSIGNED_WORK_CENTER'})
 
     def test_planning_board_returns_owner_sales_and_material_watch(self):
         customer = Customer.objects.create(
