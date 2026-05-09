@@ -182,6 +182,71 @@ class ProductionReceiptStatus:
     ]
 
 
+class ProductionWorkCenter(models.Model):
+    code = models.CharField(max_length=40, unique=True, db_index=True)
+    name = models.CharField(max_length=120)
+    default_capacity_hours = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        default=Decimal('0'),
+        validators=[MinValueValidator(Decimal('0'))],
+    )
+    description = models.TextField(blank=True, default='')
+    sort_order = models.IntegerField(default=100)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'production_work_centers'
+        ordering = ['sort_order', 'name', 'code']
+        indexes = [
+            models.Index(fields=['is_active', 'sort_order']),
+        ]
+
+    def __str__(self):
+        return f'{self.code} - {self.name}'
+
+    def save(self, *args, **kwargs):
+        self.code = str(self.code or '').strip().upper()
+        super().save(*args, **kwargs)
+
+
+class ProductionMachine(models.Model):
+    code = models.CharField(max_length=40, unique=True, db_index=True)
+    name = models.CharField(max_length=120)
+    work_center = models.ForeignKey(
+        ProductionWorkCenter,
+        on_delete=models.PROTECT,
+        related_name='machines',
+    )
+    default_capacity_hours = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        default=Decimal('0'),
+        validators=[MinValueValidator(Decimal('0'))],
+    )
+    description = models.TextField(blank=True, default='')
+    sort_order = models.IntegerField(default=100)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'production_machines'
+        ordering = ['work_center__sort_order', 'work_center__name', 'sort_order', 'name', 'code']
+        indexes = [
+            models.Index(fields=['work_center', 'is_active', 'sort_order']),
+        ]
+
+    def __str__(self):
+        return f'{self.code} - {self.name}'
+
+    def save(self, *args, **kwargs):
+        self.code = str(self.code or '').strip().upper()
+        super().save(*args, **kwargs)
+
+
 class ProductionDemand(SearchTextModelMixin):
     demand_code = models.CharField(max_length=50, unique=True, null=True, blank=True, db_index=True)
     demand_key = models.CharField(max_length=200, unique=True, db_index=True)
