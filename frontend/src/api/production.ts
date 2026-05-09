@@ -15,6 +15,7 @@ import type {
   ProductionOperationSkipResponse,
   ProductionOrderSummary,
   ProductionIssue,
+  ProductionMachine,
   ProductionOrder,
   ProductionOrderFormValues,
   ProductionPlanningBoardResponse,
@@ -22,11 +23,15 @@ import type {
   ProductionPlanningPreviewResponse,
   ProductionReceipt,
   ProductionReceiptScanResponse,
+  ProductionWorkCenter,
   ProductionWorkflowStateSummary,
 } from '../types/production';
 
 
 type ProductionOrderPayload = Omit<ProductionOrderFormValues, never>;
+
+const PRODUCTION_WORK_CENTERS_ENDPOINT = '/production/work-centers/';
+const PRODUCTION_MACHINES_ENDPOINT = '/production/machines/';
 
 
 export const productionApi = {
@@ -79,6 +84,14 @@ export const productionApi = {
   },
   getCapacityOptions: async (): Promise<ProductionCapacityOptionsResponse> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_ORDERS}capacity_options/`);
+    return response.data;
+  },
+  getProductionWorkCenters: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ProductionWorkCenter>> => {
+    const response = await axiosInstance.get(PRODUCTION_WORK_CENTERS_ENDPOINT, { params });
+    return response.data;
+  },
+  getProductionMachines: async (params?: Record<string, unknown>): Promise<PaginatedResponse<ProductionMachine>> => {
+    const response = await axiosInstance.get(PRODUCTION_MACHINES_ENDPOINT, { params });
     return response.data;
   },
   getOrder: async (id: number): Promise<ProductionOrder> => {

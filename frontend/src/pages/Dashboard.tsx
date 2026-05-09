@@ -484,6 +484,14 @@ export default function Dashboard() {
         route: '/production-planning',
         actionLabel: 'Mở planner điều độ',
       });
+      cards.push({
+        key: 'production-resources',
+        title: 'Danh mục máy/tổ',
+        badge: 'Resource',
+        description: 'Tra cứu tổ sản xuất, máy và năng lực mặc định đang cấp dữ liệu cho planner.',
+        route: '/production-resources',
+        actionLabel: 'Mở danh mục máy/tổ',
+      });
     }
 
     if (canViewReports) {
@@ -577,6 +585,15 @@ export default function Dashboard() {
         description: 'Mở riêng bàn điều độ công đoạn để rà tải theo ngày, ca, vật tư và các điểm nghẽn giao hàng.',
         route: '/production-planning',
         actionLabel: 'Mở điều độ sản xuất',
+      });
+      cards.push({
+        key: 'production-resources',
+        testId: 'dashboard-restore-production-resources',
+        title: 'Danh mục máy/tổ',
+        badge: 'Resource',
+        description: 'Mở danh mục tổ sản xuất, máy và năng lực mặc định cho điều độ.',
+        route: '/production-resources',
+        actionLabel: 'Mở danh mục máy/tổ',
       });
     }
 

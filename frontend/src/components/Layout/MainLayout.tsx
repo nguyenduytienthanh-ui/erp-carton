@@ -122,6 +122,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/production-demands': () => import('../../pages/Production/ProductionDemandList'),
   '/production-orders': () => import('../../pages/Production/ProductionOrderList'),
   '/production-planning': () => import('../../pages/Production/ProductionPlanningBoard'),
+  '/production-resources': () => import('../../pages/Production/ProductionResourceCatalog'),
   '/material-issues': () => import('../../pages/Production/MaterialIssueList'),
   '/production-receipts': () => import('../../pages/Production/ProductionReceiptList'),
   '/production-costing': () => import('../../pages/Management/ProductionCostingReport'),
@@ -559,6 +560,13 @@ const MainLayout = () => {
           path: '/production-planning',
           testId: 'header-restore-shortcut-production-planning',
         },
+        {
+          key: 'production-resources',
+          label: 'Danh mục máy/tổ',
+          description: 'Mở danh mục tổ sản xuất, máy và năng lực mặc định dùng cho planner.',
+          path: '/production-resources',
+          testId: 'header-restore-shortcut-production-resources',
+        },
       );
     }
 
@@ -837,6 +845,10 @@ const MainLayout = () => {
         ...(canManageProduction ? [{
           key: '/production-planning',
           label: renderMenuLabel('/production-planning', 'Điều độ sản xuất'),
+        }] : []),
+        ...(canManageProduction ? [{
+          key: '/production-resources',
+          label: renderMenuLabel('/production-resources', 'Danh mục máy/tổ'),
         }] : []),
         ...(canAccessMaterialIssueRoute ? [{
           key: '/material-issues',

@@ -438,6 +438,15 @@ export function buildCommandPaletteCatalog(
       spotlight: options.canManageProduction,
     },
     {
+      key: 'production-resources',
+      path: '/production-resources',
+      title: 'Danh mục máy/tổ sản xuất',
+      group: 'Sản xuất',
+      description: 'Tra cứu danh mục tổ sản xuất, máy và năng lực mặc định đang dùng cho điều độ.',
+      keywords: ['danh muc may to', 'may san xuat', 'to san xuat', 'work center', 'machine catalog'],
+      enabled: options.canManageProduction,
+    },
+    {
       key: 'production-planning-ready',
       path: '/production-planning?ready_to_run=1',
       title: 'Điều độ sản xuất: Sẵn chạy',
