@@ -329,11 +329,16 @@ export interface ProductionPlanningCard {
     runtime_hours: string;
     setup_hours: string;
     scheduled_hours: string;
+    active_scheduled_hours?: string;
     shift_capacity_hours: string;
+    work_center_capacity_hours?: string;
+    machine_capacity_hours?: string;
     work_center_load_hours: string;
     machine_load_hours: string;
     work_center_load_ratio?: string | null;
     machine_load_ratio?: string | null;
+    work_center_catalog_matched?: boolean;
+    machine_catalog_matched?: boolean;
     capacity_state: ProductionCapacityState;
     capacity_state_label: string;
     over_capacity: boolean;
@@ -816,6 +821,38 @@ export interface ProductionPlanningPreviewResponse {
     machine_changed: boolean;
     work_center_load_ratio_delta?: number | null;
   };
+}
+
+export interface ProductionWorkCenter {
+  id: number;
+  code: string;
+  name: string;
+  default_capacity_hours: string;
+  description?: string;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductionMachine {
+  id: number;
+  code: string;
+  name: string;
+  work_center: number;
+  work_center_code: string;
+  work_center_name: string;
+  default_capacity_hours: string;
+  description?: string;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductionCapacityOptionsResponse {
+  work_centers: ProductionWorkCenter[];
+  machines: ProductionMachine[];
 }
 
 export interface ProductionPlanningBulkPreviewSummary {

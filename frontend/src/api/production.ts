@@ -4,6 +4,7 @@ import type {
   ProductionBulkUpdateResponse,
   PaginatedResponse,
   ProductionApprovalHistoryItem,
+  ProductionCapacityOptionsResponse,
   ProductionDemand,
   ProductionDemandCreateOrderPayload,
   ProductionDemandCreateOrderResponse,
@@ -74,6 +75,10 @@ export const productionApi = {
   },
   getPlanningBoard: async (params?: Record<string, unknown>): Promise<ProductionPlanningBoardResponse> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_ORDERS}planning_board/`, { params });
+    return response.data;
+  },
+  getCapacityOptions: async (): Promise<ProductionCapacityOptionsResponse> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTION_ORDERS}capacity_options/`);
     return response.data;
   },
   getOrder: async (id: number): Promise<ProductionOrder> => {

@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  AutoComplete,
   Button,
   Card,
   DatePicker,
@@ -53,6 +54,8 @@ import type {
   ProductionPlanningRebalanceSuggestion,
   ProductionPlanningSummary,
   ProductionPlanningShiftFilter,
+  ProductionMachine,
+  ProductionWorkCenter,
 } from '../../types/production';
 import { canManageProductionData } from '../../utils/authz';
 import { PAGES } from '../../utils/constants';
@@ -347,6 +350,22 @@ const formatDateTime = (value?: string | null) => (value ? dayjs(value).format('
 const formatQty = (value?: string | number | null) => Number(value ?? 0).toLocaleString('vi-VN', { maximumFractionDigits: 2 });
 const formatHours = (value?: string | number | null) => `${Number(value ?? 0).toLocaleString('vi-VN', { maximumFractionDigits: 2 })}h`;
 const flatCards = (workspace?: ProductionPlanningBoardResponse) => workspace?.lanes.flatMap((lane) => lane.buckets.flatMap((bucket) => bucket.cards)) ?? [];
+const normalizeResourceCode = (value?: string | null) => String(value || '').trim().toUpperCase();
+const buildWorkCenterLabel = (workCenter: ProductionWorkCenter) => `${workCenter.code} · ${workCenter.name || 'Chưa đặt tên'} · ${formatHours(workCenter.default_capacity_hours)}`;
+const buildMachineLabel = (machine: ProductionMachine) => `${machine.code} · ${machine.name || 'Chưa đặt tên'} · ${machine.work_center_code} · ${formatHours(machine.default_capacity_hours)}`;
+const buildLegacyResourceLabel = (code?: string | null, name?: string | null) => {
+  const normalizedCode = String(code || '').trim();
+  const normalizedName = String(name || '').trim();
+  if (!normalizedCode) {
+    return '';
+  }
+  return `${normalizedCode}${normalizedName ? ` · ${normalizedName}` : ''} · Ngoài danh mục`;
+};
+const sortResourceOptions = <T extends { code: string; name?: string; sort_order?: number }>(items: T[]) => [...items].sort((left, right) => (
+  Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0)
+  || String(left.name || '').localeCompare(String(right.name || ''), 'vi')
+  || String(left.code || '').localeCompare(String(right.code || ''), 'vi')
+));
 const getOperationProgressPercent = (card: ProductionPlanningCard) => {
   const plannedQty = Number(card.operation.planned_qty || 0);
   if (!plannedQty) {
@@ -704,7 +723,12 @@ export default function ProductionPlanningBoard() {
     queryKey: ['production-planning-board', params],
     queryFn: () => productionApi.getPlanningBoard(params),
   });
+  const capacityOptionsQuery = useQuery({
+    queryKey: ['production-capacity-options'],
+    queryFn: productionApi.getCapacityOptions,
+  });
   const workspace = workspaceQuery.data;
+  const capacityOptionData = capacityOptionsQuery.data;
   const cards = useMemo(() => flatCards(workspace), [workspace]);
   const selectedCard = useMemo(() => {
     if (selectedCardKey) {
@@ -739,6 +763,116 @@ export default function ProductionPlanningBoard() {
     () => activeSelectedCardKeys.map((cardKey) => cards.find((card) => card.card_key === cardKey)).filter(Boolean) as ProductionPlanningCard[],
     [activeSelectedCardKeys, cards],
   );
+  const activeWorkCenters = useMemo(() => sortResourceOptions(capacityOptionData?.work_centers ?? []), [capacityOptionData?.work_centers]);
+  const activeMachines = useMemo(
+    () => [...(capacityOptionData?.machines ?? [])].sort((left, right) => (
+      String(left.work_center_code || '').localeCompare(String(right.work_center_code || ''), 'vi')
+      || Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0)
+      || String(left.name || '').localeCompare(String(right.name || ''), 'vi')
+      || String(left.code || '').localeCompare(String(right.code || ''), 'vi')
+    )),
+    [capacityOptionData?.machines],
+  );
+  const workCenterByCode = useMemo(() => {
+    const map = new Map<string, ProductionWorkCenter>();
+    activeWorkCenters.forEach((item) => map.set(normalizeResourceCode(item.code), item));
+    return map;
+  }, [activeWorkCenters]);
+  const machineByCode = useMemo(() => {
+    const map = new Map<string, ProductionMachine>();
+    activeMachines.forEach((item) => map.set(normalizeResourceCode(item.code), item));
+    return map;
+  }, [activeMachines]);
+  const hasCapacityCatalog = activeWorkCenters.length > 0 || activeMachines.length > 0;
+  const getWorkCenterOptions = (currentCode?: string | null, currentName?: string | null) => {
+    const options = activeWorkCenters.map((item) => ({ value: item.code, label: buildWorkCenterLabel(item) }));
+    const normalizedCurrent = normalizeResourceCode(currentCode);
+    const currentValue = String(currentCode || '').trim();
+    if (currentValue && !workCenterByCode.has(normalizedCurrent)) {
+      options.unshift({ value: currentValue, label: buildLegacyResourceLabel(currentValue, currentName) });
+    }
+    return options;
+  };
+  const getMachineOptions = (workCenterValue?: string | null, currentCode?: string | null, currentName?: string | null) => {
+    const selectedWorkCenter = normalizeResourceCode(workCenterValue);
+    const machines = selectedWorkCenter
+      ? activeMachines.filter((item) => normalizeResourceCode(item.work_center_code) === selectedWorkCenter)
+      : activeMachines;
+    const options = machines.map((item) => ({ value: item.code, label: buildMachineLabel(item) }));
+    const normalizedCurrent = normalizeResourceCode(currentCode);
+    const currentValue = String(currentCode || '').trim();
+    if (currentValue && !machineByCode.has(normalizedCurrent)) {
+      options.unshift({ value: currentValue, label: buildLegacyResourceLabel(currentValue, currentName) });
+    }
+    return options;
+  };
+  const applyWorkCenterToForm = (targetForm: typeof form | typeof bulkForm, value?: string | null) => {
+    const code = String(value || '').trim();
+    if (!code) {
+      targetForm.setFieldsValue({
+        work_center_code: '',
+        work_center_name: '',
+        machine_code: '',
+        machine_name: '',
+      });
+      return;
+    }
+    const matchedWorkCenter = workCenterByCode.get(normalizeResourceCode(code));
+    const currentMachineCode = String(targetForm.getFieldValue('machine_code') || '').trim();
+    const currentMachine = machineByCode.get(normalizeResourceCode(currentMachineCode));
+    const values: Record<string, string> = {
+      work_center_code: matchedWorkCenter?.code ?? code,
+    };
+    if (matchedWorkCenter) {
+      values.work_center_name = matchedWorkCenter.name;
+    }
+    if (
+      currentMachine
+      && normalizeResourceCode(currentMachine.work_center_code) !== normalizeResourceCode(matchedWorkCenter?.code ?? code)
+    ) {
+      values.machine_code = '';
+      values.machine_name = '';
+    }
+    targetForm.setFieldsValue(values);
+  };
+  const applyMachineToForm = (targetForm: typeof form | typeof bulkForm, value?: string | null) => {
+    const code = String(value || '').trim();
+    if (!code) {
+      targetForm.setFieldsValue({ machine_code: '', machine_name: '' });
+      return;
+    }
+    const matchedMachine = machineByCode.get(normalizeResourceCode(code));
+    if (matchedMachine) {
+      targetForm.setFieldsValue({
+        machine_code: matchedMachine.code,
+        machine_name: matchedMachine.name,
+        work_center_code: matchedMachine.work_center_code,
+        work_center_name: matchedMachine.work_center_name,
+      });
+      return;
+    }
+    targetForm.setFieldsValue({ machine_code: code, machine_name: '' });
+  };
+  const handleWorkCenterFilterChange = (value?: string | null) => {
+    const code = String(value || '').trim();
+    setWorkCenterCode(code);
+    if (!code) {
+      setMachineCode('');
+      return;
+    }
+    const currentMachine = machineByCode.get(normalizeResourceCode(machineCode));
+    if (currentMachine && normalizeResourceCode(currentMachine.work_center_code) !== normalizeResourceCode(code)) {
+      setMachineCode('');
+    }
+  };
+  const handleMachineFilterChange = (value?: string | null) => {
+    const code = String(value || '').trim();
+    const matchedMachine = machineByCode.get(normalizeResourceCode(code));
+    setMachineCode(matchedMachine?.code ?? code);
+    if (matchedMachine) {
+      setWorkCenterCode(matchedMachine.work_center_code);
+    }
+  };
   const blockedSelectedCards = useMemo(() => selectedCards.filter(isDependencyBlocked), [selectedCards]);
   const blockedSelectedCount = blockedSelectedCards.length;
   const selectedCardReadiness = selectedCard ? getOperationReadinessMeta(selectedCard) : null;
@@ -1897,8 +2031,8 @@ export default function ProductionPlanningBoard() {
     bucketKey !== 'ALL' ? { key: 'bucket_key', label: `Nhóm: ${bucketOptions.find((item) => item.value === bucketKey)?.label || bucketKey}`, onClose: () => setBucketKey('ALL') } : null,
     orderStatus !== 'ALL' ? { key: 'order_status', label: `LSX: ${orderStatusOptions.find((item) => item.value === orderStatus)?.label || orderStatus}`, onClose: () => setOrderStatus('ALL') } : null,
     dispatchOwner.trim() ? { key: 'dispatch_owner', label: `Người phụ trách: ${dispatchOwner.trim()}`, onClose: () => setDispatchOwner('') } : null,
-    workCenterCode.trim() ? { key: 'work_center_code', label: `Work center: ${workCenterCode.trim()}`, onClose: () => setWorkCenterCode('') } : null,
-    machineCode.trim() ? { key: 'machine_code', label: `Máy: ${machineCode.trim()}`, onClose: () => setMachineCode('') } : null,
+    workCenterCode.trim() ? { key: 'work_center_code', label: `Work center: ${workCenterByCode.get(normalizeResourceCode(workCenterCode))?.name || workCenterCode.trim()}`, onClose: () => handleWorkCenterFilterChange('') } : null,
+    machineCode.trim() ? { key: 'machine_code', label: `Máy: ${machineByCode.get(normalizeResourceCode(machineCode))?.name || machineCode.trim()}`, onClose: () => setMachineCode('') } : null,
     customer.trim() ? { key: 'customer', label: `Khách hàng: ${customer.trim()}`, onClose: () => setCustomer('') } : null,
     salesOrderCode.trim() ? { key: 'sales_order_code', label: `SO: ${salesOrderCode.trim()}`, onClose: () => setSalesOrderCode('') } : null,
     finishedProductCode.trim() ? { key: 'finished_product_code', label: `Mã hàng: ${finishedProductCode.trim()}`, onClose: () => setFinishedProductCode('') } : null,
@@ -3401,8 +3535,26 @@ export default function ProductionPlanningBoard() {
           </div>
           <div className="workspace-toolbar-group">
             <Input value={dispatchOwner} onChange={(event) => setDispatchOwner(event.target.value)} placeholder="Người phụ trách floor" style={{ width: 200 }} data-testid="production-planning-dispatch-owner-filter" />
-            <Input value={workCenterCode} onChange={(event) => setWorkCenterCode(event.target.value)} placeholder="Work center" style={{ width: 150 }} data-testid="production-planning-work-center-filter" />
-            <Input value={machineCode} onChange={(event) => setMachineCode(event.target.value)} placeholder="Máy" style={{ width: 150 }} data-testid="production-planning-machine-filter" />
+            <AutoComplete
+              allowClear
+              value={workCenterCode}
+              onChange={handleWorkCenterFilterChange}
+              options={getWorkCenterOptions(workCenterCode)}
+              filterOption={(inputValue, option) => String(option?.label ?? option?.value ?? '').toLowerCase().includes(inputValue.toLowerCase())}
+              placeholder={hasCapacityCatalog ? 'Tổ / work center' : 'Work center'}
+              style={{ width: 190 }}
+              data-testid="production-planning-work-center-filter"
+            />
+            <AutoComplete
+              allowClear
+              value={machineCode}
+              onChange={handleMachineFilterChange}
+              options={getMachineOptions(workCenterCode, machineCode)}
+              filterOption={(inputValue, option) => String(option?.label ?? option?.value ?? '').toLowerCase().includes(inputValue.toLowerCase())}
+              placeholder={hasCapacityCatalog ? 'Máy theo tổ' : 'Máy'}
+              style={{ width: 190 }}
+              data-testid="production-planning-machine-filter"
+            />
             <Input value={customer} onChange={(event) => setCustomer(event.target.value)} placeholder="Khách hàng" style={{ width: 180 }} data-testid="production-planning-customer-filter" />
             <Input value={salesOrderCode} onChange={(event) => setSalesOrderCode(event.target.value)} placeholder="Mã SO" style={{ width: 150 }} data-testid="production-planning-sales-order-filter" />
             <Input value={finishedProductCode} onChange={(event) => setFinishedProductCode(event.target.value)} placeholder="Mã hàng" style={{ width: 150 }} data-testid="production-planning-finished-product-filter" />
@@ -3524,7 +3676,14 @@ export default function ProductionPlanningBoard() {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
               <Form.Item name="work_center_code" label="Work center code">
-                <Input placeholder="Gán cùng một work center cho nhóm đang chọn" />
+                <AutoComplete
+                  allowClear
+                  options={getWorkCenterOptions(watchedBulkWorkCenterCode, watchedBulkWorkCenterName)}
+                  onChange={(value) => applyWorkCenterToForm(bulkForm, value)}
+                  filterOption={(inputValue, option) => String(option?.label ?? option?.value ?? '').toLowerCase().includes(inputValue.toLowerCase())}
+                  placeholder={hasCapacityCatalog ? 'Chọn hoặc nhập work center' : 'Gán cùng một work center cho nhóm đang chọn'}
+                  data-testid="production-planning-bulk-work-center-code"
+                />
               </Form.Item>
               <Form.Item name="work_center_name" label="Tên work center">
                 <Input placeholder="Tên để planner dễ đọc" />
@@ -3544,7 +3703,14 @@ export default function ProductionPlanningBoard() {
                   }),
                 ]}
               >
-                <Input placeholder="Gán máy cho toàn bộ nhóm đang chọn" />
+                <AutoComplete
+                  allowClear
+                  options={getMachineOptions(watchedBulkWorkCenterCode, watchedBulkMachineCode, watchedBulkMachineName)}
+                  onChange={(value) => applyMachineToForm(bulkForm, value)}
+                  filterOption={(inputValue, option) => String(option?.label ?? option?.value ?? '').toLowerCase().includes(inputValue.toLowerCase())}
+                  placeholder={hasCapacityCatalog ? 'Chọn hoặc nhập máy' : 'Gán máy cho toàn bộ nhóm đang chọn'}
+                  data-testid="production-planning-bulk-machine-code"
+                />
               </Form.Item>
               <Form.Item name="machine_name" label="Tên máy">
                 <Input placeholder="Tên hiển thị trên planner" />
@@ -3999,7 +4165,15 @@ export default function ProductionPlanningBoard() {
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
                   <Form.Item name="work_center_code" label="Work center code">
-                    <Input disabled={!canEditSelectedCard} placeholder="VD: IN, BE, DONGGOI" data-testid="production-planning-work-center-code-input" />
+                    <AutoComplete
+                      allowClear
+                      disabled={!canEditSelectedCard}
+                      options={getWorkCenterOptions(watchedWorkCenterCode, watchedWorkCenterName)}
+                      onChange={(value) => applyWorkCenterToForm(form, value)}
+                      filterOption={(inputValue, option) => String(option?.label ?? option?.value ?? '').toLowerCase().includes(inputValue.toLowerCase())}
+                      placeholder={hasCapacityCatalog ? 'Chọn hoặc nhập work center' : 'VD: IN, BE, DONGGOI'}
+                      data-testid="production-planning-work-center-code-input"
+                    />
                   </Form.Item>
                   <Form.Item name="work_center_name" label="Tên work center">
                     <Input disabled={!canEditSelectedCard} placeholder="Tên để planner dễ đọc" />
@@ -4019,7 +4193,15 @@ export default function ProductionPlanningBoard() {
                       }),
                     ]}
                   >
-                    <Input disabled={!canEditSelectedCard} placeholder="VD: MAY-IN-01" data-testid="production-planning-machine-code-input" />
+                    <AutoComplete
+                      allowClear
+                      disabled={!canEditSelectedCard}
+                      options={getMachineOptions(watchedWorkCenterCode, watchedMachineCode, watchedMachineName)}
+                      onChange={(value) => applyMachineToForm(form, value)}
+                      filterOption={(inputValue, option) => String(option?.label ?? option?.value ?? '').toLowerCase().includes(inputValue.toLowerCase())}
+                      placeholder={hasCapacityCatalog ? 'Chọn hoặc nhập máy' : 'VD: MAY-IN-01'}
+                      data-testid="production-planning-machine-code-input"
+                    />
                   </Form.Item>
                   <Form.Item name="machine_name" label="Tên máy">
                     <Input disabled={!canEditSelectedCard} placeholder="Tên hiển thị trên planner" />
