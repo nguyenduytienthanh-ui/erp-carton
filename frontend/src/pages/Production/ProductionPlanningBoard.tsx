@@ -27,7 +27,7 @@ import {
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { AppstoreOutlined, CalendarOutlined, CopyOutlined, LinkOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, ArrowDownOutlined, ArrowUpOutlined, CalendarOutlined, CopyOutlined, LinkOutlined, OrderedListOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -141,6 +141,24 @@ type BulkFormValues = {
   block_reason_note?: string;
   note?: string;
 };
+type QueueSequenceDraft = Record<string, number | null>;
+type QueueSequenceDraftState = {
+  scopeKey: string;
+  values: QueueSequenceDraft;
+};
+type QueueSequenceRow = {
+  key: string;
+  card: ProductionPlanningCard;
+  sequence: number;
+  draftPosition: number;
+  cumulativeHours: number;
+  draftCumulativeHours: number;
+  currentSequence: number;
+  nextSequence: number | null;
+  isInactive: boolean;
+  canSequence: boolean;
+  hasChanged: boolean;
+};
 type SkipFormValues = {
   reason?: string;
 };
@@ -183,6 +201,13 @@ const operationStatusLabel = {
   SKIPPED: 'Bỏ qua',
 } as const;
 const isInactiveOperationStatus = (status?: string | null) => status === 'DONE' || status === 'SKIPPED';
+const DEFAULT_DISPATCH_SEQUENCE = 100;
+const DISPATCH_SEQUENCE_STEP = 10;
+const EMPTY_QUEUE_SEQUENCE_DRAFT: QueueSequenceDraft = {};
+const normalizeDispatchSequenceValue = (value?: string | number | null) => {
+  const numberValue = Number(value ?? DEFAULT_DISPATCH_SEQUENCE);
+  return Number.isFinite(numberValue) && numberValue > 0 ? Math.trunc(numberValue) : DEFAULT_DISPATCH_SEQUENCE;
+};
 const DEFAULT_SHIFT_FILTER_OPTIONS = [
   { label: 'Tất cả ca', value: 'ALL' },
   { label: 'Sáng', value: 'MORNING' },
@@ -592,6 +617,7 @@ export default function ProductionPlanningBoard() {
   const [selectedCardKeys, setSelectedCardKeys] = useState<string[]>([]);
   const [selectedSuggestionKeys, setSelectedSuggestionKeys] = useState<string[]>([]);
   const [selectedQueueKey, setSelectedQueueKey] = useState(searchParams.get('queue_key') || null);
+  const [queueSequenceDraftState, setQueueSequenceDraftState] = useState<QueueSequenceDraftState>({ scopeKey: '', values: EMPTY_QUEUE_SEQUENCE_DRAFT });
   const [selectedPresetId, setSelectedPresetId] = useState('NONE');
   const [selectedScenarioId, setSelectedScenarioId] = useState('NONE');
   const [isPresetModalOpen, setIsPresetModalOpen] = useState(false);
@@ -1896,6 +1922,121 @@ export default function ProductionPlanningBoard() {
       ];
     }, []);
   }, [queueDetailCards]);
+  const queueDetailSignature = useMemo(
+    () => queueDetailRows.map((row) => `${row.key}:${row.card.operation.dispatch_sequence ?? ''}:${row.card.operation.status}`).join('|'),
+    [queueDetailRows],
+  );
+  const queueSequenceDraftScopeKey = `${selectedQueueKey || ''}:${queueDetailSignature}`;
+  const queueSequenceDraft = queueSequenceDraftState.scopeKey === queueSequenceDraftScopeKey
+    ? queueSequenceDraftState.values
+    : EMPTY_QUEUE_SEQUENCE_DRAFT;
+  const queueSequenceRows = useMemo<QueueSequenceRow[]>(() => {
+    const draftRows = queueDetailRows.map((row) => {
+      const currentSequence = normalizeDispatchSequenceValue(row.card.operation.dispatch_sequence);
+      const draftValue = Object.prototype.hasOwnProperty.call(queueSequenceDraft, row.key)
+        ? queueSequenceDraft[row.key]
+        : currentSequence;
+      const nextSequence = draftValue === null ? null : normalizeDispatchSequenceValue(draftValue);
+      const isInactive = isInactiveOperationStatus(row.card.operation.status);
+      const canSequence = !isInactive && ['RELEASED', 'IN_PROGRESS'].includes(row.card.order.status);
+      return {
+        ...row,
+        draftPosition: row.sequence,
+        draftCumulativeHours: row.cumulativeHours,
+        currentSequence,
+        nextSequence,
+        isInactive,
+        canSequence,
+        hasChanged: canSequence && nextSequence !== null && nextSequence !== currentSequence,
+      };
+    });
+    return [...draftRows]
+      .sort((left, right) => (
+        (left.nextSequence ?? 99999) - (right.nextSequence ?? 99999)
+        || Number(left.card.operation.priority_rank ?? 99999) - Number(right.card.operation.priority_rank ?? 99999)
+        || String(left.card.order.code || '').localeCompare(String(right.card.order.code || ''), 'vi')
+      ))
+      .reduce<QueueSequenceRow[]>((rows, row, index) => {
+        const previousHours = rows[rows.length - 1]?.draftCumulativeHours ?? 0;
+        const draftCumulativeHours = previousHours + (row.isInactive ? 0 : Number(row.card.capacity.scheduled_hours || 0));
+        return [
+          ...rows,
+          {
+            ...row,
+            draftPosition: index + 1,
+            draftCumulativeHours,
+          },
+        ];
+      }, []);
+  }, [queueDetailRows, queueSequenceDraft]);
+  const queueEditableRows = useMemo(
+    () => queueSequenceRows.filter((row) => row.canSequence),
+    [queueSequenceRows],
+  );
+  const queueSequenceChangedRows = useMemo(
+    () => queueEditableRows.filter((row) => row.hasChanged),
+    [queueEditableRows],
+  );
+  const queueSequenceInvalidRows = useMemo(
+    () => queueEditableRows.filter((row) => row.nextSequence === null || row.nextSequence < 1 || row.nextSequence > 99999 || !Number.isInteger(row.nextSequence)),
+    [queueEditableRows],
+  );
+  const queueSequenceDuplicateValues = useMemo(() => {
+    const counts = new Map<number, number>();
+    queueEditableRows.forEach((row) => {
+      if (row.nextSequence !== null) {
+        counts.set(row.nextSequence, (counts.get(row.nextSequence) ?? 0) + 1);
+      }
+    });
+    return Array.from(counts.entries())
+      .filter(([, count]) => count > 1)
+      .map(([sequence]) => sequence);
+  }, [queueEditableRows]);
+  const queueSequenceSummary = useMemo(() => ({
+    total: queueSequenceRows.length,
+    activeCount: queueSequenceRows.filter((row) => !row.isInactive).length,
+    editableCount: queueEditableRows.length,
+    changedCount: queueSequenceChangedRows.length,
+    inactiveCount: queueSequenceRows.filter((row) => row.isInactive).length,
+    lockedOrderCount: queueSequenceRows.filter((row) => !row.isInactive && !row.canSequence).length,
+    dependencyBlockedCount: queueEditableRows.filter((row) => isDependencyBlocked(row.card)).length,
+    activeScheduledHours: queueSequenceRows.filter((row) => !row.isInactive).reduce((total, row) => total + Number(row.card.capacity.scheduled_hours || 0), 0),
+  }), [queueEditableRows, queueSequenceChangedRows.length, queueSequenceRows]);
+  const queueSequenceMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedQueue) {
+        throw new Error('Chưa chọn queue máy.');
+      }
+      if (!queueSequenceChangedRows.length) {
+        throw new Error('Chưa có thay đổi thứ tự dispatch.');
+      }
+      if (queueSequenceInvalidRows.length) {
+        throw new Error('Thứ tự dispatch phải là số nguyên từ 1 đến 99999.');
+      }
+      if (queueSequenceDuplicateValues.length) {
+        throw new Error(`Thứ tự dispatch bị trùng: ${queueSequenceDuplicateValues.join(', ')}.`);
+      }
+      for (const row of queueSequenceChangedRows) {
+        await productionApi.updateOperation(row.card.order.id, {
+          operation_id: row.card.operation.id,
+          dispatch_sequence: row.nextSequence,
+        });
+      }
+      return { updatedCount: queueSequenceChangedRows.length };
+    },
+    onSuccess: async (result) => {
+      messageApi.success(`Đã cập nhật thứ tự dispatch cho ${result.updatedCount} công đoạn.`);
+      setQueueSequenceDraftState({ scopeKey: queueSequenceDraftScopeKey, values: EMPTY_QUEUE_SEQUENCE_DRAFT });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['production-planning-board'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard-production-summary'] }),
+      ]);
+    },
+    onError: (error) => {
+      messageApi.error(getPlanningActionErrorMessage(error));
+      void queryClient.invalidateQueries({ queryKey: ['production-planning-board'] });
+    },
+  });
   const queueFocusLink = useMemo(() => {
     if (!selectedQueue) {
       return '';
@@ -1911,6 +2052,55 @@ export default function ProductionPlanningBoard() {
       queue_key: selectedQueue.key,
     });
   }, [selectedQueue]);
+  const handleQueueSequenceChange = (rowKey: string, value: number | null) => {
+    setQueueSequenceDraftState((current) => {
+      const values = current.scopeKey === queueSequenceDraftScopeKey ? current.values : EMPTY_QUEUE_SEQUENCE_DRAFT;
+      return { scopeKey: queueSequenceDraftScopeKey, values: { ...values, [rowKey]: value } };
+    });
+  };
+  const handleNormalizeQueueSequence = () => {
+    if (!queueEditableRows.length) {
+      messageApi.info('Queue này chưa có công đoạn active để đánh thứ tự.');
+      return;
+    }
+    const nextDraft: QueueSequenceDraft = {};
+    queueSequenceRows.forEach((row) => {
+      if (!row.isInactive) {
+        nextDraft[row.key] = row.draftPosition * DISPATCH_SEQUENCE_STEP;
+      }
+    });
+    setQueueSequenceDraftState({ scopeKey: queueSequenceDraftScopeKey, values: nextDraft });
+    messageApi.info('Đã nạp thứ tự 10/20/30 theo queue đang hiển thị.');
+  };
+  const handleMoveQueueSequenceRow = (rowKey: string, direction: -1 | 1) => {
+    const rowIndex = queueEditableRows.findIndex((row) => row.key === rowKey);
+    const targetRow = queueEditableRows[rowIndex + direction];
+    if (rowIndex < 0 || !targetRow) {
+      return;
+    }
+    const currentRow = queueEditableRows[rowIndex];
+    setQueueSequenceDraftState((current) => {
+      const values = current.scopeKey === queueSequenceDraftScopeKey ? current.values : EMPTY_QUEUE_SEQUENCE_DRAFT;
+      return {
+        scopeKey: queueSequenceDraftScopeKey,
+        values: {
+          ...values,
+          [currentRow.key]: targetRow.nextSequence,
+          [targetRow.key]: currentRow.nextSequence,
+        },
+      };
+    });
+  };
+  const handleResetQueueSequenceDraft = () => {
+    setQueueSequenceDraftState({ scopeKey: queueSequenceDraftScopeKey, values: EMPTY_QUEUE_SEQUENCE_DRAFT });
+  };
+  const handleApplyQueueSequence = async () => {
+    if (!canManageProduction) {
+      messageApi.warning('Tài khoản hiện tại chưa có quyền điều độ sản xuất.');
+      return;
+    }
+    await queueSequenceMutation.mutateAsync();
+  };
   const rebalanceScenarioPack = (() => {
     const data = rebalancePreviewQuery.data;
     if (!data) {
@@ -4085,7 +4275,7 @@ export default function ProductionPlanningBoard() {
 
       <Drawer
         title={selectedQueue ? `${selectedQueue.machine_name || selectedQueue.machine_code || 'Queue máy'} · ${selectedQueue.shift_label}` : 'Queue theo máy'}
-        width={560}
+        width={760}
         open={Boolean(selectedQueue)}
         onClose={() => setSelectedQueueKey(null)}
         data-testid="production-planning-queue-drawer"
@@ -4112,25 +4302,143 @@ export default function ProductionPlanningBoard() {
               <Card size="small"><Statistic title="Quá hạn" value={selectedQueue.overdue_count} /></Card>
               <Card size="small"><Statistic title="Giờ xếp lịch" value={Number(selectedQueue.scheduled_hours || 0)} precision={2} suffix="h" /></Card>
             </div>
+            <Card
+              size="small"
+              title={<Space><OrderedListOutlined /> <span>Thứ tự chạy theo máy</span></Space>}
+              data-testid="production-planning-queue-sequence-card"
+            >
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
+                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 10 }}><Statistic title="Đang hiển thị" value={queueSequenceSummary.total} /></div>
+                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 10 }}><Statistic title="Active" value={queueSequenceSummary.activeCount} /></div>
+                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 10 }}><Statistic title="Có thể xếp" value={queueSequenceSummary.editableCount} /></div>
+                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 10 }}><Statistic title="Giờ active" value={queueSequenceSummary.activeScheduledHours} precision={2} suffix="h" /></div>
+                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 10 }}><Statistic title="Đã đổi seq" value={queueSequenceSummary.changedCount} valueStyle={{ color: queueSequenceSummary.changedCount ? '#1677ff' : undefined }} /></div>
+                </div>
+                <Space wrap>
+                  <Button size="small" onClick={handleNormalizeQueueSequence} disabled={!queueEditableRows.length || queueSequenceMutation.isPending} data-testid="production-planning-queue-normalize">
+                    Chuẩn hóa 10/20/30
+                  </Button>
+                  <Button size="small" onClick={handleResetQueueSequenceDraft} disabled={!Object.keys(queueSequenceDraft).length || queueSequenceMutation.isPending} data-testid="production-planning-queue-reset-sequence">
+                    Khôi phục thứ tự
+                  </Button>
+                  <Button size="small" onClick={() => setSelectedCardKeys(queueEditableRows.map((row) => row.card.card_key))} disabled={!queueEditableRows.length}>
+                    Chọn active queue
+                  </Button>
+                  <Button
+                    size="small"
+                    type="primary"
+                    onClick={() => void handleApplyQueueSequence()}
+                    loading={queueSequenceMutation.isPending}
+                    disabled={!canManageProduction || !queueSequenceChangedRows.length || queueSequenceInvalidRows.length > 0 || queueSequenceDuplicateValues.length > 0}
+                    data-testid="production-planning-queue-apply-sequence"
+                  >
+                    Áp dụng thứ tự
+                  </Button>
+                </Space>
+                {!canManageProduction ? (
+                  <Alert type="info" showIcon message="Tài khoản hiện tại chưa có quyền điều độ sản xuất." />
+                ) : queueSequenceDuplicateValues.length ? (
+                  <Alert type="warning" showIcon message="Thứ tự dispatch đang bị trùng." description={`Seq trùng: ${queueSequenceDuplicateValues.join(', ')}. Cần đổi về các số khác nhau trước khi áp dụng.`} />
+                ) : queueSequenceInvalidRows.length ? (
+                  <Alert type="warning" showIcon message="Có thứ tự dispatch chưa hợp lệ." description="Seq mới phải là số nguyên từ 1 đến 99999." />
+                ) : queueSequenceChangedRows.length ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Xem trước thứ tự dispatch"
+                    description={`Sẽ cập nhật ${queueSequenceChangedRows.length} công đoạn trong queue đang mở. DONE/SKIPPED không được tính là tải active và không nằm trong gói đổi seq.`}
+                    data-testid="production-planning-queue-sequence-preview"
+                  />
+                ) : (
+                  <Alert type="info" showIcon message="Chưa có thay đổi thứ tự." description="Có thể bấm lên/xuống hoặc nhập seq mới, sau đó áp dụng để lưu thứ tự chạy theo máy." />
+                )}
+                {queueSequenceSummary.inactiveCount || queueSequenceSummary.lockedOrderCount || queueSequenceSummary.dependencyBlockedCount ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="Lưu ý khi xếp queue"
+                    description={`DONE/SKIPPED: ${queueSequenceSummary.inactiveCount} · LSX chưa cho điều độ: ${queueSequenceSummary.lockedOrderCount} · Chờ công đoạn trước: ${queueSequenceSummary.dependencyBlockedCount}. Thao tác này chỉ đổi dispatch_sequence, không đổi trạng thái công đoạn.`}
+                  />
+                ) : null}
+              </Space>
+            </Card>
             <List
               size="small"
-              dataSource={queueDetailRows}
+              dataSource={queueSequenceRows}
               data-testid="production-planning-queue-list"
               locale={{ emptyText: 'Không còn công đoạn nào trong queue máy theo bộ lọc hiện tại.' }}
-              renderItem={(item) => (
-                <List.Item
-                  actions={[
-                    <Button key="open" size="small" type="primary" onClick={() => openCard(item.card)}>
-                      Mở công đoạn
-                    </Button>,
-                  ]}
-                >
-                  <List.Item.Meta
-                    title={`${item.sequence}. ${item.card.order.code} · ${item.card.operation.step_code}`}
-                    description={`${item.card.sales.customer_name || item.card.sales.sales_order_code || 'Chưa gắn SO'} · Seq ${item.card.operation.dispatch_sequence ?? 100} · Lũy kế ${formatHours(item.cumulativeHours)} · ${item.card.exceptions.risk_state_label}`}
-                  />
-                </List.Item>
-              )}
+              renderItem={(item) => {
+                const editableIndex = queueEditableRows.findIndex((row) => row.key === item.key);
+                const canEditSequenceRow = canManageProduction && item.canSequence;
+                return (
+                  <List.Item
+                    data-testid="production-planning-queue-sequence-row"
+                    actions={[
+                      <Tooltip key="up" title="Đưa lên trước">
+                        <span>
+                          <Button
+                            size="small"
+                            icon={<ArrowUpOutlined />}
+                            disabled={!canEditSequenceRow || editableIndex <= 0 || queueSequenceMutation.isPending}
+                            onClick={() => handleMoveQueueSequenceRow(item.key, -1)}
+                            data-testid="production-planning-queue-move-up"
+                          />
+                        </span>
+                      </Tooltip>,
+                      <Tooltip key="down" title="Đưa xuống sau">
+                        <span>
+                          <Button
+                            size="small"
+                            icon={<ArrowDownOutlined />}
+                            disabled={!canEditSequenceRow || editableIndex < 0 || editableIndex >= queueEditableRows.length - 1 || queueSequenceMutation.isPending}
+                            onClick={() => handleMoveQueueSequenceRow(item.key, 1)}
+                            data-testid="production-planning-queue-move-down"
+                          />
+                        </span>
+                      </Tooltip>,
+                      <Button key="open" size="small" type="primary" onClick={() => openCard(item.card)}>
+                        Mở công đoạn
+                      </Button>,
+                    ]}
+                  >
+                    <List.Item.Meta
+                      title={(
+                        <Space wrap>
+                          <Text strong>{`${item.draftPosition}. ${item.card.order.code} · ${item.card.operation.step_code}`}</Text>
+                          {renderOperationStatusTag(item.card.operation)}
+                          <Tag color={isDependencyBlocked(item.card) ? 'warning' : dependencyColor[item.card.exceptions.dependency_state]}>{item.card.exceptions.dependency_state_label}</Tag>
+                          {item.hasChanged ? <Tag color="processing">{`${item.currentSequence} -> ${item.nextSequence}`}</Tag> : null}
+                        </Space>
+                      )}
+                      description={(
+                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                          <Text type="secondary">
+                            {`${item.card.sales.customer_name || item.card.sales.sales_order_code || 'Chưa gắn SO'} · Ưu tiên ${item.card.operation.priority_rank ?? 100} · Lũy kế active ${formatHours(item.draftCumulativeHours)} · ${item.card.exceptions.risk_state_label}`}
+                          </Text>
+                          <Space wrap>
+                            <Tag>{`Seq hiện tại ${item.currentSequence}`}</Tag>
+                            <InputNumber
+                              min={1}
+                              max={99999}
+                              precision={0}
+                              value={item.nextSequence}
+                              disabled={!canEditSequenceRow || queueSequenceMutation.isPending}
+                              onChange={(value) => handleQueueSequenceChange(item.key, value === null ? null : Number(value))}
+                              style={{ width: 110 }}
+                              data-testid="production-planning-queue-sequence-input"
+                            />
+                            <Tag color={getCapacityColor(item.card.capacity.capacity_state)}>{item.card.capacity.capacity_state_label}</Tag>
+                            <Tag>{formatHours(item.card.capacity.scheduled_hours)}</Tag>
+                            {item.isInactive ? <Tag color="default">Không tính active</Tag> : null}
+                            {!item.isInactive && !item.canSequence ? <Tag color="default">LSX chưa cho điều độ</Tag> : null}
+                          </Space>
+                        </Space>
+                      )}
+                    />
+                  </List.Item>
+                );
+              }}
             />
           </Space>
         ) : null}
