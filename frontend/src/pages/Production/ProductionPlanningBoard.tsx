@@ -159,6 +159,25 @@ type QueueSequenceRow = {
   canSequence: boolean;
   hasChanged: boolean;
 };
+type PlanningWarningSeverity = 'critical' | 'warning' | 'info';
+type PlanningWarningItem = {
+  key: string;
+  title: string;
+  reason: string;
+  action: string;
+  severity: PlanningWarningSeverity;
+  count?: number;
+};
+type PlanningWarningCounts = {
+  overCapacityCount?: number;
+  atLimitCount?: number;
+  overdueCount?: number;
+  deliveryRiskCount?: number;
+  unassignedResourceCount?: number;
+  unscheduledCount?: number;
+  dependencyBlockedCount?: number;
+  inactiveCount?: number;
+};
 type SkipFormValues = {
   reason?: string;
 };
@@ -569,6 +588,188 @@ const getSeverityColor = (severity?: 'critical' | 'warning' | 'info') => {
   if (severity === 'warning') return 'gold';
   return 'blue';
 };
+const getPlanningWarningColor = (severity: PlanningWarningSeverity) => {
+  if (severity === 'critical') return 'error';
+  if (severity === 'warning') return 'gold';
+  return 'blue';
+};
+const getPlanningWarningAlertType = (severity: PlanningWarningSeverity): 'error' | 'warning' | 'info' => {
+  if (severity === 'critical') return 'error';
+  if (severity === 'warning') return 'warning';
+  return 'info';
+};
+const planningWarningSeverityRank: Record<PlanningWarningSeverity, number> = {
+  critical: 3,
+  warning: 2,
+  info: 1,
+};
+const sortPlanningWarnings = (items: PlanningWarningItem[]) => [...items].sort((left, right) => (
+  planningWarningSeverityRank[right.severity] - planningWarningSeverityRank[left.severity]
+  || (Number(right.count ?? 0) - Number(left.count ?? 0))
+  || left.title.localeCompare(right.title, 'vi')
+));
+const getPlanningWarningTone = (items: PlanningWarningItem[]): PlanningWarningSeverity => {
+  if (items.some((item) => item.severity === 'critical')) return 'critical';
+  if (items.some((item) => item.severity === 'warning')) return 'warning';
+  return 'info';
+};
+const buildPlanningWarningItemsFromCounts = (counts: PlanningWarningCounts): PlanningWarningItem[] => {
+  const items: PlanningWarningItem[] = [];
+  if (Number(counts.overCapacityCount ?? 0) > 0) {
+    items.push({
+      key: 'over-capacity',
+      title: 'Quá tải',
+      reason: 'Tải đang vượt năng lực đã tính trong planner.',
+      action: 'Mở cockpit công suất hoặc queue máy để đổi ngày/ca/máy.',
+      severity: 'critical',
+      count: counts.overCapacityCount,
+    });
+  }
+  if (Number(counts.overdueCount ?? 0) > 0) {
+    items.push({
+      key: 'overdue',
+      title: 'Trễ kế hoạch',
+      reason: 'Công đoạn active đã rơi vào nhóm quá hạn hoặc trễ giao.',
+      action: 'Ưu tiên xử lý, đổi lịch hoặc bàn giao sớm cho ca hiện tại.',
+      severity: 'critical',
+      count: counts.overdueCount,
+    });
+  }
+  if (Number(counts.atLimitCount ?? 0) > 0) {
+    items.push({
+      key: 'at-limit',
+      title: 'Gần kín tải',
+      reason: 'Slot công suất đang sát ngưỡng tải theo planner.',
+      action: 'Không nhồi thêm việc nếu chưa rà lại queue và giờ active.',
+      severity: 'warning',
+      count: counts.atLimitCount,
+    });
+  }
+  if (Number(counts.deliveryRiskCount ?? 0) > 0) {
+    items.push({
+      key: 'delivery-risk',
+      title: 'Nguy cơ trễ',
+      reason: 'Công đoạn có rủi ro tiến độ hoặc bộ đệm giao hàng xấu.',
+      action: 'Rà hạn giao, ưu tiên và trạng thái bàn giao trước khi chốt ca.',
+      severity: 'warning',
+      count: counts.deliveryRiskCount,
+    });
+  }
+  if (Number(counts.unassignedResourceCount ?? 0) > 0) {
+    items.push({
+      key: 'unassigned-resource',
+      title: 'Thiếu máy/tổ',
+      reason: 'Công đoạn chưa có work center hoặc máy để tính queue rõ ràng.',
+      action: 'Gán work center/máy từ catalog hoặc giữ legacy code nếu cần.',
+      severity: 'warning',
+      count: counts.unassignedResourceCount,
+    });
+  }
+  if (Number(counts.unscheduledCount ?? 0) > 0) {
+    items.push({
+      key: 'unscheduled',
+      title: 'Chưa gán ngày/ca',
+      reason: 'Công đoạn chưa có lịch đủ để vào ca điều độ.',
+      action: 'Dùng nạp lịch nhanh hoặc bulk update để xếp ngày/ca.',
+      severity: 'warning',
+      count: counts.unscheduledCount,
+    });
+  }
+  if (Number(counts.dependencyBlockedCount ?? 0) > 0) {
+    items.push({
+      key: 'dependency-blocked',
+      title: 'Chờ công đoạn trước',
+      reason: 'Công đoạn chưa đủ điều kiện để bắt đầu hoặc hoàn thành.',
+      action: 'Theo dõi bàn giao công đoạn trước; chỉ bỏ qua khi có lý do/audit.',
+      severity: 'warning',
+      count: counts.dependencyBlockedCount,
+    });
+  }
+  if (Number(counts.inactiveCount ?? 0) > 0) {
+    items.push({
+      key: 'inactive-done-skipped',
+      title: 'DONE/SKIPPED inactive',
+      reason: 'Công đoạn hoàn thành hoặc bỏ qua vẫn hiển thị để đối chiếu.',
+      action: 'Không tính các dòng này vào giờ active hoặc tải queue.',
+      severity: 'info',
+      count: counts.inactiveCount,
+    });
+  }
+  return sortPlanningWarnings(items);
+};
+const buildOperationWarnings = (card: ProductionPlanningCard): PlanningWarningItem[] => {
+  if (isInactiveOperationStatus(card.operation.status)) {
+    return [{
+      key: 'inactive-done-skipped',
+      title: 'Không tính active',
+      reason: `${operationStatusLabel[card.operation.status]} chỉ để đối chiếu trạng thái.`,
+      action: 'Không đưa công đoạn này vào tải active hoặc đổi thứ tự queue.',
+      severity: 'info',
+    }];
+  }
+
+  const counts: PlanningWarningCounts = {
+    overCapacityCount: card.capacity.capacity_state === 'OVER_CAPACITY' || card.capacity.over_capacity ? 1 : 0,
+    atLimitCount: card.capacity.capacity_state === 'AT_LIMIT' ? 1 : 0,
+    overdueCount: card.exceptions.risk_state === 'OVERDUE' || card.exceptions.is_overdue ? 1 : 0,
+    deliveryRiskCount: card.exceptions.risk_state === 'AT_RISK' ? 1 : 0,
+    unassignedResourceCount: card.capacity.unassigned_machine || card.capacity.unassigned_work_center ? 1 : 0,
+    unscheduledCount: !card.operation.planned_date || !card.operation.planned_shift ? 1 : 0,
+    dependencyBlockedCount: isDependencyBlocked(card) ? 1 : 0,
+  };
+  const items = buildPlanningWarningItemsFromCounts(counts).map((item) => ({ ...item, count: undefined }));
+  return items.map((item) => {
+    if (item.key === 'over-capacity' || item.key === 'at-limit') {
+      return {
+        ...item,
+        reason: `${card.capacity.capacity_state_label} · ${formatHours(card.capacity.scheduled_hours)} · tải WC ${formatCapacityLoad(card.capacity.work_center_load_ratio)}.`,
+      };
+    }
+    if (item.key === 'overdue' || item.key === 'delivery-risk') {
+      return {
+        ...item,
+        reason: `${card.exceptions.risk_state_label} · ${formatDaysToDelivery(card.exceptions.days_to_delivery)} · ${formatDeliveryGap(card.exceptions.delivery_gap_days)}.`,
+      };
+    }
+    if (item.key === 'unassigned-resource') {
+      return {
+        ...item,
+        reason: `${card.capacity.unassigned_work_center ? 'Chưa gán work center' : 'Đã có work center'} · ${card.capacity.unassigned_machine ? 'chưa gán máy' : 'đã có máy'}.`,
+      };
+    }
+    if (item.key === 'unscheduled') {
+      return {
+        ...item,
+        reason: `${card.operation.planned_date ? formatDate(card.operation.planned_date) : 'Chưa gán ngày'} · ${card.operation.planned_shift_label || 'chưa gán ca'}.`,
+      };
+    }
+    if (item.key === 'dependency-blocked') {
+      const previousStep = card.operation.previous_step_name || card.operation.previous_step_code || 'công đoạn trước';
+      return {
+        ...item,
+        reason: `Đang chờ ${previousStep} trước khi chạy tiếp.`,
+      };
+    }
+    return item;
+  });
+};
+const renderPlanningWarningChips = (items: PlanningWarningItem[], maxItems = 4) => {
+  const visibleItems = items.slice(0, maxItems);
+  const hiddenCount = Math.max(items.length - visibleItems.length, 0);
+  if (!visibleItems.length) {
+    return null;
+  }
+  return (
+    <Space wrap size={4} data-testid="production-planning-warning-chips">
+      {visibleItems.map((item) => (
+        <Tooltip key={item.key} title={`${item.reason} Nên làm: ${item.action}`}>
+          <Tag color={getPlanningWarningColor(item.severity)}>{item.title}</Tag>
+        </Tooltip>
+      ))}
+      {hiddenCount ? <Tag>{`+${hiddenCount} cảnh báo`}</Tag> : null}
+    </Space>
+  );
+};
 const getSummaryRatio = (summary?: ProductionPlanningSummary | null, scopeSummary?: ProductionPlanningSummary | null) => {
   const total = Number(scopeSummary?.total_operations ?? 0);
   if (!total) {
@@ -817,12 +1018,24 @@ export default function ProductionPlanningBoard() {
     waitMaterialCount: activeLoadCards.filter((card) => card.materials.material_readiness === 'WAITING' || card.operation.block_reason_code === 'WAIT_MATERIAL').length,
     waitPreviousCount: activeLoadCards.filter(isDependencyBlocked).length,
     overCapacityCount: activeLoadCards.filter((card) => card.capacity.capacity_state === 'OVER_CAPACITY' || card.capacity.over_capacity).length,
+    atLimitCount: activeLoadCards.filter((card) => card.capacity.capacity_state === 'AT_LIMIT').length,
     overdueCount: activeLoadCards.filter((card) => card.exceptions.risk_state === 'OVERDUE').length,
+    deliveryRiskCount: activeLoadCards.filter((card) => card.exceptions.risk_state === 'AT_RISK').length,
     unassignedMachineCount: activeLoadCards.filter((card) => card.capacity.unassigned_machine).length,
     unassignedWorkCenterCount: activeLoadCards.filter((card) => card.capacity.unassigned_work_center).length,
     unassignedResourceCount: activeLoadCards.filter((card) => card.capacity.unassigned_machine || card.capacity.unassigned_work_center).length,
     unscheduledCount: activeLoadCards.filter((card) => !card.operation.planned_date || !card.operation.planned_shift).length,
   }), [activeLoadCards, cards.length]);
+  const planningWarningItems = useMemo(() => buildPlanningWarningItemsFromCounts({
+    overCapacityCount: planningUsabilitySummary.overCapacityCount,
+    atLimitCount: planningUsabilitySummary.atLimitCount,
+    overdueCount: planningUsabilitySummary.overdueCount,
+    deliveryRiskCount: planningUsabilitySummary.deliveryRiskCount,
+    unassignedResourceCount: planningUsabilitySummary.unassignedResourceCount,
+    unscheduledCount: planningUsabilitySummary.unscheduledCount,
+    dependencyBlockedCount: planningUsabilitySummary.waitPreviousCount,
+    inactiveCount: planningUsabilitySummary.inactiveDoneSkippedCount,
+  }), [planningUsabilitySummary]);
   const activeWorkCenters = useMemo(() => sortResourceOptions(capacityOptionData?.work_centers ?? []), [capacityOptionData?.work_centers]);
   const activeMachines = useMemo(
     () => [...(capacityOptionData?.machines ?? [])].sort((left, right) => (
@@ -938,6 +1151,10 @@ export default function ProductionPlanningBoard() {
   const selectedCardReadiness = selectedCard ? getOperationReadinessMeta(selectedCard) : null;
   const selectedCardDependencyBlocked = Boolean(selectedCard && isDependencyBlocked(selectedCard));
   const selectedBlockedReason = selectedCardReadiness?.reason || 'Công đoạn này đang chờ công đoạn trước hoàn thành.';
+  const selectedCardWarnings = useMemo(
+    () => (selectedCard ? buildOperationWarnings(selectedCard) : []),
+    [selectedCard],
+  );
   const blockedSelectionMessage = getDependencyBlockedSelectionMessage(blockedSelectedCount);
   const activeSelectedSuggestionKeys = useMemo(
     () => selectedSuggestionKeys.filter((suggestionKey) => (workspace?.rebalance_suggestions ?? []).some((item) => item.key === suggestionKey)),
@@ -1710,10 +1927,21 @@ export default function ProductionPlanningBoard() {
       dependencyBlockedCount: activeCards.filter(isDependencyBlocked).length,
       doneOrSkippedCount: selectedCards.filter((card) => card.operation.status === 'DONE' || card.operation.status === 'SKIPPED').length,
       overCapacityCount: activeCards.filter((card) => card.capacity.capacity_state === 'OVER_CAPACITY' || card.capacity.over_capacity).length,
+      atLimitCount: activeCards.filter((card) => card.capacity.capacity_state === 'AT_LIMIT').length,
+      deliveryRiskCount: activeCards.filter((card) => card.exceptions.risk_state === 'AT_RISK').length,
       unassignedResourceCount: activeCards.filter((card) => card.capacity.unassigned_machine || card.capacity.unassigned_work_center).length,
       unscheduledCount: activeCards.filter((card) => !card.operation.planned_date || !card.operation.planned_shift).length,
     };
   }, [selectedCards]);
+  const bulkSelectionWarnings = useMemo(() => buildPlanningWarningItemsFromCounts({
+    overCapacityCount: bulkSelectionSummary.overCapacityCount,
+    atLimitCount: bulkSelectionSummary.atLimitCount,
+    deliveryRiskCount: bulkSelectionSummary.deliveryRiskCount,
+    unassignedResourceCount: bulkSelectionSummary.unassignedResourceCount,
+    unscheduledCount: bulkSelectionSummary.unscheduledCount,
+    dependencyBlockedCount: bulkSelectionSummary.dependencyBlockedCount,
+    inactiveCount: bulkSelectionSummary.doneOrSkippedCount,
+  }), [bulkSelectionSummary]);
   const bulkTargetSummary = useMemo(() => {
     const items = [
       watchedBulkPlannedDate ? `Ngày ${formatDate(dayjs(watchedBulkPlannedDate).format('YYYY-MM-DD'))}` : '',
@@ -2002,6 +2230,37 @@ export default function ProductionPlanningBoard() {
     dependencyBlockedCount: queueEditableRows.filter((row) => isDependencyBlocked(row.card)).length,
     activeScheduledHours: queueSequenceRows.filter((row) => !row.isInactive).reduce((total, row) => total + Number(row.card.capacity.scheduled_hours || 0), 0),
   }), [queueEditableRows, queueSequenceChangedRows.length, queueSequenceRows]);
+  const queueWarningItems = useMemo(() => {
+    const items = buildPlanningWarningItemsFromCounts({
+      overCapacityCount: selectedQueue?.overloaded ? 1 : 0,
+      unscheduledCount: selectedQueue && (!selectedQueue.planned_date || !selectedQueue.shift_key) ? 1 : 0,
+      dependencyBlockedCount: queueSequenceSummary.dependencyBlockedCount,
+      inactiveCount: queueSequenceSummary.inactiveCount,
+    });
+    return items.map((item) => {
+      if (item.key === 'over-capacity' && selectedQueue) {
+        return {
+          ...item,
+          title: 'Queue quá tải',
+          reason: `Tải queue ${formatCapacityLoad(selectedQueue.load_ratio)} · ${formatHours(selectedQueue.scheduled_hours)}/${formatHours(selectedQueue.capacity_hours)}.`,
+          action: 'Giảm giờ active, đổi máy hoặc dời ngày/ca trước khi chốt queue.',
+        };
+      }
+      if (item.key === 'dependency-blocked') {
+        return {
+          ...item,
+          reason: `${queueSequenceSummary.dependencyBlockedCount} công đoạn active đang chờ công đoạn trước.`,
+        };
+      }
+      if (item.key === 'inactive-done-skipped') {
+        return {
+          ...item,
+          reason: `${queueSequenceSummary.inactiveCount} công đoạn DONE/SKIPPED vẫn hiển thị để đối chiếu.`,
+        };
+      }
+      return item;
+    });
+  }, [queueSequenceSummary.dependencyBlockedCount, queueSequenceSummary.inactiveCount, selectedQueue]);
   const queueSequenceMutation = useMutation({
     mutationFn: async () => {
       if (!selectedQueue) {
@@ -2303,7 +2562,18 @@ export default function ProductionPlanningBoard() {
         </Space>
       ),
     },
-    { title: 'Rủi ro', key: 'risk', width: 160, render: (_, card) => <Space direction="vertical" size={6}><Tag color={riskColor[card.exceptions.risk_state]}>{card.exceptions.risk_state_label}</Tag><Text type="secondary">{card.exceptions.block_reason_label || 'Không khóa'}</Text></Space> },
+    {
+      title: 'Rủi ro',
+      key: 'risk',
+      width: 220,
+      render: (_, card) => (
+        <Space direction="vertical" size={6}>
+          <Tag color={riskColor[card.exceptions.risk_state]}>{card.exceptions.risk_state_label}</Tag>
+          {renderPlanningWarningChips(buildOperationWarnings(card), 3)}
+          <Text type="secondary">{card.exceptions.block_reason_label || 'Không khóa'}</Text>
+        </Space>
+      ),
+    },
     {
       title: 'Vật tư',
       key: 'materials',
@@ -2672,6 +2942,33 @@ export default function ProductionPlanningBoard() {
           />
           <Card
             size="small"
+            data-testid="production-planning-warning-panel"
+            title="Cảnh báo điều độ"
+            extra={<Tag color={getPlanningWarningColor(getPlanningWarningTone(planningWarningItems))}>{`${planningWarningItems.length} nhóm cảnh báo`}</Tag>}
+          >
+            {planningWarningItems.length ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
+                {planningWarningItems.slice(0, 8).map((item) => (
+                  <div
+                    key={item.key}
+                    data-testid={`production-planning-warning-${item.key}`}
+                    style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}
+                  >
+                    <Space wrap size={6}>
+                      <Tag color={getPlanningWarningColor(item.severity)}>{item.title}</Tag>
+                      <Text strong>{item.count ?? 0}</Text>
+                    </Space>
+                    <Text type="secondary">{`Lý do: ${item.reason}`}</Text>
+                    <Text type="secondary">{`Nên làm: ${item.action}`}</Text>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Alert type="success" showIcon message="Chưa có cảnh báo điều độ lớn trong bộ lọc hiện tại." description="Planner chỉ tính tải active; DONE/SKIPPED vẫn hiển thị để đối chiếu nhưng không làm tăng tải." />
+            )}
+          </Card>
+          <Card
+            size="small"
             data-testid="production-planning-dispatch-presets"
             title="Điều độ nhanh"
             extra={<Button size="small" onClick={resetDispatchPreset} disabled={!hasDispatchPresetFocus && !dispatchPresetBase}>Bỏ preset</Button>}
@@ -2787,7 +3084,7 @@ export default function ProductionPlanningBoard() {
             <Card size="small"><Statistic title="Chờ vật tư active" value={planningUsabilitySummary.waitMaterialCount} valueStyle={{ color: '#d48806' }} /></Card>
             <Card size="small"><Statistic title="Chờ công đoạn trước" value={planningUsabilitySummary.waitPreviousCount} valueStyle={{ color: '#fa8c16' }} /></Card>
             <Card size="small"><Statistic title="Quá tải active" value={planningUsabilitySummary.overCapacityCount} valueStyle={{ color: '#cf1322' }} /></Card>
-            <Card size="small"><Statistic title="Gần kín tải" value={workspace?.summary.at_limit_count ?? 0} valueStyle={{ color: '#d48806' }} /></Card>
+            <Card size="small"><Statistic title="Gần kín tải" value={planningUsabilitySummary.atLimitCount} valueStyle={{ color: '#d48806' }} /></Card>
             <Card size="small"><Statistic title="Chưa gán máy" value={planningUsabilitySummary.unassignedMachineCount} valueStyle={{ color: '#595959' }} /></Card>
             <Card size="small"><Statistic title="Chưa gán WC" value={planningUsabilitySummary.unassignedWorkCenterCount} valueStyle={{ color: '#8c8c8c' }} /></Card>
             <Card size="small"><Statistic title="Máy dừng" value={workspace?.summary.machine_down_count ?? 0} valueStyle={{ color: '#cf1322' }} /></Card>
@@ -2816,7 +3113,7 @@ export default function ProductionPlanningBoard() {
               Quá tải ({planningUsabilitySummary.overCapacityCount})
             </Button>
             <Button type={capacityState === 'AT_LIMIT' ? 'primary' : 'default'} onClick={() => setCapacityState((current) => (current === 'AT_LIMIT' ? 'ALL' : 'AT_LIMIT'))} data-testid="production-planning-quick-at-limit">
-              Gần kín tải ({workspace?.summary.at_limit_count ?? 0})
+              Gần kín tải ({planningUsabilitySummary.atLimitCount})
             </Button>
             <Button type={capacityState === 'UNASSIGNED_MACHINE' ? 'primary' : 'default'} onClick={() => setCapacityState((current) => (current === 'UNASSIGNED_MACHINE' ? 'ALL' : 'UNASSIGNED_MACHINE'))}>
               Chưa gán máy ({planningUsabilitySummary.unassignedMachineCount})
@@ -3816,6 +4113,7 @@ export default function ProductionPlanningBoard() {
                                   <Tag color={getHandoverColor(card.shop_floor.handover_status)}>{card.shop_floor.handover_status_label}</Tag>
                                 ) : null}
                               </Space>
+                              {renderPlanningWarningChips(buildOperationWarnings(card), 4)}
                               <Space size={4}>
                                 <Button
                                   size="small"
@@ -3978,6 +4276,8 @@ export default function ProductionPlanningBoard() {
                 <Card size="small"><Statistic title="Chờ trước" value={bulkSelectionSummary.dependencyBlockedCount} valueStyle={{ color: '#fa8c16' }} /></Card>
                 <Card size="small"><Statistic title="DONE/SKIPPED" value={bulkSelectionSummary.doneOrSkippedCount} valueStyle={{ color: '#722ed1' }} /></Card>
                 <Card size="small"><Statistic title="Quá tải" value={bulkSelectionSummary.overCapacityCount} valueStyle={{ color: '#cf1322' }} /></Card>
+                <Card size="small"><Statistic title="Gần kín" value={bulkSelectionSummary.atLimitCount} valueStyle={{ color: '#d48806' }} /></Card>
+                <Card size="small"><Statistic title="Nguy cơ trễ" value={bulkSelectionSummary.deliveryRiskCount} valueStyle={{ color: '#d48806' }} /></Card>
               </div>
               <Alert
                 showIcon
@@ -3987,6 +4287,22 @@ export default function ProductionPlanningBoard() {
               />
             </Space>
           </Card>
+          {bulkSelectionWarnings.length ? (
+            <Card size="small" data-testid="production-planning-bulk-warning-panel" title="Cảnh báo nhóm chọn">
+              <List
+                size="small"
+                dataSource={bulkSelectionWarnings.slice(0, 8)}
+                renderItem={(item) => (
+                  <List.Item>
+                    <List.Item.Meta
+                      title={<Space wrap><Tag color={getPlanningWarningColor(item.severity)}>{item.title}</Tag><Text strong>{item.count ?? 0}</Text></Space>}
+                      description={`Lý do: ${item.reason} · Nên làm: ${item.action}`}
+                    />
+                  </List.Item>
+                )}
+              />
+            </Card>
+          ) : null}
           {blockedSelectedCount ? (
             <Alert
               type="warning"
@@ -4008,7 +4324,7 @@ export default function ProductionPlanningBoard() {
               type="info"
               showIcon
               message="Cảnh báo điều độ trong nhóm chọn"
-              description={`Quá tải ${bulkSelectionSummary.overCapacityCount} · Thiếu máy/tổ ${bulkSelectionSummary.unassignedResourceCount} · Chưa gán ngày/ca ${bulkSelectionSummary.unscheduledCount}`}
+              description={`Quá tải ${bulkSelectionSummary.overCapacityCount} · Gần kín ${bulkSelectionSummary.atLimitCount} · Thiếu máy/tổ ${bulkSelectionSummary.unassignedResourceCount} · Chưa gán ngày/ca ${bulkSelectionSummary.unscheduledCount}`}
             />
           ) : null}
           <Space wrap>
@@ -4168,6 +4484,13 @@ export default function ProductionPlanningBoard() {
             <Card size="small" data-testid="production-planning-bulk-preview">
               <Space direction="vertical" size={10} style={{ width: '100%' }}>
                 <Text strong>Mô phỏng tác động trước khi áp dụng</Text>
+                <Alert
+                  type={(bulkPreviewQuery.data.preview_summary.over_capacity_count > bulkPreviewQuery.data.current_summary.over_capacity_count || bulkPreviewQuery.data.preview_summary.negative_delivery_gap_count > 0) ? 'warning' : 'info'}
+                  showIcon
+                  data-testid="production-planning-bulk-preview-warning-summary"
+                  message="Cảnh báo sau preview"
+                  description={`Quá tải ${bulkPreviewQuery.data.current_summary.over_capacity_count} -> ${bulkPreviewQuery.data.preview_summary.over_capacity_count} · Gần kín ${bulkPreviewQuery.data.current_summary.at_limit_count} -> ${bulkPreviewQuery.data.preview_summary.at_limit_count} · Thiếu máy/tổ ${bulkPreviewQuery.data.preview_summary.unassigned_machine_count + bulkPreviewQuery.data.preview_summary.unassigned_work_center_count} · Giao hàng bị trễ ${bulkPreviewQuery.data.preview_summary.negative_delivery_gap_count}. DONE/SKIPPED trong nhóm chọn vẫn không tính giờ active.`}
+                />
                 <Text type="secondary">
                   {`Sẵn chạy ${bulkPreviewQuery.data.current_summary.ready_to_run_count} -> ${bulkPreviewQuery.data.preview_summary.ready_to_run_count} · Cần xử lý ${bulkPreviewQuery.data.current_summary.needs_attention_count} -> ${bulkPreviewQuery.data.preview_summary.needs_attention_count}`}
                 </Text>
@@ -4288,6 +4611,23 @@ export default function ProductionPlanningBoard() {
               message={`${selectedQueue.work_center_name || selectedQueue.work_center_code || 'Chưa gán WC'} · ${selectedQueue.total_operations} công đoạn`}
               description={`${selectedQueue.planned_date ? formatDate(selectedQueue.planned_date) : 'Chưa xếp ngày'} · Tải ${formatCapacityLoad(selectedQueue.load_ratio)} · ${formatHours(selectedQueue.scheduled_hours)}/${formatHours(selectedQueue.capacity_hours)}`}
             />
+            {queueWarningItems.length ? (
+              <Alert
+                showIcon
+                type={getPlanningWarningAlertType(getPlanningWarningTone(queueWarningItems))}
+                data-testid="production-planning-queue-warning-panel"
+                message="Cảnh báo queue máy"
+                description={queueWarningItems.slice(0, 4).map((item) => `${item.title}: ${item.reason} Nên làm: ${item.action}`).join(' · ')}
+              />
+            ) : (
+              <Alert
+                showIcon
+                type="success"
+                data-testid="production-planning-queue-warning-panel"
+                message="Queue chưa có cảnh báo lớn."
+                description="Giờ active đang tách riêng với DONE/SKIPPED để tránh hiểu sai tải máy."
+              />
+            )}
             <Space wrap>
               <Button size="small" icon={<LinkOutlined />} onClick={() => void handleCopyPlannerDeepLink(queueFocusLink, 'Đã sao chép deeplink queue máy.')}>
                 Copy deeplink
@@ -4416,6 +4756,7 @@ export default function ProductionPlanningBoard() {
                           <Text type="secondary">
                             {`${item.card.sales.customer_name || item.card.sales.sales_order_code || 'Chưa gắn SO'} · Ưu tiên ${item.card.operation.priority_rank ?? 100} · Lũy kế active ${formatHours(item.draftCumulativeHours)} · ${item.card.exceptions.risk_state_label}`}
                           </Text>
+                          {renderPlanningWarningChips(buildOperationWarnings(item.card), 3)}
                           <Space wrap>
                             <Tag>{`Seq hiện tại ${item.currentSequence}`}</Tag>
                             <InputNumber
@@ -4485,6 +4826,24 @@ export default function ProductionPlanningBoard() {
               {selectedCard.shop_floor.handover_status ? <Tag color={getHandoverColor(selectedCard.shop_floor.handover_status)}>{selectedCard.shop_floor.handover_status_label}</Tag> : null}
               {selectedCard.operation.block_reason_label ? <Tag color="volcano">{selectedCard.operation.block_reason_label}</Tag> : null}
             </Space>
+            <Card size="small" title="Cảnh báo cần xử lý" data-testid="production-planning-detail-warning-panel">
+              {selectedCardWarnings.length ? (
+                <List
+                  size="small"
+                  dataSource={selectedCardWarnings.slice(0, 6)}
+                  renderItem={(item) => (
+                    <List.Item>
+                      <List.Item.Meta
+                        title={<Space wrap><Tag color={getPlanningWarningColor(item.severity)}>{item.title}</Tag><Text>{item.reason}</Text></Space>}
+                        description={`Nên làm: ${item.action}`}
+                      />
+                    </List.Item>
+                  )}
+                />
+              ) : (
+                <Alert type="success" showIcon message="Chưa có cảnh báo cần xử lý cho công đoạn này." description="Công đoạn đang đủ dữ liệu điều độ theo trạng thái hiện tại." />
+              )}
+            </Card>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
               <Card size="small">
                 <Statistic
