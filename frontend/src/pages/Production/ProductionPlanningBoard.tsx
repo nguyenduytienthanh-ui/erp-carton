@@ -117,7 +117,8 @@ type SavedScenario = {
     total_scheduled_hours_delta: string;
   };
 };
-type DispatchPresetKey = 'OVERDUE_RESCUE' | 'TODAY_READY' | 'TODAY_HANDOVER' | 'TOMORROW_LOAD' | 'UNSCHEDULED_QUEUE';
+type DispatchPresetKey = 'READY_TO_RUN' | 'UNASSIGNED_RESOURCE' | 'UNSCHEDULED_SCHEDULE' | 'OVER_CAPACITY' | 'OVERDUE' | 'WAIT_PREVIOUS_STEP';
+type DispatchPresetSnapshot = Pick<Snapshot, 'planned_date' | 'planned_shift' | 'capacity_state' | 'risk_state' | 'bucket_key' | 'dependency_state' | 'ready_to_run' | 'needs_attention' | 'has_material_wait' | 'has_previous_wait' | 'view'>;
 type OperationReadinessMeta = {
   label: string;
   color: string;
@@ -181,6 +182,7 @@ const operationStatusLabel = {
   DONE: 'Hoàn thành',
   SKIPPED: 'Bỏ qua',
 } as const;
+const isInactiveOperationStatus = (status?: string | null) => status === 'DONE' || status === 'SKIPPED';
 const DEFAULT_SHIFT_FILTER_OPTIONS = [
   { label: 'Tất cả ca', value: 'ALL' },
   { label: 'Sáng', value: 'MORNING' },
@@ -260,31 +262,42 @@ const blockReasonOptions = [
   { label: 'Máy dừng', value: 'MACHINE_DOWN' },
   { label: 'Khác', value: 'OTHER' },
 ];
-const dispatchPresetCards: Array<{ key: DispatchPresetKey; title: string; description: string }> = [
+const dispatchPresetCards: Array<{ key: DispatchPresetKey; title: string; description: string; tone: string }> = [
   {
-    key: 'OVERDUE_RESCUE',
-    title: 'Cứu công đoạn quá hạn',
-    description: 'Khoanh ngay nhóm cần đổi lịch để giảm áp lực trễ giao.',
+    key: 'READY_TO_RUN',
+    title: 'Sẵn chạy',
+    description: 'Công đoạn đủ điều kiện để đưa vào line.',
+    tone: '#1677ff',
   },
   {
-    key: 'TODAY_READY',
-    title: 'Đẩy hàng sẵn chạy hôm nay',
-    description: 'Lọc ngay các công đoạn hôm nay đã đủ điều kiện vào line.',
+    key: 'UNASSIGNED_RESOURCE',
+    title: 'Chưa gán máy/tổ',
+    description: 'Cần chốt work center hoặc máy trước khi chạy.',
+    tone: '#595959',
   },
   {
-    key: 'TODAY_HANDOVER',
-    title: 'Bàn giao công đoạn hôm nay',
-    description: 'Theo dõi nhóm chờ công đoạn trước ngay trong ca hiện tại.',
+    key: 'UNSCHEDULED_SCHEDULE',
+    title: 'Chưa gán ngày/ca',
+    description: 'Cần xếp ngày kế hoạch hoặc ca sản xuất.',
+    tone: '#8c8c8c',
   },
   {
-    key: 'TOMORROW_LOAD',
-    title: 'Cân tải ngày mai',
-    description: 'Xem trước lane ngày mai để chốt nhân lực và vật tư.',
+    key: 'OVER_CAPACITY',
+    title: 'Quá tải',
+    description: 'Máy hoặc tổ đang vượt năng lực đã khai báo.',
+    tone: '#cf1322',
   },
   {
-    key: 'UNSCHEDULED_QUEUE',
-    title: 'Chốt lịch còn treo',
-    description: 'Gom các công đoạn chưa xếp để xếp ngày-ca nhanh hơn.',
+    key: 'OVERDUE',
+    title: 'Trễ',
+    description: 'Công đoạn quá hạn hoặc tạo áp lực giao hàng.',
+    tone: '#d4380d',
+  },
+  {
+    key: 'WAIT_PREVIOUS_STEP',
+    title: 'Chờ công đoạn trước',
+    description: 'Bị chặn bởi dependency, không thao tác vượt thứ tự.',
+    tone: '#fa8c16',
   },
 ];
 
@@ -569,6 +582,8 @@ export default function ProductionPlanningBoard() {
   const [hasMaterialWait, setHasMaterialWait] = useState(initial.has_material_wait);
   const [hasPreviousWait, setHasPreviousWait] = useState(initial.has_previous_wait);
   const [viewMode, setViewMode] = useState<ViewMode>(initial.view);
+  const [activeDispatchPreset, setActiveDispatchPreset] = useState<DispatchPresetKey | null>(null);
+  const [dispatchPresetBase, setDispatchPresetBase] = useState<DispatchPresetSnapshot | null>(null);
   const [productionOrderId, setProductionOrderId] = useState(searchParams.get('production_order_id') || '');
   const [focusOperationId, setFocusOperationId] = useState(searchParams.get('focus_operation_id') || '');
   const [focusWindowDate, setFocusWindowDate] = useState(searchParams.get('focus_window_date') || '');
@@ -763,6 +778,25 @@ export default function ProductionPlanningBoard() {
     () => activeSelectedCardKeys.map((cardKey) => cards.find((card) => card.card_key === cardKey)).filter(Boolean) as ProductionPlanningCard[],
     [activeSelectedCardKeys, cards],
   );
+  const activeLoadCards = useMemo(
+    () => cards.filter((card) => !isInactiveOperationStatus(card.operation.status)),
+    [cards],
+  );
+  const planningUsabilitySummary = useMemo(() => ({
+    totalVisibleCount: cards.length,
+    activeCount: activeLoadCards.length,
+    inactiveDoneSkippedCount: cards.length - activeLoadCards.length,
+    activeScheduledHours: activeLoadCards.reduce((total, card) => total + Number(card.capacity.scheduled_hours || 0), 0),
+    readyCount: activeLoadCards.filter((card) => card.materials.ready_to_run).length,
+    waitMaterialCount: activeLoadCards.filter((card) => card.materials.material_readiness === 'WAITING' || card.operation.block_reason_code === 'WAIT_MATERIAL').length,
+    waitPreviousCount: activeLoadCards.filter(isDependencyBlocked).length,
+    overCapacityCount: activeLoadCards.filter((card) => card.capacity.capacity_state === 'OVER_CAPACITY' || card.capacity.over_capacity).length,
+    overdueCount: activeLoadCards.filter((card) => card.exceptions.risk_state === 'OVERDUE').length,
+    unassignedMachineCount: activeLoadCards.filter((card) => card.capacity.unassigned_machine).length,
+    unassignedWorkCenterCount: activeLoadCards.filter((card) => card.capacity.unassigned_work_center).length,
+    unassignedResourceCount: activeLoadCards.filter((card) => card.capacity.unassigned_machine || card.capacity.unassigned_work_center).length,
+    unscheduledCount: activeLoadCards.filter((card) => !card.operation.planned_date || !card.operation.planned_shift).length,
+  }), [activeLoadCards, cards.length]);
   const activeWorkCenters = useMemo(() => sortResourceOptions(capacityOptionData?.work_centers ?? []), [capacityOptionData?.work_centers]);
   const activeMachines = useMemo(
     () => [...(capacityOptionData?.machines ?? [])].sort((left, right) => (
@@ -1093,70 +1127,131 @@ export default function ProductionPlanningBoard() {
     const anchor = plannedDate ? dayjs(plannedDate) : dayjs();
     setPlannedDate(anchor.add(offsetDays, 'day').format('YYYY-MM-DD'));
   };
+  const buildDispatchPresetSnapshot = (): DispatchPresetSnapshot => ({
+    planned_date: plannedDate,
+    planned_shift: plannedShift,
+    capacity_state: capacityState,
+    risk_state: riskState,
+    bucket_key: bucketKey,
+    dependency_state: dependencyState,
+    ready_to_run: readyToRunOnly,
+    needs_attention: needsAttentionOnly,
+    has_material_wait: hasMaterialWait,
+    has_previous_wait: hasPreviousWait,
+    view: viewMode,
+  });
+  const applyDispatchPresetSnapshot = (saved: DispatchPresetSnapshot) => {
+    setPlannedDate(saved.planned_date);
+    setPlannedShift(saved.planned_shift);
+    setCapacityState(saved.capacity_state);
+    setRiskState(saved.risk_state);
+    setBucketKey(saved.bucket_key);
+    setDependencyState(saved.dependency_state);
+    setReadyToRunOnly(saved.ready_to_run);
+    setNeedsAttentionOnly(saved.needs_attention);
+    setHasMaterialWait(saved.has_material_wait);
+    setHasPreviousWait(saved.has_previous_wait);
+    setViewMode(saved.view);
+  };
+  const resetDispatchPreset = () => {
+    if (dispatchPresetBase) {
+      applyDispatchPresetSnapshot(dispatchPresetBase);
+    } else {
+      setReadyToRunOnly(false);
+      setNeedsAttentionOnly(false);
+      setHasMaterialWait(false);
+      setHasPreviousWait(false);
+      setCapacityState('ALL');
+      setRiskState('ALL');
+      setBucketKey('ALL');
+      setDependencyState('ALL');
+    }
+    setActiveDispatchPreset(null);
+    setDispatchPresetBase(null);
+  };
   const applyDispatchPreset = (preset: DispatchPresetKey) => {
-    if (preset === 'OVERDUE_RESCUE') {
+    const base = dispatchPresetBase ?? buildDispatchPresetSnapshot();
+    applyDispatchPresetSnapshot(base);
+    setDispatchPresetBase(base);
+    setActiveDispatchPreset(preset);
+    setViewMode('BOARD');
+    if (preset === 'READY_TO_RUN') {
+      setReadyToRunOnly(true);
+      return;
+    }
+    if (preset === 'UNASSIGNED_RESOURCE') {
+      const unassignedMachineCount = planningUsabilitySummary.unassignedMachineCount;
+      const unassignedWorkCenterCount = planningUsabilitySummary.unassignedWorkCenterCount;
+      setCapacityState(unassignedWorkCenterCount > unassignedMachineCount ? 'UNASSIGNED_WORK_CENTER' : 'UNASSIGNED_MACHINE');
+      return;
+    }
+    if (preset === 'UNSCHEDULED_SCHEDULE') {
+      setPlannedDate('');
+      setPlannedShift('ALL');
+      setBucketKey('UNSCHEDULED');
+      return;
+    }
+    if (preset === 'OVER_CAPACITY') {
+      setCapacityState('OVER_CAPACITY');
+      return;
+    }
+    if (preset === 'OVERDUE') {
       setPlannedDate('');
       setBucketKey('OVERDUE');
-      setReadyToRunOnly(false);
-      setNeedsAttentionOnly(true);
-      setHasMaterialWait(false);
-      setHasPreviousWait(false);
-      setViewMode('BOARD');
+      setRiskState('OVERDUE');
       return;
     }
-    if (preset === 'TODAY_READY') {
-      setPlannedDate(dayjs().format('YYYY-MM-DD'));
-      setBucketKey('ALL');
-      setReadyToRunOnly(true);
-      setNeedsAttentionOnly(false);
-      setHasMaterialWait(false);
-      setHasPreviousWait(false);
-      setViewMode('BOARD');
-      return;
-    }
-    if (preset === 'TODAY_HANDOVER') {
-      setPlannedDate(dayjs().format('YYYY-MM-DD'));
-      setBucketKey('ALL');
-      setReadyToRunOnly(false);
-      setNeedsAttentionOnly(true);
-      setHasMaterialWait(false);
-      setHasPreviousWait(true);
-      setViewMode('BOARD');
-      return;
-    }
-    if (preset === 'TOMORROW_LOAD') {
-      setPlannedDate(dayjs().add(1, 'day').format('YYYY-MM-DD'));
-      setBucketKey('ALL');
-      setReadyToRunOnly(false);
-      setNeedsAttentionOnly(false);
-      setHasMaterialWait(false);
-      setHasPreviousWait(false);
-      setViewMode('BOARD');
-      return;
-    }
-    setPlannedDate('');
-    setBucketKey('UNSCHEDULED');
-    setReadyToRunOnly(false);
-    setNeedsAttentionOnly(false);
-    setHasMaterialWait(false);
-    setHasPreviousWait(false);
-    setViewMode('BOARD');
+    setDependencyState('WAIT_PREVIOUS_STEP');
+    setHasPreviousWait(true);
   };
-  const isDispatchPresetActive = (preset: DispatchPresetKey) => {
-    if (preset === 'OVERDUE_RESCUE') {
-      return !plannedDate && bucketKey === 'OVERDUE' && needsAttentionOnly && !readyToRunOnly && !hasMaterialWait && !hasPreviousWait;
+  const isDispatchPresetFilterActive = (preset: DispatchPresetKey) => {
+    if (preset === 'READY_TO_RUN') {
+      return readyToRunOnly;
     }
-    if (preset === 'TODAY_READY') {
-      return plannedDate === dayjs().format('YYYY-MM-DD') && readyToRunOnly && bucketKey === 'ALL' && !needsAttentionOnly && !hasMaterialWait && !hasPreviousWait;
+    if (preset === 'UNASSIGNED_RESOURCE') {
+      return capacityState === 'UNASSIGNED_MACHINE' || capacityState === 'UNASSIGNED_WORK_CENTER';
     }
-    if (preset === 'TODAY_HANDOVER') {
-      return plannedDate === dayjs().format('YYYY-MM-DD') && hasPreviousWait && needsAttentionOnly && bucketKey === 'ALL' && !readyToRunOnly && !hasMaterialWait;
+    if (preset === 'UNSCHEDULED_SCHEDULE') {
+      return bucketKey === 'UNSCHEDULED';
     }
-    if (preset === 'TOMORROW_LOAD') {
-      return plannedDate === dayjs().add(1, 'day').format('YYYY-MM-DD') && bucketKey === 'ALL' && !readyToRunOnly && !needsAttentionOnly && !hasMaterialWait && !hasPreviousWait;
+    if (preset === 'OVER_CAPACITY') {
+      return capacityState === 'OVER_CAPACITY';
     }
-    return !plannedDate && bucketKey === 'UNSCHEDULED' && !readyToRunOnly && !needsAttentionOnly && !hasMaterialWait && !hasPreviousWait;
+    if (preset === 'OVERDUE') {
+      return bucketKey === 'OVERDUE' || riskState === 'OVERDUE';
+    }
+    return dependencyState === 'WAIT_PREVIOUS_STEP' || hasPreviousWait;
   };
+  const isDispatchPresetActive = (preset: DispatchPresetKey) => (
+    activeDispatchPreset === preset || (!activeDispatchPreset && isDispatchPresetFilterActive(preset))
+  );
+  const getDispatchPresetCount = (preset: DispatchPresetKey) => {
+    if (preset === 'READY_TO_RUN') return planningUsabilitySummary.readyCount;
+    if (preset === 'UNASSIGNED_RESOURCE') return planningUsabilitySummary.unassignedResourceCount;
+    if (preset === 'UNSCHEDULED_SCHEDULE') return planningUsabilitySummary.unscheduledCount;
+    if (preset === 'OVER_CAPACITY') return planningUsabilitySummary.overCapacityCount;
+    if (preset === 'OVERDUE') return planningUsabilitySummary.overdueCount;
+    return planningUsabilitySummary.waitPreviousCount;
+  };
+  const getDispatchPresetDetail = (preset: DispatchPresetKey) => {
+    if (preset === 'UNASSIGNED_RESOURCE') {
+      return `Máy ${planningUsabilitySummary.unassignedMachineCount} · Tổ ${planningUsabilitySummary.unassignedWorkCenterCount}`;
+    }
+    if (preset === 'UNSCHEDULED_SCHEDULE') {
+      return 'Lọc nhóm chưa xếp ngày/ca';
+    }
+    if (preset === 'OVER_CAPACITY') {
+      return `Active ${planningUsabilitySummary.activeCount} · Không tính DONE/SKIPPED`;
+    }
+    if (preset === 'OVERDUE') {
+      return `Ảnh hưởng ${workspace?.summary.affected_sales_order_count ?? 0} SO`;
+    }
+    if (preset === 'WAIT_PREVIOUS_STEP') {
+      return 'Giữ dependency, không thao tác vượt bước';
+    }
+    return `Active ${planningUsabilitySummary.activeCount}`;
+  };
+  const hasDispatchPresetFocus = dispatchPresetCards.some((preset) => isDispatchPresetFilterActive(preset.key));
   const handleCopyPlannerHandover = async () => {
     if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
       messageApi.error('Trinh duyet hien tai khong ho tro sao chep nhanh.');
@@ -1578,6 +1673,48 @@ export default function ProductionPlanningBoard() {
     }
     return changes;
   };
+  const bulkSelectionSummary = useMemo(() => {
+    const activeCards = selectedCards.filter((card) => !isInactiveOperationStatus(card.operation.status));
+    const activeScheduledHours = activeCards.reduce((total, card) => total + Number(card.capacity.scheduled_hours || 0), 0);
+    return {
+      total: selectedCards.length,
+      activeCount: activeCards.length,
+      activeScheduledHours,
+      readyCount: activeCards.filter((card) => card.materials.ready_to_run).length,
+      dependencyBlockedCount: activeCards.filter(isDependencyBlocked).length,
+      doneOrSkippedCount: selectedCards.filter((card) => card.operation.status === 'DONE' || card.operation.status === 'SKIPPED').length,
+      overCapacityCount: activeCards.filter((card) => card.capacity.capacity_state === 'OVER_CAPACITY' || card.capacity.over_capacity).length,
+      unassignedResourceCount: activeCards.filter((card) => card.capacity.unassigned_machine || card.capacity.unassigned_work_center).length,
+      unscheduledCount: activeCards.filter((card) => !card.operation.planned_date || !card.operation.planned_shift).length,
+    };
+  }, [selectedCards]);
+  const bulkTargetSummary = useMemo(() => {
+    const items = [
+      watchedBulkPlannedDate ? `Ngày ${formatDate(dayjs(watchedBulkPlannedDate).format('YYYY-MM-DD'))}` : '',
+      watchedBulkPlannedShift ? `Ca ${watchedBulkPlannedShift === '__CLEAR__' ? 'Bỏ xếp ca' : shiftFormOptions.find((item) => item.value === watchedBulkPlannedShift)?.label || watchedBulkPlannedShift}` : '',
+      watchedBulkWorkCenterCode ? `Tổ ${workCenterByCode.get(normalizeResourceCode(watchedBulkWorkCenterCode))?.name || watchedBulkWorkCenterName || watchedBulkWorkCenterCode}` : '',
+      watchedBulkMachineCode ? `Máy ${machineByCode.get(normalizeResourceCode(watchedBulkMachineCode))?.name || watchedBulkMachineName || watchedBulkMachineCode}` : '',
+      watchedBulkDispatchSequence ? `Seq ${watchedBulkDispatchSequence}` : '',
+      watchedBulkPriorityRank ? `Ưu tiên ${watchedBulkPriorityRank}` : '',
+      watchedBulkEstimatedRuntimeHours !== undefined && watchedBulkEstimatedRuntimeHours !== null ? `Runtime ${formatHours(watchedBulkEstimatedRuntimeHours)}` : '',
+      watchedBulkSetupMinutes !== undefined && watchedBulkSetupMinutes !== null ? `Setup ${watchedBulkSetupMinutes} phút` : '',
+    ].filter(Boolean);
+    return items.length ? items.join(' · ') : 'Chưa chọn thay đổi điều độ.';
+  }, [
+    machineByCode,
+    shiftFormOptions,
+    watchedBulkDispatchSequence,
+    watchedBulkEstimatedRuntimeHours,
+    watchedBulkMachineCode,
+    watchedBulkMachineName,
+    watchedBulkPlannedDate,
+    watchedBulkPlannedShift,
+    watchedBulkPriorityRank,
+    watchedBulkSetupMinutes,
+    watchedBulkWorkCenterCode,
+    watchedBulkWorkCenterName,
+    workCenterByCode,
+  ]);
   const bulkPreviewPayload = useMemo(() => {
     if (!selectedCards.length || !isBulkModalOpen) {
       return null;
@@ -1851,6 +1988,13 @@ export default function ProductionPlanningBoard() {
     }
     const currentValues = form.getFieldsValue();
     void updateMutation.mutateAsync({ ...currentValues, ...patch });
+  };
+  const stageQuickScheduleChange = (patch: Record<string, unknown>) => {
+    if (!selectedCard || !canEditSelectedCard) {
+      return;
+    }
+    form.setFieldsValue(patch);
+    messageApi.info('Đã nạp vào form điều độ. Kiểm tra preview trước khi cập nhật.');
   };
   const handleOpenSkipModal = () => {
     if (!selectedCard || !canSkipSelectedCard) {
@@ -2330,7 +2474,54 @@ export default function ProductionPlanningBoard() {
               <Button icon={<CalendarOutlined />} onClick={handleExport} disabled={!cards.length}>Xuất CSV</Button>
             </Space>
           </div>
-          <Alert showIcon type={(workspace?.summary.overdue_operations ?? 0) > 0 ? 'warning' : 'success'} message={(workspace?.summary.overdue_operations ?? 0) > 0 ? `${workspace?.summary.overdue_operations ?? 0} công đoạn đang quá hạn.` : 'Planner đang bám đúng nhịp theo bộ lọc hiện tại.'} description={`Ảnh hưởng ngày giao: ${workspace?.summary.affected_sales_order_count ?? 0} SO · Lead time TB: ${workspace?.summary.avg_days_to_deadline ?? '--'}`} />
+          <Alert
+            showIcon
+            type={planningUsabilitySummary.overdueCount > 0 ? 'warning' : 'success'}
+            message={planningUsabilitySummary.overdueCount > 0 ? `${planningUsabilitySummary.overdueCount} công đoạn active đang trễ.` : 'Planner đang bám đúng nhịp theo bộ lọc hiện tại.'}
+            description={`Tải active: ${planningUsabilitySummary.activeCount}/${planningUsabilitySummary.totalVisibleCount} công đoạn · DONE/SKIPPED: ${planningUsabilitySummary.inactiveDoneSkippedCount} không tính vào tải active · Ảnh hưởng ngày giao: ${workspace?.summary.affected_sales_order_count ?? 0} SO`}
+          />
+          <Card
+            size="small"
+            data-testid="production-planning-dispatch-presets"
+            title="Điều độ nhanh"
+            extra={<Button size="small" onClick={resetDispatchPreset} disabled={!hasDispatchPresetFocus && !dispatchPresetBase}>Bỏ preset</Button>}
+          >
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+              {dispatchPresetCards.map((preset) => {
+                const active = isDispatchPresetActive(preset.key);
+                return (
+                  <button
+                    key={preset.key}
+                    type="button"
+                    data-testid={`production-planning-preset-${preset.key.toLowerCase()}`}
+                    onClick={() => applyDispatchPreset(preset.key)}
+                    style={{
+                      border: active ? '1px solid #1677ff' : '1px solid #d9e2f2',
+                      borderRadius: 8,
+                      padding: 12,
+                      minHeight: 118,
+                      textAlign: 'left',
+                      background: active ? '#f0f7ff' : '#fff',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                    }}
+                  >
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Text strong>{preset.title}</Text>
+                      <Text type="secondary">{preset.description}</Text>
+                    </Space>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <Text style={{ color: preset.tone, fontSize: 24, fontWeight: 700 }}>{getDispatchPresetCount(preset.key)}</Text>
+                      <Text type="secondary" style={{ textAlign: 'right' }}>{getDispatchPresetDetail(preset.key)}</Text>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </Card>
           {hotDispatchOwner || hotSalesWatch || hotMaterialWatch || hotWorkCenterWatch || hotMachineWatch || hotDeliveryWatch || hotUnscheduledWatch || hotShiftWatch || hotDateWatch || hotOwnerCapacityWatch || hotStepWatch || hotRebalanceSummary ? (
             <Card size="small" data-testid="production-planning-focus-highlights" title="Điểm nóng cần mở nhanh">
               <Space wrap>
@@ -2399,46 +2590,49 @@ export default function ProductionPlanningBoard() {
           ) : null}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
             <Card size="small"><Statistic title="Tổng lệnh" value={workspace?.summary.total_orders ?? 0} /></Card>
-            <Card size="small"><Statistic title="Quá hạn" value={workspace?.summary.overdue_operations ?? 0} valueStyle={{ color: '#cf1322' }} /></Card>
-            <Card size="small"><Statistic title="Sẵn chạy" value={workspace?.summary.ready_to_run_count ?? 0} valueStyle={{ color: '#1677ff' }} /></Card>
-            <Card size="small"><Statistic title="Chờ vật tư" value={workspace?.summary.wait_material_count ?? 0} valueStyle={{ color: '#d48806' }} /></Card>
-            <Card size="small"><Statistic title="Chờ công đoạn trước" value={workspace?.summary.wait_previous_step_count ?? 0} valueStyle={{ color: '#fa8c16' }} /></Card>
-            <Card size="small"><Statistic title="Quá tải" value={workspace?.summary.over_capacity_count ?? 0} valueStyle={{ color: '#cf1322' }} /></Card>
+            <Card size="small"><Statistic title="Active" value={planningUsabilitySummary.activeCount} /></Card>
+            <Card size="small"><Statistic title="DONE/SKIPPED" value={planningUsabilitySummary.inactiveDoneSkippedCount} valueStyle={{ color: '#722ed1' }} /></Card>
+            <Card size="small"><Statistic title="Quá hạn active" value={planningUsabilitySummary.overdueCount} valueStyle={{ color: '#cf1322' }} /></Card>
+            <Card size="small"><Statistic title="Sẵn chạy active" value={planningUsabilitySummary.readyCount} valueStyle={{ color: '#1677ff' }} /></Card>
+            <Card size="small"><Statistic title="Chờ vật tư active" value={planningUsabilitySummary.waitMaterialCount} valueStyle={{ color: '#d48806' }} /></Card>
+            <Card size="small"><Statistic title="Chờ công đoạn trước" value={planningUsabilitySummary.waitPreviousCount} valueStyle={{ color: '#fa8c16' }} /></Card>
+            <Card size="small"><Statistic title="Quá tải active" value={planningUsabilitySummary.overCapacityCount} valueStyle={{ color: '#cf1322' }} /></Card>
             <Card size="small"><Statistic title="Gần kín tải" value={workspace?.summary.at_limit_count ?? 0} valueStyle={{ color: '#d48806' }} /></Card>
-            <Card size="small"><Statistic title="Chưa gán máy" value={workspace?.summary.unassigned_machine_count ?? 0} valueStyle={{ color: '#595959' }} /></Card>
-            <Card size="small"><Statistic title="Chưa gán WC" value={workspace?.summary.unassigned_work_center_count ?? 0} valueStyle={{ color: '#8c8c8c' }} /></Card>
+            <Card size="small"><Statistic title="Chưa gán máy" value={planningUsabilitySummary.unassignedMachineCount} valueStyle={{ color: '#595959' }} /></Card>
+            <Card size="small"><Statistic title="Chưa gán WC" value={planningUsabilitySummary.unassignedWorkCenterCount} valueStyle={{ color: '#8c8c8c' }} /></Card>
             <Card size="small"><Statistic title="Máy dừng" value={workspace?.summary.machine_down_count ?? 0} valueStyle={{ color: '#cf1322' }} /></Card>
             <Card size="small"><Statistic title="Sẵn sàng bàn giao" value={workspace?.summary.handover_ready_count ?? 0} valueStyle={{ color: '#722ed1' }} /></Card>
             <Card size="small"><Statistic title="Đã tiếp quản" value={workspace?.summary.handover_accepted_count ?? 0} valueStyle={{ color: '#389e0d' }} /></Card>
-            <Card size="small"><Statistic title="Chưa xếp" value={workspace?.summary.unscheduled_count ?? 0} /></Card>
+            <Card size="small"><Statistic title="Chưa gán ngày/ca" value={planningUsabilitySummary.unscheduledCount} /></Card>
+            <Card size="small"><Statistic title="Giờ active" value={planningUsabilitySummary.activeScheduledHours} precision={2} suffix="h" /></Card>
           </div>
           <Space wrap>
             <Button type={bucketKey === 'OVERDUE' ? 'primary' : 'default'} onClick={() => { setBucketKey(bucketKey === 'OVERDUE' ? 'ALL' : 'OVERDUE'); setNeedsAttentionOnly(false); }} data-testid="production-planning-quick-overdue">
-              Quá hạn ({workspace?.summary.bucket_counts?.OVERDUE ?? 0})
+              Quá hạn ({planningUsabilitySummary.overdueCount})
             </Button>
             <Button type={bucketKey === 'UNSCHEDULED' ? 'primary' : 'default'} onClick={() => { setBucketKey(bucketKey === 'UNSCHEDULED' ? 'ALL' : 'UNSCHEDULED'); setNeedsAttentionOnly(false); }}>
-              Chưa xếp ({workspace?.summary.bucket_counts?.UNSCHEDULED ?? 0})
+              Chưa xếp ({planningUsabilitySummary.unscheduledCount})
             </Button>
             <Button type={readyToRunOnly ? 'primary' : 'default'} onClick={() => setReadyToRunOnly((current) => !current)} data-testid="production-planning-quick-ready">
-              Sẵn chạy ({workspace?.summary.ready_to_run_count ?? 0})
+              Sẵn chạy ({planningUsabilitySummary.readyCount})
             </Button>
             <Button type={hasMaterialWait ? 'primary' : 'default'} onClick={() => setHasMaterialWait((current) => !current)}>
-              Chờ vật tư ({workspace?.summary.wait_material_count ?? 0})
+              Chờ vật tư ({planningUsabilitySummary.waitMaterialCount})
             </Button>
             <Button type={hasPreviousWait ? 'primary' : 'default'} onClick={() => setHasPreviousWait((current) => !current)}>
-              Chờ công đoạn trước ({workspace?.summary.wait_previous_step_count ?? 0})
+              Chờ công đoạn trước ({planningUsabilitySummary.waitPreviousCount})
             </Button>
             <Button type={capacityState === 'OVER_CAPACITY' ? 'primary' : 'default'} onClick={() => setCapacityState((current) => (current === 'OVER_CAPACITY' ? 'ALL' : 'OVER_CAPACITY'))} data-testid="production-planning-quick-over-capacity">
-              Quá tải ({workspace?.summary.over_capacity_count ?? 0})
+              Quá tải ({planningUsabilitySummary.overCapacityCount})
             </Button>
             <Button type={capacityState === 'AT_LIMIT' ? 'primary' : 'default'} onClick={() => setCapacityState((current) => (current === 'AT_LIMIT' ? 'ALL' : 'AT_LIMIT'))} data-testid="production-planning-quick-at-limit">
               Gần kín tải ({workspace?.summary.at_limit_count ?? 0})
             </Button>
             <Button type={capacityState === 'UNASSIGNED_MACHINE' ? 'primary' : 'default'} onClick={() => setCapacityState((current) => (current === 'UNASSIGNED_MACHINE' ? 'ALL' : 'UNASSIGNED_MACHINE'))}>
-              Chưa gán máy ({workspace?.summary.unassigned_machine_count ?? 0})
+              Chưa gán máy ({planningUsabilitySummary.unassignedMachineCount})
             </Button>
             <Button type={capacityState === 'UNASSIGNED_WORK_CENTER' ? 'primary' : 'default'} onClick={() => setCapacityState((current) => (current === 'UNASSIGNED_WORK_CENTER' ? 'ALL' : 'UNASSIGNED_WORK_CENTER'))}>
-              Chưa gán WC ({workspace?.summary.unassigned_work_center_count ?? 0})
+              Chưa gán WC ({planningUsabilitySummary.unassignedWorkCenterCount})
             </Button>
             <Button type={handoverStatus === 'READY' ? 'primary' : 'default'} onClick={() => setHandoverStatus((current) => (current === 'READY' ? 'ALL' : 'READY'))}>
               Sẵn sàng bàn giao ({workspace?.summary.handover_ready_count ?? 0})
@@ -2866,32 +3060,6 @@ export default function ProductionPlanningBoard() {
                 </Card>
               </div>
             </Space>
-          </Card>
-          <Card size="small" data-testid="production-planning-dispatch-presets" title="Preset điều độ nhanh">
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-              {dispatchPresetCards.map((preset) => (
-                <button
-                  key={preset.key}
-                  type="button"
-                  data-testid={`production-planning-preset-${preset.key.toLowerCase()}`}
-                  onClick={() => applyDispatchPreset(preset.key)}
-                  style={{
-                    border: isDispatchPresetActive(preset.key) ? '1px solid #1677ff' : '1px solid #d9e2f2',
-                    borderRadius: 12,
-                    padding: 12,
-                    textAlign: 'left',
-                    background: isDispatchPresetActive(preset.key) ? '#f0f7ff' : '#fff',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 6,
-                  }}
-                >
-                  <strong>{preset.title}</strong>
-                  <Text type="secondary">{preset.description}</Text>
-                </button>
-              ))}
-            </div>
           </Card>
           <Card size="small" data-testid="production-planning-handover-pack" title="Gói bàn giao planner">
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -3592,13 +3760,14 @@ export default function ProductionPlanningBoard() {
       <Modal
         open={isBulkModalOpen}
         title={`Cập nhật hàng loạt ${selectedCards.length} công đoạn`}
+        width={920}
         onCancel={() => {
           setIsBulkModalOpen(false);
           bulkForm.resetFields();
         }}
         onOk={() => void handleSubmitBulk()}
         okText="Áp dụng hàng loạt"
-        okButtonProps={{ disabled: bulkPreviewBlockedByDependency }}
+        okButtonProps={{ disabled: !bulkPreviewQuery.data || bulkPreviewBlockedByValidation || bulkPreviewBlockedByDependency }}
         confirmLoading={bulkUpdateMutation.isPending}
         data-testid="production-planning-bulk-modal"
       >
@@ -3609,12 +3778,47 @@ export default function ProductionPlanningBoard() {
             message="Bulk action chỉ áp dụng cho những công đoạn đang được chọn."
             description="Nếu có lệnh chưa phát lệnh hoặc dữ liệu không hợp lệ, backend sẽ chặn để tránh phá vỡ kế hoạch hiện tại."
           />
+          <Card size="small" data-testid="production-planning-bulk-selection-summary" title="Tóm tắt nhóm đang chọn">
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
+                <Card size="small"><Statistic title="Công đoạn" value={bulkSelectionSummary.total} /></Card>
+                <Card size="small"><Statistic title="Active" value={bulkSelectionSummary.activeCount} /></Card>
+                <Card size="small"><Statistic title="Giờ active" value={bulkSelectionSummary.activeScheduledHours} precision={2} suffix="h" /></Card>
+                <Card size="small"><Statistic title="Sẵn chạy" value={bulkSelectionSummary.readyCount} valueStyle={{ color: '#1677ff' }} /></Card>
+                <Card size="small"><Statistic title="Chờ trước" value={bulkSelectionSummary.dependencyBlockedCount} valueStyle={{ color: '#fa8c16' }} /></Card>
+                <Card size="small"><Statistic title="DONE/SKIPPED" value={bulkSelectionSummary.doneOrSkippedCount} valueStyle={{ color: '#722ed1' }} /></Card>
+                <Card size="small"><Statistic title="Quá tải" value={bulkSelectionSummary.overCapacityCount} valueStyle={{ color: '#cf1322' }} /></Card>
+              </div>
+              <Alert
+                showIcon
+                type={bulkPreviewPayload ? 'info' : 'warning'}
+                message="Mục tiêu cập nhật"
+                description={bulkTargetSummary}
+              />
+            </Space>
+          </Card>
           {blockedSelectedCount ? (
             <Alert
               type="warning"
               showIcon
               message="Một số công đoạn đang chờ công đoạn trước."
               description="Có thể tiếp tục xếp ngày/ca, gán máy hoặc ghi chú nghẽn, nhưng không thể đổi sang READY/IN_PROGRESS/DONE/SKIPPED cho các công đoạn này."
+            />
+          ) : null}
+          {bulkSelectionSummary.doneOrSkippedCount ? (
+            <Alert
+              type="warning"
+              showIcon
+              message={`${bulkSelectionSummary.doneOrSkippedCount} công đoạn đã DONE/SKIPPED trong nhóm chọn.`}
+              description="Các công đoạn này vẫn nằm trong nhóm chọn để backend kiểm soát hợp lệ, nhưng không tính vào giờ active của nhóm."
+            />
+          ) : null}
+          {bulkSelectionSummary.overCapacityCount || bulkSelectionSummary.unassignedResourceCount || bulkSelectionSummary.unscheduledCount ? (
+            <Alert
+              type="info"
+              showIcon
+              message="Cảnh báo điều độ trong nhóm chọn"
+              description={`Quá tải ${bulkSelectionSummary.overCapacityCount} · Thiếu máy/tổ ${bulkSelectionSummary.unassignedResourceCount} · Chưa gán ngày/ca ${bulkSelectionSummary.unscheduledCount}`}
             />
           ) : null}
           <Space wrap>
@@ -3756,7 +3960,14 @@ export default function ProductionPlanningBoard() {
               <Input.TextArea rows={3} placeholder="Ghi chú áp dụng chung cho các công đoạn đang chọn." />
             </Form.Item>
           </Form>
-          {bulkPreviewBlockedByValidation ? (
+          {!bulkPreviewPayload ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="Chọn thay đổi để xem preview trước khi áp dụng."
+              description="Nút áp dụng hàng loạt chỉ mở sau khi planner đã mô phỏng tác động của ngày/ca/tổ/máy, trạng thái hoặc lý do nghẽn."
+            />
+          ) : bulkPreviewBlockedByValidation ? (
             <Alert
               type="info"
               showIcon
@@ -4017,7 +4228,7 @@ export default function ProductionPlanningBoard() {
                 />
               ) : null}
             </Card>
-            <Card size="small" title="Cập nhật nhanh">
+            <Card size="small" title="Điều độ công đoạn">
               {!canEditSelectedCard ? (
                 <Alert
                   type="info"
@@ -4037,36 +4248,61 @@ export default function ProductionPlanningBoard() {
                 />
               ) : null}
               {canEditSelectedCard ? (
-                <Space wrap style={{ marginBottom: 16 }}>
-                  <Button onClick={() => runQuickUpdate({ planned_date: dayjs(), planned_shift: form.getFieldValue('planned_shift') || 'FULLDAY' })}>
-                    Đẩy sang hôm nay
-                  </Button>
-                  <Button onClick={() => runQuickUpdate({ planned_date: dayjs().add(1, 'day'), planned_shift: form.getFieldValue('planned_shift') || 'FULLDAY' })}>
-                    Dời sang ngày mai
-                  </Button>
-                  <Button onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_MATERIAL', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ cấp vật tư trước khi vào máy' })}>
-                    Đánh dấu chờ vật tư
-                  </Button>
-                  <Button onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_PREVIOUS_STEP', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ công đoạn trước bàn giao' })}>
-                    Chờ công đoạn trước
-                  </Button>
-                  {canSkipSelectedCard ? (
-                    <Tooltip title={selectedCardDependencyBlocked ? 'Ngoại lệ có audit: bỏ qua công đoạn này dù đang chờ công đoạn trước.' : 'Bỏ qua công đoạn này và ghi lý do/audit.'}>
-                      <Button danger onClick={handleOpenSkipModal} loading={skipMutation.isPending} data-testid="production-planning-skip-operation">
-                        Bỏ qua
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Nạp lịch nhanh sẽ chỉ đổi form trước."
+                  description="Sau khi nạp ngày/ca/máy/tổ, kiểm tra thẻ Tác động dự kiến rồi bấm Cập nhật công đoạn."
+                  style={{ marginBottom: 16 }}
+                />
+              ) : null}
+              {canEditSelectedCard ? (
+                <Space direction="vertical" size={10} style={{ width: '100%', marginBottom: 16 }}>
+                  <Space direction="vertical" size={6}>
+                    <Text strong>Nạp lịch nhanh</Text>
+                    <Space wrap>
+                      <Button onClick={() => stageQuickScheduleChange({ planned_date: dayjs(), planned_shift: form.getFieldValue('planned_shift') || 'FULLDAY' })} data-testid="production-planning-quick-schedule-today">
+                        Nạp hôm nay
                       </Button>
-                    </Tooltip>
-                  ) : null}
-                  <Tooltip title={selectedCardDependencyBlocked ? selectedBlockedReason : ''}>
-                    <span>
-                      <Button onClick={() => runQuickUpdate({ status: 'READY', block_reason_code: '', block_reason_note: '' })} disabled={selectedCardDependencyBlocked}>
-                        Đánh dấu sẵn chạy
+                      <Button onClick={() => stageQuickScheduleChange({ planned_date: dayjs().add(1, 'day'), planned_shift: form.getFieldValue('planned_shift') || 'FULLDAY' })} data-testid="production-planning-quick-schedule-tomorrow">
+                        Nạp ngày mai
                       </Button>
-                    </span>
-                  </Tooltip>
-                  <Button onClick={() => runQuickUpdate({ block_reason_code: '', block_reason_note: '' })}>
-                    Gỡ nghẽn
-                  </Button>
+                      <Button onClick={() => stageQuickScheduleChange({ planned_date: null, planned_shift: 'ALL' })} data-testid="production-planning-quick-clear-schedule">
+                        Xóa lịch
+                      </Button>
+                      <Button onClick={() => stageQuickScheduleChange({ work_center_code: '', work_center_name: '', machine_code: '', machine_name: '' })} data-testid="production-planning-quick-clear-resource">
+                        Xóa máy/tổ
+                      </Button>
+                    </Space>
+                  </Space>
+                  <Space direction="vertical" size={6}>
+                    <Text strong>Trạng thái và nghẽn</Text>
+                    <Space wrap>
+                      <Button onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_MATERIAL', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ cấp vật tư trước khi vào máy' })}>
+                        Đánh dấu chờ vật tư
+                      </Button>
+                      <Button onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_PREVIOUS_STEP', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ công đoạn trước bàn giao' })}>
+                        Chờ công đoạn trước
+                      </Button>
+                      {canSkipSelectedCard ? (
+                        <Tooltip title={selectedCardDependencyBlocked ? 'Ngoại lệ có audit: bỏ qua công đoạn này dù đang chờ công đoạn trước.' : 'Bỏ qua công đoạn này và ghi lý do/audit.'}>
+                          <Button danger onClick={handleOpenSkipModal} loading={skipMutation.isPending} data-testid="production-planning-skip-operation">
+                            Bỏ qua
+                          </Button>
+                        </Tooltip>
+                      ) : null}
+                      <Tooltip title={selectedCardDependencyBlocked ? selectedBlockedReason : ''}>
+                        <span>
+                          <Button onClick={() => runQuickUpdate({ status: 'READY', block_reason_code: '', block_reason_note: '' })} disabled={selectedCardDependencyBlocked}>
+                            Đánh dấu sẵn chạy
+                          </Button>
+                        </span>
+                      </Tooltip>
+                      <Button onClick={() => runQuickUpdate({ block_reason_code: '', block_reason_note: '' })}>
+                        Gỡ nghẽn
+                      </Button>
+                    </Space>
+                  </Space>
                 </Space>
               ) : null}
               {canEditSelectedCard && previewBlockedByValidation ? (
