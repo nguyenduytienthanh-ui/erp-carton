@@ -201,52 +201,52 @@ export const inventoryApi = {
 
   // Stock Alerts
   getStockAlerts: async (params?: Record<string, unknown>): Promise<PaginatedResponse<StockAlert>> => {
-    const response = await axiosInstance.get('api/inventory/stock-alerts/', { params });
+    const response = await axiosInstance.get(API_ENDPOINTS.INVENTORY_STOCK_ALERTS, { params });
     return response.data;
   },
   acknowledgeAlert: async (id: number): Promise<{ status: string }> => {
-    const response = await axiosInstance.post(`api/inventory/stock-alerts/${id}/acknowledge_alert/`);
+    const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_STOCK_ALERTS}${id}/acknowledge_alert/`);
     return response.data;
   },
   checkLowStock: async (): Promise<{ created: number }> => {
-    const response = await axiosInstance.post('api/inventory/stock-alerts/check_low_stock/');
+    const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_STOCK_ALERTS}check_low_stock/`);
     return response.data;
   },
 
   // Warehouse Transfers
   getWarehouseTransfers: async (params?: Record<string, unknown>): Promise<PaginatedResponse<WarehouseTransfer>> => {
-    const response = await axiosInstance.get('api/inventory/warehouse-transfers/', { params });
+    const response = await axiosInstance.get(API_ENDPOINTS.INVENTORY_WAREHOUSE_TRANSFERS, { params });
     return response.data;
   },
   getWarehouseTransfer: async (id: number): Promise<WarehouseTransfer> => {
-    const response = await axiosInstance.get(`api/inventory/warehouse-transfers/${id}/`);
+    const response = await axiosInstance.get(`${API_ENDPOINTS.INVENTORY_WAREHOUSE_TRANSFERS}${id}/`);
     return response.data;
   },
   createWarehouseTransfer: async (payload: WarehouseTransferPayload): Promise<WarehouseTransfer> => {
-    const response = await axiosInstance.post('api/inventory/warehouse-transfers/', payload);
+    const response = await axiosInstance.post(API_ENDPOINTS.INVENTORY_WAREHOUSE_TRANSFERS, payload);
     return response.data;
   },
   updateWarehouseTransfer: async (id: number, payload: WarehouseTransferPayload): Promise<WarehouseTransfer> => {
-    const response = await axiosInstance.patch(`api/inventory/warehouse-transfers/${id}/`, payload);
+    const response = await axiosInstance.patch(`${API_ENDPOINTS.INVENTORY_WAREHOUSE_TRANSFERS}${id}/`, payload);
     return response.data;
   },
   deleteWarehouseTransfer: async (id: number): Promise<void> => {
-    await axiosInstance.delete(`api/inventory/warehouse-transfers/${id}/`);
+    await axiosInstance.delete(`${API_ENDPOINTS.INVENTORY_WAREHOUSE_TRANSFERS}${id}/`);
   },
   submitTransfer: async (id: number): Promise<{ status: string }> => {
-    const response = await axiosInstance.post(`api/inventory/warehouse-transfers/${id}/submit_transfer/`);
+    const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_WAREHOUSE_TRANSFERS}${id}/submit_transfer/`);
     return response.data;
   },
   postTransfer: async (id: number): Promise<{ status: string }> => {
-    const response = await axiosInstance.post(`api/inventory/warehouse-transfers/${id}/post_transfer/`);
+    const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_WAREHOUSE_TRANSFERS}${id}/post_transfer/`);
     return response.data;
   },
   receiveTransfer: async (id: number): Promise<{ status: string }> => {
-    const response = await axiosInstance.post(`api/inventory/warehouse-transfers/${id}/receive_transfer/`);
+    const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_WAREHOUSE_TRANSFERS}${id}/receive_transfer/`);
     return response.data;
   },
   cancelTransfer: async (id: number, reason?: string): Promise<{ status: string }> => {
-    const response = await axiosInstance.post(`api/inventory/warehouse-transfers/${id}/cancel_transfer/`, { reason: reason ?? '' });
+    const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_WAREHOUSE_TRANSFERS}${id}/cancel_transfer/`, { reason: reason ?? '' });
     return response.data;
   },
 };

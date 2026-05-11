@@ -169,6 +169,8 @@ export const API_ENDPOINTS = {
   INVENTORY_NXT_REPORT: '/inventory/transactions/nxt_report/',
   INVENTORY_STOCKTAKES: '/inventory/stocktakes/',
   INVENTORY_SHIPMENTS: '/inventory/shipments/',
+  INVENTORY_STOCK_ALERTS: '/inventory/stock-alerts/',
+  INVENTORY_WAREHOUSE_TRANSFERS: '/inventory/warehouse-transfers/',
   PURCHASING_SUPPLIERS: '/purchasing/suppliers/',
   PURCHASING_MATERIAL_PRICES: '/purchasing/material-prices/',
   PURCHASING_ORDERS: '/purchasing/orders/',
