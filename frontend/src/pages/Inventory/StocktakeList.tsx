@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+  Alert,
   Button,
   DatePicker,
   Drawer,
@@ -19,7 +20,15 @@ import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { inventoryApi } from '../../api/inventory';
 import { productsApi } from '../../api/products';
-import type { Stocktake, StocktakeLine, StocktakeStatus } from '../../types/inventory';
+import type {
+  Stocktake,
+  StocktakeAdjustmentLineStatus,
+  StocktakeAdjustmentPreview,
+  StocktakeAdjustmentPreviewLine,
+  StocktakeAdjustmentType,
+  StocktakeLine,
+  StocktakeStatus,
+} from '../../types/inventory';
 import { canManageStocktake } from '../../utils/authz';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
@@ -34,6 +43,28 @@ const STATUS_COLORS: Record<StocktakeStatus, string> = {
   DRAFT: 'default',
   COMPLETED: 'success',
   CANCELLED: 'default',
+};
+
+const ADJUSTMENT_TYPE_LABELS: Record<StocktakeAdjustmentType, string> = {
+  ADJUSTMENT_IN: 'Điều chỉnh tăng',
+  ADJUSTMENT_OUT: 'Điều chỉnh giảm',
+};
+
+const ADJUSTMENT_TYPE_COLORS: Record<StocktakeAdjustmentType, string> = {
+  ADJUSTMENT_IN: 'green',
+  ADJUSTMENT_OUT: 'red',
+};
+
+const ADJUSTMENT_STATUS_LABELS: Record<StocktakeAdjustmentLineStatus, string> = {
+  READY: 'Sẵn sàng ghi',
+  SKIPPED: 'Không lệch',
+  BLOCKED: 'Bị chặn',
+};
+
+const ADJUSTMENT_STATUS_COLORS: Record<StocktakeAdjustmentLineStatus, string> = {
+  READY: 'blue',
+  SKIPPED: 'default',
+  BLOCKED: 'red',
 };
 
 type CreateFormValues = {
@@ -68,6 +99,24 @@ function parseViewSnapshot(value: unknown): StocktakeViewSnapshot | null {
   };
 }
 
+function formatQty(value: string | number | null | undefined): string {
+  const numberValue = Number(value ?? 0);
+  return Number.isFinite(numberValue) ? numberValue.toLocaleString('vi-VN') : String(value ?? '');
+}
+
+function formatBlockedReason(value: unknown): string {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(formatBlockedReason).filter(Boolean).join('; ');
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, nestedValue]) => `${key}: ${formatBlockedReason(nestedValue)}`)
+      .filter(Boolean)
+      .join('; ');
+  }
+  return String(value);
+}
+
 export default function StocktakeList() {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
@@ -78,6 +127,9 @@ export default function StocktakeList() {
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [detailId, setDetailId] = useState<number | null>(null);
+  const [adjustmentPreview, setAdjustmentPreview] = useState<StocktakeAdjustmentPreview | null>(null);
+  const [isPostModalOpen, setIsPostModalOpen] = useState(false);
+  const [adjustmentReason, setAdjustmentReason] = useState('');
   const [createForm] = Form.useForm<CreateFormValues>();
   const canManage = canManageStocktake();
   const {
@@ -120,6 +172,22 @@ export default function StocktakeList() {
     enabled: createOpen && canManage,
   });
 
+  const resetAdjustmentUi = () => {
+    setAdjustmentPreview(null);
+    setAdjustmentReason('');
+    setIsPostModalOpen(false);
+  };
+
+  const openDetail = (id: number) => {
+    resetAdjustmentUi();
+    setDetailId(id);
+  };
+
+  const closeDetail = () => {
+    resetAdjustmentUi();
+    setDetailId(null);
+  };
+
   const createMutation = useMutation({
     mutationFn: inventoryApi.createStocktake,
     onSuccess: () => {
@@ -135,8 +203,11 @@ export default function StocktakeList() {
     mutationFn: inventoryApi.completeStocktake,
     onSuccess: () => {
       messageApi.success('Đã hoàn tất phiếu kiểm tồn.');
-      setDetailId(null);
+      setAdjustmentPreview(null);
       void queryClient.invalidateQueries({ queryKey: ['inventory-stocktakes'] });
+      if (detailId != null) {
+        void queryClient.invalidateQueries({ queryKey: ['inventory-stocktake-detail', detailId] });
+      }
     },
     onError: (err) => messageApi.error(getToastMessage(err)),
   });
@@ -145,8 +216,38 @@ export default function StocktakeList() {
     mutationFn: inventoryApi.deleteStocktake,
     onSuccess: () => {
       messageApi.success('Đã xóa phiếu.');
-      setDetailId(null);
+      closeDetail();
       void queryClient.invalidateQueries({ queryKey: ['inventory-stocktakes'] });
+    },
+    onError: (err) => messageApi.error(getToastMessage(err)),
+  });
+
+  const previewAdjustmentMutation = useMutation({
+    mutationFn: inventoryApi.previewStocktakeAdjustments,
+    onSuccess: (data) => {
+      setAdjustmentPreview(data);
+      if (data.blocked_lines > 0) {
+        messageApi.warning('Có dòng bị chặn, chưa thể ghi điều chỉnh tồn.');
+      } else if (data.transaction_count === 0) {
+        messageApi.info('Không có chênh lệch cần ghi điều chỉnh.');
+      } else {
+        messageApi.success('Đã tải xem trước điều chỉnh tồn.');
+      }
+    },
+    onError: (err) => messageApi.error(getToastMessage(err)),
+  });
+
+  const postAdjustmentMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: number; reason: string }) => inventoryApi.postStocktakeAdjustments(id, reason),
+    onSuccess: (data) => {
+      setAdjustmentPreview(data);
+      setAdjustmentReason('');
+      setIsPostModalOpen(false);
+      messageApi.success('Đã ghi điều chỉnh tồn vào sổ kho.');
+      void queryClient.invalidateQueries({ queryKey: ['inventory-stocktakes'] });
+      if (detailId != null) {
+        void queryClient.invalidateQueries({ queryKey: ['inventory-stocktake-detail', detailId] });
+      }
     },
     onError: (err) => messageApi.error(getToastMessage(err)),
   });
@@ -195,6 +296,40 @@ export default function StocktakeList() {
     if (!selectedPreset) return activeFilterTags;
     return [...activeFilterTags, `Mẫu đang dùng: ${selectedPreset.name}`];
   }, [activeFilterTags, selectedPreset]);
+
+  const previewForDetail = detail && adjustmentPreview?.stocktake === detail.id ? adjustmentPreview : null;
+  const isAdjustmentPosted = Boolean(
+    detail?.adjustment_posted_at || previewForDetail?.adjustment_posted_at || previewForDetail?.status === 'POSTED'
+  );
+  const canOpenPostAdjustment =
+    Boolean(detail && previewForDetail?.can_post && previewForDetail.blocked_lines === 0 && previewForDetail.transaction_count > 0) &&
+    !isAdjustmentPosted;
+
+  const handleOpenPostAdjustment = () => {
+    if (!detail || !previewForDetail) {
+      messageApi.warning('Vui lòng xem trước điều chỉnh tồn trước khi ghi sổ.');
+      return;
+    }
+    if (previewForDetail.blocked_lines > 0) {
+      messageApi.warning('Còn dòng bị chặn, chưa thể ghi điều chỉnh tồn.');
+      return;
+    }
+    if (previewForDetail.transaction_count === 0) {
+      messageApi.info('Không có chênh lệch cần ghi điều chỉnh.');
+      return;
+    }
+    setIsPostModalOpen(true);
+  };
+
+  const handlePostAdjustment = async () => {
+    if (!detail) return;
+    const reason = adjustmentReason.trim();
+    if (!reason) {
+      messageApi.warning('Vui lòng nhập lý do ghi điều chỉnh tồn.');
+      return;
+    }
+    await postAdjustmentMutation.mutateAsync({ id: detail.id, reason });
+  };
 
   const handleCreate = async () => {
     const values = await createForm.validateFields();
@@ -352,6 +487,46 @@ export default function StocktakeList() {
     },
   ];
 
+  const adjustmentLineColumns: ColumnsType<StocktakeAdjustmentPreviewLine> = [
+    { title: '#', dataIndex: 'line_number', width: 52 },
+    { title: 'Mã SP', dataIndex: 'product_code', width: 110 },
+    { title: 'Tên SP', dataIndex: 'product_name', ellipsis: true },
+    { title: 'Tồn hệ thống', dataIndex: 'system_qty', width: 110, align: 'right', render: (value) => formatQty(value as string) },
+    { title: 'Tồn đếm', dataIndex: 'count_qty', width: 100, align: 'right', render: (value) => formatQty(value as string) },
+    {
+      title: 'Chênh lệch',
+      dataIndex: 'variance_qty',
+      width: 105,
+      align: 'right',
+      render: (value: string) => {
+        const numberValue = Number(value);
+        const color = numberValue > 0 ? '#237804' : numberValue < 0 ? '#cf1322' : undefined;
+        return <span style={{ color }}>{formatQty(value)}</span>;
+      },
+    },
+    {
+      title: 'Ledger sẽ ghi',
+      dataIndex: 'adjustment_type',
+      width: 145,
+      render: (value: StocktakeAdjustmentType | null) =>
+        value ? <Tag color={ADJUSTMENT_TYPE_COLORS[value]}>{ADJUSTMENT_TYPE_LABELS[value]}</Tag> : <Tag>Không ghi</Tag>,
+    },
+    { title: 'Số lượng', dataIndex: 'adjustment_qty', width: 95, align: 'right', render: (value) => formatQty(value as string) },
+    {
+      title: 'Trạng thái',
+      dataIndex: 'status',
+      width: 130,
+      render: (value: StocktakeAdjustmentLineStatus, row) => (
+        <Space direction="vertical" size={2}>
+          <Tag color={ADJUSTMENT_STATUS_COLORS[value]}>{ADJUSTMENT_STATUS_LABELS[value]}</Tag>
+          {value === 'BLOCKED' ? (
+            <span style={{ color: '#cf1322', fontSize: 12 }}>{formatBlockedReason(row.blocked_reason)}</span>
+          ) : null}
+        </Space>
+      ),
+    },
+  ];
+
   return (
     <div style={{ padding: 24 }}>
       {contextHolder}
@@ -463,7 +638,7 @@ export default function StocktakeList() {
             }
           },
         }}
-        onRow={(row) => ({ onClick: () => setDetailId(row.id), style: { cursor: 'pointer' } })}
+        onRow={(row) => ({ onClick: () => openDetail(row.id), style: { cursor: 'pointer' } })}
         locale={{
           emptyText: (listQuery.data?.results?.length ?? 0) === 0 && !listQuery.isLoading ? (
             <div style={{ padding: 40, color: '#8c8c8c' }}>
@@ -559,10 +734,47 @@ export default function StocktakeList() {
         </Form>
       </Modal>
 
+      <Modal
+        title="Ghi điều chỉnh tồn kho"
+        open={isPostModalOpen}
+        onCancel={() => setIsPostModalOpen(false)}
+        onOk={() => void handlePostAdjustment()}
+        confirmLoading={postAdjustmentMutation.isPending}
+        okText="Ghi điều chỉnh tồn"
+        cancelText="Đóng"
+        okButtonProps={{ 'data-testid': 'stocktake-confirm-post-adjustments' }}
+        destroyOnClose
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Alert
+            type="warning"
+            showIcon
+            message="Thao tác này sẽ tạo giao dịch nhập/xuất điều chỉnh tồn"
+            description="Đây không phải là thao tác hoàn tất kiểm kê đơn thuần. Sau khi ghi ledger, phiếu không được ghi điều chỉnh lần hai."
+          />
+          {previewForDetail ? (
+            <Space wrap>
+              <Tag color="green">Tăng: {previewForDetail.total_in_lines}</Tag>
+              <Tag color="red">Giảm: {previewForDetail.total_out_lines}</Tag>
+              <Tag>Bỏ qua: {previewForDetail.skipped_zero_lines}</Tag>
+            </Space>
+          ) : null}
+          <Input.TextArea
+            data-testid="stocktake-adjustment-reason"
+            rows={3}
+            value={adjustmentReason}
+            onChange={(event) => setAdjustmentReason(event.target.value)}
+            placeholder="Nhập lý do bắt buộc, ví dụ: Điều chỉnh theo biên bản kiểm kê cuối ngày"
+            maxLength={255}
+            showCount
+          />
+        </Space>
+      </Modal>
+
       <Drawer
         title={detail ? `Phiếu kiểm tồn ${detail.code}` : 'Chi tiết'}
         open={detailId != null}
-        onClose={() => setDetailId(null)}
+        onClose={closeDetail}
         width={720}
       >
         {detailQuery.isLoading && detailId != null ? (
@@ -584,6 +796,86 @@ export default function StocktakeList() {
               columns={lineColumns}
               dataSource={detail.lines ?? []}
             />
+            <div data-testid="stocktake-adjustment-panel" style={{ marginTop: 18 }}>
+              <h3 style={{ marginBottom: 8 }}>Điều chỉnh tồn sau kiểm kê</h3>
+              {detail.status !== 'COMPLETED' ? (
+                <Alert
+                  data-testid="stocktake-adjustment-draft-alert"
+                  type="info"
+                  showIcon
+                  message="Chưa thể ghi điều chỉnh tồn"
+                  description="Hoàn tất kiểm kê chỉ khóa số đếm. Sau khi phiếu ở trạng thái Đã hoàn tất, bạn mới có thể xem trước và ghi bút toán điều chỉnh tồn kho."
+                />
+              ) : isAdjustmentPosted ? (
+                <Alert
+                  data-testid="stocktake-adjustment-posted-status"
+                  type="success"
+                  showIcon
+                  message="Đã ghi điều chỉnh tồn"
+                  description={`Phiếu này đã tạo ledger điều chỉnh tồn${(detail.adjustment_posted_at || previewForDetail?.adjustment_posted_at) ? ` lúc ${dayjs(detail.adjustment_posted_at || previewForDetail?.adjustment_posted_at).format('DD/MM/YYYY HH:mm')}` : ''}. Không thể ghi lại lần hai.`}
+                />
+              ) : (
+                <Alert
+                  data-testid="stocktake-adjustment-ready-alert"
+                  type="warning"
+                  showIcon
+                  message="Hoàn tất kiểm kê chưa làm thay đổi tồn kho"
+                  description="Xem trước điều chỉnh để kiểm tra dòng tăng, dòng giảm, dòng bỏ qua và dòng bị chặn. Chỉ khi bấm Ghi điều chỉnh tồn, hệ thống mới tạo InventoryTransaction."
+                />
+              )}
+
+              {detail.status === 'COMPLETED' ? (
+                <Space style={{ marginTop: 12, marginBottom: 12 }} wrap>
+                  <Button
+                    data-testid="stocktake-preview-adjustments"
+                    onClick={() => previewAdjustmentMutation.mutate(detail.id)}
+                    loading={previewAdjustmentMutation.isPending}
+                  >
+                    Xem trước điều chỉnh tồn
+                  </Button>
+                  <Button
+                    data-testid="stocktake-post-adjustments"
+                    type="primary"
+                    disabled={!canOpenPostAdjustment}
+                    onClick={handleOpenPostAdjustment}
+                  >
+                    Ghi điều chỉnh tồn
+                  </Button>
+                </Space>
+              ) : null}
+
+              {previewForDetail ? (
+                <div data-testid="stocktake-adjustment-preview">
+                  <div data-testid="stocktake-adjustment-summary" style={{ marginBottom: 10 }}>
+                    <Space wrap>
+                      <Tag color="green">Tăng: {previewForDetail.total_in_lines}</Tag>
+                      <Tag color="red">Giảm: {previewForDetail.total_out_lines}</Tag>
+                      <Tag>Bỏ qua: {previewForDetail.skipped_zero_lines}</Tag>
+                      <Tag color={previewForDetail.blocked_lines > 0 ? 'red' : 'blue'}>Bị chặn: {previewForDetail.blocked_lines}</Tag>
+                    </Space>
+                  </div>
+                  {previewForDetail.blocked_lines > 0 ? (
+                    <Alert
+                      data-testid="stocktake-adjustment-blocker-alert"
+                      type="error"
+                      showIcon
+                      style={{ marginBottom: 10 }}
+                      message="Có dòng chưa thể ghi ledger"
+                      description="Vui lòng xử lý dòng bị chặn trước. Hệ thống sẽ không ghi một phần nếu còn lỗi."
+                    />
+                  ) : null}
+                  <Table<StocktakeAdjustmentPreviewLine>
+                    data-testid="stocktake-adjustment-preview-table"
+                    rowKey="line_id"
+                    size="small"
+                    pagination={false}
+                    columns={adjustmentLineColumns}
+                    dataSource={previewForDetail.lines ?? []}
+                    scroll={{ x: 950 }}
+                  />
+                </div>
+              ) : null}
+            </div>
             {canManage && detail.status === 'DRAFT' && (
               <Space style={{ marginTop: 16 }}>
                 <Button

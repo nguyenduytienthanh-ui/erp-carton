@@ -75,6 +75,10 @@ export interface InventoryTransaction {
   sales_order_line?: number | null;
   reservation?: number | null;
   reservation_code?: string | null;
+  stocktake?: number | null;
+  stocktake_code?: string | null;
+  stocktake_line?: number | null;
+  stocktake_line_number?: number | null;
   posted_at: string;
   created_at: string;
   updated_at: string;
@@ -205,10 +209,49 @@ export interface Stocktake {
   created_by?: number | null;
   completed_at?: string | null;
   completed_by?: number | null;
+  adjustment_posted_at?: string | null;
+  adjustment_posted_by?: number | null;
   lines: StocktakeLine[];
 }
 
 export type StocktakeFormLine = { product_id: number; count_qty: number | string; note?: string };
+
+export type StocktakeAdjustmentType = 'ADJUSTMENT_IN' | 'ADJUSTMENT_OUT';
+export type StocktakeAdjustmentLineStatus = 'READY' | 'SKIPPED' | 'BLOCKED';
+
+export interface StocktakeAdjustmentPreviewLine {
+  line_id: number;
+  line_number: number;
+  product: number;
+  product_code?: string;
+  product_name?: string;
+  warehouse: number;
+  warehouse_code?: string;
+  warehouse_name?: string;
+  system_qty: string;
+  count_qty: string;
+  variance_qty: string;
+  status: StocktakeAdjustmentLineStatus;
+  adjustment_type: StocktakeAdjustmentType | null;
+  adjustment_qty: string;
+  blocked_reason?: unknown;
+}
+
+export interface StocktakeAdjustmentPreview {
+  stocktake: number;
+  stocktake_code: string;
+  status: StocktakeStatus | 'POSTED';
+  adjustment_posted_at?: string | null;
+  adjustment_posted_by?: number | null;
+  can_post: boolean;
+  total_in_lines: number;
+  total_out_lines: number;
+  skipped_zero_lines: number;
+  blocked_lines: number;
+  transaction_count: number;
+  transaction_ids?: number[];
+  lines: StocktakeAdjustmentPreviewLine[];
+}
 
 /** Phiếu xuất / Giao hàng (danh sách + chi tiết) */
 export type OutboundShipmentStatus = 'POSTED' | 'CANCELLED';

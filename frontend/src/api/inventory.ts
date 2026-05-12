@@ -12,6 +12,7 @@ import type {
   PaginatedResponse,
   StockAlert,
   Stocktake,
+  StocktakeAdjustmentPreview,
   StocktakeFormLine,
   Warehouse,
   WarehouseTransfer,
@@ -178,6 +179,14 @@ export const inventoryApi = {
   },
   completeStocktake: async (id: number): Promise<{ status: string }> => {
     const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_STOCKTAKES}${id}/complete/`);
+    return response.data;
+  },
+  previewStocktakeAdjustments: async (id: number): Promise<StocktakeAdjustmentPreview> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_STOCKTAKES}${id}/preview_adjustments/`);
+    return response.data;
+  },
+  postStocktakeAdjustments: async (id: number, reason: string): Promise<StocktakeAdjustmentPreview> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_STOCKTAKES}${id}/post_adjustments/`, { reason });
     return response.data;
   },
 
