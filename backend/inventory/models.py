@@ -516,6 +516,20 @@ class InventoryTransaction(models.Model):
         blank=True,
         related_name='transactions',
     )
+    stocktake = models.ForeignKey(
+        'inventory.Stocktake',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='adjustment_transactions',
+    )
+    stocktake_line = models.ForeignKey(
+        'inventory.StocktakeLine',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='adjustment_transactions',
+    )
     posted_at = models.DateTimeField(auto_now_add=True)
     posted_by = models.ForeignKey(
         User,
@@ -564,6 +578,8 @@ class InventoryTransaction(models.Model):
             models.Index(fields=['production_order']),
             models.Index(fields=['production_issue']),
             models.Index(fields=['production_receipt']),
+            models.Index(fields=['stocktake']),
+            models.Index(fields=['stocktake_line']),
         ]
 
     def __str__(self):
@@ -728,6 +744,14 @@ class Stocktake(models.Model):
         null=True,
         blank=True,
         related_name='completed_stocktakes',
+    )
+    adjustment_posted_at = models.DateTimeField(null=True, blank=True)
+    adjustment_posted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='adjustment_posted_stocktakes',
     )
 
     class Meta:

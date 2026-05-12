@@ -14,6 +14,7 @@ from inventory.models import (
     OutboundShipmentPackage,
     InventoryTransaction,
     InventoryTransactionStatus,
+    InventoryTransactionType,
     OutboundShipment,
     Stocktake,
     WarehouseTransfer,
@@ -78,6 +79,48 @@ class InventoryApiFlowTest(TestCase):
             qty=Decimal('10'),
             unit_price=Decimal('100'),
         )
+
+    def _create_inventory_product(self, code):
+        return Product.objects.create(
+            code=code,
+            name=f'{code} product',
+            unit=self.unit,
+            sale_price=Decimal('100'),
+            min_stock=Decimal('0'),
+        )
+
+    def _create_inventory_transaction(self, tx_type, product, quantity, code_suffix, warehouse=None):
+        return InventoryTransaction.objects.create(
+            code=f'INVTX-STK-{code_suffix}',
+            transaction_type=tx_type,
+            transaction_date=timezone.localdate(),
+            product=product,
+            warehouse=warehouse or self.warehouse,
+            quantity=Decimal(str(quantity)),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+
+    def _create_completed_stocktake(self, lines_data):
+        create_response = self.client.post(
+            '/api/inventory/stocktakes/',
+            {
+                'warehouse': self.warehouse.id,
+                'count_date': str(timezone.localdate()),
+                'note': 'Stocktake adjustment regression',
+                'lines_data': lines_data,
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.json())
+        stocktake_id = create_response.json()['id']
+        complete_response = self.client.post(
+            f'/api/inventory/stocktakes/{stocktake_id}/complete/',
+            format='json',
+        )
+        self.assertEqual(complete_response.status_code, 200, complete_response.json())
+        return Stocktake.objects.get(pk=stocktake_id)
 
     def test_stock_receipt_reservation_and_summary_flow(self):
         receipt_response = self.client.post(
@@ -1479,6 +1522,160 @@ class InventoryApiFlowTest(TestCase):
         delete_response = self.client.delete(f'/api/inventory/stocktakes/{draft_stocktake_id}/')
         self.assertEqual(delete_response.status_code, 204, delete_response.content)
         self.assertFalse(Stocktake.objects.filter(pk=draft_stocktake_id).exists())
+
+    def test_complete_stocktake_does_not_create_adjustment_transactions(self):
+        self._create_inventory_transaction(InventoryTransactionType.RECEIPT, self.product, '10', 'COMPLETE-001')
+        stocktake = self._create_completed_stocktake([
+            {'product_id': self.product.id, 'count_qty': '12'},
+        ])
+
+        stocktake.refresh_from_db()
+        self.assertEqual(stocktake.status, 'COMPLETED')
+        self.assertIsNone(stocktake.adjustment_posted_at)
+        self.assertIsNone(stocktake.adjustment_posted_by)
+        self.assertFalse(InventoryTransaction.objects.filter(stocktake=stocktake).exists())
+
+    def test_preview_stocktake_adjustments_returns_in_out_and_zero_lines(self):
+        product_out = self._create_inventory_product('BOX-STK-02')
+        product_zero = self._create_inventory_product('BOX-STK-03')
+        self._create_inventory_transaction(InventoryTransactionType.RECEIPT, self.product, '10', 'PREV-001')
+        self._create_inventory_transaction(InventoryTransactionType.RECEIPT, product_out, '5', 'PREV-002')
+        self._create_inventory_transaction(InventoryTransactionType.RECEIPT, product_zero, '7', 'PREV-003')
+        stocktake = self._create_completed_stocktake([
+            {'product_id': self.product.id, 'count_qty': '12'},
+            {'product_id': product_out.id, 'count_qty': '3'},
+            {'product_id': product_zero.id, 'count_qty': '7'},
+        ])
+
+        response = self.client.post(
+            f'/api/inventory/stocktakes/{stocktake.id}/preview_adjustments/',
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.json())
+        data = response.json()
+        self.assertTrue(data['can_post'])
+        self.assertEqual(data['total_in_lines'], 1)
+        self.assertEqual(data['total_out_lines'], 1)
+        self.assertEqual(data['skipped_zero_lines'], 1)
+        self.assertEqual(data['blocked_lines'], 0)
+
+        lines_by_product = {line['product']: line for line in data['lines']}
+        self.assertEqual(lines_by_product[self.product.id]['adjustment_type'], InventoryTransactionType.ADJUSTMENT_IN)
+        self.assertEqual(Decimal(lines_by_product[self.product.id]['adjustment_qty']), Decimal('2.0000'))
+        self.assertEqual(lines_by_product[product_out.id]['adjustment_type'], InventoryTransactionType.ADJUSTMENT_OUT)
+        self.assertEqual(Decimal(lines_by_product[product_out.id]['adjustment_qty']), Decimal('2.0000'))
+        self.assertEqual(lines_by_product[product_zero.id]['status'], 'SKIPPED')
+
+    def test_post_stocktake_adjustments_requires_reason(self):
+        self._create_inventory_transaction(InventoryTransactionType.RECEIPT, self.product, '10', 'REASON-001')
+        stocktake = self._create_completed_stocktake([
+            {'product_id': self.product.id, 'count_qty': '12'},
+        ])
+
+        response = self.client.post(
+            f'/api/inventory/stocktakes/{stocktake.id}/post_adjustments/',
+            {'reason': '   '},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400, response.json())
+        self.assertFalse(InventoryTransaction.objects.filter(stocktake=stocktake).exists())
+
+    def test_post_stocktake_adjustments_creates_transactions_and_audit(self):
+        product_out = self._create_inventory_product('BOX-STK-04')
+        self._create_inventory_transaction(InventoryTransactionType.RECEIPT, self.product, '10', 'POST-001')
+        self._create_inventory_transaction(InventoryTransactionType.RECEIPT, product_out, '5', 'POST-002')
+        stocktake = self._create_completed_stocktake([
+            {'product_id': self.product.id, 'count_qty': '12'},
+            {'product_id': product_out.id, 'count_qty': '3'},
+        ])
+
+        response = self.client.post(
+            f'/api/inventory/stocktakes/{stocktake.id}/post_adjustments/',
+            {'reason': 'Điều chỉnh theo kiểm kê cuối ngày'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.json())
+        data = response.json()
+        self.assertEqual(data['status'], 'POSTED')
+        self.assertEqual(data['transaction_count'], 2)
+        self.assertEqual(len(data['transaction_ids']), 2)
+
+        transactions = InventoryTransaction.objects.filter(stocktake=stocktake).order_by('stocktake_line__line_number')
+        self.assertEqual(transactions.count(), 2)
+        self.assertEqual(transactions[0].transaction_type, InventoryTransactionType.ADJUSTMENT_IN)
+        self.assertEqual(transactions[0].quantity, Decimal('2.0000'))
+        self.assertEqual(transactions[0].stocktake_line.product_id, self.product.id)
+        self.assertEqual(transactions[1].transaction_type, InventoryTransactionType.ADJUSTMENT_OUT)
+        self.assertEqual(transactions[1].quantity, Decimal('2.0000'))
+        self.assertEqual(transactions[1].stocktake_line.product_id, product_out.id)
+
+        stocktake.refresh_from_db()
+        self.assertIsNotNone(stocktake.adjustment_posted_at)
+        self.assertEqual(stocktake.adjustment_posted_by, self.user)
+        self.assertTrue(
+            AuditLog.objects.filter(
+                entity_type='Stocktake',
+                entity_id=stocktake.id,
+                entity_code=stocktake.code,
+                action='POST',
+            ).exists()
+        )
+
+    def test_post_stocktake_adjustments_is_single_use(self):
+        self._create_inventory_transaction(InventoryTransactionType.RECEIPT, self.product, '10', 'ONCE-001')
+        stocktake = self._create_completed_stocktake([
+            {'product_id': self.product.id, 'count_qty': '12'},
+        ])
+
+        first_response = self.client.post(
+            f'/api/inventory/stocktakes/{stocktake.id}/post_adjustments/',
+            {'reason': 'Post lần đầu'},
+            format='json',
+        )
+        self.assertEqual(first_response.status_code, 200, first_response.json())
+
+        second_response = self.client.post(
+            f'/api/inventory/stocktakes/{stocktake.id}/post_adjustments/',
+            {'reason': 'Post lần hai'},
+            format='json',
+        )
+        self.assertEqual(second_response.status_code, 400, second_response.json())
+        self.assertEqual(InventoryTransaction.objects.filter(stocktake=stocktake).count(), 1)
+
+    def test_post_stocktake_adjustments_blocks_shortage_without_partial_writes(self):
+        product_in = self._create_inventory_product('BOX-STK-05')
+        self._create_inventory_transaction(InventoryTransactionType.RECEIPT, self.product, '1', 'BLOCK-001')
+        stocktake = self._create_completed_stocktake([
+            {'product_id': self.product.id, 'count_qty': '0'},
+            {'product_id': product_in.id, 'count_qty': '1'},
+        ])
+        self._create_inventory_transaction(InventoryTransactionType.ADJUSTMENT_OUT, self.product, '1', 'BLOCK-002')
+
+        response = self.client.post(
+            f'/api/inventory/stocktakes/{stocktake.id}/post_adjustments/',
+            {'reason': 'Không được ghi một phần khi thiếu tồn'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400, response.json())
+        self.assertFalse(InventoryTransaction.objects.filter(stocktake=stocktake).exists())
+        stocktake.refresh_from_db()
+        self.assertIsNone(stocktake.adjustment_posted_at)
+
+    def test_post_stocktake_adjustments_requires_inventory_permission(self):
+        self._create_inventory_transaction(InventoryTransactionType.RECEIPT, self.product, '10', 'PERM-001')
+        stocktake = self._create_completed_stocktake([
+            {'product_id': self.product.id, 'count_qty': '12'},
+        ])
+
+        self.client.force_authenticate(self.viewer)
+        response = self.client.post(
+            f'/api/inventory/stocktakes/{stocktake.id}/post_adjustments/',
+            {'reason': 'Không đủ quyền'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 403, response.json())
+        self.assertFalse(InventoryTransaction.objects.filter(stocktake=stocktake).exists())
+        self.client.force_authenticate(self.user)
 
     def test_create_warehouse_transfer_and_progress_workflow(self):
         target_warehouse = Warehouse.objects.create(code='K3', name='Kho 3')

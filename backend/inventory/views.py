@@ -221,6 +221,8 @@ class InventoryTransactionViewSet(InventoryManagePermissionMixin, viewsets.Model
             'sales_order',
             'sales_order_line',
             'reservation',
+            'stocktake',
+            'stocktake_line',
             'posted_by',
             'cancelled_by',
         )
@@ -417,7 +419,12 @@ class StocktakeViewSet(StocktakePermissionMixin, viewsets.ModelViewSet):
     ordering = ['-count_date', '-id']
 
     def get_queryset(self):
-        return Stocktake.objects.select_related('warehouse', 'created_by', 'completed_by').prefetch_related('lines', 'lines__product')
+        return Stocktake.objects.select_related(
+            'warehouse',
+            'created_by',
+            'completed_by',
+            'adjustment_posted_by',
+        ).prefetch_related('lines', 'lines__product', 'lines__warehouse')
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -447,6 +454,185 @@ class StocktakeViewSet(StocktakePermissionMixin, viewsets.ModelViewSet):
         stocktake.completed_by = request.user
         stocktake.save(update_fields=['status', 'completed_at', 'completed_by', 'updated_at'])
         return Response({'status': stocktake.status})
+
+    def _build_adjustment_preview(self, stocktake, reason=''):
+        lines = []
+        total_in_lines = 0
+        total_out_lines = 0
+        skipped_zero_lines = 0
+        blocked_lines = 0
+
+        for line in stocktake.lines.all().order_by('line_number', 'id'):
+            variance = line.variance_qty
+            base = {
+                'line_id': line.id,
+                'line_number': line.line_number,
+                'product': line.product_id,
+                'product_code': getattr(line.product, 'code', ''),
+                'product_name': getattr(line.product, 'name', ''),
+                'warehouse': line.warehouse_id,
+                'warehouse_code': getattr(line.warehouse, 'code', ''),
+                'warehouse_name': getattr(line.warehouse, 'name', ''),
+                'system_qty': str(line.system_qty or Decimal('0')),
+                'count_qty': str(line.count_qty or Decimal('0')),
+                'variance_qty': str(variance),
+            }
+            if variance == 0:
+                skipped_zero_lines += 1
+                lines.append({
+                    **base,
+                    'status': 'SKIPPED',
+                    'adjustment_type': None,
+                    'adjustment_qty': '0',
+                    'blocked_reason': '',
+                })
+                continue
+
+            tx_type = InventoryTransactionType.ADJUSTMENT_IN if variance > 0 else InventoryTransactionType.ADJUSTMENT_OUT
+            qty = variance if variance > 0 else abs(variance)
+            payload = {
+                'transaction_type': tx_type,
+                'transaction_date': stocktake.count_date,
+                'reference': stocktake.code,
+                'reason': reason or f'Stocktake {stocktake.code}',
+                'product': line.product_id,
+                'warehouse': line.warehouse_id,
+                'quantity': qty,
+            }
+            serializer = InventoryTransactionSerializer(data=payload, context=self.get_serializer_context())
+            if serializer.is_valid():
+                if tx_type == InventoryTransactionType.ADJUSTMENT_IN:
+                    total_in_lines += 1
+                else:
+                    total_out_lines += 1
+                lines.append({
+                    **base,
+                    'status': 'READY',
+                    'adjustment_type': tx_type,
+                    'adjustment_qty': str(qty),
+                    'blocked_reason': '',
+                    '_payload': payload,
+                })
+            else:
+                blocked_lines += 1
+                lines.append({
+                    **base,
+                    'status': 'BLOCKED',
+                    'adjustment_type': tx_type,
+                    'adjustment_qty': str(qty),
+                    'blocked_reason': serializer.errors,
+                    '_payload': payload,
+                })
+
+        can_post = (
+            stocktake.status == StocktakeStatus.COMPLETED
+            and stocktake.adjustment_posted_at is None
+            and blocked_lines == 0
+        )
+        return {
+            'stocktake': stocktake.id,
+            'stocktake_code': stocktake.code,
+            'status': stocktake.status,
+            'adjustment_posted_at': stocktake.adjustment_posted_at,
+            'can_post': can_post,
+            'total_in_lines': total_in_lines,
+            'total_out_lines': total_out_lines,
+            'skipped_zero_lines': skipped_zero_lines,
+            'blocked_lines': blocked_lines,
+            'transaction_count': total_in_lines + total_out_lines,
+            'lines': lines,
+        }
+
+    def _public_adjustment_preview(self, preview):
+        public_lines = []
+        for line in preview.get('lines', []):
+            public_lines.append({key: value for key, value in line.items() if key != '_payload'})
+        return {**preview, 'lines': public_lines}
+
+    @action(detail=True, methods=['post'])
+    def preview_adjustments(self, request, pk=None):
+        stocktake = self.get_object()
+        if stocktake.status != StocktakeStatus.COMPLETED:
+            raise ValidationError({'status': 'Chá»‰ preview Ä‘iá»u chá»‰nh cho phiáº¿u kiá»ƒm tá»“n Ä‘Ă£ hoĂ n táº¥t.'})
+        return Response(self._public_adjustment_preview(self._build_adjustment_preview(stocktake)))
+
+    @action(detail=True, methods=['post'])
+    def post_adjustments(self, request, pk=None):
+        if not _can_manage_inventory(request.user):
+            raise PermissionDenied('Báº¡n khĂ´ng cĂ³ quyá»n ghi Ä‘iá»u chá»‰nh tá»“n kho.')
+        reason = (request.data.get('reason') or '').strip()
+        if not reason:
+            raise ValidationError({'reason': 'Ghi Ä‘iá»u chá»‰nh tá»“n báº¯t buá»™c cĂ³ lĂ½ do.'})
+        with transaction.atomic():
+            locked_stocktake = Stocktake.objects.select_for_update().get(pk=pk)
+            self.check_object_permissions(request, locked_stocktake)
+            stocktake = (
+                Stocktake.objects.select_related('warehouse')
+                .prefetch_related('lines', 'lines__product', 'lines__warehouse')
+                .get(pk=locked_stocktake.pk)
+            )
+            self.check_object_permissions(request, stocktake)
+            if stocktake.status != StocktakeStatus.COMPLETED:
+                raise ValidationError({'status': 'Chá»‰ ghi Ä‘iá»u chá»‰nh cho phiáº¿u kiá»ƒm tá»“n Ä‘Ă£ hoĂ n táº¥t.'})
+            if stocktake.adjustment_posted_at:
+                raise ValidationError({'adjustment_posted_at': 'Phiáº¿u kiá»ƒm tá»“n nĂ y Ä‘Ă£ ghi Ä‘iá»u chá»‰nh tá»“n.'})
+
+            preview = self._build_adjustment_preview(stocktake, reason=reason)
+            if preview['blocked_lines']:
+                raise ValidationError({
+                    'blocked_lines': preview['blocked_lines'],
+                    'lines': self._public_adjustment_preview(preview)['lines'],
+                })
+
+            created_transactions = []
+            for line_preview in preview['lines']:
+                payload = line_preview.get('_payload')
+                if not payload or line_preview.get('status') != 'READY':
+                    continue
+                serializer = InventoryTransactionSerializer(data=payload, context=self.get_serializer_context())
+                serializer.is_valid(raise_exception=True)
+                stocktake_line = stocktake.lines.get(id=line_preview['line_id'])
+                tx = serializer.save(
+                    created_by=request.user,
+                    updated_by=request.user,
+                    posted_by=request.user,
+                    stocktake=stocktake,
+                    stocktake_line=stocktake_line,
+                )
+                created_transactions.append(tx)
+
+            stocktake.adjustment_posted_at = timezone.now()
+            stocktake.adjustment_posted_by = request.user
+            stocktake.save(update_fields=['adjustment_posted_at', 'adjustment_posted_by', 'updated_at'])
+
+            AuditLog.objects.create(
+                user=request.user,
+                action='POST',
+                entity_type='Stocktake',
+                entity_id=stocktake.id,
+                entity_code=stocktake.code,
+                old_values={'adjustment_posted_at': None},
+                new_values={
+                    'adjustment_posted_at': stocktake.adjustment_posted_at.isoformat(),
+                    'reason': reason,
+                    'transaction_count': len(created_transactions),
+                    'total_in_lines': preview['total_in_lines'],
+                    'total_out_lines': preview['total_out_lines'],
+                    'skipped_zero_lines': preview['skipped_zero_lines'],
+                },
+                changed_fields=['adjustment_posted_at', 'adjustment_posted_by'],
+                ip_address=get_client_ip(request),
+                user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:500],
+            )
+
+        response = self._public_adjustment_preview(preview)
+        response.update({
+            'status': 'POSTED',
+            'adjustment_posted_at': stocktake.adjustment_posted_at,
+            'adjustment_posted_by': stocktake.adjustment_posted_by_id,
+            'transaction_ids': [tx.id for tx in created_transactions],
+        })
+        return Response(response)
 
 
 class OutboundShipmentViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):

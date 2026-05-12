@@ -118,6 +118,8 @@ class InventoryTransactionSerializer(serializers.ModelSerializer):
     sales_order_code = serializers.CharField(source='sales_order.code', read_only=True)
     reservation_code = serializers.CharField(source='reservation.code', read_only=True)
     shipment_batch_code = serializers.CharField(source='shipment_batch.code', read_only=True)
+    stocktake_code = serializers.CharField(source='stocktake.code', read_only=True)
+    stocktake_line_number = serializers.IntegerField(source='stocktake_line.line_number', read_only=True)
     amount = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
 
     class Meta:
@@ -152,6 +154,10 @@ class InventoryTransactionSerializer(serializers.ModelSerializer):
             'reservation_code',
             'shipment_batch',
             'shipment_batch_code',
+            'stocktake',
+            'stocktake_code',
+            'stocktake_line',
+            'stocktake_line_number',
             'posted_at',
             'posted_by',
             'cancelled_at',
@@ -180,6 +186,10 @@ class InventoryTransactionSerializer(serializers.ModelSerializer):
             'sales_order_code',
             'reservation_code',
             'shipment_batch_code',
+            'stocktake',
+            'stocktake_code',
+            'stocktake_line',
+            'stocktake_line_number',
         ]
 
     def validate(self, attrs):
@@ -585,10 +595,21 @@ class StocktakeSerializer(serializers.ModelSerializer):
             'created_by',
             'completed_at',
             'completed_by',
+            'adjustment_posted_at',
+            'adjustment_posted_by',
             'lines',
             'lines_data',
         ]
-        read_only_fields = ['code', 'created_at', 'updated_at', 'warehouse_name', 'completed_at', 'completed_by']
+        read_only_fields = [
+            'code',
+            'created_at',
+            'updated_at',
+            'warehouse_name',
+            'completed_at',
+            'completed_by',
+            'adjustment_posted_at',
+            'adjustment_posted_by',
+        ]
 
     def create(self, validated_data):
         lines_data = validated_data.pop('lines_data', [])
