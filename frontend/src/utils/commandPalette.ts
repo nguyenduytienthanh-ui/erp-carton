@@ -18,6 +18,7 @@ type BuildCommandPaletteCatalogOptions = {
   canAccessMaterialIssues: boolean;
   canAccessProductionReceipts: boolean;
   canManageProduction: boolean;
+  canViewQuality: boolean;
   canManageInventory: boolean;
   canManageStocktake: boolean;
   canManageFinance: boolean;
@@ -481,6 +482,16 @@ export function buildCommandPaletteCatalog(
       description: 'Theo dõi nhập kho thành phẩm, hủy chứng từ và liên kết với lệnh sản xuất.',
       keywords: ['nhap thanh pham', 'production receipt', 'finished goods'],
       enabled: options.canAccessProductionReceipts,
+    },
+    {
+      key: 'qc-printing',
+      path: '/qc-printing',
+      title: 'QC Printing - Kiểm tra chất lượng in',
+      group: 'Chất lượng',
+      description: 'Theo dõi phiếu kiểm in, lỗi, ảnh bằng chứng và job xử lý ảnh theo lớp QC riêng.',
+      keywords: ['qc printing', 'quality', 'kiem chat luong in', 'loi in', 'anh bang chung'],
+      enabled: options.canViewQuality,
+      spotlight: options.canViewQuality,
     },
     {
       key: 'production-costing',

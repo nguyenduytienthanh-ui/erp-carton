@@ -213,6 +213,21 @@ export function canManageProductionData(): boolean {
   ]);
 }
 
+export function canViewQualityData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'QUALITY', 'VIEW')) return true;
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'operation-manager',
+    'ops-manager',
+    'product-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
 export function canSubmitProductionOrders(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;

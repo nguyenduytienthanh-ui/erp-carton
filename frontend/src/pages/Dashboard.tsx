@@ -30,6 +30,7 @@ import {
   canAccessSalesOrders,
   canAccessProductionCenter,
   canManageProductionData,
+  canViewQualityData,
   canManageFinanceData,
   canManageInventoryData,
   canManageOnboardingStudio,
@@ -170,6 +171,7 @@ export default function Dashboard() {
   const canManagePurchasing = canManagePurchasingData();
   const canAccessProduction = canAccessProductionCenter();
   const canManageProduction = canManageProductionData();
+  const canViewQuality = canViewQualityData();
   const canManageInventory = canManageInventoryData();
   const canManageFinance = canManageFinanceData();
   const canManageWorkforce = canManageWorkforceData();
@@ -467,6 +469,17 @@ export default function Dashboard() {
       });
     }
 
+    if (canViewQuality) {
+      cards.push({
+        key: 'qc-printing',
+        title: 'QC Printing',
+        badge: 'Quality',
+        description: 'Mở workspace kiểm chất lượng in để theo dõi phiếu kiểm, lỗi, ảnh bằng chứng và job xử lý ảnh.',
+        route: '/qc-printing',
+        actionLabel: 'Mở QC Printing',
+      });
+    }
+
     if (canManageProduction) {
       cards.push({
         key: 'production-demands',
@@ -531,6 +544,7 @@ export default function Dashboard() {
   }, [
     canAccessProduction,
     canManageProduction,
+    canViewQuality,
     canViewOps,
     canViewReports,
     canViewSales,

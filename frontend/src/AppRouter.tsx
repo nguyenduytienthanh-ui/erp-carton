@@ -24,6 +24,7 @@ import {
   canManageStocktake,
   canManagePurchasingData,
   canManageProductionData,
+  canViewQualityData,
   canAccessProductionCenter,
   canAccessMaterialIssues,
   canAccessProductionReceipts,
@@ -73,6 +74,7 @@ const ProductionPlanningBoard = lazy(() => import('./pages/Production/Production
 const ProductionResourceCatalog = lazy(() => import('./pages/Production/ProductionResourceCatalog'));
 const MaterialIssueList = lazy(() => import('./pages/Production/MaterialIssueList'));
 const ProductionReceiptList = lazy(() => import('./pages/Production/ProductionReceiptList'));
+const QCPrintingWorkspace = lazy(() => import('./pages/Quality/QCPrintingWorkspace'));
 const ExecutiveCockpit = lazy(() => import('./pages/Management/ExecutiveCockpit'));
 const ReportsCenter = lazy(() => import('./pages/Management/ReportsCenter'));
 const ProductionCostingReport = lazy(() => import('./pages/Management/ProductionCostingReport'));
@@ -165,6 +167,7 @@ export default function AppRouter() {
   const canManageStocktakeRoute = canManageStocktake();
   const canManagePurchasing = canManagePurchasingData();
   const canManageProduction = canManageProductionData();
+  const canViewQuality = canViewQualityData();
   const canAccessProduction = canAccessProductionCenter();
   const canAccessMaterialIssueRoute = canAccessMaterialIssues();
   const canAccessProductionReceiptRoute = canAccessProductionReceipts();
@@ -272,6 +275,7 @@ export default function AppRouter() {
               <Route path="production-resources" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionResourceCatalog />)}</FeatureRoute>} />
               <Route path="material-issues" element={<FeatureRoute allow={canAccessMaterialIssueRoute} fallbackTo="/">{withAsyncBoundary(<MaterialIssueList />)}</FeatureRoute>} />
               <Route path="production-receipts" element={<FeatureRoute allow={canAccessProductionReceiptRoute} fallbackTo="/">{withAsyncBoundary(<ProductionReceiptList />)}</FeatureRoute>} />
+              <Route path="qc-printing" element={<FeatureRoute allow={canViewQuality} fallbackTo="/">{withAsyncBoundary(<QCPrintingWorkspace />)}</FeatureRoute>} />
               <Route path="warehouses" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseList />)}</FeatureRoute>} />
               <Route path="warehouse-locations" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseLocationList />)}</FeatureRoute>} />
               <Route path="inventory-stock" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryStockOverview />)}</FeatureRoute>} />

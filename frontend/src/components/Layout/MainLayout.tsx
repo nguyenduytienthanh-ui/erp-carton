@@ -53,6 +53,7 @@ import {
   canManageStocktake,
   canManagePurchasingData,
   canManageProductionData,
+  canViewQualityData,
   canAccessProductionCenter,
   canAccessMaterialIssues,
   canAccessProductionReceipts,
@@ -125,6 +126,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/production-resources': () => import('../../pages/Production/ProductionResourceCatalog'),
   '/material-issues': () => import('../../pages/Production/MaterialIssueList'),
   '/production-receipts': () => import('../../pages/Production/ProductionReceiptList'),
+  '/qc-printing': () => import('../../pages/Quality/QCPrintingWorkspace'),
   '/production-costing': () => import('../../pages/Management/ProductionCostingReport'),
   '/reports': () => import('../../pages/Management/ReportsCenter'),
   '/warehouses': () => import('../../pages/Inventory/WarehouseList'),
@@ -228,6 +230,7 @@ const MainLayout = () => {
   const canManageStocktakeMenu = canManageStocktake();
   const canManagePurchasing = canManagePurchasingData();
   const canManageProduction = canManageProductionData();
+  const canViewQuality = canViewQualityData();
   const canAccessProduction = canAccessProductionCenter();
   const canAccessMaterialIssueRoute = canAccessMaterialIssues();
   const canAccessProductionReceiptRoute = canAccessProductionReceipts();
@@ -380,6 +383,7 @@ const MainLayout = () => {
     canAccessMaterialIssues: canAccessMaterialIssueRoute,
     canAccessProductionReceipts: canAccessProductionReceiptRoute,
     canManageProduction,
+    canViewQuality,
     canManageInventory,
     canManageStocktake: canManageStocktakeMenu,
     canManageFinance,
@@ -431,6 +435,7 @@ const MainLayout = () => {
     canViewAdminObservability,
     canViewOps,
     canViewOpsLog,
+    canViewQuality,
     canViewRbacAudit,
     canViewReports,
     canViewSalesOrders,
@@ -863,6 +868,11 @@ const MainLayout = () => {
           label: renderMenuLabel('/production-costing', 'Giá vốn sau sản xuất'),
         }] : []),
       ],
+    } : null,
+    canViewQuality ? {
+      key: '/qc-printing',
+      icon: <SafetyOutlined />,
+      label: renderMenuLabel('/qc-printing', 'QC Printing'),
     } : null,
     (canManageInventory || canManageStocktakeMenu) ? {
       key: 'inventory-group',
