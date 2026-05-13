@@ -174,5 +174,6 @@ urlpatterns = [
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('preferences/<str:page>/', UserPreferencesViewSet.as_view(actions={'get': 'page_config', 'post': 'page_config', 'delete': 'page_config'}), name='userpreferences-page-config'),
+    path('quality/', include('quality.urls')),
     path('', include(router.urls)),
 ]

@@ -81,6 +81,7 @@ INSTALLED_APPS = [
     'inventory.apps.InventoryConfig',
     'purchasing.apps.PurchasingConfig',
     'production.apps.ProductionConfig',
+    'quality.apps.QualityConfig',
     'workforce.apps.WorkforceConfig',
     'finance.apps.FinanceConfig',
     'django_q',
