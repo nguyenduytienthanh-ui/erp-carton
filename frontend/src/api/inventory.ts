@@ -186,7 +186,7 @@ export const inventoryApi = {
     return response.data;
   },
   postStocktakeAdjustments: async (id: number, reason: string): Promise<StocktakeAdjustmentPreview> => {
-    const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_STOCKTAKES}${id}/post_adjustments/`, { reason });
+    const response = await axiosInstance.post(`${API_ENDPOINTS.INVENTORY_STOCKTAKES}${id}/post_adjustments/`, { reason: reason.trim() });
     return response.data;
   },
 

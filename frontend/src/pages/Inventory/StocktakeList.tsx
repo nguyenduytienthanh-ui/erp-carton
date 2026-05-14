@@ -314,6 +314,10 @@ export default function StocktakeList() {
       messageApi.warning('Còn dòng bị chặn, chưa thể ghi điều chỉnh tồn.');
       return;
     }
+    if (isAdjustmentPosted) {
+      messageApi.info('Phiếu này đã ghi điều chỉnh tồn, không thể ghi lại.');
+      return;
+    }
     if (previewForDetail.transaction_count === 0) {
       messageApi.info('Không có chênh lệch cần ghi điều chỉnh.');
       return;
@@ -742,7 +746,10 @@ export default function StocktakeList() {
         confirmLoading={postAdjustmentMutation.isPending}
         okText="Ghi điều chỉnh tồn"
         cancelText="Đóng"
-        okButtonProps={{ 'data-testid': 'stocktake-confirm-post-adjustments' }}
+        okButtonProps={{
+          'data-testid': 'stocktake-confirm-post-adjustments',
+          disabled: !adjustmentReason.trim() || postAdjustmentMutation.isPending,
+        }}
         destroyOnClose
       >
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
@@ -830,6 +837,7 @@ export default function StocktakeList() {
                     data-testid="stocktake-preview-adjustments"
                     onClick={() => previewAdjustmentMutation.mutate(detail.id)}
                     loading={previewAdjustmentMutation.isPending}
+                    disabled={isAdjustmentPosted}
                   >
                     Xem trước điều chỉnh tồn
                   </Button>
@@ -884,7 +892,7 @@ export default function StocktakeList() {
                   onClick={() => completeMutation.mutate(detail.id)}
                   loading={completeMutation.isPending}
                 >
-                  Hoàn tất
+                  Hoàn tất kiểm kê
                 </Button>
                 <Button
                   data-testid={`stocktake-delete-${detail.id}`}
