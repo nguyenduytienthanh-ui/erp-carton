@@ -2,6 +2,7 @@ from datetime import datetime, time
 
 import django_filters
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone as django_tz
 
 from inventory.models import (
@@ -68,22 +69,57 @@ class WarehouseLocationFilter(django_filters.FilterSet):
 class InventoryTransactionFilter(django_filters.FilterSet):
     product = django_filters.NumberFilter(field_name='product__id')
     warehouse = django_filters.NumberFilter(field_name='warehouse__id')
+    warehouse_involved = django_filters.NumberFilter(method='filter_warehouse_involved')
     location = django_filters.NumberFilter(field_name='location__id')
     target_warehouse = django_filters.NumberFilter(field_name='target_warehouse__id')
     target_location = django_filters.NumberFilter(field_name='target_location__id')
+    sales_order = django_filters.NumberFilter(field_name='sales_order__id')
+    reservation = django_filters.NumberFilter(field_name='reservation__id')
+    shipment_batch = django_filters.NumberFilter(field_name='shipment_batch__id')
+    stocktake = django_filters.NumberFilter(field_name='stocktake__id')
+    source_type = django_filters.CharFilter(method='filter_source_type')
     transaction_type = django_filters.CharFilter(field_name='transaction_type', lookup_expr='iexact')
     status = django_filters.CharFilter(field_name='status', lookup_expr='iexact')
     transaction_date__gte = django_filters.DateFilter(field_name='transaction_date', lookup_expr='gte')
     transaction_date__lte = django_filters.DateFilter(field_name='transaction_date', lookup_expr='lte')
+
+    def filter_warehouse_involved(self, queryset, name, value):
+        return queryset.filter(Q(warehouse_id=value) | Q(target_warehouse_id=value))
+
+    def filter_source_type(self, queryset, name, value):
+        source_type = str(value or '').strip().upper()
+        if source_type == 'STOCKTAKE':
+            return queryset.filter(stocktake_id__isnull=False)
+        if source_type == 'RESERVATION':
+            return queryset.filter(reservation_id__isnull=False)
+        if source_type == 'SALES':
+            return queryset.filter(Q(sales_order_id__isnull=False) | Q(sales_order_line_id__isnull=False))
+        if source_type == 'SHIPMENT':
+            return queryset.filter(shipment_batch_id__isnull=False)
+        if source_type == 'MANUAL':
+            return queryset.filter(
+                stocktake_id__isnull=True,
+                reservation_id__isnull=True,
+                sales_order_id__isnull=True,
+                sales_order_line_id__isnull=True,
+                shipment_batch_id__isnull=True,
+            )
+        return queryset
 
     class Meta:
         model = InventoryTransaction
         fields = [
             'product',
             'warehouse',
+            'warehouse_involved',
             'location',
             'target_warehouse',
             'target_location',
+            'sales_order',
+            'reservation',
+            'shipment_batch',
+            'stocktake',
+            'source_type',
             'transaction_type',
             'status',
             'transaction_date__gte',

@@ -1,9 +1,10 @@
+from collections import defaultdict
 from datetime import datetime as dt_parse
 from decimal import Decimal
 
 import django_filters
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import filters, mixins, viewsets
 from rest_framework.decorators import action
@@ -258,28 +259,60 @@ class InventoryTransactionViewSet(InventoryManagePermissionMixin, viewsets.Model
             return Response({'error': 'date_from, date_to phải đúng định dạng YYYY-MM-DD.'}, status=400)
         if date_from > date_to:
             return Response({'error': 'date_from không được lớn hơn date_to.'}, status=400)
-        warehouse_id = request.query_params.get('warehouse') or request.query_params.get('warehouse_id')
-        if warehouse_id and str(warehouse_id).isdigit():
-            warehouse_id = int(warehouse_id)
-        else:
-            warehouse_id = None
 
-        base = InventoryTransaction.objects.filter(status=InventoryTransactionStatus.POSTED)
+        def _parse_positive_int(value):
+            if value and str(value).isdigit():
+                return int(value)
+            return None
+
+        warehouse_id = _parse_positive_int(request.query_params.get('warehouse') or request.query_params.get('warehouse_id'))
+        product_id = _parse_positive_int(request.query_params.get('product') or request.query_params.get('product_id'))
+
+        base = InventoryTransaction.objects.filter(
+            status=InventoryTransactionStatus.POSTED,
+            transaction_date__lte=date_to,
+        )
+        if product_id:
+            base = base.filter(product_id=product_id)
         if warehouse_id:
-            base = base.filter(warehouse_id=warehouse_id)
-        in_types = [InventoryTransactionType.RECEIPT, InventoryTransactionType.ADJUSTMENT_IN]
-        out_types = [InventoryTransactionType.ISSUE, InventoryTransactionType.ADJUSTMENT_OUT]
+            base = base.filter(Q(warehouse_id=warehouse_id) | Q(target_warehouse_id=warehouse_id))
 
-        def _agg(qs, key_fields):
-            return {
-                (r['product_id'], r['warehouse_id'] or 0): Decimal(str(r['total'] or 0))
-                for r in qs.values('product_id', 'warehouse_id').annotate(total=Sum('quantity'))
-            }
+        opening_in = defaultdict(Decimal)
+        opening_out = defaultdict(Decimal)
+        period_in = defaultdict(Decimal)
+        period_out = defaultdict(Decimal)
 
-        opening_in = _agg(base.filter(transaction_type__in=in_types, transaction_date__lt=date_from), ('product_id', 'warehouse_id'))
-        opening_out = _agg(base.filter(transaction_type__in=out_types, transaction_date__lt=date_from), ('product_id', 'warehouse_id'))
-        period_in = _agg(base.filter(transaction_type__in=in_types, transaction_date__gte=date_from, transaction_date__lte=date_to), ('product_id', 'warehouse_id'))
-        period_out = _agg(base.filter(transaction_type__in=out_types, transaction_date__gte=date_from, transaction_date__lte=date_to), ('product_id', 'warehouse_id'))
+        def _add_movement(bucket, tx, movement_warehouse_id):
+            if not movement_warehouse_id:
+                return
+            if warehouse_id and movement_warehouse_id != warehouse_id:
+                return
+            bucket[(tx.product_id, movement_warehouse_id)] += tx.quantity or Decimal('0')
+
+        for tx in base.only(
+            'product_id',
+            'warehouse_id',
+            'target_warehouse_id',
+            'transaction_type',
+            'transaction_date',
+            'quantity',
+        ):
+            if tx.transaction_date < date_from:
+                in_bucket = opening_in
+                out_bucket = opening_out
+            elif date_from <= tx.transaction_date <= date_to:
+                in_bucket = period_in
+                out_bucket = period_out
+            else:
+                continue
+
+            if tx.transaction_type in {InventoryTransactionType.RECEIPT, InventoryTransactionType.ADJUSTMENT_IN}:
+                _add_movement(in_bucket, tx, tx.warehouse_id)
+            elif tx.transaction_type in {InventoryTransactionType.ISSUE, InventoryTransactionType.ADJUSTMENT_OUT}:
+                _add_movement(out_bucket, tx, tx.warehouse_id)
+            elif tx.transaction_type == InventoryTransactionType.TRANSFER:
+                _add_movement(out_bucket, tx, tx.warehouse_id)
+                _add_movement(in_bucket, tx, tx.target_warehouse_id)
 
         keys = set(opening_in) | set(opening_out) | set(period_in) | set(period_out)
         product_ids = [k[0] for k in keys if k[0]]

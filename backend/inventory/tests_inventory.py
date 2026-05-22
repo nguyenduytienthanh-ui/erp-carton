@@ -1457,6 +1457,174 @@ class InventoryApiFlowTest(TestCase):
         self.assertEqual(len(target_rows), 1)
         self.assertEqual(Decimal(str(target_rows[0]['on_hand'])), Decimal('4'))
 
+    def test_nxt_report_counts_transfer_opening_period_and_warehouse_filter(self):
+        target_warehouse = Warehouse.objects.create(code='K-NXT', name='Kho NXT')
+        date_from = timezone.localdate() - timedelta(days=3)
+        date_to = timezone.localdate()
+        opening_date = date_from - timedelta(days=2)
+        period_date = date_from + timedelta(days=1)
+
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-OPEN-001',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            transaction_date=opening_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            quantity=Decimal('20'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-IN-001',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            quantity=Decimal('5'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-OUT-001',
+            transaction_type=InventoryTransactionType.ISSUE,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            quantity=Decimal('3'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-TRANSFER-001',
+            transaction_type=InventoryTransactionType.TRANSFER,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            target_warehouse=target_warehouse,
+            quantity=Decimal('4'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-WH-TRANSFER-ISSUE',
+            transaction_type=InventoryTransactionType.ISSUE,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            reference='TRN-NXT-001',
+            quantity=Decimal('2'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-WH-TRANSFER-RECEIPT',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=target_warehouse,
+            reference='TRN-NXT-001',
+            quantity=Decimal('2'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-CANCELLED-001',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            status=InventoryTransactionStatus.CANCELLED,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            quantity=Decimal('99'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+
+        response = self.client.get(
+            '/api/inventory/transactions/nxt_report/',
+            {'date_from': str(date_from), 'date_to': str(date_to), 'product': self.product.id},
+        )
+        self.assertEqual(response.status_code, 200, response.json())
+        rows = {(row['product_id'], row['warehouse_id']): row for row in response.json()['results']}
+
+        source_row = rows[(self.product.id, self.warehouse.id)]
+        self.assertEqual(Decimal(source_row['opening_qty']), Decimal('20'))
+        self.assertEqual(Decimal(source_row['in_qty']), Decimal('5'))
+        self.assertEqual(Decimal(source_row['out_qty']), Decimal('9'))
+        self.assertEqual(Decimal(source_row['closing_qty']), Decimal('16'))
+
+        target_row = rows[(self.product.id, target_warehouse.id)]
+        self.assertEqual(Decimal(target_row['opening_qty']), Decimal('0'))
+        self.assertEqual(Decimal(target_row['in_qty']), Decimal('6'))
+        self.assertEqual(Decimal(target_row['out_qty']), Decimal('0'))
+        self.assertEqual(Decimal(target_row['closing_qty']), Decimal('6'))
+
+        filtered_response = self.client.get(
+            '/api/inventory/transactions/nxt_report/',
+            {
+                'date_from': str(date_from),
+                'date_to': str(date_to),
+                'warehouse': target_warehouse.id,
+                'product': self.product.id,
+            },
+        )
+        self.assertEqual(filtered_response.status_code, 200, filtered_response.json())
+        filtered_rows = filtered_response.json()['results']
+        self.assertEqual(len(filtered_rows), 1)
+        self.assertEqual(filtered_rows[0]['warehouse_id'], target_warehouse.id)
+        self.assertEqual(Decimal(filtered_rows[0]['in_qty']), Decimal('6'))
+
+    def test_transaction_list_filters_by_involved_warehouse_and_source_type(self):
+        target_warehouse = Warehouse.objects.create(code='K-FLT', name='Kho filter')
+        transfer = InventoryTransaction.objects.create(
+            code='INVTX-FILTER-TRANSFER',
+            transaction_type=InventoryTransactionType.TRANSFER,
+            transaction_date=timezone.localdate(),
+            product=self.product,
+            warehouse=self.warehouse,
+            target_warehouse=target_warehouse,
+            quantity=Decimal('1'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        stocktake = Stocktake.objects.create(
+            code='STKT-FILTER-001',
+            warehouse=self.warehouse,
+            count_date=timezone.localdate(),
+            status='COMPLETED',
+            created_by=self.user,
+        )
+        stocktake_tx = InventoryTransaction.objects.create(
+            code='INVTX-FILTER-STOCKTAKE',
+            transaction_type=InventoryTransactionType.ADJUSTMENT_IN,
+            transaction_date=timezone.localdate(),
+            product=self.product,
+            warehouse=self.warehouse,
+            stocktake=stocktake,
+            quantity=Decimal('1'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+
+        involved_response = self.client.get('/api/inventory/transactions/', {'warehouse_involved': target_warehouse.id})
+        self.assertEqual(involved_response.status_code, 200, involved_response.json())
+        involved_codes = {row['code'] for row in involved_response.json()['results']}
+        self.assertIn(transfer.code, involved_codes)
+
+        stocktake_response = self.client.get('/api/inventory/transactions/', {'source_type': 'STOCKTAKE'})
+        self.assertEqual(stocktake_response.status_code, 200, stocktake_response.json())
+        stocktake_codes = {row['code'] for row in stocktake_response.json()['results']}
+        self.assertIn(stocktake_tx.code, stocktake_codes)
+        self.assertNotIn(transfer.code, stocktake_codes)
+
     def test_create_stocktake_complete_and_delete_draft(self):
         create_response = self.client.post(
             '/api/inventory/stocktakes/',
