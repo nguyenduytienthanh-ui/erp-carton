@@ -75,13 +75,38 @@ export interface InventoryTransaction {
   sales_order_line?: number | null;
   reservation?: number | null;
   reservation_code?: string | null;
+  shipment_batch?: number | null;
+  shipment_batch_code?: string | null;
   stocktake?: number | null;
   stocktake_code?: string | null;
   stocktake_line?: number | null;
   stocktake_line_number?: number | null;
+  posted_by?: number | null;
+  cancelled_at?: string | null;
+  cancelled_by?: number | null;
+  cancel_reason?: string;
   posted_at: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface InventoryNxtReportRow {
+  product_id: number;
+  product_code: string;
+  product_name: string;
+  warehouse_id: number | null;
+  warehouse_code: string;
+  warehouse_name: string;
+  opening_qty: string;
+  in_qty: string;
+  out_qty: string;
+  closing_qty: string;
+}
+
+export interface InventoryNxtReportResponse {
+  date_from: string;
+  date_to: string;
+  results: InventoryNxtReportRow[];
 }
 
 export interface InventoryReservation {

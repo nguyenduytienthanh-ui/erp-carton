@@ -3,6 +3,7 @@ import { API_ENDPOINTS } from '../utils/constants';
 import type {
   InventoryReservation,
   InventoryForecastRow,
+  InventoryNxtReportResponse,
   InventorySalesOrderDetail,
   InventorySalesOrderOption,
   InventoryStockRow,
@@ -138,22 +139,7 @@ export const inventoryApi = {
     const response = await axiosInstance.get(API_ENDPOINTS.INVENTORY_FORECAST, { params });
     return Array.isArray(response.data) ? response.data : response.data?.results ?? [];
   },
-  getNxtReport: async (params: { date_from: string; date_to: string; warehouse?: number }): Promise<{
-    date_from: string;
-    date_to: string;
-    results: Array<{
-      product_id: number;
-      product_code: string;
-      product_name: string;
-      warehouse_id: number | null;
-      warehouse_code: string;
-      warehouse_name: string;
-      opening_qty: string;
-      in_qty: string;
-      out_qty: string;
-      closing_qty: string;
-    }>;
-  }> => {
+  getNxtReport: async (params: { date_from: string; date_to: string; warehouse?: number; product?: number }): Promise<InventoryNxtReportResponse> => {
     const response = await axiosInstance.get(API_ENDPOINTS.INVENTORY_NXT_REPORT, { params });
     return response.data;
   },

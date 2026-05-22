@@ -1,28 +1,39 @@
 import { useMemo, useState } from 'react';
 import { Alert, Button, Card, Form, Input, InputNumber, Modal, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined, StopOutlined } from '@ant-design/icons';
+import { DownloadOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { inventoryApi } from '../../api/inventory';
 import { productsApi } from '../../api/products';
-import type { InventoryTransaction } from '../../types/inventory';
+import type { InventoryNxtReportRow, InventoryTransaction } from '../../types/inventory';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { canManageInventoryData } from '../../utils/authz';
 import { getToastMessage } from '../../shared/apiError';
+import { downloadCSV } from '../../utils/csvExport';
 
 type Filters = {
   warehouse?: number;
+  product?: number;
   transaction_type?: string;
+  status?: InventoryTransaction['status'];
+  transaction_date__gte?: string;
+  transaction_date__lte?: string;
+  source_type?: string;
 };
 
 type InventoryTransactionViewSnapshot = {
   search: string;
   warehouse?: number;
+  product?: number;
   transaction_type?: string;
+  status?: InventoryTransaction['status'];
+  transaction_date__gte?: string;
+  transaction_date__lte?: string;
+  source_type?: string;
 };
 
 type InventoryTransactionNamedPreset = {
@@ -48,6 +59,13 @@ type FormValues = {
 
 type CancelFormValues = {
   reason: string;
+};
+
+type NxtFilters = {
+  date_from: string;
+  date_to: string;
+  warehouse?: number;
+  product?: number;
 };
 
 const TYPE_LABELS: Record<InventoryTransaction['transaction_type'], string> = {
@@ -80,6 +98,24 @@ const STATUS_COLORS: Record<InventoryTransaction['status'], string> = {
   POSTED: 'green',
   CANCELLED: 'red',
 };
+
+const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({
+  value,
+  label,
+}));
+
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  STOCKTAKE: 'Kiểm tồn',
+  RESERVATION: 'Giữ chỗ',
+  SALES: 'Đơn bán',
+  SHIPMENT: 'Giao hàng',
+  MANUAL: 'Thủ công',
+};
+
+const SOURCE_TYPE_OPTIONS = Object.entries(SOURCE_TYPE_LABELS).map(([value, label]) => ({
+  value,
+  label,
+}));
 
 const emptyForm: FormValues = {
   transaction_type: 'RECEIPT',
@@ -121,8 +157,38 @@ function parseViewSnapshot(value: unknown): InventoryTransactionViewSnapshot | n
   return {
     search: typeof obj.search === 'string' ? obj.search : '',
     warehouse: typeof obj.warehouse === 'number' ? obj.warehouse : undefined,
+    product: typeof obj.product === 'number' ? obj.product : undefined,
     transaction_type: typeof obj.transaction_type === 'string' ? obj.transaction_type : undefined,
+    status: typeof obj.status === 'string' ? (obj.status as InventoryTransaction['status']) : undefined,
+    transaction_date__gte: typeof obj.transaction_date__gte === 'string' ? obj.transaction_date__gte : undefined,
+    transaction_date__lte: typeof obj.transaction_date__lte === 'string' ? obj.transaction_date__lte : undefined,
+    source_type: typeof obj.source_type === 'string' ? obj.source_type : undefined,
   };
+}
+
+function toNumber(value: string | number | null | undefined): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatQty(value: string | number | null | undefined): string {
+  return toNumber(value).toLocaleString('vi-VN', { maximumFractionDigits: 4 });
+}
+
+function getTransactionSource(row: InventoryTransaction): { label: string; color: string; detail?: string | null } {
+  if (row.stocktake_code) {
+    return { label: 'Kiểm tồn', color: 'purple', detail: row.stocktake_code };
+  }
+  if (row.reservation_code) {
+    return { label: 'Giữ chỗ', color: 'blue', detail: row.reservation_code };
+  }
+  if (row.shipment_batch_code) {
+    return { label: 'Giao hàng', color: 'cyan', detail: row.shipment_batch_code };
+  }
+  if (row.sales_order_code) {
+    return { label: 'Đơn bán', color: 'geekblue', detail: row.sales_order_code };
+  }
+  return { label: 'Thủ công', color: 'default', detail: row.reference || row.reason || null };
 }
 
 export default function InventoryTransactionList() {
@@ -130,6 +196,10 @@ export default function InventoryTransactionList() {
   const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState('');
   const [filters, setFilters] = useState<Filters>({});
+  const [nxtFilters, setNxtFilters] = useState<NxtFilters>({
+    date_from: dayjs().startOf('month').format('YYYY-MM-DD'),
+    date_to: dayjs().format('YYYY-MM-DD'),
+  });
   const [selectedPresetId, setSelectedPresetId] = useState<string>();
   const [isPresetModalOpen, setIsPresetModalOpen] = useState(false);
   const [presetName, setPresetName] = useState('');
@@ -181,14 +251,35 @@ export default function InventoryTransactionList() {
   const params = useMemo(() => {
     const next: Record<string, unknown> = { page, page_size: pageSize, ordering: '-transaction_date' };
     if (intentSearch.trim()) next.search = intentSearch.trim();
-    if (intentFilters.warehouse) next.warehouse = intentFilters.warehouse;
+    if (intentFilters.warehouse) next.warehouse_involved = intentFilters.warehouse;
+    if (intentFilters.product) next.product = intentFilters.product;
     if (intentFilters.transaction_type) next.transaction_type = intentFilters.transaction_type;
+    if (intentFilters.status) next.status = intentFilters.status;
+    if (intentFilters.transaction_date__gte) next.transaction_date__gte = intentFilters.transaction_date__gte;
+    if (intentFilters.transaction_date__lte) next.transaction_date__lte = intentFilters.transaction_date__lte;
+    if (intentFilters.source_type) next.source_type = intentFilters.source_type;
     return next;
   }, [intentSearch, intentFilters, page, pageSize]);
 
   const listQuery = useQuery({
     queryKey: ['inventory-transactions', params],
     queryFn: () => inventoryApi.getTransactions(params),
+  });
+
+  const nxtParams = useMemo(() => {
+    const next: { date_from: string; date_to: string; warehouse?: number; product?: number } = {
+      date_from: nxtFilters.date_from,
+      date_to: nxtFilters.date_to,
+    };
+    if (nxtFilters.warehouse) next.warehouse = nxtFilters.warehouse;
+    if (nxtFilters.product) next.product = nxtFilters.product;
+    return next;
+  }, [nxtFilters]);
+
+  const nxtQuery = useQuery({
+    queryKey: ['inventory-nxt-report', nxtParams],
+    queryFn: () => inventoryApi.getNxtReport(nxtParams),
+    enabled: Boolean(nxtFilters.date_from && nxtFilters.date_to),
   });
 
   const invalidate = async () => {
@@ -224,8 +315,16 @@ export default function InventoryTransactionList() {
       ) as Record<number, string>,
     [warehouseQuery.data?.results],
   );
+  const productLabelMap = useMemo(
+    () =>
+      Object.fromEntries(
+        (productQuery.data?.results ?? []).map((item) => [item.id, `${item.code} - ${item.name}`]),
+      ) as Record<number, string>,
+    [productQuery.data?.results],
+  );
 
   const rows = useMemo(() => listQuery.data?.results ?? [], [listQuery.data?.results]);
+  const nxtRows = useMemo(() => nxtQuery.data?.results ?? [], [nxtQuery.data?.results]);
 
   const summary = useMemo(() => {
     const postedCount = rows.filter((item) => item.status === 'POSTED').length;
@@ -257,11 +356,34 @@ export default function InventoryTransactionList() {
     if (filters.warehouse) {
       tags.push(`Kho: ${warehouseLabelMap[filters.warehouse] ?? `#${filters.warehouse}`}`);
     }
+    if (filters.product) {
+      tags.push(`Sản phẩm: ${productLabelMap[filters.product] ?? `#${filters.product}`}`);
+    }
     if (filters.transaction_type) {
       tags.push(`Loại: ${TYPE_LABELS[filters.transaction_type as InventoryTransaction['transaction_type']] ?? filters.transaction_type}`);
     }
+    if (filters.status) {
+      tags.push(`Trạng thái: ${STATUS_LABELS[filters.status]}`);
+    }
+    if (filters.transaction_date__gte || filters.transaction_date__lte) {
+      tags.push(`Kỳ: ${filters.transaction_date__gte || '...'} - ${filters.transaction_date__lte || '...'}`);
+    }
+    if (filters.source_type) {
+      tags.push(`Nguồn: ${SOURCE_TYPE_LABELS[filters.source_type] ?? filters.source_type}`);
+    }
     return tags;
-  }, [filters.transaction_type, filters.warehouse, intentSearch, warehouseLabelMap]);
+  }, [
+    filters.product,
+    filters.source_type,
+    filters.status,
+    filters.transaction_date__gte,
+    filters.transaction_date__lte,
+    filters.transaction_type,
+    filters.warehouse,
+    intentSearch,
+    productLabelMap,
+    warehouseLabelMap,
+  ]);
   const namedPresets = useMemo<InventoryTransactionNamedPreset[]>(() => {
     const raw = configRecord.saved_views;
     if (!Array.isArray(raw)) return [];
@@ -284,9 +406,24 @@ export default function InventoryTransactionList() {
     return parseViewSnapshot({
       search: configRecord.search,
       warehouse: configRecord.warehouse,
+      product: configRecord.product,
       transaction_type: configRecord.transaction_type,
+      status: configRecord.status,
+      transaction_date__gte: configRecord.transaction_date__gte,
+      transaction_date__lte: configRecord.transaction_date__lte,
+      source_type: configRecord.source_type,
     });
-  }, [configRecord.saved_view_snapshot, configRecord.search, configRecord.warehouse, configRecord.transaction_type]);
+  }, [
+    configRecord.product,
+    configRecord.saved_view_snapshot,
+    configRecord.search,
+    configRecord.source_type,
+    configRecord.status,
+    configRecord.transaction_date__gte,
+    configRecord.transaction_date__lte,
+    configRecord.transaction_type,
+    configRecord.warehouse,
+  ]);
   const commandContextTags = useMemo(() => {
     if (!selectedPreset) return activeFilterTags;
     return [...activeFilterTags, `Mẫu đang dùng: ${selectedPreset.name}`];
@@ -295,14 +432,24 @@ export default function InventoryTransactionList() {
   const buildCurrentSnapshot = (): InventoryTransactionViewSnapshot => ({
     search: searchInput,
     warehouse: filters.warehouse,
+    product: filters.product,
     transaction_type: filters.transaction_type,
+    status: filters.status,
+    transaction_date__gte: filters.transaction_date__gte,
+    transaction_date__lte: filters.transaction_date__lte,
+    source_type: filters.source_type,
   });
 
   const applySnapshot = (snapshot: InventoryTransactionViewSnapshot) => {
     setSearchInput(snapshot.search);
     setFilters({
       warehouse: snapshot.warehouse,
+      product: snapshot.product,
       transaction_type: snapshot.transaction_type,
+      status: snapshot.status,
+      transaction_date__gte: snapshot.transaction_date__gte,
+      transaction_date__lte: snapshot.transaction_date__lte,
+      source_type: snapshot.source_type,
     });
     setPage(1);
   };
@@ -394,6 +541,65 @@ export default function InventoryTransactionList() {
     }
   };
 
+  const handleExportTransactionsCSV = () => {
+    if (rows.length === 0) {
+      messageApi.warning('Không có giao dịch kho để xuất.');
+      return;
+    }
+    downloadCSV(
+      rows.map((row) => {
+        const source = getTransactionSource(row);
+        return {
+          'Mã CT': row.code,
+          Ngày: row.transaction_date,
+          Loại: TYPE_LABELS[row.transaction_type],
+          'Trạng thái': STATUS_LABELS[row.status],
+          'Mã SP': row.product_code ?? '',
+          'Sản phẩm': row.product_name ?? '',
+          Nguồn: [row.warehouse_name, row.location_name].filter(Boolean).join(' / '),
+          Đích: [row.target_warehouse_name, row.target_location_name].filter(Boolean).join(' / '),
+          'Số lượng': row.quantity,
+          'Đơn giá vốn': row.unit_cost,
+          'Giá trị': row.amount ?? '',
+          'Nguồn chứng từ': source.label,
+          'Mã nguồn': source.detail ?? '',
+          'Tham chiếu': row.reference,
+          'Lý do': row.reason,
+          'Ghi chú': row.note,
+          'Lý do hủy': row.cancel_reason ?? '',
+        };
+      }),
+      `so-kho-${dayjs().format('YYYYMMDD')}`,
+    );
+  };
+
+  const handleExportNxtCSV = () => {
+    if (nxtRows.length === 0) {
+      messageApi.warning('Không có dữ liệu NXT để xuất.');
+      return;
+    }
+    downloadCSV(
+      nxtRows.map((row) => ({
+        'Mã SP': row.product_code,
+        'Sản phẩm': row.product_name,
+        'Mã kho': row.warehouse_code,
+        Kho: row.warehouse_name,
+        'Tồn đầu': row.opening_qty,
+        Nhập: row.in_qty,
+        Xuất: row.out_qty,
+        'Tồn cuối': row.closing_qty,
+      })),
+      `nxt-${nxtFilters.date_from}-${nxtFilters.date_to}`,
+    );
+  };
+
+  const resetFilters = () => {
+    setSearchInput('');
+    setFilters({});
+    setPage(1);
+    setSelectedPresetId(undefined);
+  };
+
   const statusAlert = useMemo(() => {
     if (summary.cancelledCount > 0) {
       return {
@@ -445,6 +651,30 @@ export default function InventoryTransactionList() {
       render: (value: string) => value || '-',
     },
     {
+      title: 'Nguồn chứng từ',
+      width: 180,
+      render: (_, row) => {
+        const source = getTransactionSource(row);
+        return (
+          <Space direction="vertical" size={2}>
+            <Tag color={source.color}>{source.label}</Tag>
+            {source.detail ? <Text type="secondary">{source.detail}</Text> : null}
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Audit',
+      width: 220,
+      render: (_, row) => (
+        <Space direction="vertical" size={2}>
+          <Text>{row.reason || '-'}</Text>
+          {row.note ? <Text type="secondary">{row.note}</Text> : null}
+          {row.cancel_reason ? <Text type="danger">Hủy: {row.cancel_reason}</Text> : null}
+        </Space>
+      ),
+    },
+    {
       title: 'Trạng thái',
       width: 130,
       render: (_, row) => <Tag color={STATUS_COLORS[row.status]}>{STATUS_LABELS[row.status]}</Tag>,
@@ -471,6 +701,16 @@ export default function InventoryTransactionList() {
         </Space>
       ),
     },
+  ];
+
+  const nxtColumns: ColumnsType<InventoryNxtReportRow> = [
+    { title: 'Mã SP', dataIndex: 'product_code', width: 120 },
+    { title: 'Sản phẩm', dataIndex: 'product_name', width: 240 },
+    { title: 'Kho', dataIndex: 'warehouse_name', width: 180 },
+    { title: 'Tồn đầu', dataIndex: 'opening_qty', width: 120, align: 'right', render: (value) => formatQty(value as string) },
+    { title: 'Nhập', dataIndex: 'in_qty', width: 120, align: 'right', render: (value) => formatQty(value as string) },
+    { title: 'Xuất', dataIndex: 'out_qty', width: 120, align: 'right', render: (value) => formatQty(value as string) },
+    { title: 'Tồn cuối', dataIndex: 'closing_qty', width: 120, align: 'right', render: (value) => formatQty(value as string) },
   ];
 
   const onSubmit = async () => {
@@ -607,15 +847,79 @@ export default function InventoryTransactionList() {
               options={TYPE_OPTIONS}
             />
           </div>
-          <Button
-            onClick={() => {
-              setSearchInput('');
-              setFilters({});
+          <div data-testid="inventory-transactions-status-filter" style={{ display: 'inline-block' }}>
+            <Select
+              allowClear
+              placeholder="Trạng thái"
+              style={{ width: 180 }}
+              value={filters.status}
+              onChange={(value) => {
+                setFilters((prev) => ({ ...prev, status: value }));
+                setPage(1);
+              }}
+              options={STATUS_OPTIONS}
+            />
+          </div>
+          <div data-testid="inventory-transactions-product-filter" style={{ display: 'inline-block' }}>
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="Sản phẩm"
+              style={{ width: 280 }}
+              value={filters.product}
+              onChange={(value) => {
+                setFilters((prev) => ({ ...prev, product: value }));
+                setPage(1);
+              }}
+              options={(productQuery.data?.results ?? []).map((item) => ({ label: `${item.code} - ${item.name}`, value: item.id }))}
+            />
+          </div>
+          <div data-testid="inventory-transactions-source-filter" style={{ display: 'inline-block' }}>
+            <Select
+              allowClear
+              placeholder="Nguồn chứng từ"
+              style={{ width: 200 }}
+              value={filters.source_type}
+              onChange={(value) => {
+                setFilters((prev) => ({ ...prev, source_type: value }));
+                setPage(1);
+              }}
+              options={SOURCE_TYPE_OPTIONS}
+            />
+          </div>
+          <Input
+            data-testid="inventory-transactions-date-from"
+            type="date"
+            value={filters.transaction_date__gte}
+            onChange={(event) => {
+              setFilters((prev) => ({ ...prev, transaction_date__gte: event.target.value || undefined }));
               setPage(1);
-              setSelectedPresetId(undefined);
             }}
+            style={{ width: 160 }}
+          />
+          <Input
+            data-testid="inventory-transactions-date-to"
+            type="date"
+            value={filters.transaction_date__lte}
+            onChange={(event) => {
+              setFilters((prev) => ({ ...prev, transaction_date__lte: event.target.value || undefined }));
+              setPage(1);
+            }}
+            style={{ width: 160 }}
+          />
+          <Button
+            onClick={resetFilters}
           >
             Xóa bộ lọc
+          </Button>
+          <Button
+            data-testid="inventory-transactions-export-csv"
+            icon={<DownloadOutlined />}
+            disabled={rows.length === 0}
+            onClick={handleExportTransactionsCSV}
+          >
+            Xuất CSV
           </Button>
         </div>
         <div
@@ -685,12 +989,84 @@ export default function InventoryTransactionList() {
         </div>
       </Card>
 
+      <Card
+        data-testid="inventory-nxt-panel"
+        bordered={false}
+        style={{ borderRadius: 18 }}
+        styles={{ body: { display: 'flex', flexDirection: 'column', gap: 12 } }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <Title level={4} style={{ margin: 0 }}>
+              Báo cáo Nhập - Xuất - Tồn
+            </Title>
+            <Text type="secondary">
+              Đối chiếu tồn đầu kỳ, phát sinh nhập/xuất và tồn cuối kỳ theo sản phẩm và kho.
+            </Text>
+          </div>
+          <Button
+            data-testid="inventory-nxt-export-csv"
+            icon={<DownloadOutlined />}
+            disabled={nxtRows.length === 0}
+            onClick={handleExportNxtCSV}
+          >
+            Xuất NXT CSV
+          </Button>
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <Input
+            data-testid="inventory-nxt-date-from"
+            type="date"
+            value={nxtFilters.date_from}
+            onChange={(event) => setNxtFilters((prev) => ({ ...prev, date_from: event.target.value }))}
+            style={{ width: 170 }}
+          />
+          <Input
+            data-testid="inventory-nxt-date-to"
+            type="date"
+            value={nxtFilters.date_to}
+            onChange={(event) => setNxtFilters((prev) => ({ ...prev, date_to: event.target.value }))}
+            style={{ width: 170 }}
+          />
+          <Select
+            allowClear
+            data-testid="inventory-nxt-warehouse-filter"
+            placeholder="Kho"
+            style={{ width: 240 }}
+            value={nxtFilters.warehouse}
+            onChange={(value) => setNxtFilters((prev) => ({ ...prev, warehouse: value }))}
+            options={(warehouseQuery.data?.results ?? []).map((item) => ({ label: `${item.code} - ${item.name}`, value: item.id }))}
+          />
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            data-testid="inventory-nxt-product-filter"
+            placeholder="Sản phẩm"
+            style={{ width: 280 }}
+            value={nxtFilters.product}
+            onChange={(value) => setNxtFilters((prev) => ({ ...prev, product: value }))}
+            options={(productQuery.data?.results ?? []).map((item) => ({ label: `${item.code} - ${item.name}`, value: item.id }))}
+          />
+        </div>
+        <Table<InventoryNxtReportRow>
+          data-testid="inventory-nxt-table"
+          rowKey={(row) => `${row.product_id}-${row.warehouse_id ?? 'none'}`}
+          loading={nxtQuery.isLoading}
+          columns={nxtColumns}
+          dataSource={nxtRows}
+          pagination={false}
+          scroll={{ x: 1020 }}
+          locale={{ emptyText: 'Không có dữ liệu NXT trong kỳ đã chọn.' }}
+        />
+      </Card>
+
       <Table
         rowKey="id"
         loading={listQuery.isLoading}
         columns={columns}
         dataSource={rows}
-        scroll={{ x: 1700 }}
+        scroll={{ x: 2100 }}
         pagination={{
           current: page,
           pageSize,
