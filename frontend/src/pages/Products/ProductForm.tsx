@@ -241,6 +241,26 @@ const READINESS_CATEGORY_LABELS: Record<string, string> = {
   print_metadata: 'Print metadata',
 };
 
+const READINESS_STATUS_LABELS: Record<ProductRoutingReadiness['status'], string> = {
+  READY: 'Sẵn sàng',
+  WARNING: 'Cần bổ sung',
+  BLOCKER: 'Thiếu dữ liệu chính',
+};
+
+const READINESS_STATUS_HELP: Record<ProductRoutingReadiness['status'], string> = {
+  READY: 'Có thể dùng cho bước bán hàng/sản xuất hiện tại.',
+  WARNING: 'Có dữ liệu nên bổ sung để điều độ và sản xuất rõ hơn.',
+  BLOCKER: 'Thiếu routing/công đoạn hoặc dữ liệu chính cần xử lý trước khi đưa xuống sản xuất.',
+};
+
+const READINESS_SUMMARY_ITEMS: Array<{ key: keyof ProductRoutingReadiness['summary']; label: string }> = [
+  { key: 'operation_count', label: 'Công đoạn' },
+  { key: 'routing_step_count', label: 'Routing' },
+  { key: 'active_work_center_count', label: 'Work center' },
+  { key: 'active_machine_count', label: 'Máy' },
+  { key: 'print_color_count', label: 'Màu in' },
+];
+
 const ROUTING_STEP_TYPE_OPTIONS: Array<{ value: ProductRoutingStepType; label: string }> = [
   { value: 'REQUIRED', label: 'Bắt buộc' },
   { value: 'OPTIONAL', label: 'Tùy chọn' },
@@ -295,6 +315,8 @@ function ProductReadinessPanel({
   const issues = readiness.issues ?? [];
   const summary = readiness.summary;
   const status = readiness.status;
+  const blockerCount = summary.blocker_count ?? 0;
+  const warningCount = summary.warning_count ?? 0;
 
   return (
     <Alert
@@ -307,11 +329,45 @@ function ProductReadinessPanel({
         </span>
       )}
       description={(
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <strong data-testid="product-readiness-status-label">{READINESS_STATUS_LABELS[status]}</strong>
+            <Tag data-testid="product-readiness-blocker-count" color={blockerCount > 0 ? 'red' : 'default'}>
+              {`${blockerCount} BLOCKER`}
+            </Tag>
+            <Tag data-testid="product-readiness-warning-count" color={warningCount > 0 ? 'gold' : 'default'}>
+              {`${warningCount} WARNING`}
+            </Tag>
+            <span style={{ color: '#64748b' }}>{READINESS_STATUS_HELP[status]}</span>
+          </div>
+          <div
+            data-testid="product-readiness-summary"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(104px, 1fr))',
+              gap: 8,
+            }}
+          >
+            {READINESS_SUMMARY_ITEMS.map((item) => (
+              <div
+                key={item.key}
+                data-testid={`product-readiness-summary-${item.key}`}
+                style={{
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 6,
+                  padding: '8px 10px',
+                  background: '#fff',
+                }}
+              >
+                <div style={{ color: '#64748b', fontSize: 12, lineHeight: '16px' }}>{item.label}</div>
+                <div style={{ color: '#0f172a', fontWeight: 700, fontSize: 16 }}>{summary[item.key] ?? 0}</div>
+              </div>
+            ))}
+          </div>
           {issues.length === 0 ? (
             <div>Routing/công đoạn, máy/tổ và metadata in đã đủ cho bước kiểm tra hiện tại.</div>
           ) : (
-            <ul style={{ margin: 0, paddingLeft: 18 }}>
+            <ul data-testid="product-readiness-issues" style={{ margin: 0, paddingLeft: 18 }}>
               {issues.map((issue, index) => (
                 <li key={`${issue.code}-${index}`}>
                   <strong>{READINESS_CATEGORY_LABELS[issue.category] ?? issue.category}:</strong>{' '}

@@ -178,6 +178,12 @@ test('product form displays routing readiness without blocking edits', async ({ 
   const panel = page.getByTestId('product-readiness-panel');
   await expect(panel).toBeVisible();
   await expect(page.getByTestId('product-readiness-status')).toContainText('BLOCKER');
+  await expect(page.getByTestId('product-readiness-status-label')).toBeVisible();
+  await expect(page.getByTestId('product-readiness-blocker-count')).toContainText('1 BLOCKER');
+  await expect(page.getByTestId('product-readiness-warning-count')).toContainText('2 WARNING');
+  await expect(page.getByTestId('product-readiness-summary-operation_count')).toContainText('0');
+  await expect(page.getByTestId('product-readiness-summary-routing_step_count')).toContainText('0');
+  await expect(page.getByTestId('product-readiness-summary-active_machine_count')).toContainText('0');
   await expect(panel).toContainText('Routing/công đoạn');
   await expect(panel).toContainText('Máy/tổ sản xuất');
   await expect(panel).toContainText('Print metadata');
