@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from core.models import ApprovalHistory, AuditLog, Customer, Setting, User
 from inventory.models import InventoryTransaction, Warehouse, WarehouseLocation
-from products.models import Product, ProductUnit
+from products.models import Operation, Product, ProductOperation, ProductRoutingStep, ProductUnit
 from production.models import (
     ProductionDemand,
     ProductionDemandPlanningStatus,
@@ -807,6 +807,262 @@ class ProductionDemandOrderServiceTests(APITestCase):
         self.assertEqual(order.status, ProductionOrderStatus.COMPLETED)
         self.assertEqual(str(demand.qty_completed), '10.0000')
         self.assertEqual(demand.production_status, ProductionDemandProductionStatus.COMPLETED)
+
+
+class ERPMainFlowSmokeTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='erp_main_smoke_admin',
+            password='Demo123!',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_authenticate(user=self.user)
+        self.customer = Customer.objects.create(
+            code='ERP-SMOKE-CUST',
+            name='ERP Smoke Customer',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.unit = ProductUnit.objects.create(code='ERPUNIT', name='ERP Unit')
+        self.rm_warehouse = Warehouse.objects.create(
+            code='ERP-RM',
+            name='ERP Smoke RM Warehouse',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.rm_location = WarehouseLocation.objects.create(
+            warehouse=self.rm_warehouse,
+            code='ERP-RM-A1',
+            name='ERP RM A1',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.fg_warehouse = Warehouse.objects.create(
+            code='ERP-FG',
+            name='ERP Smoke FG Warehouse',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.fg_location = WarehouseLocation.objects.create(
+            warehouse=self.fg_warehouse,
+            code='ERP-FG-A1',
+            name='ERP FG A1',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+    def _operation(self, code, name, sequence):
+        operation, _created = Operation.objects.get_or_create(
+            code=code,
+            defaults={'name': name, 'sequence': sequence},
+        )
+        return operation
+
+    def _create_sales_order_line(self, product, *, code='SO-ERP-SMOKE-001', qty='8'):
+        sales_order = SalesOrder.objects.create(
+            code=code,
+            order_date=timezone.localdate(),
+            delivery_date=timezone.localdate() + timedelta(days=7),
+            customer=self.customer,
+            status=SalesOrderStatus.APPROVED,
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        line = SalesOrderLine.objects.create(
+            sales_order=sales_order,
+            line_number=1,
+            product=product,
+            qty=qty,
+            uom=self.unit.code,
+            unit_price='40000',
+        )
+        SalesOrderDeliveryPlan.objects.create(
+            line=line,
+            delivery_date=sales_order.delivery_date,
+            qty=qty,
+        )
+        return sales_order, line
+
+    def test_sales_to_production_planning_inventory_smoke_uses_product_routing_snapshot(self):
+        print_operation = self._operation('IN', 'In', 10)
+        finish_operation = self._operation('BE', 'Be', 20)
+        product = Product.objects.create(
+            code='ERP-SMOKE-FG',
+            name='ERP Smoke Finished Good',
+            unit=self.unit,
+            cost_price=25000,
+            sale_price=40000,
+            film_code='FILM-ERP-001',
+            print_color_1='Black',
+            print_color_2='Red',
+            status='ACTIVE',
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        material = Product.objects.create(
+            code='ERP-SMOKE-RM',
+            name='ERP Smoke Material',
+            unit=self.unit,
+            cost_price=9000,
+            sale_price=0,
+            parent=product,
+            component_quantity=2,
+            status='ACTIVE',
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        print_product_operation = ProductOperation.objects.create(
+            product=product,
+            operation=print_operation,
+            standard_rate_per_hour=20000,
+        )
+        finish_product_operation = ProductOperation.objects.create(
+            product=product,
+            operation=finish_operation,
+            standard_rate_per_hour=8500,
+        )
+        ProductRoutingStep.objects.create(
+            product=product,
+            operation=print_operation,
+            product_operation=print_product_operation,
+            step_no=10,
+            display_order=10,
+            standard_rate_per_hour=20000,
+            group_code='PRINT',
+        )
+        ProductRoutingStep.objects.create(
+            product=product,
+            operation=finish_operation,
+            product_operation=finish_product_operation,
+            step_no=20,
+            display_order=20,
+            standard_rate_per_hour=8500,
+            group_code='FINISH',
+        )
+        InventoryTransaction.objects.create(
+            code='ERP-SMOKE-RM-OPENING',
+            transaction_type='RECEIPT',
+            transaction_date=timezone.localdate(),
+            product=material,
+            warehouse=self.rm_warehouse,
+            location=self.rm_location,
+            quantity='40',
+            unit_cost='9000',
+            posted_by=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        sales_order, line = self._create_sales_order_line(product)
+
+        self.assertEqual(line.product_snapshot['schema_version'], 2)
+        self.assertEqual(line.product_snapshot['routing_steps'][0]['source'], 'product_routing')
+        self.assertEqual(line.product_snapshot['print_colors'], ['Black', 'Red'])
+
+        sync_result = sync_production_demands_for_sales_order(sales_order, user=self.user)
+        self.assertEqual(sync_result['created'], 1)
+        demand = ProductionDemand.objects.get(sales_order_line=line)
+        self.assertEqual(demand.product_code, product.code)
+        self.assertEqual([item['operation_code'] for item in demand.routing_summary], ['IN', 'BE'])
+        self.assertEqual(demand.print_colors, ['Black', 'Red'])
+
+        order = create_production_order_from_demand(
+            demand,
+            '8',
+            planned_start_date=timezone.localdate(),
+            planned_end_date=timezone.localdate() + timedelta(days=3),
+            user=self.user,
+        )
+        order.target_warehouse = self.fg_warehouse
+        order.target_location = self.fg_location
+        order.save(update_fields=['target_warehouse', 'target_location', 'updated_at'])
+
+        operations = list(order.operations.order_by('sequence'))
+        self.assertEqual([item.step_code for item in operations], ['IN', 'BE'])
+        self.assertTrue(all(item.source_field == 'routing_steps' for item in operations))
+        self.assertEqual(order.material_requirements.count(), 1)
+        self.assertEqual(str(order.material_requirements.get().required_qty), '16.0000')
+
+        board_response = self.client.get('/api/production/orders/planning_board/', {'production_order_id': order.id})
+        self.assertEqual(board_response.status_code, 200, board_response.data)
+        self.assertEqual(board_response.data['summary']['total_orders'], 1)
+        self.assertEqual(board_response.data['summary']['total_operations'], 2)
+        self.assertEqual(board_response.data['summary']['unassigned_work_center_count'], 2)
+        cards = []
+        for lane in board_response.data['lanes']:
+            for bucket in lane['buckets']:
+                cards.extend(bucket['cards'])
+        self.assertEqual({card['capacity']['capacity_state'] for card in cards}, {'UNASSIGNED_WORK_CENTER'})
+        self.assertTrue(all('/sales-orders' in card['actions']['sales_fulfillment_url'] for card in cards))
+
+        nxt_response = self.client.get(
+            '/api/inventory/transactions/nxt_report/',
+            {
+                'date_from': timezone.localdate().isoformat(),
+                'date_to': timezone.localdate().isoformat(),
+                'warehouse': self.rm_warehouse.id,
+                'product': material.id,
+            },
+        )
+        self.assertEqual(nxt_response.status_code, 200, nxt_response.data)
+        self.assertEqual(nxt_response.data['results'][0]['product_code'], material.code)
+        self.assertEqual(nxt_response.data['results'][0]['warehouse_code'], self.rm_warehouse.code)
+        self.assertEqual(nxt_response.data['results'][0]['in_qty'], '40.0000')
+
+    def test_missing_routing_and_print_metadata_are_visible_as_readiness_gaps(self):
+        product = Product.objects.create(
+            code='ERP-SMOKE-GAP',
+            name='ERP Smoke Product Missing Readiness',
+            unit=self.unit,
+            cost_price=25000,
+            sale_price=40000,
+            status='ACTIVE',
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        sales_order, line = self._create_sales_order_line(
+            product,
+            code='SO-ERP-SMOKE-GAP',
+            qty='3',
+        )
+
+        self.assertEqual(line.product_snapshot['routing_steps'], [])
+        self.assertEqual(line.product_snapshot['operations'], [])
+        self.assertEqual(line.product_snapshot['print_colors'], [])
+        self.assertEqual(line.product_snapshot['film_code'], '')
+
+        sync_production_demands_for_sales_order(sales_order, user=self.user)
+        demand = ProductionDemand.objects.get(sales_order_line=line)
+        self.assertEqual(demand.routing_summary, [])
+        self.assertEqual(demand.operations_summary, [])
+        self.assertEqual(demand.print_colors, [])
+
+        order = create_production_order_from_demand(
+            demand,
+            '3',
+            planned_start_date=timezone.localdate(),
+            planned_end_date=timezone.localdate() + timedelta(days=2),
+            user=self.user,
+        )
+        self.assertEqual(order.operations.count(), 0)
+
+        board_response = self.client.get('/api/production/orders/planning_board/', {'production_order_id': order.id})
+        self.assertEqual(board_response.status_code, 200, board_response.data)
+        self.assertEqual(board_response.data['summary']['total_orders'], 0)
+        self.assertEqual(board_response.data['summary']['total_operations'], 0)
+        self.assertEqual(board_response.data['lanes'], [])
+
+        order.status = ProductionOrderStatus.APPROVED
+        order.approved_by = self.user
+        order.approved_at = timezone.now()
+        order.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
+        with self.assertRaises(ValueError) as missing_operations:
+            validate_production_order_can_release(order)
+        self.assertIn('chua co cong doan', str(missing_operations.exception))
 
 
 class ProductionDemandSyncTests(APITestCase):
