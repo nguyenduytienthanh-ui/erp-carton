@@ -8,6 +8,7 @@ import type {
   ProductUnit,
   PaginatedResponse,
   ProductFormData,
+  ProductRoutingReadiness,
 } from '../types/product';
 import type { ActivityItem } from '../utils/historyUtils';
 
@@ -102,6 +103,11 @@ export const productsApi = {
 
   getProduct: async (id: number): Promise<Product> => {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTS}${id}/`);
+    return response.data;
+  },
+
+  getProductReadiness: async (id: number): Promise<ProductRoutingReadiness> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PRODUCTS}${id}/readiness/`);
     return response.data;
   },
 

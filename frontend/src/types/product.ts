@@ -96,6 +96,39 @@ export interface ProductRoutingInput {
   allow_parallel?: boolean;
 }
 
+export type ProductReadinessStatus = 'READY' | 'WARNING' | 'BLOCKER';
+export type ProductReadinessIssueCategory = 'routing' | 'resource' | 'print_metadata' | string;
+
+export interface ProductReadinessIssue {
+  code: string;
+  severity: ProductReadinessStatus;
+  category: ProductReadinessIssueCategory;
+  message: string;
+  workflow_blocking: boolean;
+  details?: Record<string, unknown>;
+}
+
+export interface ProductRoutingReadiness {
+  product_id: number;
+  product_code: string;
+  product_name: string;
+  status: ProductReadinessStatus;
+  is_ready: boolean;
+  workflow_blocking: boolean;
+  summary: {
+    blocker_count: number;
+    warning_count: number;
+    issue_count: number;
+    operation_count: number;
+    routing_step_count: number;
+    active_work_center_count: number;
+    active_machine_count: number;
+    print_color_count: number;
+  };
+  issues: ProductReadinessIssue[];
+  rules?: Record<string, unknown>;
+}
+
 export interface ProductBundleComponent {
   id: number;
   component_product: number;

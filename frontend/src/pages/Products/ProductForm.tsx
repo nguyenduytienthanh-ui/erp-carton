@@ -4,7 +4,7 @@
  * Không còn giao diện cũ; toàn bộ thêm/sửa dùng form này.
  */
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { App, Modal, Button, Checkbox, Alert } from 'antd';
+import { App, Modal, Button, Checkbox, Alert, Tag } from 'antd';
 import { CopyOutlined, DeleteOutlined, PlusOutlined, SortAscendingOutlined, UndoOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { productsApi } from '../../api/products';
@@ -21,6 +21,7 @@ import type {
   ProductOperationCode,
   ProductOperationInput,
   ProductOperationNotes,
+  ProductRoutingReadiness,
   ProductRoutingInput,
   ProductRoutingStep,
   ProductRoutingStepType,
@@ -222,6 +223,24 @@ const PRODUCT_OPERATIONS: ProductOperationDefinition[] = [
 const PRODUCT_OPERATION_LEFT = PRODUCT_OPERATIONS.slice(0, 5);
 const PRODUCT_OPERATION_RIGHT = PRODUCT_OPERATIONS.slice(5);
 
+const READINESS_ALERT_TYPE: Record<ProductRoutingReadiness['status'], 'success' | 'warning' | 'error'> = {
+  READY: 'success',
+  WARNING: 'warning',
+  BLOCKER: 'error',
+};
+
+const READINESS_TAG_COLOR: Record<ProductRoutingReadiness['status'], string> = {
+  READY: 'green',
+  WARNING: 'gold',
+  BLOCKER: 'red',
+};
+
+const READINESS_CATEGORY_LABELS: Record<string, string> = {
+  routing: 'Routing/công đoạn',
+  resource: 'Máy/tổ sản xuất',
+  print_metadata: 'Print metadata',
+};
+
 const ROUTING_STEP_TYPE_OPTIONS: Array<{ value: ProductRoutingStepType; label: string }> = [
   { value: 'REQUIRED', label: 'Bắt buộc' },
   { value: 'OPTIONAL', label: 'Tùy chọn' },
@@ -236,6 +255,82 @@ const PRINT_COLOR_FIELDS: Array<{ field: PrintColorField; label: string }> = [
   { field: 'print_color_4', label: 'Màu 4 / mã màu' },
   { field: 'print_color_5', label: 'Màu 5 / mã màu' },
 ];
+
+function ProductReadinessPanel({
+  readiness,
+  loading,
+  error,
+}: {
+  readiness?: ProductRoutingReadiness;
+  loading: boolean;
+  error: boolean;
+}) {
+  if (loading) {
+    return (
+      <Alert
+        data-testid="product-readiness-panel"
+        type="info"
+        showIcon
+        message="Đang kiểm tra readiness sản xuất..."
+        style={{ marginBottom: 16 }}
+      />
+    );
+  }
+
+  if (error) {
+    return (
+      <Alert
+        data-testid="product-readiness-panel"
+        type="warning"
+        showIcon
+        message="Chưa tải được readiness sản xuất."
+        description="Form vẫn dùng bình thường; readiness chỉ là cảnh báo."
+        style={{ marginBottom: 16 }}
+      />
+    );
+  }
+
+  if (!readiness) return null;
+
+  const issues = readiness.issues ?? [];
+  const summary = readiness.summary;
+  const status = readiness.status;
+
+  return (
+    <Alert
+      data-testid="product-readiness-panel"
+      type={READINESS_ALERT_TYPE[status]}
+      showIcon
+      message={(
+        <span>
+          Readiness sản xuất <Tag data-testid="product-readiness-status" color={READINESS_TAG_COLOR[status]}>{status}</Tag>
+        </span>
+      )}
+      description={(
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {issues.length === 0 ? (
+            <div>Routing/công đoạn, máy/tổ và metadata in đã đủ cho bước kiểm tra hiện tại.</div>
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {issues.map((issue, index) => (
+                <li key={`${issue.code}-${index}`}>
+                  <strong>{READINESS_CATEGORY_LABELS[issue.category] ?? issue.category}:</strong>{' '}
+                  <Tag color={READINESS_TAG_COLOR[issue.severity]}>{issue.severity}</Tag>
+                  {issue.message}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div style={{ color: '#64748b' }}>
+            {`Công đoạn: ${summary.operation_count} | Routing: ${summary.routing_step_count} | Work center: ${summary.active_work_center_count} | Máy: ${summary.active_machine_count} | Màu in: ${summary.print_color_count}`}
+          </div>
+          <div style={{ color: '#64748b' }}>Chỉ cảnh báo/đánh giá, chưa chặn workflow.</div>
+        </div>
+      )}
+      style={{ marginBottom: 16 }}
+    />
+  );
+}
 
 function getPrintColorValue(data: PrintColorFormData, field: PrintColorField): string {
   return String(data[field] ?? '').trim();
@@ -1342,6 +1437,16 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
     enabled: visible && !!editingProduct?.id,
     retry: false,
   });
+  const {
+    data: productReadiness,
+    isLoading: productReadinessLoading,
+    isError: productReadinessError,
+  } = useQuery({
+    queryKey: ['product', editingProduct?.id, 'readiness'],
+    queryFn: () => productsApi.getProductReadiness(editingProduct!.id),
+    enabled: visible && !!editingProduct?.id,
+    retry: false,
+  });
   const isEditingChild = productDetail?.parent != null;
   const { data: parentDetail } = useQuery({
     queryKey: ['product', productDetail?.parent],
@@ -1760,6 +1865,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
             message.success('Đã xóa mã hàng con.');
           }
           queryClient.invalidateQueries({ queryKey: ['product', editingProduct.id] });
+          queryClient.invalidateQueries({ queryKey: ['product', editingProduct.id, 'readiness'] });
           queryClient.invalidateQueries({ queryKey: ['product', productDetail?.parent] });
         } else {
           await updateMotherMutation.mutateAsync({
@@ -1797,6 +1903,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
           }
           await syncBundleForMother(motherId, bundleRows);
           queryClient.invalidateQueries({ queryKey: ['product', editingProduct.id] });
+          queryClient.invalidateQueries({ queryKey: ['product', editingProduct.id, 'readiness'] });
           message.success('Đã cập nhật sản phẩm thành công.');
         }
       } else {
@@ -1878,6 +1985,13 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
             closable
             onClose={() => setSubmitError(null)}
             style={{ marginBottom: 16 }}
+          />
+        )}
+        {editingProduct?.id && (
+          <ProductReadinessPanel
+            readiness={productReadiness}
+            loading={productReadinessLoading}
+            error={productReadinessError}
           />
         )}
         <div
