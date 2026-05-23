@@ -3657,6 +3657,142 @@ class ProductionWorkflowTests(APITestCase):
         self.assertEqual(material_filtered.status_code, 200, material_filtered.data)
         self.assertEqual(material_filtered.data['summary']['total_operations'], 3)
 
+    def test_planning_board_returns_ready_to_dispatch_advisory(self):
+        self.finished_product.film_code = 'FILM-READY'
+        self.finished_product.print_color_1 = 'Black'
+        self.finished_product.save()
+        work_center, machine = self._create_capacity_resource(
+            work_center_code='DISP',
+            machine_code='DISP-01',
+            work_center_capacity='8.00',
+            machine_capacity='8.00',
+        )
+        order = self._create_production_order(planned_qty='5')
+        order_id = order['id']
+        self._release_order(order_id)
+        self._issue_all_materials(order_id)
+        operations = list(ProductionOperation.objects.filter(production_order_id=order_id).order_by('sequence'))
+        today = timezone.localdate().isoformat()
+
+        ready_update = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operations[0].id,
+                'planned_date': today,
+                'planned_shift': 'MORNING',
+                'work_center_code': work_center.code,
+                'machine_code': machine.code,
+                'estimated_runtime_hours': '1.00',
+                'setup_minutes': 0,
+            },
+            format='json',
+        )
+        self.assertEqual(ready_update.status_code, 200, ready_update.data)
+        blocker_update = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operations[1].id,
+                'planned_date': today,
+                'planned_shift': 'MORNING',
+                'work_center_code': work_center.code,
+                'machine_code': machine.code,
+                'estimated_runtime_hours': '1.00',
+                'setup_minutes': 0,
+            },
+            format='json',
+        )
+        self.assertEqual(blocker_update.status_code, 200, blocker_update.data)
+
+        warning_order = self._create_production_order(planned_qty='2')
+        warning_order_id = warning_order['id']
+        self._release_order(warning_order_id)
+        self._issue_all_materials(warning_order_id)
+        warning_operation = ProductionOperation.objects.get(production_order_id=warning_order_id, sequence=1)
+        warning_update = self.client.post(
+            f'/api/production/orders/{warning_order_id}/update_operation/',
+            {
+                'operation_id': warning_operation.id,
+                'planned_date': today,
+                'planned_shift': 'AFTERNOON',
+                'estimated_runtime_hours': '1.00',
+                'setup_minutes': 0,
+            },
+            format='json',
+        )
+        self.assertEqual(warning_update.status_code, 200, warning_update.data)
+
+        response = self.client.get('/api/production/orders/planning_board/')
+        self.assertEqual(response.status_code, 200, response.data)
+        cards = self._planning_cards(response)
+        first_card = next(card for card in cards if card['operation']['id'] == operations[0].id)
+        second_card = next(card for card in cards if card['operation']['id'] == operations[1].id)
+        warning_card = next(card for card in cards if card['operation']['id'] == warning_operation.id)
+
+        self.assertEqual(first_card['ready_to_dispatch']['status'], 'READY')
+        self.assertTrue(first_card['ready_to_dispatch']['is_ready'])
+        self.assertFalse(first_card['ready_to_dispatch']['workflow_blocking'])
+        self.assertEqual(first_card['product_readiness']['status'], 'READY')
+        self.assertEqual(first_card['materials']['source_availability_issues'], [])
+
+        self.assertEqual(second_card['ready_to_dispatch']['status'], 'BLOCKER')
+        second_issue_codes = {item['code'] for item in second_card['ready_to_dispatch']['issues']}
+        self.assertIn('WAIT_PREVIOUS_STEP', second_issue_codes)
+
+        self.assertEqual(warning_card['ready_to_dispatch']['status'], 'WARNING')
+        warning_issue_codes = {item['code'] for item in warning_card['ready_to_dispatch']['issues']}
+        self.assertIn('WORK_CENTER_MISSING', warning_issue_codes)
+
+        self.assertGreaterEqual(response.data['summary']['ready_to_dispatch_count'], 1)
+        self.assertGreaterEqual(response.data['summary']['dispatch_warning_count'], 1)
+        self.assertGreaterEqual(response.data['summary']['dispatch_blocker_count'], 1)
+        self.assertGreaterEqual(response.data['summary']['dispatch_status_counts']['READY'], 1)
+        self.assertGreaterEqual(response.data['scope_summary']['dispatch_status_counts']['BLOCKER'], 1)
+
+    def test_ready_to_dispatch_warns_on_material_source_without_enforcing_dispatch_workflow(self):
+        self.finished_product.film_code = 'FILM-MATERIAL'
+        self.finished_product.print_color_1 = 'Black'
+        self.finished_product.save()
+        work_center, machine = self._create_capacity_resource(
+            work_center_code='MAT',
+            machine_code='MAT-01',
+            work_center_capacity='8.00',
+            machine_capacity='8.00',
+        )
+        order = self._create_production_order(planned_qty='60')
+        order_id = order['id']
+        self._release_order(order_id)
+        operation = ProductionOperation.objects.get(production_order_id=order_id, sequence=1)
+        requirement = ProductionMaterialRequirement.objects.get(production_order_id=order_id, line_number=1)
+        requirement.source_warehouse = self.rm_warehouse
+        requirement.source_location = self.rm_location
+        requirement.save(update_fields=['source_warehouse', 'source_location'])
+        today = timezone.localdate().isoformat()
+
+        update_response = self.client.post(
+            f'/api/production/orders/{order_id}/update_operation/',
+            {
+                'operation_id': operation.id,
+                'planned_date': today,
+                'planned_shift': 'MORNING',
+                'work_center_code': work_center.code,
+                'machine_code': machine.code,
+                'estimated_runtime_hours': '1.00',
+                'setup_minutes': 0,
+            },
+            format='json',
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.data)
+
+        response = self.client.get('/api/production/orders/planning_board/', {'production_order_id': order_id})
+        self.assertEqual(response.status_code, 200, response.data)
+        card = next(item for item in self._planning_cards(response) if item['operation']['id'] == operation.id)
+        self.assertEqual(card['ready_to_dispatch']['status'], 'WARNING')
+        self.assertFalse(card['ready_to_dispatch']['workflow_blocking'])
+        issue_codes = {item['code'] for item in card['ready_to_dispatch']['issues']}
+        self.assertIn('MATERIAL_NOT_READY', issue_codes)
+        self.assertIn('MATERIAL_SOURCE_STOCK_LOW', issue_codes)
+        self.assertEqual(card['materials']['source_availability_issues'][0]['severity'], 'WARNING')
+
     def test_planning_board_returns_capacity_groups_and_filters(self):
         order = self._create_production_order(planned_qty='5')
         order_id = order['id']

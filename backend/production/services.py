@@ -6,6 +6,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from core.models import AuditLog
+from inventory.services import build_stock_balance_map
+from products.readiness import build_product_routing_readiness
 from production.models import (
     ProductionDemand,
     ProductionDemandPlanningStatus,
@@ -34,6 +36,16 @@ STEP_DEFINITIONS = [
     ('DAN', 'Dán', 'process_dan'),
     ('KHAC', 'Khác', 'process_khac'),
 ]
+
+READY_TO_DISPATCH_READY = 'READY'
+READY_TO_DISPATCH_WARNING = 'WARNING'
+READY_TO_DISPATCH_BLOCKER = 'BLOCKER'
+
+READY_TO_DISPATCH_SEVERITY_ORDER = {
+    READY_TO_DISPATCH_READY: 0,
+    READY_TO_DISPATCH_WARNING: 1,
+    READY_TO_DISPATCH_BLOCKER: 2,
+}
 
 
 @lru_cache(maxsize=1)
@@ -812,6 +824,252 @@ def get_order_material_readiness(order, requirements=None):
     return 'PARTIAL' if partial_exists else 'WAITING'
 
 
+def _ready_to_dispatch_issue(code, severity, category, message, *, details=None):
+    return {
+        'code': code,
+        'severity': severity,
+        'category': category,
+        'message': message,
+        'workflow_blocking': False,
+        'details': details or {},
+    }
+
+
+def _ready_to_dispatch_status_from_issues(issues):
+    status = READY_TO_DISPATCH_READY
+    for item in issues:
+        severity = item.get('severity') or READY_TO_DISPATCH_READY
+        if READY_TO_DISPATCH_SEVERITY_ORDER.get(severity, 0) > READY_TO_DISPATCH_SEVERITY_ORDER.get(status, 0):
+            status = severity
+    return status
+
+
+def _requirement_remaining_issue_qty(requirement):
+    remaining = getattr(requirement, 'remaining_issue_qty', None)
+    if remaining is not None:
+        return Decimal(str(remaining or 0))
+    required_qty = Decimal(str(getattr(requirement, 'required_qty', 0) or 0))
+    issued_qty = Decimal(str(getattr(requirement, 'issued_qty', 0) or 0))
+    remaining = required_qty - issued_qty
+    return round_qty(remaining if remaining > 0 else Decimal('0'))
+
+
+def _stock_available_for_requirement(requirement, stock_balances):
+    product_id = getattr(requirement, 'material_product_id', None)
+    warehouse_id = getattr(requirement, 'source_warehouse_id', None)
+    if not product_id or not warehouse_id:
+        return None
+    location_id = getattr(requirement, 'source_location_id', None)
+    if location_id:
+        row = stock_balances.get((int(product_id), int(warehouse_id), int(location_id)), {})
+        return Decimal(str(row.get('on_hand', 0) or 0)) - Decimal(str(row.get('reserved', 0) or 0))
+    available_qty = Decimal('0')
+    for (row_product_id, row_warehouse_id, _row_location_id), row in stock_balances.items():
+        if int(row_product_id) == int(product_id) and int(row_warehouse_id) == int(warehouse_id):
+            available_qty += Decimal(str(row.get('on_hand', 0) or 0)) - Decimal(str(row.get('reserved', 0) or 0))
+    return available_qty
+
+
+def build_material_source_readiness_issues(requirements, *, stock_balances=None):
+    requirement_rows = [
+        requirement
+        for requirement in requirements
+        if _requirement_remaining_issue_qty(requirement) > 0
+    ]
+    issues = []
+    if not requirement_rows:
+        return issues
+
+    if stock_balances is None:
+        product_ids = {
+            getattr(requirement, 'material_product_id', None)
+            for requirement in requirement_rows
+            if getattr(requirement, 'material_product_id', None)
+        }
+        warehouse_ids = {
+            getattr(requirement, 'source_warehouse_id', None)
+            for requirement in requirement_rows
+            if getattr(requirement, 'source_warehouse_id', None)
+        }
+        stock_balances = build_stock_balance_map(
+            product_ids=product_ids or None,
+            warehouse_ids=warehouse_ids or None,
+        ) if product_ids and warehouse_ids else {}
+
+    for requirement in requirement_rows:
+        remaining_qty = round_qty(_requirement_remaining_issue_qty(requirement))
+        details = {
+            'requirement_id': getattr(requirement, 'id', None),
+            'material_product_id': getattr(requirement, 'material_product_id', None),
+            'source_warehouse_id': getattr(requirement, 'source_warehouse_id', None),
+            'source_location_id': getattr(requirement, 'source_location_id', None),
+            'remaining_issue_qty': str(remaining_qty),
+        }
+        if not getattr(requirement, 'source_warehouse_id', None):
+            issues.append(_ready_to_dispatch_issue(
+                'MATERIAL_SOURCE_MISSING',
+                READY_TO_DISPATCH_WARNING,
+                'material',
+                'Chua xac dinh kho nguon cho vat tu chua cap.',
+                details=details,
+            ))
+            continue
+
+        available_qty = _stock_available_for_requirement(requirement, stock_balances)
+        if available_qty is not None:
+            available_qty = round_qty(available_qty)
+            details['available_qty'] = str(available_qty)
+            if available_qty < remaining_qty:
+                issues.append(_ready_to_dispatch_issue(
+                    'MATERIAL_SOURCE_STOCK_LOW',
+                    READY_TO_DISPATCH_WARNING,
+                    'material',
+                    'Ton kha dung tai kho nguon khong du cho vat tu chua cap.',
+                    details=details,
+                ))
+    return issues
+
+
+def build_ready_to_dispatch_advisory(
+    *,
+    operation_status,
+    block_reason_code,
+    dependency_state,
+    material_readiness,
+    product_readiness=None,
+    capacity_state='BALANCED',
+    planned_date=None,
+    planned_shift=None,
+    material_source_issues=None,
+):
+    issues = []
+    normalized_status = str(operation_status or '').strip().upper()
+    normalized_block_reason = str(block_reason_code or '').strip().upper()
+    normalized_dependency = str(dependency_state or '').strip().upper()
+    normalized_material = str(material_readiness or '').strip().upper()
+    normalized_capacity = str(capacity_state or '').strip().upper() or 'BALANCED'
+
+    if normalized_status in {ProductionOperationStatus.DONE, ProductionOperationStatus.SKIPPED}:
+        issues.append(_ready_to_dispatch_issue(
+            'OPERATION_INACTIVE',
+            READY_TO_DISPATCH_BLOCKER,
+            'operation',
+            'Cong doan da dong hoac da bo qua, khong con nam trong hang dispatch.',
+        ))
+
+    product_status = str((product_readiness or {}).get('status') or READY_TO_DISPATCH_READY).strip().upper()
+    if product_status == READY_TO_DISPATCH_BLOCKER:
+        issues.append(_ready_to_dispatch_issue(
+            'PRODUCT_READINESS_BLOCKER',
+            READY_TO_DISPATCH_BLOCKER,
+            'product',
+            'Product/routing readiness dang co loi chan.',
+            details={'product_readiness_status': product_status},
+        ))
+    elif product_status == READY_TO_DISPATCH_WARNING:
+        issues.append(_ready_to_dispatch_issue(
+            'PRODUCT_READINESS_WARNING',
+            READY_TO_DISPATCH_WARNING,
+            'product',
+            'Product/routing readiness dang co canh bao.',
+            details={'product_readiness_status': product_status},
+        ))
+
+    if normalized_dependency == 'WAIT_PREVIOUS_STEP':
+        issues.append(_ready_to_dispatch_issue(
+            'WAIT_PREVIOUS_STEP',
+            READY_TO_DISPATCH_BLOCKER,
+            'dependency',
+            'Cong doan dang cho cong doan truoc hoan tat.',
+        ))
+    if normalized_block_reason:
+        issues.append(_ready_to_dispatch_issue(
+            'BLOCK_REASON_ACTIVE',
+            READY_TO_DISPATCH_BLOCKER,
+            'operation',
+            'Cong doan dang co ly do khoa/canh bao tren shop floor.',
+            details={'block_reason_code': normalized_block_reason},
+        ))
+    if normalized_material and normalized_material != 'READY':
+        issues.append(_ready_to_dispatch_issue(
+            'MATERIAL_NOT_READY',
+            READY_TO_DISPATCH_WARNING,
+            'material',
+            'Vat tu chua duoc cap day du.',
+            details={'material_readiness': normalized_material},
+        ))
+    if not planned_date or not str(planned_shift or '').strip():
+        issues.append(_ready_to_dispatch_issue(
+            'SCHEDULE_MISSING',
+            READY_TO_DISPATCH_WARNING,
+            'planning',
+            'Cong doan chua co ngay hoac ca san xuat.',
+        ))
+
+    capacity_issue_map = {
+        'UNASSIGNED_WORK_CENTER': (
+            'WORK_CENTER_MISSING',
+            'resource',
+            'Cong doan chua gan to/work center.',
+        ),
+        'UNASSIGNED_MACHINE': (
+            'MACHINE_MISSING',
+            'resource',
+            'Cong doan chua gan may.',
+        ),
+        'OVER_CAPACITY': (
+            'CAPACITY_OVER_CAPACITY',
+            'capacity',
+            'Tai cong suat dang vuot gio kha dung.',
+        ),
+        'AT_LIMIT': (
+            'CAPACITY_AT_LIMIT',
+            'capacity',
+            'Tai cong suat dang gan cham nguong.',
+        ),
+    }
+    if normalized_capacity in capacity_issue_map:
+        code, category, message = capacity_issue_map[normalized_capacity]
+        issues.append(_ready_to_dispatch_issue(
+            code,
+            READY_TO_DISPATCH_WARNING,
+            category,
+            message,
+            details={'capacity_state': normalized_capacity},
+        ))
+
+    for issue in material_source_issues or []:
+        issues.append(issue)
+
+    advisory_status = _ready_to_dispatch_status_from_issues(issues)
+    blocker_count = sum(1 for item in issues if item.get('severity') == READY_TO_DISPATCH_BLOCKER)
+    warning_count = sum(1 for item in issues if item.get('severity') == READY_TO_DISPATCH_WARNING)
+    return {
+        'status': advisory_status,
+        'is_ready': advisory_status == READY_TO_DISPATCH_READY,
+        'workflow_blocking': False,
+        'summary': {
+            'blocker_count': blocker_count,
+            'warning_count': warning_count,
+            'issue_count': len(issues),
+            'product_readiness_status': product_status,
+            'material_readiness': normalized_material,
+            'dependency_state': normalized_dependency,
+            'capacity_state': normalized_capacity,
+        },
+        'issues': issues,
+        'rules': {
+            'advisory_only': True,
+            'workflow_enforced': False,
+            'product_readiness_blocker': READY_TO_DISPATCH_BLOCKER,
+            'dependency_wait_previous_step': READY_TO_DISPATCH_BLOCKER,
+            'block_reason_active': READY_TO_DISPATCH_BLOCKER,
+            'operation_done_or_skipped': READY_TO_DISPATCH_BLOCKER,
+            'material_or_capacity_warning': READY_TO_DISPATCH_WARNING,
+        },
+    }
+
+
 def get_operation_dependency_state(operation, operations=None):
     operation_rows = list(
         operations
@@ -853,12 +1111,25 @@ def get_operation_risk_state(operation, *, material_readiness=None, dependency_s
     return 'ON_TRACK'
 
 
-def build_operation_planning_snapshot(operation, *, order=None, requirements=None, operations=None, today=None):
+def build_operation_planning_snapshot(
+    operation,
+    *,
+    order=None,
+    requirements=None,
+    operations=None,
+    today=None,
+    include_dispatch_readiness=False,
+):
     production_order = order or operation.production_order
     current_date = today or timezone.localdate()
     operation_rows = list(operations if operations is not None else production_order.operations.all())
     requirement_rows = list(requirements if requirements is not None else production_order.material_requirements.all())
     material_readiness = get_order_material_readiness(production_order, requirements=requirement_rows)
+    product_readiness = None
+    material_source_issues = []
+    if include_dispatch_readiness:
+        product_readiness = build_product_routing_readiness(production_order.product) if production_order.product_id else None
+        material_source_issues = build_material_source_readiness_issues(requirement_rows)
     dependency_state, previous_step, next_step = get_operation_dependency_state(operation, operations=operation_rows)
     risk_state = get_operation_risk_state(
         operation,
@@ -879,6 +1150,8 @@ def build_operation_planning_snapshot(operation, *, order=None, requirements=Non
         'planned_shift_label': get_shift_label(getattr(operation, 'planned_shift', '')),
         'block_reason_label': get_block_reason_label(getattr(operation, 'block_reason_code', '')),
         'material_readiness': material_readiness,
+        'product_readiness': product_readiness,
+        'material_source_issues': material_source_issues,
         'dependency_state': dependency_state,
         'risk_state': risk_state,
         'previous_step_code': getattr(previous_step, 'step_code', None),

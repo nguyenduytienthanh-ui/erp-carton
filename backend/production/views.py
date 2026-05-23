@@ -70,6 +70,7 @@ from production.services import (
     build_material_product_snapshot,
     build_operation_planning_snapshot,
     build_production_order_trace_code,
+    build_ready_to_dispatch_advisory,
     create_production_order_from_demand,
     get_shift_capacity_hours,
     get_next_production_issue_code,
@@ -363,6 +364,26 @@ def _is_ready_to_run_card(card):
         and str(card['operation'].get('status') or '').strip().upper()
         in {ProductionOperationStatus.PENDING, ProductionOperationStatus.READY}
     )
+
+
+def _annotate_ready_to_dispatch_context(cards):
+    for card in cards:
+        card['ready_to_dispatch'] = build_ready_to_dispatch_advisory(
+            operation_status=card['operation'].get('status'),
+            block_reason_code=card['exceptions'].get('block_reason_code'),
+            dependency_state=card['exceptions'].get('dependency_state'),
+            material_readiness=card['materials'].get('material_readiness'),
+            product_readiness=card.get('product_readiness') or {},
+            capacity_state=card.get('capacity', {}).get('capacity_state'),
+            planned_date=card['operation'].get('planned_date'),
+            planned_shift=card['operation'].get('planned_shift'),
+            material_source_issues=card['materials'].get('source_availability_issues') or [],
+        )
+    return cards
+
+
+def _is_ready_to_dispatch_card(card):
+    return str((card.get('ready_to_dispatch') or {}).get('status') or '').strip().upper() == 'READY'
 
 
 def _get_planning_shift_key(value):
@@ -2608,6 +2629,11 @@ def _build_planning_summary(cards, *, today):
         key: _build_shift_load_item(key)
         for key in PLANNING_SHIFT_FILTERS
     }
+    dispatch_status_counts = {
+        'READY': 0,
+        'WARNING': 0,
+        'BLOCKER': 0,
+    }
     capacity_state_counts = {key: 0 for key in PLANNING_CAPACITY_STATES}
     unique_order_ids = set()
     affected_sales_order_ids = set()
@@ -2622,6 +2648,9 @@ def _build_planning_summary(cards, *, today):
         risk_counts[card['exceptions']['risk_state']] = risk_counts.get(card['exceptions']['risk_state'], 0) + 1
         shift_key = _get_planning_shift_key(card['operation'].get('planned_shift'))
         _accumulate_shift_load(shift_loads[shift_key], card)
+        dispatch_status = str((card.get('ready_to_dispatch') or {}).get('status') or '').strip().upper()
+        if dispatch_status in dispatch_status_counts:
+            dispatch_status_counts[dispatch_status] += 1
         capacity_state_key = str(card['capacity'].get('capacity_state') or '').strip().upper()
         if capacity_state_key in capacity_state_counts:
             capacity_state_counts[capacity_state_key] += 1
@@ -2648,6 +2677,9 @@ def _build_planning_summary(cards, *, today):
         'total_operations': len(cards),
         'overdue_operations': sum(1 for card in cards if card['exceptions']['risk_state'] == 'OVERDUE'),
         'ready_to_run_count': sum(1 for card in cards if _is_ready_to_run_card(card)),
+        'ready_to_dispatch_count': dispatch_status_counts['READY'],
+        'dispatch_warning_count': dispatch_status_counts['WARNING'],
+        'dispatch_blocker_count': dispatch_status_counts['BLOCKER'],
         'wait_material_count': sum(1 for card in cards if card['materials']['material_readiness'] != 'READY'),
         'wait_previous_step_count': sum(1 for card in cards if card['exceptions']['dependency_state'] == 'WAIT_PREVIOUS_STEP'),
         'machine_down_count': sum(1 for card in cards if card['exceptions']['block_reason_code'] == ProductionOperationBlockReason.MACHINE_DOWN),
@@ -2664,6 +2696,7 @@ def _build_planning_summary(cards, *, today):
         'avg_days_to_deadline': avg_days_to_deadline,
         'bucket_counts': bucket_counts,
         'risk_counts': risk_counts,
+        'dispatch_status_counts': dispatch_status_counts,
         'capacity_state_counts': capacity_state_counts,
         'total_runtime_hours': str(total_runtime_hours),
         'total_setup_hours': str(total_setup_hours),
@@ -3325,12 +3358,24 @@ def _normalize_operation_change_items(
 
 def _summarize_preview_rows(rows):
     shift_items = {key: _build_shift_load_item(key) for key in PLANNING_SHIFT_FILTERS}
+    dispatch_status_counts = {
+        'READY': 0,
+        'WARNING': 0,
+        'BLOCKER': 0,
+    }
     for card in rows:
         shift_key = _get_planning_shift_key(card['operation'].get('planned_shift'))
         _accumulate_shift_load(shift_items[shift_key], card)
+        dispatch_status = str((card.get('ready_to_dispatch') or {}).get('status') or '').strip().upper()
+        if dispatch_status in dispatch_status_counts:
+            dispatch_status_counts[dispatch_status] += 1
     return {
         'total_operations': len(rows),
         'ready_to_run_count': sum(1 for card in rows if _is_ready_to_run_card(card)),
+        'ready_to_dispatch_count': dispatch_status_counts['READY'],
+        'dispatch_warning_count': dispatch_status_counts['WARNING'],
+        'dispatch_blocker_count': dispatch_status_counts['BLOCKER'],
+        'dispatch_status_counts': dispatch_status_counts,
         'needs_attention_count': sum(1 for card in rows if card['exceptions']['needs_attention']),
         'blocked_count': sum(1 for card in rows if card['exceptions']['risk_state'] == 'BLOCKED'),
         'overdue_count': sum(1 for card in rows if card['exceptions']['risk_state'] == 'OVERDUE'),
@@ -3533,6 +3578,7 @@ def _serialize_planning_card(order, operation, *, snapshot, today):
             'reference': order.reference,
         },
         'operation': operation_payload,
+        'product_readiness': snapshot.get('product_readiness') or {},
         'sales': {
             'sales_order_id': getattr(order, 'sales_order_id', None),
             'sales_order_code': sales_order_code or None,
@@ -3550,6 +3596,7 @@ def _serialize_planning_card(order, operation, *, snapshot, today):
             'issue_count': len(issue_rows),
             'receipt_count': len(receipt_rows),
             'ready_to_run': ready_to_run,
+            'source_availability_issues': snapshot.get('material_source_issues') or [],
         },
         'exceptions': {
             'risk_state': snapshot['risk_state'],
@@ -4713,6 +4760,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                     requirements=requirements,
                     operations=operations,
                     today=today,
+                    include_dispatch_readiness=True,
                 )
                 current_card = _serialize_planning_card(order, operation, snapshot=current_snapshot, today=today)
                 preview_snapshot = build_operation_planning_snapshot(
@@ -4721,6 +4769,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                     requirements=requirements,
                     operations=preview_operations,
                     today=today,
+                    include_dispatch_readiness=True,
                 )
                 preview_card = _serialize_planning_card(order, preview_by_id[item['operation_id']], snapshot=preview_snapshot, today=today)
                 current_cards.append(current_card)
@@ -4757,11 +4806,16 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 operation_rows.append(row)
 
         _annotate_capacity_context(current_cards)
+        _annotate_ready_to_dispatch_context(current_cards)
         preview_capacity_context = _annotate_capacity_context(preview_cards)
+        _annotate_ready_to_dispatch_context(preview_cards)
         for item in operation_rows:
             current_ratio = item['current']['capacity'].get('work_center_load_ratio')
             preview_ratio = item['preview']['capacity'].get('work_center_load_ratio')
             item['impact']['capacity_state_changed'] = item['current']['capacity']['capacity_state'] != item['preview']['capacity']['capacity_state']
+            item['impact']['ready_to_dispatch_changed'] = (
+                item['current']['ready_to_dispatch']['status'] != item['preview']['ready_to_dispatch']['status']
+            )
             item['impact']['work_center_changed'] = item['current']['capacity']['work_center_code'] != item['preview']['capacity']['work_center_code']
             item['impact']['machine_changed'] = item['current']['capacity']['machine_code'] != item['preview']['capacity']['machine_code']
             item['impact']['work_center_load_ratio_delta'] = (
@@ -5027,9 +5081,11 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             requirements=requirements,
             operations=operations,
             today=today,
+            include_dispatch_readiness=True,
         )
         current_card = _serialize_planning_card(order, operation, snapshot=current_snapshot, today=today)
         _annotate_capacity_context([current_card])
+        _annotate_ready_to_dispatch_context([current_card])
 
         preview_operation = ProductionOperation.objects.get(pk=operation.pk)
         preview_operation.production_order = order
@@ -5044,9 +5100,11 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             requirements=requirements,
             operations=preview_operations,
             today=today,
+            include_dispatch_readiness=True,
         )
         preview_card = _serialize_planning_card(order, preview_operation, snapshot=preview_snapshot, today=today)
         _annotate_capacity_context([preview_card])
+        _annotate_ready_to_dispatch_context([preview_card])
         current_days = current_card['exceptions'].get('days_to_delivery')
         preview_days = preview_card['exceptions'].get('days_to_delivery')
         current_delivery_gap = current_card['exceptions'].get('delivery_gap_days')
@@ -5071,6 +5129,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 ),
                 'handover_status_changed': current_card['shop_floor']['handover_status'] != preview_card['shop_floor']['handover_status'],
                 'capacity_state_changed': current_card['capacity']['capacity_state'] != preview_card['capacity']['capacity_state'],
+                'ready_to_dispatch_changed': current_card['ready_to_dispatch']['status'] != preview_card['ready_to_dispatch']['status'],
                 'work_center_changed': current_card['capacity']['work_center_code'] != preview_card['capacity']['work_center_code'],
                 'machine_changed': current_card['capacity']['machine_code'] != preview_card['capacity']['machine_code'],
                 'work_center_load_ratio_delta': (
@@ -5866,6 +5925,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                     requirements=requirements,
                     operations=operations,
                     today=today,
+                    include_dispatch_readiness=True,
                 )
                 summary_cards.append(_serialize_planning_card(order, operation, snapshot=snapshot, today=today))
                 if snapshot['risk_state'] == 'OVERDUE':
@@ -5891,6 +5951,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             if order_needs_attention and getattr(order, 'sales_order_id', None):
                 affected_sales_order_ids.add(order.sales_order_id)
         capacity_context = _annotate_capacity_context(summary_cards)
+        _annotate_ready_to_dispatch_context(summary_cards)
         capacity_calendar = _build_capacity_calendar(summary_cards)
         shift_watch = _build_planner_shift_watch(summary_cards, capacity_calendar)
         date_watch = _build_planner_date_watch(summary_cards, capacity_calendar)
@@ -5905,6 +5966,17 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         planner_digest['over_capacity_slot_count'] = capacity_context['summary']['over_capacity_slot_count']
         planner_digest['unassigned_machine_count'] = capacity_context['summary']['unassigned_machine_count']
         planner_digest['unassigned_work_center_count'] = capacity_context['summary']['unassigned_work_center_count']
+        planner_digest['ready_to_dispatch_count'] = sum(1 for card in summary_cards if _is_ready_to_dispatch_card(card))
+        planner_digest['dispatch_warning_count'] = sum(
+            1
+            for card in summary_cards
+            if str((card.get('ready_to_dispatch') or {}).get('status') or '').strip().upper() == 'WARNING'
+        )
+        planner_digest['dispatch_blocker_count'] = sum(
+            1
+            for card in summary_cards
+            if str((card.get('ready_to_dispatch') or {}).get('status') or '').strip().upper() == 'BLOCKER'
+        )
         planner_digest['affected_sales_order_count'] = len(affected_sales_order_ids)
         planner_digest['hot_over_capacity_window'] = _build_planner_window_focus(capacity_calendar, target_state='OVER_CAPACITY')
         planner_digest['hot_at_limit_window'] = _build_planner_window_focus(capacity_calendar, target_state='AT_LIMIT')
@@ -6036,10 +6108,12 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                     requirements=requirements,
                     operations=operations,
                     today=today,
+                    include_dispatch_readiness=True,
                 )
                 raw_cards.append(_serialize_planning_card(order, operation, snapshot=snapshot, today=today))
 
         capacity_context = _annotate_capacity_context(raw_cards)
+        _annotate_ready_to_dispatch_context(raw_cards)
 
         lane_map = {}
         cards = []
