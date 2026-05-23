@@ -42,6 +42,7 @@ from .price_services import (
     resolve_product_price_as_of,
     submit_price_change_request,
 )
+from .readiness import build_product_routing_readiness
 from .serializers import (
     ProductCategorySerializer,
     ProductUnitSerializer,
@@ -592,6 +593,11 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
         )
 
         return queryset
+
+    @action(detail=True, methods=['get'], url_path='readiness')
+    def readiness(self, request, pk=None):
+        product = self.get_object()
+        return Response(build_product_routing_readiness(product))
 
     @staticmethod
     def _to_decimal(value):

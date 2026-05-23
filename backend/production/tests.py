@@ -1035,6 +1035,11 @@ class ERPMainFlowSmokeTests(APITestCase):
         self.assertEqual(line.product_snapshot['print_colors'], [])
         self.assertEqual(line.product_snapshot['film_code'], '')
 
+        readiness_response = self.client.get(f'/api/products/products/{product.id}/readiness/')
+        self.assertEqual(readiness_response.status_code, 200, readiness_response.data)
+        self.assertEqual(readiness_response.data['status'], 'BLOCKER')
+        self.assertFalse(readiness_response.data['workflow_blocking'])
+
         sync_production_demands_for_sales_order(sales_order, user=self.user)
         demand = ProductionDemand.objects.get(sales_order_line=line)
         self.assertEqual(demand.routing_summary, [])

@@ -5,6 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from core.models import User
+from production.models import ProductionMachine, ProductionWorkCenter
 from products.models import Operation, Product, ProductOperation, ProductRoutingStep, ProductUnit
 
 
@@ -96,6 +97,20 @@ class ProductOperationApiTest(TestCase):
                 standard_rate_per_hour=rate,
             )
         return product
+
+    def create_active_resource_catalog(self):
+        work_center = ProductionWorkCenter.objects.create(
+            code='READINESS-WC',
+            name='Readiness Work Center',
+            default_capacity_hours='8.00',
+        )
+        ProductionMachine.objects.create(
+            code='READINESS-MC',
+            name='Readiness Machine',
+            work_center=work_center,
+            default_capacity_hours='8.00',
+        )
+        return work_center
 
     def test_product_defaults_to_specific_kind(self):
         product = Product.objects.create(
@@ -305,6 +320,75 @@ class ProductOperationApiTest(TestCase):
         self.assertEqual(payload['print_color_5'], 'CMYK')
         self.assertEqual(payload['color_count'], 2)
         self.assertEqual(payload['print_colors'], ['Đen', 'CMYK'])
+
+    def test_product_readiness_ready_when_routing_resource_and_print_metadata_exist(self):
+        self.create_active_resource_catalog()
+        product = self.create_product_with_operations('READY-OK')
+        product.film_code = 'FILM-READY'
+        product.print_color_1 = 'Black'
+        product.save(update_fields=['film_code', 'print_color_1'])
+
+        response = self.client.get(f'/api/products/products/{product.id}/readiness/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['status'], 'READY')
+        self.assertTrue(payload['is_ready'])
+        self.assertFalse(payload['workflow_blocking'])
+        self.assertEqual(payload['issues'], [])
+        self.assertEqual(payload['summary']['blocker_count'], 0)
+        self.assertEqual(payload['summary']['warning_count'], 0)
+
+    def test_product_readiness_marks_missing_routing_and_operations_as_blocker(self):
+        self.create_active_resource_catalog()
+        product = Product.objects.create(
+            code='READY-NO-ROUTE',
+            name='Ready No Route',
+            unit=self.unit,
+        )
+
+        response = self.client.get(f'/api/products/products/{product.id}/readiness/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['status'], 'BLOCKER')
+        self.assertFalse(payload['workflow_blocking'])
+        issue_codes = {item['code'] for item in payload['issues']}
+        self.assertIn('ROUTING_MISSING', issue_codes)
+        self.assertIn('OPERATIONS_MISSING', issue_codes)
+        self.assertEqual(payload['summary']['blocker_count'], 2)
+
+    def test_product_readiness_marks_missing_work_center_and_machine_as_warning(self):
+        product = self.create_product_with_operations('READY-NO-RESOURCE')
+        product.film_code = 'FILM-RESOURCE'
+        product.print_color_1 = 'Black'
+        product.save(update_fields=['film_code', 'print_color_1'])
+
+        response = self.client.get(f'/api/products/products/{product.id}/readiness/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['status'], 'WARNING')
+        issue_codes = {item['code'] for item in payload['issues']}
+        self.assertIn('WORK_CENTER_CATALOG_MISSING', issue_codes)
+        self.assertIn('MACHINE_CATALOG_MISSING', issue_codes)
+        self.assertEqual(payload['summary']['blocker_count'], 0)
+        self.assertEqual(payload['summary']['warning_count'], 2)
+
+    def test_product_readiness_marks_missing_print_metadata_as_warning(self):
+        self.create_active_resource_catalog()
+        product = self.create_product_with_operations('READY-NO-PRINT')
+
+        response = self.client.get(f'/api/products/products/{product.id}/readiness/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['status'], 'WARNING')
+        issue_codes = {item['code'] for item in payload['issues']}
+        self.assertIn('PRINT_FILM_CODE_MISSING', issue_codes)
+        self.assertIn('PRINT_COLORS_MISSING', issue_codes)
+        self.assertEqual(payload['summary']['blocker_count'], 0)
+        self.assertEqual(payload['summary']['warning_count'], 2)
 
     def test_product_api_returns_legacy_process_fields_and_product_operations(self):
         operation = Operation.objects.get(code='IN')
