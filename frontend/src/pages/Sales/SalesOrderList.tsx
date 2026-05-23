@@ -457,6 +457,157 @@ function getSnapshotRoutingPreview(snapshot?: SalesOrderLineProductSnapshot | nu
   }));
 }
 
+type SalesSnapshotAdvisoryStatus = 'READY' | 'WARNING' | 'BLOCKER';
+type SalesSnapshotAdvisoryIssue = {
+  code: string;
+  severity: SalesSnapshotAdvisoryStatus;
+  category: string;
+  message: string;
+};
+
+const SALES_SNAPSHOT_STATUS_COLOR: Record<SalesSnapshotAdvisoryStatus, string> = {
+  READY: 'green',
+  WARNING: 'gold',
+  BLOCKER: 'red',
+};
+
+const SALES_SNAPSHOT_STATUS_LABEL: Record<SalesSnapshotAdvisoryStatus, string> = {
+  READY: 'Sẵn sàng',
+  WARNING: 'Cần kiểm tra',
+  BLOCKER: 'Thiếu dữ liệu chính',
+};
+
+const SALES_SNAPSHOT_CATEGORY_LABELS: Record<string, string> = {
+  spec: 'Quy cách',
+  routing: 'Công đoạn/routing',
+  print_metadata: 'Metadata in',
+  handoff: 'Handoff sản xuất',
+};
+
+const SALES_PRINT_OPERATION_CODES = new Set(['IN']);
+
+function getSalesSnapshotStatus(issues: SalesSnapshotAdvisoryIssue[]): SalesSnapshotAdvisoryStatus {
+  if (issues.some((issue) => issue.severity === 'BLOCKER')) return 'BLOCKER';
+  if (issues.some((issue) => issue.severity === 'WARNING')) return 'WARNING';
+  return 'READY';
+}
+
+function hasSalesSnapshotIdentity(snapshot?: SalesOrderLineProductSnapshot | null): boolean {
+  return Boolean(
+    snapshot?.product_id
+    || snapshot?.product_code
+    || snapshot?.code
+    || snapshot?.product_name
+    || snapshot?.name
+  );
+}
+
+function hasSnapshotPrintProcess(
+  snapshot: SalesOrderLineProductSnapshot,
+  operations: SalesSnapshotOperation[],
+  routingSteps: SalesSnapshotRoutingStep[],
+): boolean {
+  const operationCodes = [
+    ...operations.map((item) => item.operation_code),
+    ...routingSteps.map((item) => item.operation_code),
+  ].map((item) => String(item || '').trim().toUpperCase());
+  return operationCodes.some((code) => SALES_PRINT_OPERATION_CODES.has(code)) || Number(snapshot.process_in ?? 0) > 0;
+}
+
+function buildSalesSnapshotAdvisory(snapshot?: SalesOrderLineProductSnapshot | null) {
+  if (!snapshot || !hasSalesSnapshotIdentity(snapshot)) return null;
+  const operations = getSnapshotOperationsPreview(snapshot);
+  const routingSteps = getSnapshotRoutingPreview(snapshot);
+  const printColorCount = getSnapshotColorCount(snapshot);
+  const issues: SalesSnapshotAdvisoryIssue[] = [];
+
+  if (!isSnapshotV2(snapshot)) {
+    issues.push({
+      code: 'SNAPSHOT_LEGACY',
+      severity: 'WARNING',
+      category: 'handoff',
+      message: 'Snapshot cũ, cần kiểm tra kỹ trước khi đưa xuống sản xuất.',
+    });
+  }
+  if (snapshot.requires_order_spec && !snapshot.order_spec_confirmed) {
+    issues.push({
+      code: 'ORDER_SPEC_NOT_CONFIRMED',
+      severity: 'WARNING',
+      category: 'spec',
+      message: 'Chưa xác nhận quy cách đặt hàng.',
+    });
+  }
+  if (snapshot.requires_order_operations_review && !snapshot.order_operations_reviewed) {
+    issues.push({
+      code: 'ORDER_OPERATIONS_NOT_REVIEWED',
+      severity: 'WARNING',
+      category: 'routing',
+      message: 'Chưa kiểm tra công đoạn/định mức cho dòng đơn.',
+    });
+  }
+  if (!String(snapshot.size_order || '').trim()) {
+    issues.push({
+      code: 'SIZE_ORDER_MISSING',
+      severity: 'WARNING',
+      category: 'spec',
+      message: 'Thiếu kích thước đặt hàng.',
+    });
+  }
+  if (!String(snapshot.size_production || '').trim()) {
+    issues.push({
+      code: 'SIZE_PRODUCTION_MISSING',
+      severity: 'WARNING',
+      category: 'spec',
+      message: 'Thiếu kích thước sản xuất.',
+    });
+  }
+  if (!operations.length) {
+    issues.push({
+      code: 'SNAPSHOT_OPERATIONS_MISSING',
+      severity: 'BLOCKER',
+      category: 'routing',
+      message: 'Snapshot chưa có công đoạn, handoff xuống sản xuất sẽ thiếu dữ liệu.',
+    });
+  }
+  if (!routingSteps.length) {
+    issues.push({
+      code: 'SNAPSHOT_ROUTING_MISSING',
+      severity: 'BLOCKER',
+      category: 'handoff',
+      message: 'Snapshot chưa có routing, ProductionDemand/ProductionOrder sẽ không có thứ tự công đoạn rõ ràng.',
+    });
+  }
+  if (hasSnapshotPrintProcess(snapshot, operations, routingSteps)) {
+    if (!String(snapshot.film_code || '').trim()) {
+      issues.push({
+        code: 'SNAPSHOT_FILM_MISSING',
+        severity: 'WARNING',
+        category: 'print_metadata',
+        message: 'Có công đoạn in nhưng thiếu mã phim.',
+      });
+    }
+    if (printColorCount <= 0) {
+      issues.push({
+        code: 'SNAPSHOT_PRINT_COLORS_MISSING',
+        severity: 'WARNING',
+        category: 'print_metadata',
+        message: 'Có công đoạn in nhưng chưa khai báo màu in.',
+      });
+    }
+  }
+
+  const status = getSalesSnapshotStatus(issues);
+  return {
+    status,
+    issues,
+    operations,
+    routingSteps,
+    printColorCount,
+    blockerCount: issues.filter((issue) => issue.severity === 'BLOCKER').length,
+    warningCount: issues.filter((issue) => issue.severity === 'WARNING').length,
+  };
+}
+
 const snapshotStepTypeLabels: Record<string, string> = {
   REQUIRED: 'Bắt buộc',
   OPTIONAL: 'Tùy chọn',
@@ -570,6 +721,62 @@ function SnapshotRoutingPreview({ routingSteps }: { routingSteps: SalesSnapshotR
         </tbody>
       </table>
     </div>
+  );
+}
+
+function SalesSnapshotAdvisoryPanel({
+  advisory,
+}: {
+  advisory: ReturnType<typeof buildSalesSnapshotAdvisory>;
+}) {
+  if (!advisory) return null;
+  const { status, issues, operations, routingSteps, printColorCount, blockerCount, warningCount } = advisory;
+
+  return (
+    <Alert
+      data-testid="sales-snapshot-readiness-panel"
+      type={status === 'BLOCKER' ? 'error' : status === 'WARNING' ? 'warning' : 'success'}
+      showIcon
+      style={{ marginBottom: 10 }}
+      message={(
+        <span>
+          Snapshot/handoff sản xuất{' '}
+          <Tag data-testid="sales-snapshot-readiness-status" color={SALES_SNAPSHOT_STATUS_COLOR[status]}>
+            {status}
+          </Tag>
+          <span style={{ color: '#64748b' }}>{SALES_SNAPSHOT_STATUS_LABEL[status]}</span>
+        </span>
+      )}
+      description={(
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            <Tag data-testid="sales-snapshot-blocker-count" color={blockerCount > 0 ? 'red' : 'default'}>
+              {`${blockerCount} BLOCKER`}
+            </Tag>
+            <Tag data-testid="sales-snapshot-warning-count" color={warningCount > 0 ? 'gold' : 'default'}>
+              {`${warningCount} WARNING`}
+            </Tag>
+            <Tag>{`Công đoạn: ${operations.length}`}</Tag>
+            <Tag>{`Routing: ${routingSteps.length}`}</Tag>
+            <Tag>{`Màu in: ${printColorCount}`}</Tag>
+          </div>
+          {issues.length ? (
+            <ul data-testid="sales-snapshot-readiness-issues" style={{ margin: 0, paddingLeft: 18 }}>
+              {issues.map((issue, issueIndex) => (
+                <li key={`${issue.code}-${issueIndex}`}>
+                  <strong>{SALES_SNAPSHOT_CATEGORY_LABELS[issue.category] ?? issue.category}:</strong>{' '}
+                  <Tag color={SALES_SNAPSHOT_STATUS_COLOR[issue.severity]}>{issue.severity}</Tag>
+                  {issue.message}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div>Snapshot có đủ quy cách, routing/công đoạn và metadata cần thiết cho handoff hiện tại.</div>
+          )}
+          <div style={{ color: '#64748b' }}>Chỉ cảnh báo/đánh giá, không tự refresh snapshot và không chặn lưu đơn.</div>
+        </div>
+      )}
+    />
   );
 }
 
@@ -2582,6 +2789,7 @@ export default function SalesOrderList() {
                   const legacyColorCount = !hasDetailedColors ? getSnapshotColorCount(currentSnapshot) : 0;
                   const operationsPreview = getSnapshotOperationsPreview(currentSnapshot);
                   const routingPreview = getSnapshotRoutingPreview(currentSnapshot);
+                  const snapshotAdvisory = buildSalesSnapshotAdvisory(currentSnapshot);
                   return (
                     <Card
                       key={field.key}
@@ -2663,6 +2871,7 @@ export default function SalesOrderList() {
                             message="Mã chung cần xác nhận quy cách và kiểm tra công đoạn/định mức trước khi duyệt/lên sản xuất."
                           />
                         ) : null}
+                        <SalesSnapshotAdvisoryPanel advisory={snapshotAdvisory} />
                         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
                           <Form.Item
                             name={[field.name, 'product_snapshot', 'order_spec_confirmed']}
