@@ -997,6 +997,62 @@ class SalesOrderLineIdentityUpdateTests(TestCase):
         self.assertEqual(line.product_snapshot['sale_price'], '150.00')
         self.assertEqual(line.note, 'Keep snapshot')
 
+    def test_update_same_product_does_not_refresh_routing_or_print_metadata(self):
+        operation_in, _ = Operation.objects.update_or_create(
+            code='IN',
+            defaults={'name': 'In', 'sequence': 20, 'is_active': True},
+        )
+        operation_be, _ = Operation.objects.update_or_create(
+            code='BE',
+            defaults={'name': 'Be', 'sequence': 50, 'is_active': True},
+        )
+        self.product.film_code = 'FILM-SNAPSHOT'
+        self.product.print_color_1 = 'Black'
+        self.product.save(update_fields=['film_code', 'print_color_1', 'updated_at'])
+        product_operation = ProductOperation.objects.create(
+            product=self.product,
+            operation=operation_in,
+            sequence=20,
+            standard_rate_per_hour=20000,
+        )
+        route_step = ProductRoutingStep.objects.create(
+            product=self.product,
+            operation=operation_in,
+            product_operation=product_operation,
+            step_no=10,
+            display_order=10,
+            standard_rate_per_hour=20000,
+        )
+        order = self._order(code='SO-LINE-ID-SNAPSHOT')
+        line = self._line(order, price='100')
+
+        self.assertEqual(line.product_snapshot['film_code'], 'FILM-SNAPSHOT')
+        self.assertEqual(line.product_snapshot['print_colors'], ['Black'])
+        self.assertEqual(line.product_snapshot['operations'][0]['operation_code'], 'IN')
+        self.assertEqual(line.product_snapshot['routing_steps'][0]['operation_code'], 'IN')
+
+        self.product.film_code = 'FILM-CHANGED'
+        self.product.print_color_1 = 'Red'
+        self.product.save(update_fields=['film_code', 'print_color_1', 'updated_at'])
+        product_operation.operation = operation_be
+        product_operation.sequence = 50
+        product_operation.standard_rate_per_hour = 8500
+        product_operation.save(update_fields=['operation', 'sequence', 'standard_rate_per_hour', 'updated_at'])
+        route_step.operation = operation_be
+        route_step.step_no = 20
+        route_step.display_order = 20
+        route_step.standard_rate_per_hour = 8500
+        route_step.save(update_fields=['operation', 'step_no', 'display_order', 'standard_rate_per_hour'])
+
+        self._save_order_update(order, [self._line_payload(line, qty='12', unit_price='150')])
+
+        line.refresh_from_db()
+        self.assertEqual(line.product_snapshot['film_code'], 'FILM-SNAPSHOT')
+        self.assertEqual(line.product_snapshot['print_colors'], ['Black'])
+        self.assertEqual(line.product_snapshot['operations'][0]['operation_code'], 'IN')
+        self.assertEqual(line.product_snapshot['routing_steps'][0]['operation_code'], 'IN')
+        self.assertEqual(line.product_snapshot['sale_price'], '150.00')
+
     def test_update_same_product_persists_confirmation_flags_but_blocks_forbidden_snapshot_fields(self):
         self.product.product_kind = Product.ProductKind.GENERIC
         self.product.requires_order_spec = True

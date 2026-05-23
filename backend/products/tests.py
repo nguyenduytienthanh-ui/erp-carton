@@ -390,6 +390,29 @@ class ProductOperationApiTest(TestCase):
         self.assertEqual(payload['summary']['blocker_count'], 0)
         self.assertEqual(payload['summary']['warning_count'], 2)
 
+    def test_product_readiness_ignores_print_metadata_when_no_print_process(self):
+        self.create_active_resource_catalog()
+        product = Product.objects.create(
+            code='READY-NO-PRINT-PROCESS',
+            name='Ready No Print Process',
+            unit=self.unit,
+        )
+        ProductOperation.objects.create(
+            product=product,
+            operation=Operation.objects.get(code='BE'),
+            standard_rate_per_hour=8500,
+        )
+
+        response = self.client.get(f'/api/products/products/{product.id}/readiness/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['status'], 'READY')
+        issue_codes = {item['code'] for item in payload['issues']}
+        self.assertNotIn('PRINT_FILM_CODE_MISSING', issue_codes)
+        self.assertNotIn('PRINT_COLORS_MISSING', issue_codes)
+        self.assertEqual(payload['summary']['warning_count'], 0)
+
     def test_product_api_returns_legacy_process_fields_and_product_operations(self):
         operation = Operation.objects.get(code='IN')
         product = Product.objects.create(

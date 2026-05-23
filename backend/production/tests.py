@@ -1272,6 +1272,55 @@ class ProductionDemandSyncTests(APITestCase):
         self.assertEqual(demand.operations_summary[0]['operation_code'], 'IN')
         self.assertEqual(demand.routing_summary[0]['operation_code'], 'IN')
 
+    def test_sync_uses_sales_line_snapshot_after_product_master_changes(self):
+        line = self._create_line(product_snapshot={
+            'schema_version': 2,
+            'product_id': self.product.id,
+            'product_code': 'SNAPSHOT-FG',
+            'product_name': 'Snapshot Finished Good',
+            'code': 'SNAPSHOT-FG',
+            'name': 'Snapshot Finished Good',
+            'product_kind': 'SPECIFIC',
+            'unit_name': self.unit.name,
+            'size_order': '100x80',
+            'size_production': '102x82',
+            'print_colors': ['Snapshot Black'],
+            'operations': [
+                {
+                    'operation_code': 'IN',
+                    'operation_name': 'Snapshot In',
+                    'sequence': 20,
+                    'standard_rate_per_hour': 20000,
+                    'applied_rate_per_hour': 20000,
+                    'source': 'product_operations',
+                },
+            ],
+            'routing_steps': [
+                {
+                    'step_no': 10,
+                    'display_step': 1,
+                    'operation_code': 'IN',
+                    'operation_name': 'Snapshot In',
+                    'applied_rate_per_hour': 20000,
+                    'source': 'product_routing',
+                },
+            ],
+        })
+        self.product.name = 'Changed Master Product'
+        self.product.process_in = 1
+        self.product.save(update_fields=['name', 'process_in', 'updated_at'])
+
+        sync_production_demands_for_sales_order(self.order, user=self.user)
+
+        demand = ProductionDemand.objects.get(sales_order_line=line)
+        self.assertEqual(demand.product_code, 'SNAPSHOT-FG')
+        self.assertEqual(demand.product_name, 'Snapshot Finished Good')
+        self.assertEqual(demand.size_order, '100x80')
+        self.assertEqual(demand.size_production, '102x82')
+        self.assertEqual(demand.print_colors, ['Snapshot Black'])
+        self.assertEqual(demand.operations_summary[0]['operation_name'], 'Snapshot In')
+        self.assertEqual(demand.routing_summary[0]['source'], 'product_routing')
+
     def test_legacy_snapshot_summary_does_not_crash(self):
         line = self._create_line(product_snapshot={
             'code': 'LEGACY-FG',
@@ -1954,6 +2003,36 @@ class ProductionDemandApiTests(APITestCase):
         self.assertEqual(len(response.data['production_demand']['production_orders']), 1)
         self.assertEqual(response.data['production_demand']['production_orders'][0]['id'], order.id)
         self.assertEqual(response.data['production_demand']['production_orders'][0]['code'], order.code)
+
+    def test_create_order_action_keeps_sales_line_snapshot_after_product_master_changes(self):
+        self._set_line_snapshot(self._routing_steps_snapshot(
+            product_code='SNAP-ORDER-FG',
+            product_name='Snapshot Order Product',
+            code='SNAP-ORDER-FG',
+            name='Snapshot Order Product',
+            print_colors=['Snapshot Blue'],
+        ))
+        self.product.name = 'Changed Master Order Product'
+        self.product.save(update_fields=['name', 'updated_at'])
+        demand = self._create_demand('CREATE-SNAPSHOT-ORDER')
+
+        response = self.client.post(
+            f'/api/production/demands/{demand.id}/create_order/',
+            {
+                'qty': '4',
+                'planned_start_date': str(self.today + timedelta(days=2)),
+                'planned_end_date': str(self.today + timedelta(days=5)),
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        order = ProductionOrder.objects.get(pk=response.data['production_order_id'])
+        self.assertEqual(order.product_snapshot['product_code'], 'SNAP-ORDER-FG')
+        self.assertEqual(order.product_snapshot['product_name'], 'Snapshot Order Product')
+        self.assertEqual(order.product_snapshot['print_colors'], ['Snapshot Blue'])
+        self.assertEqual(order.product.name, 'Changed Master Order Product')
+        self.assertEqual([item.step_code for item in order.operations.order_by('sequence')], ['IN', 'XA', 'XA', 'DONG', 'DAN'])
 
     def test_order_api_returns_demand_fields_and_filters_source_type(self):
         self._set_line_snapshot(self._routing_steps_snapshot())
