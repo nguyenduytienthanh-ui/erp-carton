@@ -53,6 +53,7 @@ import type {
   ProductionPlanningRebalanceSummaryItem,
   ProductionPlanningRebalanceSuggestion,
   ProductionPlanningSummary,
+  ProductionReadyToDispatchStatus,
   ProductionPlanningShiftFilter,
   ProductionMachine,
   ProductionWorkCenter,
@@ -72,6 +73,7 @@ type MaterialFilter = 'ALL' | ProductionOperationMaterialReadiness;
 type DependencyFilter = 'ALL' | ProductionOperationDependencyState;
 type BucketFilter = 'ALL' | ProductionPlanningBucketKey;
 type OrderStatusFilter = 'ALL' | ProductionOrderStatus;
+type DispatchReadinessFilter = 'ALL' | ProductionReadyToDispatchStatus;
 type Snapshot = {
   search: string;
   step_code: string;
@@ -92,6 +94,7 @@ type Snapshot = {
   material_product_code: string;
   material_readiness: MaterialFilter;
   dependency_state: DependencyFilter;
+  ready_to_dispatch: DispatchReadinessFilter;
   ready_to_run: boolean;
   needs_attention: boolean;
   has_material_wait: boolean;
@@ -117,8 +120,8 @@ type SavedScenario = {
     total_scheduled_hours_delta: string;
   };
 };
-type DispatchPresetKey = 'READY_TO_RUN' | 'UNASSIGNED_RESOURCE' | 'UNSCHEDULED_SCHEDULE' | 'OVER_CAPACITY' | 'OVERDUE' | 'WAIT_PREVIOUS_STEP';
-type DispatchPresetSnapshot = Pick<Snapshot, 'planned_date' | 'planned_shift' | 'capacity_state' | 'risk_state' | 'bucket_key' | 'dependency_state' | 'ready_to_run' | 'needs_attention' | 'has_material_wait' | 'has_previous_wait' | 'view'>;
+type DispatchPresetKey = 'DISPATCH_READY' | 'DISPATCH_WARNING' | 'DISPATCH_BLOCKER' | 'READY_TO_RUN' | 'UNASSIGNED_RESOURCE' | 'UNSCHEDULED_SCHEDULE' | 'OVER_CAPACITY' | 'OVERDUE' | 'WAIT_PREVIOUS_STEP';
+type DispatchPresetSnapshot = Pick<Snapshot, 'planned_date' | 'planned_shift' | 'capacity_state' | 'risk_state' | 'bucket_key' | 'dependency_state' | 'ready_to_dispatch' | 'ready_to_run' | 'needs_attention' | 'has_material_wait' | 'has_previous_wait' | 'view'>;
 type OperationReadinessMeta = {
   label: string;
   color: string;
@@ -195,6 +198,16 @@ const readinessColor: Record<ProductionOperationMaterialReadiness, string> = {
   PARTIAL: 'gold',
   WAITING: 'error',
 };
+const readyToDispatchColor: Record<ProductionReadyToDispatchStatus, string> = {
+  READY: 'success',
+  WARNING: 'gold',
+  BLOCKER: 'error',
+};
+const readyToDispatchLabel: Record<ProductionReadyToDispatchStatus, string> = {
+  READY: 'READY',
+  WARNING: 'WARNING',
+  BLOCKER: 'BLOCKER',
+};
 const dependencyColor: Record<ProductionOperationDependencyState, string> = {
   ROOT: 'blue',
   CLEAR: 'success',
@@ -264,6 +277,12 @@ const dependencyOptions = [
   { label: 'Không bị chặn', value: 'CLEAR' },
   { label: 'Chờ công đoạn trước', value: 'WAIT_PREVIOUS_STEP' },
 ];
+const readyToDispatchOptions = [
+  { label: 'Tất cả ready dispatch', value: 'ALL' },
+  { label: 'READY', value: 'READY' },
+  { label: 'WARNING', value: 'WARNING' },
+  { label: 'BLOCKER', value: 'BLOCKER' },
+];
 const handoverOptions = [
   { label: 'Tất cả bàn giao', value: 'ALL' },
   { label: 'Đang thao tác', value: 'ACTIVE' },
@@ -307,6 +326,24 @@ const blockReasonOptions = [
   { label: 'Khác', value: 'OTHER' },
 ];
 const dispatchPresetCards: Array<{ key: DispatchPresetKey; title: string; description: string; tone: string }> = [
+  {
+    key: 'DISPATCH_READY',
+    title: 'READY dispatch',
+    description: 'Đủ tín hiệu để đưa vào điều độ, chỉ là advisory.',
+    tone: '#389e0d',
+  },
+  {
+    key: 'DISPATCH_WARNING',
+    title: 'WARNING dispatch',
+    description: 'Có cảnh báo vật tư, lịch, công suất hoặc metadata.',
+    tone: '#d48806',
+  },
+  {
+    key: 'DISPATCH_BLOCKER',
+    title: 'BLOCKER dispatch',
+    description: 'Có lỗi readiness hoặc dependency cần xử lý trước.',
+    tone: '#cf1322',
+  },
   {
     key: 'READY_TO_RUN',
     title: 'Sẵn chạy',
@@ -357,6 +394,8 @@ const normalizeMaterial = (value: string | null): MaterialFilter =>
   value === 'READY' || value === 'PARTIAL' || value === 'WAITING' ? value : 'ALL';
 const normalizeDependency = (value: string | null): DependencyFilter =>
   value === 'ROOT' || value === 'CLEAR' || value === 'WAIT_PREVIOUS_STEP' ? value : 'ALL';
+const normalizeReadyToDispatch = (value: string | null): DispatchReadinessFilter =>
+  value === 'READY' || value === 'WARNING' || value === 'BLOCKER' ? value : 'ALL';
 const normalizeBucket = (value: string | null): BucketFilter =>
   value === 'OVERDUE' || value === 'TODAY' || value === 'TOMORROW' || value === 'UPCOMING' || value === 'UNSCHEDULED' ? value : 'ALL';
 const normalizeOrderStatus = (value: string | null): OrderStatusFilter =>
@@ -395,6 +434,7 @@ const buildSnapshotFromParams = (params: URLSearchParams): Snapshot => ({
   material_product_code: params.get('material_product_code') || '',
   material_readiness: normalizeMaterial(params.get('material_readiness')),
   dependency_state: normalizeDependency(params.get('dependency_state')),
+  ready_to_dispatch: normalizeReadyToDispatch(params.get('ready_to_dispatch')),
   ready_to_run: params.get('ready_to_run') === '1',
   needs_attention: params.get('needs_attention') === '1',
   has_material_wait: params.get('has_material_wait') === '1',
@@ -506,6 +546,131 @@ const getOperationReadinessMeta = (card: ProductionPlanningCard): OperationReadi
     reason: 'Công đoạn chưa được mở để bắt đầu.',
     canAdvance: canAdvanceOperation(card),
   };
+};
+const isReadyToDispatchStatus = (value?: string | null): value is ProductionReadyToDispatchStatus => (
+  value === 'READY' || value === 'WARNING' || value === 'BLOCKER'
+);
+const getProductReadinessStatus = (card: ProductionPlanningCard): ProductionReadyToDispatchStatus | null => {
+  const status = String((card.product_readiness as { status?: string } | undefined)?.status || '').trim().toUpperCase();
+  return isReadyToDispatchStatus(status) ? status : null;
+};
+const getReadyToDispatchStatus = (card: ProductionPlanningCard): ProductionReadyToDispatchStatus => {
+  const status = String(card.ready_to_dispatch?.status || '').trim().toUpperCase();
+  if (isReadyToDispatchStatus(status)) {
+    return status;
+  }
+  if (isInactiveOperationStatus(card.operation.status) || isDependencyBlocked(card) || String(card.operation.block_reason_code || '').trim()) {
+    return 'BLOCKER';
+  }
+  if (
+    getProductReadinessStatus(card) === 'WARNING'
+    || card.materials.material_readiness !== 'READY'
+    || !card.operation.planned_date
+    || !String(card.operation.planned_shift || '').trim()
+    || card.capacity.capacity_state !== 'BALANCED'
+  ) {
+    return 'WARNING';
+  }
+  return 'READY';
+};
+const buildFallbackReadyToDispatchIssues = (card: ProductionPlanningCard) => {
+  const issues: NonNullable<ProductionPlanningCard['ready_to_dispatch']>['issues'] = [];
+  const addIssue = (code: string, severity: ProductionReadyToDispatchStatus, category: string, message: string) => {
+    issues.push({ code, severity, category, message, workflow_blocking: false, details: {} });
+  };
+  const productStatus = getProductReadinessStatus(card);
+  if (productStatus === 'BLOCKER') {
+    addIssue('PRODUCT_READINESS_BLOCKER', 'BLOCKER', 'product', 'Product/routing readiness đang có lỗi chặn.');
+  } else if (productStatus === 'WARNING') {
+    addIssue('PRODUCT_READINESS_WARNING', 'WARNING', 'product', 'Product/routing readiness đang có cảnh báo.');
+  }
+  if (isDependencyBlocked(card)) {
+    addIssue('WAIT_PREVIOUS_STEP', 'BLOCKER', 'dependency', 'Công đoạn đang chờ công đoạn trước hoàn tất.');
+  }
+  if (String(card.operation.block_reason_code || '').trim()) {
+    addIssue('BLOCK_REASON_ACTIVE', 'BLOCKER', 'operation', 'Công đoạn đang có lý do khóa/cảnh báo.');
+  }
+  if (isInactiveOperationStatus(card.operation.status)) {
+    addIssue('OPERATION_INACTIVE', 'BLOCKER', 'operation', 'Công đoạn DONE/SKIPPED không còn trong hàng dispatch active.');
+  }
+  if (card.materials.material_readiness !== 'READY') {
+    addIssue('MATERIAL_NOT_READY', 'WARNING', 'material', 'Vật tư chưa được cấp đầy đủ.');
+  }
+  if (!card.operation.planned_date || !String(card.operation.planned_shift || '').trim()) {
+    addIssue('SCHEDULE_MISSING', 'WARNING', 'planning', 'Công đoạn chưa có ngày hoặc ca sản xuất.');
+  }
+  if (card.capacity.capacity_state === 'UNASSIGNED_WORK_CENTER') {
+    addIssue('WORK_CENTER_MISSING', 'WARNING', 'resource', 'Công đoạn chưa gán tổ/work center.');
+  } else if (card.capacity.capacity_state === 'UNASSIGNED_MACHINE') {
+    addIssue('MACHINE_MISSING', 'WARNING', 'resource', 'Công đoạn chưa gán máy.');
+  } else if (card.capacity.capacity_state === 'OVER_CAPACITY') {
+    addIssue('CAPACITY_OVER_CAPACITY', 'WARNING', 'capacity', 'Tải công suất đang vượt giờ khả dụng.');
+  } else if (card.capacity.capacity_state === 'AT_LIMIT') {
+    addIssue('CAPACITY_AT_LIMIT', 'WARNING', 'capacity', 'Tải công suất đang gần chạm ngưỡng.');
+  }
+  return issues;
+};
+const getReadyToDispatchIssues = (card: ProductionPlanningCard) => (
+  card.ready_to_dispatch?.issues?.length
+    ? card.ready_to_dispatch.issues
+    : buildFallbackReadyToDispatchIssues(card)
+);
+const getReadyToDispatchIssueTitle = (issue: { code?: string; category?: string }) => {
+  const code = String(issue.code || '').toUpperCase();
+  const category = String(issue.category || '').toLowerCase();
+  if (code.includes('PRODUCT_READINESS')) return 'Routing/product readiness';
+  if (code === 'WAIT_PREVIOUS_STEP') return 'Chờ công đoạn trước';
+  if (code === 'BLOCK_REASON_ACTIVE') return 'Block reason';
+  if (code === 'OPERATION_INACTIVE') return 'DONE/SKIPPED';
+  if (code === 'WORK_CENTER_MISSING') return 'Thiếu tổ/work center';
+  if (code === 'MACHINE_MISSING') return 'Thiếu máy';
+  if (code === 'SCHEDULE_MISSING') return 'Thiếu lịch/ca';
+  if (code.startsWith('CAPACITY_') || category === 'capacity') return 'Công suất';
+  if (code.startsWith('MATERIAL_') || category === 'material') return 'Vật tư/tồn nguồn';
+  if (code.includes('PRINT') || category === 'print_metadata') return 'Print metadata';
+  return issue.code || 'Advisory';
+};
+const getReadyToDispatchSummary = (card: ProductionPlanningCard) => {
+  const issues = getReadyToDispatchIssues(card);
+  if (!issues.length) {
+    return 'Đủ tín hiệu ready-to-dispatch theo dữ liệu hiện tại.';
+  }
+  return issues.slice(0, 3).map(getReadyToDispatchIssueTitle).join(' · ');
+};
+const renderReadyToDispatchTag = (card: ProductionPlanningCard) => {
+  const status = getReadyToDispatchStatus(card);
+  const issues = getReadyToDispatchIssues(card);
+  return (
+    <Tooltip
+      title={(
+        <Space direction="vertical" size={2}>
+          <span>{getReadyToDispatchSummary(card)}</span>
+          <span>Chỉ cảnh báo/đánh giá, chưa chặn workflow.</span>
+        </Space>
+      )}
+    >
+      <Tag color={readyToDispatchColor[status]} data-testid={`production-planning-ready-to-dispatch-${status.toLowerCase()}`}>
+        {readyToDispatchLabel[status]}
+        {issues.length ? ` · ${issues.length}` : ''}
+      </Tag>
+    </Tooltip>
+  );
+};
+const renderReadyToDispatchDetails = (card: ProductionPlanningCard, maxItems = 3) => {
+  const issues = getReadyToDispatchIssues(card);
+  if (!issues.length) {
+    return <Text type="secondary">Không có cảnh báo ready-to-dispatch.</Text>;
+  }
+  return (
+    <Space wrap size={4}>
+      {issues.slice(0, maxItems).map((issue) => (
+        <Tooltip key={`${card.card_key}-${issue.code}`} title={issue.message}>
+          <Tag color={readyToDispatchColor[issue.severity]}>{getReadyToDispatchIssueTitle(issue)}</Tag>
+        </Tooltip>
+      ))}
+      {issues.length > maxItems ? <Tag>{`+${issues.length - maxItems}`}</Tag> : null}
+    </Space>
+  );
 };
 const getSkippedByDisplay = (operation: ProductionPlanningCard['operation']) => {
   const display = String(operation.skipped_by_display || '').trim();
@@ -803,6 +968,7 @@ export default function ProductionPlanningBoard() {
   const [materialProductCode, setMaterialProductCode] = useState(initial.material_product_code);
   const [materialReadiness, setMaterialReadiness] = useState<MaterialFilter>(initial.material_readiness);
   const [dependencyState, setDependencyState] = useState<DependencyFilter>(initial.dependency_state);
+  const [readyToDispatch, setReadyToDispatch] = useState<DispatchReadinessFilter>(initial.ready_to_dispatch);
   const [readyToRunOnly, setReadyToRunOnly] = useState(initial.ready_to_run);
   const [needsAttentionOnly, setNeedsAttentionOnly] = useState(initial.needs_attention);
   const [hasMaterialWait, setHasMaterialWait] = useState(initial.has_material_wait);
@@ -882,12 +1048,13 @@ export default function ProductionPlanningBoard() {
     material_product_code: materialProductCode,
     material_readiness: materialReadiness,
     dependency_state: dependencyState,
+    ready_to_dispatch: readyToDispatch,
     ready_to_run: readyToRunOnly,
     needs_attention: needsAttentionOnly,
     has_material_wait: hasMaterialWait,
     has_previous_wait: hasPreviousWait,
     view: viewMode,
-  }), [bucketKey, capacityState, customer, deliveryDueDate, dependencyState, dispatchOwner, finishedProductCode, handoverStatus, hasMaterialWait, hasPreviousWait, machineCode, materialProductCode, materialReadiness, needsAttentionOnly, orderStatus, plannedDate, plannedShift, readyToRunOnly, riskState, salesOrderCode, search, stepCode, viewMode, workCenterCode]);
+  }), [bucketKey, capacityState, customer, deliveryDueDate, dependencyState, dispatchOwner, finishedProductCode, handoverStatus, hasMaterialWait, hasPreviousWait, machineCode, materialProductCode, materialReadiness, needsAttentionOnly, orderStatus, plannedDate, plannedShift, readyToDispatch, readyToRunOnly, riskState, salesOrderCode, search, stepCode, viewMode, workCenterCode]);
 
   const params = useMemo(() => {
     const next: Record<string, unknown> = {};
@@ -942,6 +1109,7 @@ export default function ProductionPlanningBoard() {
     if (materialProductCode.trim()) next.set('material_product_code', materialProductCode.trim());
     if (materialReadiness !== 'ALL') next.set('material_readiness', materialReadiness);
     if (dependencyState !== 'ALL') next.set('dependency_state', dependencyState);
+    if (readyToDispatch !== 'ALL') next.set('ready_to_dispatch', readyToDispatch);
     if (readyToRunOnly) next.set('ready_to_run', '1');
     if (needsAttentionOnly) next.set('needs_attention', '1');
     if (hasMaterialWait) next.set('has_material_wait', '1');
@@ -953,7 +1121,7 @@ export default function ProductionPlanningBoard() {
     if (selectedQueueKey) next.set('queue_key', selectedQueueKey);
     if (viewMode !== 'BOARD') next.set('view', viewMode);
     return next.toString();
-  }, [bucketKey, capacityState, customer, deliveryDueDate, dependencyState, dispatchOwner, finishedProductCode, focusOperationId, focusWindowDate, focusWindowShift, handoverStatus, hasMaterialWait, hasPreviousWait, machineCode, materialProductCode, materialReadiness, needsAttentionOnly, orderStatus, plannedDate, plannedShift, productionOrderId, readyToRunOnly, riskState, salesOrderCode, search, selectedQueueKey, stepCode, viewMode, workCenterCode]);
+  }, [bucketKey, capacityState, customer, deliveryDueDate, dependencyState, dispatchOwner, finishedProductCode, focusOperationId, focusWindowDate, focusWindowShift, handoverStatus, hasMaterialWait, hasPreviousWait, machineCode, materialProductCode, materialReadiness, needsAttentionOnly, orderStatus, plannedDate, plannedShift, productionOrderId, readyToDispatch, readyToRunOnly, riskState, salesOrderCode, search, selectedQueueKey, stepCode, viewMode, workCenterCode]);
 
   useEffect(() => {
     if (syncSearch !== searchParams.toString()) {
@@ -971,7 +1139,32 @@ export default function ProductionPlanningBoard() {
   });
   const workspace = workspaceQuery.data;
   const capacityOptionData = capacityOptionsQuery.data;
-  const cards = useMemo(() => flatCards(workspace), [workspace]);
+  const serverCards = useMemo(() => flatCards(workspace), [workspace]);
+  const cards = useMemo(
+    () => (readyToDispatch === 'ALL'
+      ? serverCards
+      : serverCards.filter((card) => getReadyToDispatchStatus(card) === readyToDispatch)),
+    [readyToDispatch, serverCards],
+  );
+  const displayLanes = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+    if (readyToDispatch === 'ALL') {
+      return workspace.lanes;
+    }
+    return workspace.lanes.map((lane) => {
+      const buckets = lane.buckets.map((bucket) => {
+        const bucketCards = bucket.cards.filter((card) => getReadyToDispatchStatus(card) === readyToDispatch);
+        return { ...bucket, count: bucketCards.length, cards: bucketCards };
+      });
+      return {
+        ...lane,
+        total_cards: buckets.reduce((total, bucket) => total + bucket.cards.length, 0),
+        buckets,
+      };
+    }).filter((lane) => lane.total_cards > 0);
+  }, [readyToDispatch, workspace]);
   const selectedCard = useMemo(() => {
     if (selectedCardKey) {
       const matchedByKey = cards.find((card) => card.card_key === selectedCardKey);
@@ -1014,6 +1207,9 @@ export default function ProductionPlanningBoard() {
     activeCount: activeLoadCards.length,
     inactiveDoneSkippedCount: cards.length - activeLoadCards.length,
     activeScheduledHours: activeLoadCards.reduce((total, card) => total + Number(card.capacity.scheduled_hours || 0), 0),
+    readyDispatchCount: activeLoadCards.filter((card) => getReadyToDispatchStatus(card) === 'READY').length,
+    dispatchWarningCount: activeLoadCards.filter((card) => getReadyToDispatchStatus(card) === 'WARNING').length,
+    dispatchBlockerCount: activeLoadCards.filter((card) => getReadyToDispatchStatus(card) === 'BLOCKER').length,
     readyCount: activeLoadCards.filter((card) => card.materials.ready_to_run).length,
     waitMaterialCount: activeLoadCards.filter((card) => card.materials.material_readiness === 'WAITING' || card.operation.block_reason_code === 'WAIT_MATERIAL').length,
     waitPreviousCount: activeLoadCards.filter(isDependencyBlocked).length,
@@ -1026,6 +1222,24 @@ export default function ProductionPlanningBoard() {
     unassignedResourceCount: activeLoadCards.filter((card) => card.capacity.unassigned_machine || card.capacity.unassigned_work_center).length,
     unscheduledCount: activeLoadCards.filter((card) => !card.operation.planned_date || !card.operation.planned_shift).length,
   }), [activeLoadCards, cards.length]);
+  const readyToDispatchReasonSummary = useMemo(() => {
+    const reasonCounts = new Map<string, { title: string; count: number; status: ProductionReadyToDispatchStatus }>();
+    activeLoadCards.forEach((card) => {
+      getReadyToDispatchIssues(card).forEach((issue) => {
+        const title = getReadyToDispatchIssueTitle(issue);
+        const current = reasonCounts.get(title);
+        if (current) {
+          current.count += 1;
+          if (readyToDispatchColor[issue.severity] === 'error') {
+            current.status = issue.severity;
+          }
+          return;
+        }
+        reasonCounts.set(title, { title, count: 1, status: issue.severity });
+      });
+    });
+    return [...reasonCounts.values()].sort((left, right) => right.count - left.count || left.title.localeCompare(right.title, 'vi')).slice(0, 6);
+  }, [activeLoadCards]);
   const planningWarningItems = useMemo(() => buildPlanningWarningItemsFromCounts({
     overCapacityCount: planningUsabilitySummary.overCapacityCount,
     atLimitCount: planningUsabilitySummary.atLimitCount,
@@ -1201,6 +1415,7 @@ export default function ProductionPlanningBoard() {
       dispatchOwner.trim() ? `Người phụ trách ${dispatchOwner.trim()}` : '',
       workCenterCode.trim() ? `Trung tâm công việc ${workCenterCode.trim()}` : '',
       machineCode.trim() ? `Máy ${machineCode.trim()}` : '',
+      readyToDispatch !== 'ALL' ? `Ready dispatch ${readyToDispatch}` : '',
       readyToRunOnly ? 'Chỉ sẵn chạy' : '',
       needsAttentionOnly ? 'Chỉ cần xử lý' : '',
       hasMaterialWait ? 'Chỉ chờ vật tư' : '',
@@ -1208,13 +1423,16 @@ export default function ProductionPlanningBoard() {
       productionOrderId.trim() ? `LSX ${productionOrderId.trim()}` : '',
     ].filter(Boolean);
     return tags.length ? tags.join(' | ') : 'Toàn bộ planner';
-  }, [bucketKey, capacityState, deliveryDueDate, dispatchOwner, handoverStatus, hasMaterialWait, hasPreviousWait, machineCode, needsAttentionOnly, plannedDate, plannedShift, productionOrderId, readyToRunOnly, search, shiftFilterOptions, stepCode, workCenterCode]);
+  }, [bucketKey, capacityState, deliveryDueDate, dispatchOwner, handoverStatus, hasMaterialWait, hasPreviousWait, machineCode, needsAttentionOnly, plannedDate, plannedShift, productionOrderId, readyToDispatch, readyToRunOnly, search, shiftFilterOptions, stepCode, workCenterCode]);
   const plannerHandoverPack = useMemo(() => {
     const watchItems = (workspace?.watchlist ?? []).slice(0, 4);
     return [
       'GOI BAN GIAO PLANNER',
       `Bộ lọc: ${plannerFilterSummary}`,
       `Tổng công đoạn: ${workspace?.summary.total_operations ?? 0}`,
+      `Ready dispatch: ${workspace?.summary.ready_to_dispatch_count ?? planningUsabilitySummary.readyDispatchCount}`,
+      `Warning dispatch: ${workspace?.summary.dispatch_warning_count ?? planningUsabilitySummary.dispatchWarningCount}`,
+      `Blocker dispatch: ${workspace?.summary.dispatch_blocker_count ?? planningUsabilitySummary.dispatchBlockerCount}`,
       `Quá hạn: ${workspace?.summary.overdue_operations ?? 0}`,
       `Sẵn chạy: ${workspace?.summary.ready_to_run_count ?? 0}`,
       `Chờ vật tư: ${workspace?.summary.wait_material_count ?? 0}`,
@@ -1228,7 +1446,7 @@ export default function ProductionPlanningBoard() {
         `- ${card.order.code} | ${card.operation.step_code} | ${card.exceptions.risk_state_label} | ${card.operation.planned_shift_label || 'Chưa xếp ca'}`
       )),
     ].filter(Boolean);
-  }, [plannerFilterSummary, workspace]);
+  }, [plannerFilterSummary, planningUsabilitySummary.dispatchBlockerCount, planningUsabilitySummary.dispatchWarningCount, planningUsabilitySummary.readyDispatchCount, workspace]);
   const plannerHandoverRoute = useMemo(() => {
     const selectedPairs = activeSelectedCardKeys
       .map((cardKey) => cards.find((card) => card.card_key === cardKey))
@@ -1377,6 +1595,7 @@ export default function ProductionPlanningBoard() {
     risk_state: riskState,
     bucket_key: bucketKey,
     dependency_state: dependencyState,
+    ready_to_dispatch: readyToDispatch,
     ready_to_run: readyToRunOnly,
     needs_attention: needsAttentionOnly,
     has_material_wait: hasMaterialWait,
@@ -1390,6 +1609,7 @@ export default function ProductionPlanningBoard() {
     setRiskState(saved.risk_state);
     setBucketKey(saved.bucket_key);
     setDependencyState(saved.dependency_state);
+    setReadyToDispatch(saved.ready_to_dispatch);
     setReadyToRunOnly(saved.ready_to_run);
     setNeedsAttentionOnly(saved.needs_attention);
     setHasMaterialWait(saved.has_material_wait);
@@ -1408,6 +1628,7 @@ export default function ProductionPlanningBoard() {
       setRiskState('ALL');
       setBucketKey('ALL');
       setDependencyState('ALL');
+      setReadyToDispatch('ALL');
     }
     setActiveDispatchPreset(null);
     setDispatchPresetBase(null);
@@ -1418,6 +1639,18 @@ export default function ProductionPlanningBoard() {
     setDispatchPresetBase(base);
     setActiveDispatchPreset(preset);
     setViewMode('BOARD');
+    if (preset === 'DISPATCH_READY') {
+      setReadyToDispatch('READY');
+      return;
+    }
+    if (preset === 'DISPATCH_WARNING') {
+      setReadyToDispatch('WARNING');
+      return;
+    }
+    if (preset === 'DISPATCH_BLOCKER') {
+      setReadyToDispatch('BLOCKER');
+      return;
+    }
     if (preset === 'READY_TO_RUN') {
       setReadyToRunOnly(true);
       return;
@@ -1448,6 +1681,15 @@ export default function ProductionPlanningBoard() {
     setHasPreviousWait(true);
   };
   const isDispatchPresetFilterActive = (preset: DispatchPresetKey) => {
+    if (preset === 'DISPATCH_READY') {
+      return readyToDispatch === 'READY';
+    }
+    if (preset === 'DISPATCH_WARNING') {
+      return readyToDispatch === 'WARNING';
+    }
+    if (preset === 'DISPATCH_BLOCKER') {
+      return readyToDispatch === 'BLOCKER';
+    }
     if (preset === 'READY_TO_RUN') {
       return readyToRunOnly;
     }
@@ -1469,6 +1711,9 @@ export default function ProductionPlanningBoard() {
     activeDispatchPreset === preset || (!activeDispatchPreset && isDispatchPresetFilterActive(preset))
   );
   const getDispatchPresetCount = (preset: DispatchPresetKey) => {
+    if (preset === 'DISPATCH_READY') return planningUsabilitySummary.readyDispatchCount;
+    if (preset === 'DISPATCH_WARNING') return planningUsabilitySummary.dispatchWarningCount;
+    if (preset === 'DISPATCH_BLOCKER') return planningUsabilitySummary.dispatchBlockerCount;
     if (preset === 'READY_TO_RUN') return planningUsabilitySummary.readyCount;
     if (preset === 'UNASSIGNED_RESOURCE') return planningUsabilitySummary.unassignedResourceCount;
     if (preset === 'UNSCHEDULED_SCHEDULE') return planningUsabilitySummary.unscheduledCount;
@@ -1477,6 +1722,15 @@ export default function ProductionPlanningBoard() {
     return planningUsabilitySummary.waitPreviousCount;
   };
   const getDispatchPresetDetail = (preset: DispatchPresetKey) => {
+    if (preset === 'DISPATCH_READY') {
+      return 'Advisory sạch, chưa chặn workflow';
+    }
+    if (preset === 'DISPATCH_WARNING') {
+      return 'Cần rà vật tư, lịch, tài nguyên hoặc metadata';
+    }
+    if (preset === 'DISPATCH_BLOCKER') {
+      return 'Cần xử lý readiness/dependency/block reason';
+    }
     if (preset === 'UNASSIGNED_RESOURCE') {
       return `Máy ${planningUsabilitySummary.unassignedMachineCount} · Tổ ${planningUsabilitySummary.unassignedWorkCenterCount}`;
     }
@@ -1782,6 +2036,9 @@ export default function ProductionPlanningBoard() {
     }
     if (data.impact.ready_to_run_changed) {
       highlights.push(data.preview.materials.ready_to_run ? 'Công đoạn sẽ sang trạng thái sẵn chạy.' : 'Công đoạn không còn sẵn chạy.');
+    }
+    if (data.impact.ready_to_dispatch_changed) {
+      highlights.push(`Ready-to-dispatch: ${getReadyToDispatchStatus(data.current)} -> ${getReadyToDispatchStatus(data.preview)}.`);
     }
     if (data.impact.needs_attention_changed) {
       highlights.push(data.preview.exceptions.needs_attention ? 'Cần xử lý liên phòng ban sau khi đổi lịch.' : 'Mức cần xử lý sẽ giảm sau khi cập nhật.');
@@ -2509,6 +2766,7 @@ export default function ProductionPlanningBoard() {
     const stepLabel = card.operation.display_step ?? card.operation.route_step_no;
     return (
       <Space wrap size={4}>
+        {renderReadyToDispatchTag(card)}
         <Tooltip title={readiness.reason}>
           <Tag color={readiness.color}>{readiness.label}</Tag>
         </Tooltip>
@@ -2546,6 +2804,17 @@ export default function ProductionPlanningBoard() {
           <span>{`${card.operation.step_code} · ${card.operation.step_name}`}</span>
           {renderOperationMetaTags(card)}
           <Text type="secondary">{card.exceptions.dependency_state_label}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: 'Ready dispatch',
+      key: 'ready-to-dispatch',
+      width: 220,
+      render: (_, card) => (
+        <Space direction="vertical" size={6}>
+          {renderReadyToDispatchTag(card)}
+          {renderReadyToDispatchDetails(card, 2)}
         </Space>
       ),
     },
@@ -2643,6 +2912,7 @@ export default function ProductionPlanningBoard() {
     materialProductCode.trim() ? { key: 'material_product_code', label: `NVL: ${materialProductCode.trim()}`, onClose: () => setMaterialProductCode('') } : null,
     materialReadiness !== 'ALL' ? { key: 'material_readiness', label: `Vật tư: ${materialOptions.find((item) => item.value === materialReadiness)?.label || materialReadiness}`, onClose: () => setMaterialReadiness('ALL') } : null,
     dependencyState !== 'ALL' ? { key: 'dependency_state', label: `Phụ thuộc: ${dependencyOptions.find((item) => item.value === dependencyState)?.label || dependencyState}`, onClose: () => setDependencyState('ALL') } : null,
+    readyToDispatch !== 'ALL' ? { key: 'ready_to_dispatch', label: `Ready dispatch: ${readyToDispatch}`, onClose: () => setReadyToDispatch('ALL') } : null,
     readyToRunOnly ? { key: 'ready_to_run', label: 'Chỉ sẵn chạy', onClose: () => setReadyToRunOnly(false) } : null,
     needsAttentionOnly ? { key: 'needs_attention', label: 'Chỉ cần xử lý', onClose: () => setNeedsAttentionOnly(false) } : null,
     hasMaterialWait ? { key: 'has_material_wait', label: 'Chỉ thiếu vật tư', onClose: () => setHasMaterialWait(false) } : null,
@@ -2673,6 +2943,7 @@ export default function ProductionPlanningBoard() {
     setMaterialProductCode(saved.material_product_code || '');
     setMaterialReadiness(normalizeMaterial(saved.material_readiness));
     setDependencyState(normalizeDependency(saved.dependency_state));
+    setReadyToDispatch(normalizeReadyToDispatch(saved.ready_to_dispatch ?? null));
     setReadyToRunOnly(Boolean(saved.ready_to_run));
     setNeedsAttentionOnly(Boolean(saved.needs_attention));
     setHasMaterialWait(Boolean(saved.has_material_wait));
@@ -2705,6 +2976,7 @@ export default function ProductionPlanningBoard() {
       material_product_code: '',
       material_readiness: 'ALL',
       dependency_state: 'ALL',
+      ready_to_dispatch: 'ALL',
       ready_to_run: false,
       needs_attention: false,
       has_material_wait: false,
@@ -2909,6 +3181,8 @@ export default function ProductionPlanningBoard() {
       'Work center': card.capacity.work_center_name || card.capacity.work_center_code || '',
       'Máy': card.capacity.machine_name || card.capacity.machine_code || '',
       'Công suất': card.capacity.capacity_state_label,
+      'Ready dispatch': getReadyToDispatchStatus(card),
+      'Lý do ready dispatch': getReadyToDispatchSummary(card),
       'Rủi ro': card.exceptions.risk_state_label,
       'Vật tư': card.materials.material_readiness_label,
     })), 'ban-ke-hoach-cong-doan');
@@ -2966,6 +3240,30 @@ export default function ProductionPlanningBoard() {
             ) : (
               <Alert type="success" showIcon message="Chưa có cảnh báo điều độ lớn trong bộ lọc hiện tại." description="Planner chỉ tính tải active; DONE/SKIPPED vẫn hiển thị để đối chiếu nhưng không làm tăng tải." />
             )}
+          </Card>
+          <Card
+            size="small"
+            data-testid="production-planning-ready-to-dispatch-panel"
+            title="Ready-to-dispatch advisory"
+            extra={<Tag color={planningUsabilitySummary.dispatchBlockerCount ? 'error' : planningUsabilitySummary.dispatchWarningCount ? 'gold' : 'success'}>Chỉ cảnh báo</Tag>}
+          >
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <Space wrap>
+                <Tag color="success">{`READY ${planningUsabilitySummary.readyDispatchCount}`}</Tag>
+                <Tag color="gold">{`WARNING ${planningUsabilitySummary.dispatchWarningCount}`}</Tag>
+                <Tag color="error">{`BLOCKER ${planningUsabilitySummary.dispatchBlockerCount}`}</Tag>
+              </Space>
+              <Text type="secondary">
+                Kết hợp product/routing readiness, dependency, block reason, DONE/SKIPPED, lịch/ca, máy/tổ, công suất, vật tư/tồn nguồn và print metadata. Trạng thái này chưa chặn workflow.
+              </Text>
+              <Space wrap>
+                {readyToDispatchReasonSummary.length ? readyToDispatchReasonSummary.map((item) => (
+                  <Tag key={item.title} color={readyToDispatchColor[item.status]}>
+                    {`${item.title}: ${item.count}`}
+                  </Tag>
+                )) : <Tag color="success">Không có lý do cảnh báo</Tag>}
+              </Space>
+            </Space>
           </Card>
           <Card
             size="small"
@@ -3079,6 +3377,9 @@ export default function ProductionPlanningBoard() {
             <Card size="small"><Statistic title="Tổng lệnh" value={workspace?.summary.total_orders ?? 0} /></Card>
             <Card size="small"><Statistic title="Active" value={planningUsabilitySummary.activeCount} /></Card>
             <Card size="small"><Statistic title="DONE/SKIPPED" value={planningUsabilitySummary.inactiveDoneSkippedCount} valueStyle={{ color: '#722ed1' }} /></Card>
+            <Card size="small"><Statistic title="READY dispatch" value={planningUsabilitySummary.readyDispatchCount} valueStyle={{ color: '#389e0d' }} /></Card>
+            <Card size="small"><Statistic title="WARNING dispatch" value={planningUsabilitySummary.dispatchWarningCount} valueStyle={{ color: '#d48806' }} /></Card>
+            <Card size="small"><Statistic title="BLOCKER dispatch" value={planningUsabilitySummary.dispatchBlockerCount} valueStyle={{ color: '#cf1322' }} /></Card>
             <Card size="small"><Statistic title="Quá hạn active" value={planningUsabilitySummary.overdueCount} valueStyle={{ color: '#cf1322' }} /></Card>
             <Card size="small"><Statistic title="Sẵn chạy active" value={planningUsabilitySummary.readyCount} valueStyle={{ color: '#1677ff' }} /></Card>
             <Card size="small"><Statistic title="Chờ vật tư active" value={planningUsabilitySummary.waitMaterialCount} valueStyle={{ color: '#d48806' }} /></Card>
@@ -3099,6 +3400,15 @@ export default function ProductionPlanningBoard() {
             </Button>
             <Button type={bucketKey === 'UNSCHEDULED' ? 'primary' : 'default'} onClick={() => { setBucketKey(bucketKey === 'UNSCHEDULED' ? 'ALL' : 'UNSCHEDULED'); setNeedsAttentionOnly(false); }}>
               Chưa xếp ({planningUsabilitySummary.unscheduledCount})
+            </Button>
+            <Button type={readyToDispatch === 'READY' ? 'primary' : 'default'} onClick={() => setReadyToDispatch((current) => (current === 'READY' ? 'ALL' : 'READY'))} data-testid="production-planning-quick-dispatch-ready">
+              READY dispatch ({planningUsabilitySummary.readyDispatchCount})
+            </Button>
+            <Button type={readyToDispatch === 'WARNING' ? 'primary' : 'default'} onClick={() => setReadyToDispatch((current) => (current === 'WARNING' ? 'ALL' : 'WARNING'))} data-testid="production-planning-quick-dispatch-warning">
+              WARNING dispatch ({planningUsabilitySummary.dispatchWarningCount})
+            </Button>
+            <Button type={readyToDispatch === 'BLOCKER' ? 'primary' : 'default'} onClick={() => setReadyToDispatch((current) => (current === 'BLOCKER' ? 'ALL' : 'BLOCKER'))} data-testid="production-planning-quick-dispatch-blocker">
+              BLOCKER dispatch ({planningUsabilitySummary.dispatchBlockerCount})
             </Button>
             <Button type={readyToRunOnly ? 'primary' : 'default'} onClick={() => setReadyToRunOnly((current) => !current)} data-testid="production-planning-quick-ready">
               Sẵn chạy ({planningUsabilitySummary.readyCount})
@@ -4073,9 +4383,9 @@ export default function ProductionPlanningBoard() {
       {viewMode === 'BOARD' ? (
         <section className="command-center-panel" data-testid="production-planning-board">
           <div className="command-center-panel-header"><div><div className="command-center-panel-kicker">Swimlane theo công đoạn</div><div className="command-center-panel-title">Điều độ từng bước sản xuất</div><div className="command-center-panel-subtitle">Trong mỗi lane, thẻ được nhóm theo quá hạn, hôm nay, ngày mai, sắp tới và chưa xếp.</div></div></div>
-          {workspace?.lanes.length ? (
+          {displayLanes.length ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {workspace.lanes.map((lane) => (
+              {displayLanes.map((lane) => (
                 <Card
                   key={lane.key}
                   size="small"
@@ -4103,6 +4413,7 @@ export default function ProductionPlanningBoard() {
                                 <Tooltip title={getOperationReadinessMeta(card).reason}>
                                   <Tag color={getOperationReadinessMeta(card).color}>{getOperationReadinessMeta(card).label}</Tag>
                                 </Tooltip>
+                                {renderReadyToDispatchTag(card)}
                                 {renderOperationStatusTag(card.operation)}
                                 <Tag color={readinessColor[card.materials.material_readiness]}>{card.materials.material_readiness_label}</Tag>
                                 <Tag color={getCapacityColor(card.capacity.capacity_state)}>{card.capacity.capacity_state_label}</Tag>
@@ -4133,6 +4444,7 @@ export default function ProductionPlanningBoard() {
                             <div style={{ color: 'rgba(0,0,0,0.65)', fontSize: 12 }}>{`${card.capacity.work_center_name || card.capacity.work_center_code || 'Chưa gán WC'} · ${card.capacity.machine_name || card.capacity.machine_code || 'Chưa gán máy'} · ${formatHours(card.capacity.scheduled_hours)}`}</div>
                             <Progress percent={getOperationProgressPercent(card)} size="small" showInfo={false} />
                             <div style={{ color: 'rgba(0,0,0,0.65)', fontSize: 12 }}>{`${card.exceptions.dependency_state_label} · Còn thiếu ${formatQty(card.materials.remaining_issue_qty)} · Tải ${formatCapacityLoad(card.capacity.work_center_load_ratio)}`}</div>
+                            <div>{renderReadyToDispatchDetails(card, 3)}</div>
                             <div style={{ color: 'rgba(0,0,0,0.65)', fontSize: 12 }}>{`${formatDaysToDelivery(card.exceptions.days_to_delivery)} · ${formatDeliveryGap(card.exceptions.delivery_gap_days)}`}</div>
                           </div>
                         )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có thẻ trong bucket này." />}
@@ -4157,7 +4469,7 @@ export default function ProductionPlanningBoard() {
             dataSource={cards}
             loading={workspaceQuery.isFetching}
             pagination={{ pageSize: 12, showSizeChanger: true }}
-            scroll={{ x: 1600 }}
+            scroll={{ x: 1780 }}
             locale={{ emptyText: <Empty description="Chưa có thẻ planner nào theo bộ lọc hiện tại." image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
           />
         </section>
@@ -4188,6 +4500,7 @@ export default function ProductionPlanningBoard() {
             <Select value={orderStatus} onChange={(value) => setOrderStatus(value as OrderStatusFilter)} options={orderStatusOptions} style={{ width: 180 }} data-testid="production-planning-order-status-filter" />
             <Select value={materialReadiness} onChange={(value) => setMaterialReadiness(value as MaterialFilter)} options={materialOptions} style={{ width: 180 }} />
             <Select value={dependencyState} onChange={(value) => setDependencyState(value as DependencyFilter)} options={dependencyOptions} style={{ width: 200 }} />
+            <Select value={readyToDispatch} onChange={(value) => setReadyToDispatch(value as DispatchReadinessFilter)} options={readyToDispatchOptions} style={{ width: 190 }} data-testid="production-planning-ready-to-dispatch-filter" />
           </div>
           <div className="workspace-toolbar-group">
             <Input value={dispatchOwner} onChange={(event) => setDispatchOwner(event.target.value)} placeholder="Người phụ trách floor" style={{ width: 200 }} data-testid="production-planning-dispatch-owner-filter" />
@@ -4811,6 +5124,7 @@ export default function ProductionPlanningBoard() {
               description={`${selectedCard.sales.customer_name || selectedCard.sales.sales_order_code || 'Chưa gắn SO'} · Hạn giao ${formatDate(selectedCard.sales.delivery_due_date)}`}
             />
             <Space wrap>
+              {renderReadyToDispatchTag(selectedCard)}
               <Tag color={riskColor[selectedCard.exceptions.risk_state]}>{selectedCard.exceptions.risk_state_label}</Tag>
               <Tag color={readinessColor[selectedCard.materials.material_readiness]}>{selectedCard.materials.material_readiness_label}</Tag>
               <Tag color={dependencyColor[selectedCard.exceptions.dependency_state]}>{selectedCard.exceptions.dependency_state_label}</Tag>
@@ -4826,6 +5140,16 @@ export default function ProductionPlanningBoard() {
               {selectedCard.shop_floor.handover_status ? <Tag color={getHandoverColor(selectedCard.shop_floor.handover_status)}>{selectedCard.shop_floor.handover_status_label}</Tag> : null}
               {selectedCard.operation.block_reason_label ? <Tag color="volcano">{selectedCard.operation.block_reason_label}</Tag> : null}
             </Space>
+            <Card size="small" title="Ready-to-dispatch advisory" data-testid="production-planning-ready-to-dispatch-detail">
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                <Space wrap>
+                  {renderReadyToDispatchTag(selectedCard)}
+                  <Tag color="default">Chỉ cảnh báo, chưa chặn workflow</Tag>
+                </Space>
+                <Text type="secondary">{getReadyToDispatchSummary(selectedCard)}</Text>
+                {renderReadyToDispatchDetails(selectedCard, 8)}
+              </Space>
+            </Card>
             <Card size="small" title="Cảnh báo cần xử lý" data-testid="production-planning-detail-warning-panel">
               {selectedCardWarnings.length ? (
                 <List
@@ -5001,6 +5325,7 @@ export default function ProductionPlanningBoard() {
                       <Tag color={previewQuery.data.preview.materials.ready_to_run ? 'success' : readinessColor[previewQuery.data.preview.materials.material_readiness]}>
                         {previewQuery.data.preview.materials.ready_to_run ? 'Sẵn chạy' : previewQuery.data.preview.materials.material_readiness_label}
                       </Tag>
+                      {renderReadyToDispatchTag(previewQuery.data.preview)}
                       <Tag>{`${previewQuery.data.current.bucket.label} -> ${previewQuery.data.preview.bucket.label}`}</Tag>
                       <Tag>{`${previewQuery.data.current.operation.planned_shift_label || 'Chưa xếp ca'} -> ${previewQuery.data.preview.operation.planned_shift_label || 'Chưa xếp ca'}`}</Tag>
                       <Tag color={getCapacityColor(previewQuery.data.preview.capacity.capacity_state)}>

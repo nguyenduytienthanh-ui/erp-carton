@@ -20,6 +20,7 @@ export type ProductionOperationBlockReasonCode =
   | 'MACHINE_DOWN'
   | 'OTHER';
 export type ProductionOperationMaterialReadiness = 'READY' | 'PARTIAL' | 'WAITING';
+export type ProductionReadyToDispatchStatus = 'READY' | 'WARNING' | 'BLOCKER';
 export type ProductionOperationDependencyState = 'ROOT' | 'CLEAR' | 'WAIT_PREVIOUS_STEP';
 export type ProductionOperationRiskState = 'DONE' | 'UNSCHEDULED' | 'OVERDUE' | 'BLOCKED' | 'AT_RISK' | 'ON_TRACK';
 export type ProductionIssueStatus = 'POSTED' | 'CANCELLED';
@@ -255,6 +256,44 @@ export interface ProductionOperationSkipResponse {
   production_demand?: ProductionDemand | null;
 }
 
+export interface ProductionReadinessIssue {
+  code: string;
+  severity: ProductionReadyToDispatchStatus;
+  category: string;
+  message: string;
+  workflow_blocking?: boolean;
+  details?: Record<string, unknown>;
+}
+
+export interface ProductionProductRoutingReadiness {
+  product_id?: number | null;
+  product_code?: string | null;
+  product_name?: string | null;
+  status: ProductionReadyToDispatchStatus;
+  is_ready: boolean;
+  workflow_blocking: boolean;
+  summary: Record<string, string | number | boolean | null | undefined>;
+  issues: ProductionReadinessIssue[];
+  rules?: Record<string, unknown>;
+}
+
+export interface ProductionReadyToDispatchAdvisory {
+  status: ProductionReadyToDispatchStatus;
+  is_ready: boolean;
+  workflow_blocking: boolean;
+  summary: {
+    blocker_count: number;
+    warning_count: number;
+    issue_count: number;
+    product_readiness_status?: ProductionReadyToDispatchStatus | string;
+    material_readiness?: ProductionOperationMaterialReadiness | string;
+    dependency_state?: ProductionOperationDependencyState | string;
+    capacity_state?: ProductionCapacityState | string;
+  };
+  issues: ProductionReadinessIssue[];
+  rules?: Record<string, unknown>;
+}
+
 export interface ProductionPlanningCard {
   card_key: string;
   bucket: {
@@ -295,6 +334,7 @@ export interface ProductionPlanningCard {
     issue_count: number;
     receipt_count: number;
     ready_to_run: boolean;
+    source_availability_issues?: ProductionReadinessIssue[];
   };
   exceptions: {
     risk_state: ProductionOperationRiskState;
@@ -352,6 +392,8 @@ export interface ProductionPlanningCard {
     production_receipt_url: string;
     scan_center_url: string;
   };
+  product_readiness?: ProductionProductRoutingReadiness | Record<string, never>;
+  ready_to_dispatch?: ProductionReadyToDispatchAdvisory;
 }
 
 export interface ProductionPlanningLaneBucket {
@@ -656,6 +698,9 @@ export interface ProductionPlanningSummary {
   total_operations: number;
   overdue_operations: number;
   ready_to_run_count: number;
+  ready_to_dispatch_count?: number;
+  dispatch_warning_count?: number;
+  dispatch_blocker_count?: number;
   wait_material_count: number;
   wait_previous_step_count: number;
   machine_down_count: number;
@@ -673,6 +718,7 @@ export interface ProductionPlanningSummary {
   bucket_counts: Record<ProductionPlanningBucketKey, number>;
   risk_counts: Record<ProductionOperationRiskState, number>;
   capacity_state_counts: Record<ProductionCapacityState, number>;
+  dispatch_status_counts?: Record<ProductionReadyToDispatchStatus, number>;
   total_runtime_hours: string;
   total_setup_hours: string;
   total_scheduled_hours: string;
@@ -812,6 +858,7 @@ export interface ProductionPlanningPreviewResponse {
     bucket_changed: boolean;
     risk_changed: boolean;
     ready_to_run_changed: boolean;
+    ready_to_dispatch_changed?: boolean;
     needs_attention_changed: boolean;
     days_to_delivery_delta?: number | null;
     delivery_gap_delta?: number | null;
@@ -877,6 +924,10 @@ export interface ProductionCapacityOptionsResponse {
 export interface ProductionPlanningBulkPreviewSummary {
   total_operations: number;
   ready_to_run_count: number;
+  ready_to_dispatch_count?: number;
+  dispatch_warning_count?: number;
+  dispatch_blocker_count?: number;
+  dispatch_status_counts?: Record<ProductionReadyToDispatchStatus, number>;
   needs_attention_count: number;
   blocked_count: number;
   overdue_count: number;
@@ -898,6 +949,7 @@ export interface ProductionPlanningBulkPreviewOperationImpact {
   bucket_changed: boolean;
   risk_changed: boolean;
   ready_to_run_changed: boolean;
+  ready_to_dispatch_changed?: boolean;
   needs_attention_changed: boolean;
   delivery_gap_delta?: number | null;
   handover_status_changed: boolean;
@@ -1025,6 +1077,9 @@ export interface ProductionPlannerDigestMaterialFocus {
 export interface ProductionPlannerDigest {
   overdue_operations: number;
   ready_to_run_count: number;
+  ready_to_dispatch_count?: number;
+  dispatch_warning_count?: number;
+  dispatch_blocker_count?: number;
   wait_material_count: number;
   wait_previous_step_count: number;
   machine_down_count: number;
