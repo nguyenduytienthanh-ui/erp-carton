@@ -6,7 +6,7 @@ import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { inventoryApi } from '../../api/inventory';
 import { productsApi } from '../../api/products';
-import type { InventoryNxtReportRow, InventoryTransaction } from '../../types/inventory';
+import type { InventoryNxtReportRow, InventorySourceType, InventoryTransaction } from '../../types/inventory';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
@@ -22,7 +22,7 @@ type Filters = {
   status?: InventoryTransaction['status'];
   transaction_date__gte?: string;
   transaction_date__lte?: string;
-  source_type?: string;
+  source_type?: InventorySourceType;
 };
 
 type InventoryTransactionViewSnapshot = {
@@ -33,7 +33,7 @@ type InventoryTransactionViewSnapshot = {
   status?: InventoryTransaction['status'];
   transaction_date__gte?: string;
   transaction_date__lte?: string;
-  source_type?: string;
+  source_type?: InventorySourceType;
 };
 
 type InventoryTransactionNamedPreset = {
@@ -105,7 +105,10 @@ const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({
 }));
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
+  PURCHASE: 'Mua hàng',
+  PRODUCTION: 'Sản xuất',
   STOCKTAKE: 'Kiểm tồn',
+  TRANSFER: 'Chuyển kho',
   RESERVATION: 'Giữ chỗ',
   SALES: 'Đơn bán',
   SHIPMENT: 'Giao hàng',
@@ -113,9 +116,46 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
 };
 
 const SOURCE_TYPE_OPTIONS = Object.entries(SOURCE_TYPE_LABELS).map(([value, label]) => ({
-  value,
+  value: value as InventorySourceType,
   label,
 }));
+
+const SOURCE_TYPE_COLORS: Record<InventorySourceType, string> = {
+  PURCHASE: 'green',
+  PRODUCTION: 'orange',
+  STOCKTAKE: 'purple',
+  TRANSFER: 'processing',
+  RESERVATION: 'blue',
+  SALES: 'geekblue',
+  SHIPMENT: 'cyan',
+  MANUAL: 'default',
+};
+
+const SOURCE_DOCUMENT_LABELS: Record<string, string> = {
+  PURCHASE_RECEIPT: 'Phiếu nhập mua',
+  PURCHASE_ORDER: 'Đơn mua',
+  PURCHASE_REFERENCE: 'Tham chiếu mua hàng',
+  PRODUCTION_ISSUE: 'Cấp vật tư sản xuất',
+  PRODUCTION_RECEIPT: 'Nhập thành phẩm',
+  PRODUCTION_ORDER: 'Lệnh sản xuất',
+  PRODUCTION_REFERENCE: 'Tham chiếu sản xuất',
+  STOCKTAKE: 'Kiểm tồn',
+  TRANSFER_TRANSACTION: 'Chuyển kho thủ công',
+  WAREHOUSE_TRANSFER_REFERENCE: 'Phiếu chuyển kho',
+  RESERVATION: 'Giữ chỗ',
+  SHIPMENT: 'Giao hàng',
+  SALES_ORDER: 'Đơn bán',
+  MANUAL: 'Thủ công',
+};
+
+const SOURCE_WARNING_LABELS: Record<string, string> = {
+  PURCHASE_RECEIPT_LINK_MISSING: 'Thiếu link phiếu nhập',
+  PRODUCTION_DOCUMENT_LINK_MISSING: 'Thiếu chứng từ sản xuất',
+  TRANSFER_TARGET_WAREHOUSE_MISSING: 'Thiếu kho đích',
+  TRANSFER_REFERENCE_ONLY: 'Nhận diện từ tham chiếu',
+  PURCHASE_REFERENCE_ONLY: 'Nhận diện từ tham chiếu',
+  PRODUCTION_REFERENCE_ONLY: 'Nhận diện từ tham chiếu',
+};
 
 const emptyForm: FormValues = {
   transaction_type: 'RECEIPT',
@@ -162,7 +202,7 @@ function parseViewSnapshot(value: unknown): InventoryTransactionViewSnapshot | n
     status: typeof obj.status === 'string' ? (obj.status as InventoryTransaction['status']) : undefined,
     transaction_date__gte: typeof obj.transaction_date__gte === 'string' ? obj.transaction_date__gte : undefined,
     transaction_date__lte: typeof obj.transaction_date__lte === 'string' ? obj.transaction_date__lte : undefined,
-    source_type: typeof obj.source_type === 'string' ? obj.source_type : undefined,
+    source_type: typeof obj.source_type === 'string' ? (obj.source_type as InventorySourceType) : undefined,
   };
 }
 
@@ -189,6 +229,44 @@ function getTransactionSource(row: InventoryTransaction): { label: string; color
     return { label: 'Đơn bán', color: 'geekblue', detail: row.sales_order_code };
   }
   return { label: 'Thủ công', color: 'default', detail: row.reference || row.reason || null };
+}
+
+function getSourceTypeLabel(value?: string | null): string {
+  if (!value) return '';
+  return SOURCE_TYPE_LABELS[value] ?? value;
+}
+
+function getSourceDocumentLabel(value?: string | null): string {
+  if (!value) return '';
+  return SOURCE_DOCUMENT_LABELS[value] ?? value;
+}
+
+function getSourceWarningLabels(values?: string[] | null): string[] {
+  return (values ?? []).map((value) => SOURCE_WARNING_LABELS[value] ?? value);
+}
+
+function getSourceDisplay(row: InventoryTransaction): {
+  label: string;
+  color: string;
+  detail?: string | null;
+  documentLabel?: string;
+  reference?: string;
+  warnings: string[];
+} {
+  const audit = row.source_audit;
+  const sourceType = row.source_type ?? audit?.type;
+  if (!sourceType) {
+    return { ...getTransactionSource(row), warnings: [] };
+  }
+  const warnings = row.source_warnings ?? audit?.warning_flags ?? [];
+  return {
+    label: row.source_label ?? audit?.label ?? getSourceTypeLabel(sourceType),
+    color: SOURCE_TYPE_COLORS[sourceType] ?? 'default',
+    detail: row.source_code ?? audit?.code ?? (row.reference || null),
+    documentLabel: getSourceDocumentLabel(row.source_document_type ?? audit?.document_type),
+    reference: audit?.reference || row.reference || '',
+    warnings: getSourceWarningLabels(warnings),
+  };
 }
 
 export default function InventoryTransactionList() {
@@ -369,7 +447,7 @@ export default function InventoryTransactionList() {
       tags.push(`Kỳ: ${filters.transaction_date__gte || '...'} - ${filters.transaction_date__lte || '...'}`);
     }
     if (filters.source_type) {
-      tags.push(`Nguồn: ${SOURCE_TYPE_LABELS[filters.source_type] ?? filters.source_type}`);
+      tags.push(`Nguồn: ${getSourceTypeLabel(filters.source_type)}`);
     }
     return tags;
   }, [
@@ -548,7 +626,7 @@ export default function InventoryTransactionList() {
     }
     downloadCSV(
       rows.map((row) => {
-        const source = getTransactionSource(row);
+        const source = getSourceDisplay(row);
         return {
           'Mã CT': row.code,
           Ngày: row.transaction_date,
@@ -562,7 +640,10 @@ export default function InventoryTransactionList() {
           'Đơn giá vốn': row.unit_cost,
           'Giá trị': row.amount ?? '',
           'Nguồn chứng từ': source.label,
+          'Loại chứng từ nguồn': source.documentLabel ?? '',
           'Mã nguồn': source.detail ?? '',
+          'Tham chiếu nguồn': source.reference ?? '',
+          'Cảnh báo nguồn': source.warnings.join('; '),
           'Tham chiếu': row.reference,
           'Lý do': row.reason,
           'Ghi chú': row.note,
@@ -654,11 +735,21 @@ export default function InventoryTransactionList() {
       title: 'Nguồn chứng từ',
       width: 180,
       render: (_, row) => {
-        const source = getTransactionSource(row);
+        const source = getSourceDisplay(row);
         return (
-          <Space direction="vertical" size={2}>
+          <Space data-testid={`inventory-source-audit-${row.id}`} direction="vertical" size={2}>
             <Tag color={source.color}>{source.label}</Tag>
+            {source.documentLabel ? <Text type="secondary">{source.documentLabel}</Text> : null}
             {source.detail ? <Text type="secondary">{source.detail}</Text> : null}
+            {source.warnings.length > 0 ? (
+              <Space size={4} wrap>
+                {source.warnings.map((warning) => (
+                  <Tag key={warning} color="warning" style={{ marginInlineEnd: 0 }}>
+                    {warning}
+                  </Tag>
+                ))}
+              </Space>
+            ) : null}
           </Space>
         );
       },

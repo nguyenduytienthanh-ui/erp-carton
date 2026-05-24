@@ -8,6 +8,15 @@ export type InventoryTransactionType =
 export type InventoryTransactionStatus = 'POSTED' | 'CANCELLED';
 export type InventoryReservationStatus = 'OPEN' | 'RELEASED' | 'FULFILLED' | 'CANCELLED';
 export type WarehouseLocationType = 'STORAGE' | 'STAGING' | 'SHIPPING' | 'RETURN' | 'PRODUCTION' | 'OTHER';
+export type InventorySourceType =
+  | 'PURCHASE'
+  | 'PRODUCTION'
+  | 'STOCKTAKE'
+  | 'TRANSFER'
+  | 'RESERVATION'
+  | 'SHIPMENT'
+  | 'SALES'
+  | 'MANUAL';
 
 export interface PaginatedResponse<T> {
   count: number;
@@ -47,6 +56,38 @@ export interface WarehouseLocation {
   updated_at: string;
 }
 
+export interface InventorySourceAuditRelated {
+  purchase_order_id?: number | null;
+  purchase_order_code?: string | null;
+  purchase_receipt_id?: number | null;
+  purchase_receipt_code?: string | null;
+  production_order_id?: number | null;
+  production_order_code?: string | null;
+  production_issue_id?: number | null;
+  production_issue_code?: string | null;
+  production_receipt_id?: number | null;
+  production_receipt_code?: string | null;
+  stocktake_id?: number | null;
+  stocktake_code?: string | null;
+  reservation_id?: number | null;
+  reservation_code?: string | null;
+  shipment_batch_id?: number | null;
+  shipment_batch_code?: string | null;
+  sales_order_id?: number | null;
+  sales_order_code?: string | null;
+  sales_order_line_id?: number | null;
+}
+
+export interface InventorySourceAudit {
+  type: InventorySourceType;
+  label: string;
+  document_type: string;
+  code: string;
+  reference: string;
+  warning_flags: string[];
+  related: InventorySourceAuditRelated;
+}
+
 export interface InventoryTransaction {
   id: number;
   code: string;
@@ -73,6 +114,17 @@ export interface InventoryTransaction {
   sales_order?: number | null;
   sales_order_code?: string | null;
   sales_order_line?: number | null;
+  purchase_order?: number | null;
+  purchase_order_code?: string | null;
+  purchase_order_line?: number | null;
+  purchase_receipt?: number | null;
+  purchase_receipt_code?: string | null;
+  production_order?: number | null;
+  production_order_code?: string | null;
+  production_issue?: number | null;
+  production_issue_code?: string | null;
+  production_receipt?: number | null;
+  production_receipt_code?: string | null;
   reservation?: number | null;
   reservation_code?: string | null;
   shipment_batch?: number | null;
@@ -82,6 +134,12 @@ export interface InventoryTransaction {
   stocktake_line?: number | null;
   stocktake_line_number?: number | null;
   posted_by?: number | null;
+  source_type?: InventorySourceType;
+  source_label?: string;
+  source_code?: string;
+  source_document_type?: string;
+  source_warnings?: string[];
+  source_audit?: InventorySourceAudit;
   cancelled_at?: string | null;
   cancelled_by?: number | null;
   cancel_reason?: string;

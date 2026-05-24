@@ -15,13 +15,9 @@ function json(route: Route, body: unknown, status = 200) {
 
 async function chooseVisibleAntdOptionByLabel(page: Page, trigger: Locator, label: string) {
   await trigger.click({ force: true });
-  const option = page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: label }).last();
+  const option = page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: label }).first();
   await expect(option).toBeVisible();
-  await option.evaluate((element) => element.scrollIntoView({ block: 'nearest' }));
-  const box = await option.boundingBox();
-  if (box) {
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  }
+  await option.click({ force: true });
 }
 
 async function setupMockApi(page: Page) {
@@ -96,7 +92,7 @@ async function setupMockApi(page: Page) {
     if (path === '/api/inventory/transactions/' && method === 'GET') {
       transactionUrls.push(url.toString());
       return json(route, {
-        count: 1,
+        count: 3,
         next: null,
         previous: null,
         results: [
@@ -134,6 +130,20 @@ async function setupMockApi(page: Page) {
             stocktake_code: 'STKT-AUDIT',
             stocktake_line: 502,
             stocktake_line_number: 1,
+            source_type: 'STOCKTAKE',
+            source_label: 'Kiểm tồn',
+            source_code: 'STKT-AUDIT',
+            source_document_type: 'STOCKTAKE',
+            source_warnings: [],
+            source_audit: {
+              type: 'STOCKTAKE',
+              label: 'Kiểm tồn',
+              document_type: 'STOCKTAKE',
+              code: 'STKT-AUDIT',
+              reference: 'STKT-AUDIT',
+              warning_flags: [],
+              related: { stocktake_id: 501, stocktake_code: 'STKT-AUDIT' },
+            },
             posted_at: '2026-05-15T08:00:00Z',
             posted_by: 1,
             cancelled_at: null,
@@ -141,6 +151,107 @@ async function setupMockApi(page: Page) {
             cancel_reason: '',
             created_at: '2026-05-15T08:00:00Z',
             updated_at: '2026-05-15T08:00:00Z',
+          },
+          {
+            id: 102,
+            code: 'INVTX-PURCHASE-001',
+            transaction_type: 'RECEIPT',
+            status: 'POSTED',
+            transaction_date: '2026-05-16',
+            reference: 'GRN-AUDIT-001',
+            reason: 'Nhap mua hang',
+            note: '',
+            product: product.id,
+            product_code: product.code,
+            product_name: product.name,
+            warehouse: warehouse.id,
+            warehouse_name: warehouse.name,
+            location: null,
+            location_name: null,
+            target_warehouse: null,
+            target_warehouse_name: null,
+            target_location: null,
+            target_location_name: null,
+            quantity: '5',
+            unit_cost: '0',
+            amount: '0.00',
+            purchase_order: 201,
+            purchase_order_code: 'PO-AUDIT-001',
+            purchase_order_line: null,
+            purchase_receipt: 202,
+            purchase_receipt_code: 'GRN-AUDIT-001',
+            source_type: 'PURCHASE',
+            source_label: 'Mua hàng',
+            source_code: 'GRN-AUDIT-001',
+            source_document_type: 'PURCHASE_RECEIPT',
+            source_warnings: [],
+            source_audit: {
+              type: 'PURCHASE',
+              label: 'Mua hàng',
+              document_type: 'PURCHASE_RECEIPT',
+              code: 'GRN-AUDIT-001',
+              reference: 'GRN-AUDIT-001',
+              warning_flags: [],
+              related: { purchase_order_id: 201, purchase_order_code: 'PO-AUDIT-001', purchase_receipt_id: 202, purchase_receipt_code: 'GRN-AUDIT-001' },
+            },
+            posted_at: '2026-05-16T08:00:00Z',
+            posted_by: 1,
+            cancelled_at: null,
+            cancelled_by: null,
+            cancel_reason: '',
+            created_at: '2026-05-16T08:00:00Z',
+            updated_at: '2026-05-16T08:00:00Z',
+          },
+          {
+            id: 103,
+            code: 'INVTX-PROD-ISSUE-001',
+            transaction_type: 'ISSUE',
+            status: 'POSTED',
+            transaction_date: '2026-05-17',
+            reference: 'PMI-AUDIT-001',
+            reason: 'Cap vat tu san xuat',
+            note: '',
+            product: product.id,
+            product_code: product.code,
+            product_name: product.name,
+            warehouse: warehouse.id,
+            warehouse_name: warehouse.name,
+            location: null,
+            location_name: null,
+            target_warehouse: null,
+            target_warehouse_name: null,
+            target_location: null,
+            target_location_name: null,
+            quantity: '2',
+            unit_cost: '0',
+            amount: '0.00',
+            production_order: 301,
+            production_order_code: 'MO-AUDIT-001',
+            production_issue: 302,
+            production_issue_code: 'PMI-AUDIT-001',
+            production_receipt: null,
+            production_receipt_code: null,
+            source_type: 'PRODUCTION',
+            source_label: 'Sản xuất',
+            source_code: 'PMI-AUDIT-001',
+            source_document_type: 'PRODUCTION_ISSUE',
+            source_warnings: ['PRODUCTION_REFERENCE_ONLY'],
+            source_audit: {
+              type: 'PRODUCTION',
+              label: 'Sản xuất',
+              document_type: 'PRODUCTION_ISSUE',
+              code: 'PMI-AUDIT-001',
+              reference: 'PMI-AUDIT-001',
+              warning_flags: ['PRODUCTION_REFERENCE_ONLY'],
+              related: { production_order_id: 301, production_order_code: 'MO-AUDIT-001', production_issue_id: 302, production_issue_code: 'PMI-AUDIT-001' },
+            },
+            posted_at: '2026-05-17T08:00:00Z',
+            posted_by: 1,
+            cancelled_at: null,
+            cancelled_by: null,
+            cancel_reason: '',
+            created_at: '2026-05-17T08:00:00Z',
+            updated_at: '2026-05-17T08:00:00Z',
           },
         ],
       });
@@ -162,7 +273,13 @@ test('inventory ledger exposes audit filters and NXT panel', async ({ page }) =>
   await expect(page.getByTestId('inventory-transactions-command-strip')).toBeVisible();
   await expect(page.getByTestId('inventory-nxt-panel')).toBeVisible();
   await expect(page.getByText('INVTX-AUDIT-001')).toBeVisible();
+  await expect(page.getByText('INVTX-PURCHASE-001')).toBeVisible();
+  await expect(page.getByText('INVTX-PROD-ISSUE-001')).toBeVisible();
   await expect(page.getByText('STKT-AUDIT').first()).toBeVisible();
+  await expect(page.getByTestId('inventory-source-audit-102')).toContainText('Mua hàng');
+  await expect(page.getByTestId('inventory-source-audit-102')).toContainText('Phiếu nhập mua');
+  await expect(page.getByTestId('inventory-source-audit-103')).toContainText('Sản xuất');
+  await expect(page.getByTestId('inventory-source-audit-103')).toContainText('Nhận diện từ tham chiếu');
   await expect(page.getByTestId('inventory-nxt-table')).toContainText('P-AUDIT');
   await expect(page.getByTestId('inventory-transactions-export-csv')).toBeEnabled();
   await expect(page.getByTestId('inventory-nxt-export-csv')).toBeEnabled();
@@ -172,11 +289,11 @@ test('inventory ledger exposes audit filters and NXT panel', async ({ page }) =>
   await chooseVisibleAntdOptionByLabel(
     page,
     page.getByTestId('inventory-transactions-source-filter').locator('.ant-select'),
-    'Kiểm tồn',
+    'Mua hàng',
   );
 
   await expect.poll(() => state.transactionUrls.some((item) => item.includes('transaction_date__gte=2026-05-01'))).toBe(true);
-  await expect.poll(() => state.transactionUrls.some((item) => item.includes('source_type=STOCKTAKE'))).toBe(true);
+  await expect.poll(() => state.transactionUrls.some((item) => item.includes('source_type=PURCHASE'))).toBe(true);
 
   await page.getByTestId('inventory-nxt-date-from').fill('2026-05-01');
   await page.getByTestId('inventory-nxt-date-to').fill('2026-05-31');
