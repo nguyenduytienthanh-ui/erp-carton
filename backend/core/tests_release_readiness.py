@@ -94,3 +94,22 @@ class ReleaseReadinessCommandTests(TestCase):
         self.assertIn(payload['performance']['status'], {'ok', 'warning'})
         self.assertIn(payload['performance_drilldown']['status'], {'ok', 'warning'})
         self.assertIn(payload['preflight']['checks']['audit_controls']['status'], {'ok', 'warning'})
+
+    @patch('core.management.commands.preflight_check.shutil.which')
+    def test_release_readiness_recommends_postgres_tools_when_missing_from_path(self, mock_which):
+        mock_which.return_value = None
+        stdout = StringIO()
+        with override_settings(
+            BACKUP_CLOUD_SYNC_ENABLED=False,
+            BACKUP_CLOUD_PROVIDER='',
+            BACKUP_RCLONE_DESTINATION='',
+            DEPLOYMENT_MODE='colocated',
+            TUNNEL_PROVIDER='',
+        ):
+            call_command('release_readiness', '--json', stdout=stdout)
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(payload['preflight']['checks']['backup_tools']['status'], 'warning')
+        self.assertTrue(
+            any('PostgreSQL client tools' in item and 'Windows PATH' in item for item in payload['recommendations'])
+        )

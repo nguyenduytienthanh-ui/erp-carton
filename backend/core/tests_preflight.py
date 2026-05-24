@@ -92,3 +92,24 @@ class PreflightCommandTest(TestCase):
 
         self.assertIn('hybrid_deploy', payload['checks'])
         self.assertEqual(payload['checks']['hybrid_deploy']['status'], 'ok')
+
+    @patch('core.management.commands.preflight_check.shutil.which')
+    @override_settings(
+        BACKUP_CLOUD_SYNC_ENABLED=False,
+        BACKUP_CLOUD_PROVIDER='',
+        BACKUP_RCLONE_DESTINATION='',
+        DEPLOYMENT_MODE='colocated',
+        TUNNEL_PROVIDER='',
+    )
+    def test_preflight_backup_tools_warning_has_windows_path_guidance(self, mock_which):
+        mock_which.return_value = None
+        stdout = StringIO()
+        call_command('preflight_check', '--json', stdout=stdout)
+        payload = json.loads(stdout.getvalue())
+
+        message = payload['checks']['backup_tools']['message']
+        self.assertEqual(payload['checks']['backup_tools']['status'], 'warning')
+        self.assertIn('pg_dump', message)
+        self.assertIn('psql', message)
+        self.assertIn('PostgreSQL client tools', message)
+        self.assertIn('Windows PATH', message)

@@ -32,6 +32,17 @@ class Command(BaseCommand):
             return True
         return shutil.which(candidate) is not None
 
+    @staticmethod
+    def _missing_backup_tool_message(missing):
+        missing_list = ', '.join(missing)
+        return (
+            f'Missing backup/restore tools in PATH: {missing_list}. '
+            'Install PostgreSQL client tools for pg_dump/psql, then add the PostgreSQL bin folder '
+            r'to Windows PATH, for example C:\Program Files\PostgreSQL\<version>\bin. '
+            'Reopen PowerShell after updating PATH. If rclone or cloudflared is listed, install it '
+            'and add its folder to PATH as well.'
+        )
+
     def _check_env_vars(self):
         db_config = settings.DATABASES.get('default', {})
         missing = []
@@ -72,8 +83,8 @@ class Command(BaseCommand):
             required_tools.append('cloudflared')
         missing = [tool for tool in required_tools if not self._tool_available(tool)]
         if missing:
-            return {'status': 'warning', 'message': f'Missing backup/restore tools in PATH: {", ".join(missing)}'}
-        return {'status': 'ok', 'message': f'Backup/restore tools are available ({", ".join(required_tools)})'}
+            return {'status': 'warning', 'message': self._missing_backup_tool_message(missing)}
+        return {'status': 'ok', 'message': f'Backup/restore tools are available on PATH ({", ".join(required_tools)})'}
 
     def _check_q_cluster(self):
         workers = int(settings.Q_CLUSTER.get('workers') or 0)

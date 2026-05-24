@@ -35,6 +35,8 @@ python manage.py smoke_http --backend-base http://127.0.0.1:8000 --frontend-base
 
 - API contract: frontend uses `VITE_API_BASE_URL` ending in `/api`.
 - Backend hybrid env template: `backend/.env.hybrid.example`.
+- Backup/restore tooling: install PostgreSQL client tools on the Mini PC or ops machine, then add the PostgreSQL `bin` folder to Windows `PATH` so `pg_dump` and `psql` are available in a new PowerShell window.
+- `release_readiness` can stay blocked until a fresh backup, restore dry-run, and alert delivery drill are completed with explicit approval.
 - Safe checks before release:
 
 ```powershell

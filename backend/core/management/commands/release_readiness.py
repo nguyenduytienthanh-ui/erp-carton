@@ -59,6 +59,11 @@ class Command(BaseCommand):
         recommendations = []
         if int(payload['migrations']['pending_count']) > 0:
             recommendations.append('Apply pending migrations on staging before UAT or production cutover.')
+        backup_tools = payload.get('preflight', {}).get('checks', {}).get('backup_tools', {})
+        if backup_tools.get('status') != 'ok':
+            recommendations.append(
+                'Add PostgreSQL client tools (pg_dump/psql) to Windows PATH before the backup/restore drill.'
+            )
         if payload['backups']['status'] != 'ok':
             recommendations.append('Run a fresh backup and verify restore drill before go-live.')
         if payload['backups'].get('restore_drill_status') != 'ok':
