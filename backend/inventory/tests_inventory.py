@@ -22,6 +22,8 @@ from inventory.models import (
     WarehouseLocation,
 )
 from products.models import Product, ProductUnit
+from production.models import ProductionIssue, ProductionOrder, ProductionReceipt
+from purchasing.models import PurchaseOrder, PurchaseReceipt, Supplier
 from sales.models import SalesOrder, SalesOrderDeliveryPlan, SalesOrderLine, SalesOrderStatus
 
 
@@ -1624,6 +1626,192 @@ class InventoryApiFlowTest(TestCase):
         stocktake_codes = {row['code'] for row in stocktake_response.json()['results']}
         self.assertIn(stocktake_tx.code, stocktake_codes)
         self.assertNotIn(transfer.code, stocktake_codes)
+
+    def test_transaction_source_audit_payload_and_extended_source_filters(self):
+        today = timezone.localdate()
+        target_warehouse = Warehouse.objects.create(code='K-SRC', name='Kho source audit')
+        supplier = Supplier.objects.create(code='SUP-SRC', name='Supplier source audit')
+        purchase_order = PurchaseOrder.objects.create(
+            code='PO-SRC-AUDIT',
+            order_date=today,
+            supplier=supplier,
+            warehouse=self.warehouse,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        purchase_receipt = PurchaseReceipt.objects.create(
+            code='GRN-SRC-AUDIT',
+            purchase_order=purchase_order,
+            receipt_date=today,
+            warehouse=self.warehouse,
+            posted_by=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        production_order = ProductionOrder.objects.create(
+            code='MO-SRC-AUDIT',
+            order_date=today,
+            product=self.product,
+            planned_qty=Decimal('1'),
+            target_warehouse=self.warehouse,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        production_issue = ProductionIssue.objects.create(
+            code='PMI-SRC-AUDIT',
+            production_order=production_order,
+            issue_date=today,
+            posted_by=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        production_receipt = ProductionReceipt.objects.create(
+            code='FGR-SRC-AUDIT',
+            production_order=production_order,
+            receipt_date=today,
+            warehouse=self.warehouse,
+            posted_by=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        stocktake = Stocktake.objects.create(
+            code='STKT-SRC-AUDIT',
+            warehouse=self.warehouse,
+            count_date=today,
+            status='COMPLETED',
+            created_by=self.user,
+        )
+
+        purchase_tx = InventoryTransaction.objects.create(
+            code='INVTX-SRC-PURCHASE',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            transaction_date=today,
+            product=self.product,
+            warehouse=self.warehouse,
+            quantity=Decimal('3'),
+            purchase_order=purchase_order,
+            purchase_receipt=purchase_receipt,
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        production_issue_tx = InventoryTransaction.objects.create(
+            code='INVTX-SRC-PRODUCTION-ISSUE',
+            transaction_type=InventoryTransactionType.ISSUE,
+            transaction_date=today,
+            product=self.product,
+            warehouse=self.warehouse,
+            quantity=Decimal('1'),
+            production_order=production_order,
+            production_issue=production_issue,
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        production_receipt_tx = InventoryTransaction.objects.create(
+            code='INVTX-SRC-PRODUCTION-RECEIPT',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            transaction_date=today,
+            product=self.product,
+            warehouse=self.warehouse,
+            quantity=Decimal('1'),
+            production_order=production_order,
+            production_receipt=production_receipt,
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        stocktake_tx = InventoryTransaction.objects.create(
+            code='INVTX-SRC-STOCKTAKE',
+            transaction_type=InventoryTransactionType.ADJUSTMENT_IN,
+            transaction_date=today,
+            product=self.product,
+            warehouse=self.warehouse,
+            quantity=Decimal('1'),
+            stocktake=stocktake,
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        transfer_tx = InventoryTransaction.objects.create(
+            code='INVTX-SRC-TRANSFER',
+            transaction_type=InventoryTransactionType.TRANSFER,
+            transaction_date=today,
+            product=self.product,
+            warehouse=self.warehouse,
+            target_warehouse=target_warehouse,
+            quantity=Decimal('1'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        transfer_reference_tx = InventoryTransaction.objects.create(
+            code='INVTX-SRC-TRANSFER-REF',
+            transaction_type=InventoryTransactionType.ISSUE,
+            transaction_date=today,
+            product=self.product,
+            warehouse=self.warehouse,
+            reference='TRN-20260524-9001',
+            quantity=Decimal('1'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        manual_tx = InventoryTransaction.objects.create(
+            code='INVTX-SRC-MANUAL',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            transaction_date=today,
+            product=self.product,
+            warehouse=self.warehouse,
+            reference='T-MANUAL-SRC-AUDIT',
+            quantity=Decimal('1'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+
+        purchase_response = self.client.get('/api/inventory/transactions/', {'source_type': 'PURCHASE'})
+        self.assertEqual(purchase_response.status_code, 200, purchase_response.json())
+        purchase_rows = {row['code']: row for row in purchase_response.json()['results']}
+        self.assertIn(purchase_tx.code, purchase_rows)
+        purchase_row = purchase_rows[purchase_tx.code]
+        self.assertEqual(purchase_row['source_type'], 'PURCHASE')
+        self.assertEqual(purchase_row['source_code'], purchase_receipt.code)
+        self.assertEqual(purchase_row['purchase_order_code'], purchase_order.code)
+        self.assertEqual(purchase_row['purchase_receipt_code'], purchase_receipt.code)
+        self.assertEqual(purchase_row['source_audit']['document_type'], 'PURCHASE_RECEIPT')
+
+        production_response = self.client.get('/api/inventory/transactions/', {'source_type': 'PRODUCTION'})
+        self.assertEqual(production_response.status_code, 200, production_response.json())
+        production_rows = {row['code']: row for row in production_response.json()['results']}
+        self.assertEqual(production_rows[production_issue_tx.code]['source_code'], production_issue.code)
+        self.assertEqual(production_rows[production_issue_tx.code]['source_document_type'], 'PRODUCTION_ISSUE')
+        self.assertEqual(production_rows[production_receipt_tx.code]['source_code'], production_receipt.code)
+        self.assertEqual(production_rows[production_receipt_tx.code]['source_document_type'], 'PRODUCTION_RECEIPT')
+
+        stocktake_response = self.client.get('/api/inventory/transactions/', {'source_type': 'STOCKTAKE'})
+        self.assertEqual(stocktake_response.status_code, 200, stocktake_response.json())
+        stocktake_rows = {row['code']: row for row in stocktake_response.json()['results']}
+        self.assertEqual(stocktake_rows[stocktake_tx.code]['source_type'], 'STOCKTAKE')
+        self.assertEqual(stocktake_rows[stocktake_tx.code]['source_code'], stocktake.code)
+
+        transfer_response = self.client.get('/api/inventory/transactions/', {'source_type': 'TRANSFER'})
+        self.assertEqual(transfer_response.status_code, 200, transfer_response.json())
+        transfer_rows = {row['code']: row for row in transfer_response.json()['results']}
+        self.assertEqual(transfer_rows[transfer_tx.code]['source_document_type'], 'TRANSFER_TRANSACTION')
+        self.assertEqual(transfer_rows[transfer_reference_tx.code]['source_document_type'], 'WAREHOUSE_TRANSFER_REFERENCE')
+        self.assertIn('TRANSFER_REFERENCE_ONLY', transfer_rows[transfer_reference_tx.code]['source_warnings'])
+
+        manual_response = self.client.get('/api/inventory/transactions/', {'source_type': 'MANUAL'})
+        self.assertEqual(manual_response.status_code, 200, manual_response.json())
+        manual_rows = {row['code']: row for row in manual_response.json()['results']}
+        manual_codes = set(manual_rows)
+        self.assertIn(manual_tx.code, manual_codes)
+        self.assertEqual(manual_rows[manual_tx.code]['source_type'], 'MANUAL')
+        self.assertEqual(manual_rows[manual_tx.code]['source_document_type'], 'MANUAL')
+        self.assertNotIn(purchase_tx.code, manual_codes)
+        self.assertNotIn(production_issue_tx.code, manual_codes)
+        self.assertNotIn(transfer_tx.code, manual_codes)
 
     def test_create_stocktake_complete_and_delete_draft(self):
         create_response = self.client.post(

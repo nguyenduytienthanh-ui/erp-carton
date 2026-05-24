@@ -8,6 +8,7 @@ from django.utils import timezone as django_tz
 from inventory.models import (
     InventoryReservation,
     InventoryTransaction,
+    InventoryTransactionType,
     OutboundShipment,
     Warehouse,
     WarehouseLocation,
@@ -38,6 +39,10 @@ def filter_created_at_gte(queryset, name, value):
 def filter_created_at_lte(queryset, name, value):
     dt = _parse_date_to_range(value, end_of_day=True)
     return queryset.filter(created_at__lte=dt) if dt else queryset
+
+
+def _transfer_reference_q():
+    return Q(transaction_type=InventoryTransactionType.TRANSFER) | Q(reference__istartswith='TRN-')
 
 
 class WarehouseFilter(django_filters.FilterSet):
@@ -90,6 +95,25 @@ class InventoryTransactionFilter(django_filters.FilterSet):
         source_type = str(value or '').strip().upper()
         if source_type == 'STOCKTAKE':
             return queryset.filter(stocktake_id__isnull=False)
+        if source_type == 'PURCHASE':
+            return queryset.filter(
+                Q(purchase_order_id__isnull=False)
+                | Q(purchase_order_line_id__isnull=False)
+                | Q(purchase_receipt_id__isnull=False)
+                | Q(reference__istartswith='PO-')
+                | Q(reference__istartswith='GRN-')
+            )
+        if source_type == 'PRODUCTION':
+            return queryset.filter(
+                Q(production_order_id__isnull=False)
+                | Q(production_issue_id__isnull=False)
+                | Q(production_receipt_id__isnull=False)
+                | Q(reference__istartswith='MO-')
+                | Q(reference__istartswith='PMI-')
+                | Q(reference__istartswith='FGR-')
+            )
+        if source_type == 'TRANSFER':
+            return queryset.filter(_transfer_reference_q())
         if source_type == 'RESERVATION':
             return queryset.filter(reservation_id__isnull=False)
         if source_type == 'SALES':
@@ -103,6 +127,18 @@ class InventoryTransactionFilter(django_filters.FilterSet):
                 sales_order_id__isnull=True,
                 sales_order_line_id__isnull=True,
                 shipment_batch_id__isnull=True,
+                purchase_order_id__isnull=True,
+                purchase_order_line_id__isnull=True,
+                purchase_receipt_id__isnull=True,
+                production_order_id__isnull=True,
+                production_issue_id__isnull=True,
+                production_receipt_id__isnull=True,
+            ).exclude(_transfer_reference_q()).exclude(
+                Q(reference__istartswith='PO-')
+                | Q(reference__istartswith='GRN-')
+                | Q(reference__istartswith='MO-')
+                | Q(reference__istartswith='PMI-')
+                | Q(reference__istartswith='FGR-')
             )
         return queryset
 

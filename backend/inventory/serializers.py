@@ -34,6 +34,144 @@ from inventory.services import (
 from sales.services import ensure_sales_order_line_shipment_allowed
 
 
+SOURCE_TYPE_PURCHASE = 'PURCHASE'
+SOURCE_TYPE_PRODUCTION = 'PRODUCTION'
+SOURCE_TYPE_STOCKTAKE = 'STOCKTAKE'
+SOURCE_TYPE_TRANSFER = 'TRANSFER'
+SOURCE_TYPE_RESERVATION = 'RESERVATION'
+SOURCE_TYPE_SHIPMENT = 'SHIPMENT'
+SOURCE_TYPE_SALES = 'SALES'
+SOURCE_TYPE_MANUAL = 'MANUAL'
+
+SOURCE_TYPE_LABELS = {
+    SOURCE_TYPE_PURCHASE: 'Mua hàng',
+    SOURCE_TYPE_PRODUCTION: 'Sản xuất',
+    SOURCE_TYPE_STOCKTAKE: 'Kiểm tồn',
+    SOURCE_TYPE_TRANSFER: 'Chuyển kho',
+    SOURCE_TYPE_RESERVATION: 'Giữ chỗ',
+    SOURCE_TYPE_SHIPMENT: 'Giao hàng',
+    SOURCE_TYPE_SALES: 'Đơn bán',
+    SOURCE_TYPE_MANUAL: 'Thủ công',
+}
+
+SOURCE_REFERENCE_PREFIXES = {
+    SOURCE_TYPE_PURCHASE: ('PO-', 'GRN-'),
+    SOURCE_TYPE_PRODUCTION: ('MO-', 'PMI-', 'FGR-'),
+    SOURCE_TYPE_TRANSFER: ('TRN-',),
+}
+
+
+def _clean_source_reference(value):
+    return str(value or '').strip().upper()
+
+
+def _reference_has_prefix(value, prefixes):
+    normalized = _clean_source_reference(value)
+    return any(normalized.startswith(prefix) for prefix in prefixes)
+
+
+def _source_related_payload(obj):
+    return {
+        'purchase_order_id': obj.purchase_order_id,
+        'purchase_order_code': getattr(getattr(obj, 'purchase_order', None), 'code', None),
+        'purchase_receipt_id': obj.purchase_receipt_id,
+        'purchase_receipt_code': getattr(getattr(obj, 'purchase_receipt', None), 'code', None),
+        'production_order_id': obj.production_order_id,
+        'production_order_code': getattr(getattr(obj, 'production_order', None), 'code', None),
+        'production_issue_id': obj.production_issue_id,
+        'production_issue_code': getattr(getattr(obj, 'production_issue', None), 'code', None),
+        'production_receipt_id': obj.production_receipt_id,
+        'production_receipt_code': getattr(getattr(obj, 'production_receipt', None), 'code', None),
+        'stocktake_id': obj.stocktake_id,
+        'stocktake_code': getattr(getattr(obj, 'stocktake', None), 'code', None),
+        'reservation_id': obj.reservation_id,
+        'reservation_code': getattr(getattr(obj, 'reservation', None), 'code', None),
+        'shipment_batch_id': obj.shipment_batch_id,
+        'shipment_batch_code': getattr(getattr(obj, 'shipment_batch', None), 'code', None),
+        'sales_order_id': obj.sales_order_id,
+        'sales_order_code': getattr(getattr(obj, 'sales_order', None), 'code', None),
+        'sales_order_line_id': obj.sales_order_line_id,
+    }
+
+
+def build_inventory_source_audit(obj):
+    warnings = []
+    related = _source_related_payload(obj)
+    reference = str(getattr(obj, 'reference', '') or '').strip()
+    source_type = SOURCE_TYPE_MANUAL
+    document_type = 'MANUAL'
+    source_code = reference or getattr(obj, 'code', '')
+
+    if obj.stocktake_id:
+        source_type = SOURCE_TYPE_STOCKTAKE
+        document_type = 'STOCKTAKE'
+        source_code = related['stocktake_code'] or reference or source_code
+    elif obj.purchase_receipt_id or obj.purchase_order_id or obj.purchase_order_line_id:
+        source_type = SOURCE_TYPE_PURCHASE
+        if obj.purchase_receipt_id:
+            document_type = 'PURCHASE_RECEIPT'
+            source_code = related['purchase_receipt_code'] or reference or source_code
+        else:
+            document_type = 'PURCHASE_ORDER'
+            source_code = related['purchase_order_code'] or reference or source_code
+            warnings.append('PURCHASE_RECEIPT_LINK_MISSING')
+    elif obj.production_issue_id or obj.production_receipt_id or obj.production_order_id:
+        source_type = SOURCE_TYPE_PRODUCTION
+        if obj.production_issue_id:
+            document_type = 'PRODUCTION_ISSUE'
+            source_code = related['production_issue_code'] or reference or source_code
+        elif obj.production_receipt_id:
+            document_type = 'PRODUCTION_RECEIPT'
+            source_code = related['production_receipt_code'] or reference or source_code
+        else:
+            document_type = 'PRODUCTION_ORDER'
+            source_code = related['production_order_code'] or reference or source_code
+            warnings.append('PRODUCTION_DOCUMENT_LINK_MISSING')
+    elif obj.transaction_type == InventoryTransactionType.TRANSFER:
+        source_type = SOURCE_TYPE_TRANSFER
+        document_type = 'TRANSFER_TRANSACTION'
+        source_code = reference or getattr(obj, 'code', '')
+        if not obj.target_warehouse_id:
+            warnings.append('TRANSFER_TARGET_WAREHOUSE_MISSING')
+    elif _reference_has_prefix(reference, SOURCE_REFERENCE_PREFIXES[SOURCE_TYPE_TRANSFER]):
+        source_type = SOURCE_TYPE_TRANSFER
+        document_type = 'WAREHOUSE_TRANSFER_REFERENCE'
+        source_code = reference or source_code
+        warnings.append('TRANSFER_REFERENCE_ONLY')
+    elif obj.reservation_id:
+        source_type = SOURCE_TYPE_RESERVATION
+        document_type = 'RESERVATION'
+        source_code = related['reservation_code'] or reference or source_code
+    elif obj.shipment_batch_id:
+        source_type = SOURCE_TYPE_SHIPMENT
+        document_type = 'SHIPMENT'
+        source_code = related['shipment_batch_code'] or reference or source_code
+    elif obj.sales_order_id or obj.sales_order_line_id:
+        source_type = SOURCE_TYPE_SALES
+        document_type = 'SALES_ORDER'
+        source_code = related['sales_order_code'] or reference or source_code
+    elif _reference_has_prefix(reference, SOURCE_REFERENCE_PREFIXES[SOURCE_TYPE_PURCHASE]):
+        source_type = SOURCE_TYPE_PURCHASE
+        document_type = 'PURCHASE_REFERENCE'
+        source_code = reference
+        warnings.append('PURCHASE_REFERENCE_ONLY')
+    elif _reference_has_prefix(reference, SOURCE_REFERENCE_PREFIXES[SOURCE_TYPE_PRODUCTION]):
+        source_type = SOURCE_TYPE_PRODUCTION
+        document_type = 'PRODUCTION_REFERENCE'
+        source_code = reference
+        warnings.append('PRODUCTION_REFERENCE_ONLY')
+
+    return {
+        'type': source_type,
+        'label': SOURCE_TYPE_LABELS.get(source_type, source_type),
+        'document_type': document_type,
+        'code': source_code or '',
+        'reference': reference,
+        'warning_flags': warnings,
+        'related': related,
+    }
+
+
 def _ensure_active_warehouse(field_name: str, warehouse: Warehouse | None):
     if warehouse and not warehouse.is_active:
         raise serializers.ValidationError({field_name: 'Kho đã ngưng hoạt động, không thể ghi nhận giao dịch mới.'})
@@ -116,10 +254,21 @@ class InventoryTransactionSerializer(serializers.ModelSerializer):
     target_warehouse_name = serializers.CharField(source='target_warehouse.name', read_only=True)
     target_location_name = serializers.CharField(source='target_location.name', read_only=True)
     sales_order_code = serializers.CharField(source='sales_order.code', read_only=True)
+    purchase_order_code = serializers.CharField(source='purchase_order.code', read_only=True)
+    purchase_receipt_code = serializers.CharField(source='purchase_receipt.code', read_only=True)
+    production_order_code = serializers.CharField(source='production_order.code', read_only=True)
+    production_issue_code = serializers.CharField(source='production_issue.code', read_only=True)
+    production_receipt_code = serializers.CharField(source='production_receipt.code', read_only=True)
     reservation_code = serializers.CharField(source='reservation.code', read_only=True)
     shipment_batch_code = serializers.CharField(source='shipment_batch.code', read_only=True)
     stocktake_code = serializers.CharField(source='stocktake.code', read_only=True)
     stocktake_line_number = serializers.IntegerField(source='stocktake_line.line_number', read_only=True)
+    source_type = serializers.SerializerMethodField()
+    source_label = serializers.SerializerMethodField()
+    source_code = serializers.SerializerMethodField()
+    source_document_type = serializers.SerializerMethodField()
+    source_warnings = serializers.SerializerMethodField()
+    source_audit = serializers.SerializerMethodField()
     amount = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
 
     class Meta:
@@ -150,6 +299,17 @@ class InventoryTransactionSerializer(serializers.ModelSerializer):
             'sales_order',
             'sales_order_code',
             'sales_order_line',
+            'purchase_order',
+            'purchase_order_code',
+            'purchase_order_line',
+            'purchase_receipt',
+            'purchase_receipt_code',
+            'production_order',
+            'production_order_code',
+            'production_issue',
+            'production_issue_code',
+            'production_receipt',
+            'production_receipt_code',
             'reservation',
             'reservation_code',
             'shipment_batch',
@@ -158,6 +318,12 @@ class InventoryTransactionSerializer(serializers.ModelSerializer):
             'stocktake_code',
             'stocktake_line',
             'stocktake_line_number',
+            'source_type',
+            'source_label',
+            'source_code',
+            'source_document_type',
+            'source_warnings',
+            'source_audit',
             'posted_at',
             'posted_by',
             'cancelled_at',
@@ -184,13 +350,55 @@ class InventoryTransactionSerializer(serializers.ModelSerializer):
             'target_warehouse_name',
             'target_location_name',
             'sales_order_code',
+            'purchase_order',
+            'purchase_order_code',
+            'purchase_order_line',
+            'purchase_receipt',
+            'purchase_receipt_code',
+            'production_order',
+            'production_order_code',
+            'production_issue',
+            'production_issue_code',
+            'production_receipt',
+            'production_receipt_code',
             'reservation_code',
             'shipment_batch_code',
             'stocktake',
             'stocktake_code',
             'stocktake_line',
             'stocktake_line_number',
+            'source_type',
+            'source_label',
+            'source_code',
+            'source_document_type',
+            'source_warnings',
+            'source_audit',
         ]
+
+    def _source_audit(self, obj):
+        cached = getattr(obj, '_inventory_source_audit_cache', None)
+        if cached is None:
+            cached = build_inventory_source_audit(obj)
+            obj._inventory_source_audit_cache = cached
+        return cached
+
+    def get_source_type(self, obj):
+        return self._source_audit(obj)['type']
+
+    def get_source_label(self, obj):
+        return self._source_audit(obj)['label']
+
+    def get_source_code(self, obj):
+        return self._source_audit(obj)['code']
+
+    def get_source_document_type(self, obj):
+        return self._source_audit(obj)['document_type']
+
+    def get_source_warnings(self, obj):
+        return self._source_audit(obj)['warning_flags']
+
+    def get_source_audit(self, obj):
+        return self._source_audit(obj)
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
