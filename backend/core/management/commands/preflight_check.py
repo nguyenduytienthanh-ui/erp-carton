@@ -303,12 +303,9 @@ class Command(BaseCommand):
             status = 'warning'
             issues.append('API_PUBLIC_URL should use https in production hybrid mode')
         normalized_api_public_url = api_public_url.rstrip('/')
-        if api_public_url and not (
-            normalized_api_public_url.endswith('/api')
-            or normalized_api_public_url.endswith('/api/v1')
-        ):
+        if api_public_url and not normalized_api_public_url.endswith('/api'):
             status = 'warning'
-            issues.append('API_PUBLIC_URL should end with /api or /api/v1')
+            issues.append('API_PUBLIC_URL should end with /api')
         if not proxy_enabled:
             status = 'warning'
             issues.append('USE_X_FORWARDED_PROTO should be enabled for hybrid https/public traffic')

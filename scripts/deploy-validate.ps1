@@ -17,11 +17,11 @@ function Resolve-BackendBase([string]$ExplicitBase, [string]$ExplicitApiUrl) {
     }
     if (-not [string]::IsNullOrWhiteSpace($candidate)) {
         $normalized = $candidate.TrimEnd('/')
-        if ($normalized.EndsWith('/api/v1')) {
-            return $normalized.Substring(0, $normalized.Length - 7)
-        }
         if ($normalized.EndsWith('/api')) {
             return $normalized.Substring(0, $normalized.Length - 4)
+        }
+        if ($normalized -match '/api($|/)') {
+            throw "ApiPublicUrl must use the unversioned /api contract."
         }
         return $normalized
     }
@@ -35,7 +35,13 @@ function Resolve-ApiBase([string]$ExplicitApiUrl, [string]$ResolvedBackendBase) 
     if (-not [string]::IsNullOrWhiteSpace($env:API_PUBLIC_URL)) {
         return $env:API_PUBLIC_URL.TrimEnd('/')
     }
-    return "$($ResolvedBackendBase.TrimEnd('/'))/api/v1"
+    return "$($ResolvedBackendBase.TrimEnd('/'))/api"
+}
+
+function Assert-ApiBaseContract([string]$ApiBase) {
+    if ([string]::IsNullOrWhiteSpace($ApiBase) -or -not $ApiBase.TrimEnd('/').EndsWith('/api')) {
+        throw "API base URL must end with /api."
+    }
 }
 
 function Resolve-FrontendBase([string]$ExplicitBase, [string]$ExplicitPublicUrl) {
@@ -54,6 +60,7 @@ Write-Host "=== ERP Carton Deploy Validate ===" -ForegroundColor Cyan
 
 $resolvedBackendBase = Resolve-BackendBase $BackendBase $ApiPublicUrl
 $resolvedApiBase = Resolve-ApiBase $ApiPublicUrl $resolvedBackendBase
+Assert-ApiBaseContract $resolvedApiBase
 $resolvedFrontendBase = Resolve-FrontendBase $FrontendBase $FrontendPublicUrl
 
 Push-Location backend

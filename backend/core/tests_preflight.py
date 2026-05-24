@@ -32,7 +32,7 @@ class PreflightCommandTest(TestCase):
         DEPLOYMENT_MODE='hybrid',
         FRONTEND_URL='https://erp.example.com',
         FRONTEND_PUBLIC_URL='https://erp.example.com',
-        API_PUBLIC_URL='https://api.example.com/api/v1',
+        API_PUBLIC_URL='https://api.example.com/api',
         ALLOWED_HOSTS=['api.example.com', 'erp.example.com'],
         CORS_ALLOWED_ORIGINS=['https://erp.example.com'],
         CSRF_TRUSTED_ORIGINS=['https://erp.example.com'],

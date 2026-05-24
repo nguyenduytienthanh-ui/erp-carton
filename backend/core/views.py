@@ -17649,7 +17649,7 @@ def logout_view(request):
 class TaskViewSet(viewsets.ModelViewSet):
     """
     CRUD + actions cho nhiệm vụ (task/assignment).
-    Lọc theo entity: GET /api/v1/tasks/?entity_type=Product&entity_id=5
+    Lọc theo entity: GET /api/tasks/?entity_type=Product&entity_id=5
     """
     serializer_class = TaskSerializer
     permission_classes = [IsAuthenticated]

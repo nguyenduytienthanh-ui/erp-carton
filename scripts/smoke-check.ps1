@@ -17,11 +17,11 @@ function Resolve-BackendBase([string]$ExplicitBase, [string]$ExplicitApiUrl) {
     }
     if (-not [string]::IsNullOrWhiteSpace($candidate)) {
         $normalized = $candidate.TrimEnd('/')
-        if ($normalized.EndsWith('/api/v1')) {
-            return $normalized.Substring(0, $normalized.Length - 7)
-        }
         if ($normalized.EndsWith('/api')) {
             return $normalized.Substring(0, $normalized.Length - 4)
+        }
+        if ($normalized -match '/api($|/)') {
+            throw "ApiPublicUrl must use the unversioned /api contract."
         }
         return $normalized
     }
