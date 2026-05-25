@@ -3872,6 +3872,163 @@ class ProductionWorkflowTests(APITestCase):
         self.assertIn('MATERIAL_SOURCE_STOCK_LOW', issue_codes)
         self.assertEqual(card['materials']['source_availability_issues'][0]['severity'], 'WARNING')
 
+    def test_planning_board_dispatch_scenarios_keep_advisory_only_signals(self):
+        self.finished_product.film_code = 'FILM-DISPATCH'
+        self.finished_product.print_color_1 = 'Black'
+        self.finished_product.save()
+        _daily_work_center, daily_machine = self._create_capacity_resource(
+            work_center_code='DAILY',
+            machine_code='DAILY-01',
+            work_center_capacity='8.00',
+            machine_capacity='8.00',
+        )
+        _block_work_center, block_machine = self._create_capacity_resource(
+            work_center_code='BLOCK',
+            machine_code='BLOCK-01',
+            work_center_capacity='8.00',
+            machine_capacity='8.00',
+        )
+        _capacity_work_center, capacity_machine = self._create_capacity_resource(
+            work_center_code='CAPWARN',
+            machine_code='CAPWARN-01',
+            work_center_capacity='1.00',
+            machine_capacity='1.00',
+        )
+        today = timezone.localdate().isoformat()
+
+        def create_released_order():
+            order = self._create_production_order(planned_qty='2')
+            order_id = order['id']
+            self._release_order(order_id)
+            self._issue_all_materials(order_id)
+            operations = list(ProductionOperation.objects.filter(production_order_id=order_id).order_by('sequence'))
+            return order_id, operations
+
+        def schedule(order_id, operation, machine, **overrides):
+            payload = {
+                'operation_id': operation.id,
+                'planned_date': today,
+                'planned_shift': 'MORNING',
+                'machine_code': machine.code,
+                'estimated_runtime_hours': '1.00',
+                'setup_minutes': 0,
+            }
+            payload.update(overrides)
+            response = self.client.post(
+                f'/api/production/orders/{order_id}/update_operation/',
+                payload,
+                format='json',
+            )
+            self.assertEqual(response.status_code, 200, response.data)
+            return response
+
+        ready_order_id, ready_operations = create_released_order()
+        schedule(ready_order_id, ready_operations[0], daily_machine, status='READY', dispatch_sequence=10)
+
+        dependency_order_id, dependency_operations = create_released_order()
+        schedule(dependency_order_id, dependency_operations[1], block_machine, dispatch_sequence=20)
+
+        blocked_order_id, blocked_operations = create_released_order()
+        schedule(
+            blocked_order_id,
+            blocked_operations[0],
+            block_machine,
+            status='READY',
+            dispatch_sequence=30,
+            block_reason_code='MACHINE_DOWN',
+            block_reason_note='May dung de doi dao',
+        )
+
+        capacity_order_id, capacity_operations = create_released_order()
+        schedule(
+            capacity_order_id,
+            capacity_operations[0],
+            capacity_machine,
+            status='READY',
+            dispatch_sequence=40,
+            estimated_runtime_hours='2.00',
+        )
+
+        done_order_id, done_operations = create_released_order()
+        schedule(done_order_id, done_operations[0], daily_machine, status='READY', dispatch_sequence=50)
+        done_response = self.client.post(
+            f'/api/production/orders/{done_order_id}/update_operation/',
+            {
+                'operation_id': done_operations[0].id,
+                'status': 'DONE',
+            },
+            format='json',
+        )
+        self.assertEqual(done_response.status_code, 200, done_response.data)
+
+        skipped_order_id, skipped_operations = create_released_order()
+        schedule(skipped_order_id, skipped_operations[0], daily_machine, status='READY', dispatch_sequence=60)
+        skipped_response = self.client.post(
+            f'/api/production/orders/{skipped_order_id}/skip_operation/',
+            {
+                'operation_id': skipped_operations[0].id,
+                'reason': 'Bo qua trong kich ban dispatch',
+            },
+            format='json',
+        )
+        self.assertEqual(skipped_response.status_code, 200, skipped_response.data)
+
+        response = self.client.get('/api/production/orders/planning_board/')
+        self.assertEqual(response.status_code, 200, response.data)
+        cards = self._planning_cards(response)
+        card_by_operation_id = {
+            card['operation']['id']: card
+            for card in cards
+        }
+
+        ready_card = card_by_operation_id[ready_operations[0].id]
+        self.assertEqual(ready_card['ready_to_dispatch']['status'], 'READY')
+        self.assertTrue(ready_card['ready_to_dispatch']['is_ready'])
+        self.assertFalse(ready_card['ready_to_dispatch']['workflow_blocking'])
+
+        dependency_card = card_by_operation_id[dependency_operations[1].id]
+        self.assertEqual(dependency_card['ready_to_dispatch']['status'], 'BLOCKER')
+        dependency_issue_codes = {item['code'] for item in dependency_card['ready_to_dispatch']['issues']}
+        self.assertIn('WAIT_PREVIOUS_STEP', dependency_issue_codes)
+
+        blocked_card = card_by_operation_id[blocked_operations[0].id]
+        self.assertEqual(blocked_card['ready_to_dispatch']['status'], 'BLOCKER')
+        blocked_issue_codes = {item['code'] for item in blocked_card['ready_to_dispatch']['issues']}
+        self.assertIn('BLOCK_REASON_ACTIVE', blocked_issue_codes)
+        self.assertEqual(blocked_card['exceptions']['block_reason_code'], 'MACHINE_DOWN')
+
+        capacity_card = card_by_operation_id[capacity_operations[0].id]
+        self.assertEqual(capacity_card['ready_to_dispatch']['status'], 'WARNING')
+        capacity_issue_codes = {item['code'] for item in capacity_card['ready_to_dispatch']['issues']}
+        self.assertIn('CAPACITY_OVER_CAPACITY', capacity_issue_codes)
+        self.assertEqual(capacity_card['capacity']['capacity_state'], 'OVER_CAPACITY')
+
+        done_card = card_by_operation_id[done_operations[0].id]
+        skipped_card = card_by_operation_id[skipped_operations[0].id]
+        for inactive_card in (done_card, skipped_card):
+            self.assertEqual(inactive_card['ready_to_dispatch']['status'], 'BLOCKER')
+            inactive_issue_codes = {item['code'] for item in inactive_card['ready_to_dispatch']['issues']}
+            self.assertIn('OPERATION_INACTIVE', inactive_issue_codes)
+            self.assertFalse(inactive_card['ready_to_dispatch']['workflow_blocking'])
+            self.assertEqual(inactive_card['capacity']['active_scheduled_hours'], '0')
+
+        daily_queue = next(
+            item
+            for item in response.data['machine_queues']
+            if item['machine_code'] == daily_machine.code
+        )
+        self.assertEqual(daily_queue['total_operations'], 3)
+        self.assertEqual(daily_queue['scheduled_hours'], '1.00')
+        self.assertFalse(daily_queue['overloaded'])
+
+        morning_group = next(item for item in response.data['dispatch_groups'] if item['key'] == 'MORNING')
+        self.assertGreaterEqual(morning_group['ready_to_run_count'], 1)
+        self.assertGreaterEqual(morning_group['blocked_count'], 1)
+        self.assertGreaterEqual(response.data['summary']['ready_to_dispatch_count'], 1)
+        self.assertGreaterEqual(response.data['summary']['dispatch_warning_count'], 1)
+        self.assertGreaterEqual(response.data['summary']['dispatch_blocker_count'], 1)
+        self.assertGreaterEqual(response.data['summary']['over_capacity_count'], 1)
+
     def test_planning_board_returns_capacity_groups_and_filters(self):
         order = self._create_production_order(planned_qty='5')
         order_id = order['id']
