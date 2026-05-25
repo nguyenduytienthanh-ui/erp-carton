@@ -247,3 +247,88 @@ class ErpMainUatEvidencePackCommandTests(TestCase):
     def test_evidence_pack_rejects_uncontrolled_prefix(self):
         with self.assertRaises(CommandError):
             self._call_json('--prefix', 'QA_')
+
+
+class ErpMainUatCleanupPlanCommandTests(TestCase):
+    prefix = 'QA_UAT9H_'
+
+    def _call_json(self, *args):
+        stdout = StringIO()
+        call_command('erp_main_uat_cleanup_plan', '--format', 'json', *args, stdout=stdout)
+        return stdout.getvalue(), json.loads(stdout.getvalue())
+
+    def test_cleanup_plan_is_read_only_and_blocks_broad_prefixes(self):
+        before_counts = {
+            'customers': Customer.objects.count(),
+            'products': Product.objects.count(),
+            'sales_orders': SalesOrder.objects.count(),
+            'inventory_transactions': InventoryTransaction.objects.count(),
+        }
+
+        output, payload = self._call_json('--prefix', self.prefix)
+
+        self.assertEqual(payload['pack'], 'ERP Main UAT Data Cleanup Plan v1')
+        self.assertEqual(payload['mode'], 'read_only_cleanup_plan')
+        self.assertEqual(payload['cleanup_status'], 'not_performed')
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['delete_path_available'])
+        self.assertFalse(payload['safety']['confirm_delete_available'])
+        self.assertFalse(payload['safety']['broad_prefix_allowed'])
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            },
+        )
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+
+        with self.assertRaises(CommandError):
+            self._call_json('--prefix', 'QA_')
+        with self.assertRaises(CommandError):
+            self._call_json('--prefix', 'QA_UAT_')
+
+    def test_cleanup_plan_counts_prefixed_uat_candidates_and_dependency_order(self):
+        call_command('erp_main_real_dev_uat_drill', '--prefix', self.prefix, '--confirm-write', stdout=StringIO())
+
+        _output, payload = self._call_json('--prefix', self.prefix)
+        groups = {group['key']: group for group in payload['candidate_groups']}
+
+        self.assertEqual(payload['overall_status'], 'ok')
+        self.assertEqual(groups['customers']['count'], 1)
+        self.assertEqual(groups['products']['count'], 4)
+        self.assertEqual(groups['product_operations']['count'], 3)
+        self.assertEqual(groups['product_routing_steps']['count'], 3)
+        self.assertEqual(groups['sales_orders']['count'], 1)
+        self.assertEqual(groups['sales_order_lines']['count'], 1)
+        self.assertEqual(groups['sales_order_delivery_plans']['count'], 1)
+        self.assertEqual(groups['production_demands']['count'], 1)
+        self.assertEqual(groups['production_orders']['count'], 1)
+        self.assertEqual(groups['production_operations']['count'], 5)
+        self.assertEqual(groups['production_material_requirements']['count'], 1)
+        self.assertEqual(groups['stocktakes']['count'], 1)
+        self.assertEqual(groups['stocktake_lines']['count'], 1)
+        self.assertEqual(groups['inventory_transactions']['count'], 5)
+        self.assertEqual(payload['dependency_order'][0], 'support_audit_refs')
+        self.assertLess(
+            payload['dependency_order'].index('inventory_transactions'),
+            payload['dependency_order'].index('products'),
+        )
+        self.assertTrue(any(group['key'] == 'support_audit_refs' for group in payload['blocked_or_unsafe_groups']))
+
+    def test_cleanup_plan_markdown_is_copy_friendly(self):
+        stdout = StringIO()
+        call_command('erp_main_uat_cleanup_plan', '--prefix', self.prefix, stdout=stdout)
+        output = stdout.getvalue()
+
+        self.assertIn('# ERP Main UAT Data Cleanup Plan v1', output)
+        self.assertIn('## Candidate cleanup scope', output)
+        self.assertIn('## Blocked / unsafe groups', output)
+        self.assertIn('No delete path exists in this milestone.', output)
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
