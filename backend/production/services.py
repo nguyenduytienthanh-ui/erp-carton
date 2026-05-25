@@ -780,6 +780,124 @@ def get_block_reason_label(value):
     return dict(ProductionOperationBlockReason.CHOICES).get(str(value or ''), '')
 
 
+EXECUTION_HANDOFF_AUDIT_ACTIONS = {
+    'UPDATE',
+    'SIGNAL',
+    'HANDOVER',
+    'SKIP_OPERATION',
+}
+
+EXECUTION_HANDOFF_ACTION_LABELS = {
+    'UPDATE': 'Cap nhat cong doan',
+    'SIGNAL': 'Tin hieu shop floor',
+    'HANDOVER': 'Chot handover',
+    'SKIP_OPERATION': 'Bo qua cong doan',
+}
+
+
+def _display_user(user):
+    if not user:
+        return ''
+    full_name = str(getattr(user, 'get_full_name', lambda: '')() or '').strip()
+    return full_name or getattr(user, 'username', '') or ''
+
+
+def _execution_state(operation):
+    if str(getattr(operation, 'block_reason_code', '') or '').strip():
+        return 'blocked'
+    if str(getattr(operation, 'handover_status', '') or '').strip():
+        return 'handover'
+    return str(getattr(operation, 'status', '') or '').strip().lower().replace('_', '-')
+
+
+def _audit_last_note(audit_log):
+    if audit_log is None:
+        return ''
+    new_values = audit_log.new_values if isinstance(audit_log.new_values, dict) else {}
+    action = str(getattr(audit_log, 'action', '') or '').strip().upper()
+    if action == 'HANDOVER':
+        return str(new_values.get('handover_note') or '').strip()
+    if action == 'SIGNAL':
+        return str(new_values.get('block_reason_note') or new_values.get('handover_note') or new_values.get('signal_code') or '').strip()
+    if action == 'SKIP_OPERATION':
+        return str(new_values.get('reason') or '').strip()
+    if action == 'UPDATE':
+        return str(
+            new_values.get('block_reason_note')
+            or new_values.get('note')
+            or new_values.get('status')
+            or ''
+        ).strip()
+    return ''
+
+
+def build_operation_execution_handoff(operation, *, latest_audit=None):
+    status_value = str(getattr(operation, 'status', '') or '').strip()
+    handover_status = str(getattr(operation, 'handover_status', '') or '').strip()
+    block_reason_code = str(getattr(operation, 'block_reason_code', '') or '').strip()
+    skipped_by = getattr(operation, 'skipped_by', None)
+    action = str(getattr(latest_audit, 'action', '') or '').strip().upper() if latest_audit else ''
+    return {
+        'state': _execution_state(operation),
+        'status': status_value,
+        'status_label': getattr(operation, 'get_status_display', lambda: '')() or '',
+        'is_active_execution': status_value in {ProductionOperationStatus.READY, ProductionOperationStatus.IN_PROGRESS},
+        'is_terminal': status_value in {ProductionOperationStatus.DONE, ProductionOperationStatus.SKIPPED},
+        'is_blocked': bool(block_reason_code),
+        'block_reason_code': block_reason_code,
+        'block_reason_label': get_block_reason_label(block_reason_code),
+        'block_reason_note': getattr(operation, 'block_reason_note', '') or '',
+        'dispatch_owner': getattr(operation, 'dispatch_owner', '') or '',
+        'handover_status': handover_status,
+        'handover_status_label': getattr(operation, 'get_handover_status_display', lambda: '')() or '',
+        'handover_receiver': getattr(operation, 'handover_receiver', '') or '',
+        'handover_note': getattr(operation, 'handover_note', '') or '',
+        'handover_at': getattr(operation, 'handover_at', None),
+        'skip_reason': getattr(operation, 'skip_reason', '') or '',
+        'skipped_at': getattr(operation, 'skipped_at', None),
+        'skipped_by': getattr(operation, 'skipped_by_id', None),
+        'skipped_by_display': _display_user(skipped_by),
+        'last_action': action,
+        'last_action_label': EXECUTION_HANDOFF_ACTION_LABELS.get(action, action),
+        'last_actor': _display_user(getattr(latest_audit, 'user', None)) if latest_audit else '',
+        'last_at': getattr(latest_audit, 'created_at', None) if latest_audit else None,
+        'last_note': _audit_last_note(latest_audit),
+        'audit_available': latest_audit is not None,
+        'advisory_only': True,
+        'workflow_blocking': False,
+    }
+
+
+def attach_execution_handoff_payloads(operations):
+    operation_rows = [operation for operation in operations if getattr(operation, 'id', None)]
+    if not operation_rows:
+        return operations
+    operation_ids = [int(operation.id) for operation in operation_rows]
+    latest_by_operation = {}
+    audit_rows = (
+        AuditLog.objects
+        .filter(
+            entity_type='ProductionOperation',
+            entity_id__in=operation_ids,
+            action__in=EXECUTION_HANDOFF_AUDIT_ACTIONS,
+        )
+        .select_related('user')
+        .order_by('entity_id', '-created_at', '-id')
+    )
+    for audit in audit_rows:
+        latest_by_operation.setdefault(int(audit.entity_id), audit)
+    for operation in operation_rows:
+        setattr(
+            operation,
+            '_execution_handoff',
+            build_operation_execution_handoff(
+                operation,
+                latest_audit=latest_by_operation.get(int(operation.id)),
+            ),
+        )
+    return operations
+
+
 def get_shift_capacity_hours(value):
     shift_key = str(value or '').strip().upper()
     shift = _get_shift_catalog_map().get(shift_key)
@@ -1224,7 +1342,7 @@ def skip_production_operation(operation, user, reason):
     if getattr(order, 'production_demand_id', None):
         demand = ProductionDemand.objects.filter(pk=order.production_demand_id).first()
 
-    AuditLog.objects.create(
+    audit = AuditLog.objects.create(
         user=user,
         action='SKIP_OPERATION',
         entity_type='ProductionOperation',
@@ -1269,6 +1387,7 @@ def skip_production_operation(operation, user, reason):
         'operation': operation,
         'order': order,
         'production_demand': demand,
+        'audit': audit,
     }
 
 

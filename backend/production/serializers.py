@@ -23,6 +23,7 @@ from production.models import (
 from production.services import (
     build_default_material_requirements,
     build_material_product_snapshot,
+    build_operation_execution_handoff,
     build_operation_planning_snapshot,
     build_production_product_snapshot,
     build_production_order_trace_code,
@@ -299,6 +300,7 @@ class ProductionOperationSerializer(serializers.ModelSerializer):
     next_step_name = serializers.SerializerMethodField()
     remaining_issue_qty = serializers.SerializerMethodField()
     remaining_issue_line_count = serializers.SerializerMethodField()
+    execution_handoff = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductionOperation
@@ -357,6 +359,7 @@ class ProductionOperationSerializer(serializers.ModelSerializer):
             'next_step_name',
             'remaining_issue_qty',
             'remaining_issue_line_count',
+            'execution_handoff',
             'created_at',
             'updated_at',
         ]
@@ -412,6 +415,12 @@ class ProductionOperationSerializer(serializers.ModelSerializer):
 
     def get_remaining_issue_line_count(self, obj):
         return self._get_planning_snapshot(obj).get('remaining_issue_line_count', 0)
+
+    def get_execution_handoff(self, obj):
+        payload = getattr(obj, '_execution_handoff', None)
+        if payload is not None:
+            return payload
+        return build_operation_execution_handoff(obj)
 
 
 class ProductionMaterialRequirementSerializer(serializers.ModelSerializer):

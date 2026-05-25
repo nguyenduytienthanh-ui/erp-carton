@@ -2216,6 +2216,16 @@ class ProductionDemandApiTests(APITestCase):
         self.assertEqual(response.data['operation']['skip_reason'], operation.skip_reason)
         self.assertEqual(response.data['operation']['skipped_by'], self.user.id)
         self.assertTrue(response.data['operation']['skipped_by_display'])
+        handoff = response.data['operation']['execution_handoff']
+        self.assertEqual(handoff['state'], 'handover' if operation.handover_status else 'skipped')
+        self.assertEqual(handoff['status'], ProductionOperationStatus.SKIPPED)
+        self.assertEqual(handoff['skip_reason'], operation.skip_reason)
+        self.assertEqual(handoff['last_action'], 'SKIP_OPERATION')
+        self.assertEqual(handoff['last_actor'], self.user.username)
+        self.assertIn('Khong can in mau', handoff['last_note'])
+        self.assertTrue(handoff['audit_available'])
+        self.assertTrue(handoff['advisory_only'])
+        self.assertFalse(handoff['workflow_blocking'])
         audit = AuditLog.objects.filter(entity_type='ProductionOperation', entity_id=operation.id).latest('id')
         self.assertEqual(audit.action, 'SKIP_OPERATION')
         self.assertEqual(audit.new_values['reason'], operation.skip_reason)
@@ -3355,6 +3365,17 @@ class ProductionWorkflowTests(APITestCase):
         self.assertEqual(response.data['operation']['material_readiness'], 'WAITING')
         self.assertTrue(response.data['operation']['planned_shift_label'])
         self.assertTrue(response.data['operation']['block_reason_label'])
+        handoff = response.data['operation']['execution_handoff']
+        self.assertEqual(handoff['state'], 'blocked')
+        self.assertEqual(handoff['status'], ProductionOperationStatus.READY)
+        self.assertEqual(handoff['block_reason_code'], 'WAIT_MATERIAL')
+        self.assertEqual(handoff['block_reason_note'], 'Cho xuat kho giay')
+        self.assertEqual(handoff['last_action'], 'UPDATE')
+        self.assertEqual(handoff['last_actor'], self.user.username)
+        self.assertIn('Cho xuat kho giay', handoff['last_note'])
+        self.assertTrue(handoff['audit_available'])
+        self.assertTrue(handoff['advisory_only'])
+        self.assertFalse(handoff['workflow_blocking'])
 
         audit = AuditLog.objects.filter(entity_type='ProductionOperation', entity_id=operation.id).latest('id')
         self.assertEqual(audit.action, 'UPDATE')
@@ -3691,6 +3712,22 @@ class ProductionWorkflowTests(APITestCase):
         self.assertIn('days_to_delivery', board_response.data['watchlist'][0]['exceptions'])
         self.assertIn('delivery_gap_days', board_response.data['watchlist'][0]['exceptions'])
         self.assertIn('shop_floor', board_response.data['watchlist'][0])
+        cards = [
+            card
+            for lane in board_response.data['lanes']
+            for bucket in lane['buckets']
+            for card in bucket['cards']
+        ]
+        card_by_operation_id = {card['operation']['id']: card for card in cards}
+        first_card = card_by_operation_id[operations[0].id]
+        second_card = card_by_operation_id[operations[1].id]
+        self.assertEqual(first_card['execution_handoff']['last_action'], 'UPDATE')
+        self.assertEqual(first_card['operation']['execution_handoff']['last_action'], 'UPDATE')
+        self.assertEqual(first_card['shop_floor']['last_action'], 'UPDATE')
+        self.assertTrue(first_card['execution_handoff']['audit_available'])
+        self.assertEqual(second_card['execution_handoff']['state'], 'blocked')
+        self.assertEqual(second_card['execution_handoff']['block_reason_code'], 'WAIT_PREVIOUS_STEP')
+        self.assertEqual(second_card['shop_floor']['last_actor'], self.user.username)
 
         shift_filtered = self.client.get('/api/production/orders/planning_board/', {'planned_shift': 'AFTERNOON'})
         self.assertEqual(shift_filtered.status_code, 200, shift_filtered.data)
@@ -4790,6 +4827,15 @@ class ProductionWorkflowTests(APITestCase):
         self.assertEqual(operation.block_reason_note, 'May can doi dao')
         self.assertEqual(operation.dispatch_owner, 'Ca B')
         self.assertEqual(operation.handover_status, 'ACTIVE')
+        handoff = response.data['operations'][0]['operation']['execution_handoff']
+        self.assertEqual(handoff['state'], 'blocked')
+        self.assertEqual(handoff['block_reason_code'], 'MACHINE_DOWN')
+        self.assertEqual(handoff['dispatch_owner'], 'Ca B')
+        self.assertEqual(handoff['handover_status'], 'ACTIVE')
+        self.assertEqual(handoff['last_action'], 'SIGNAL')
+        self.assertEqual(handoff['last_actor'], self.user.username)
+        self.assertIn('May can doi dao', handoff['last_note'])
+        self.assertTrue(handoff['audit_available'])
         audit = AuditLog.objects.filter(entity_type='ProductionOperation', entity_id=operation.id).latest('id')
         self.assertEqual(audit.action, 'SIGNAL')
         self.assertEqual(audit.new_values['signal_code'], 'MACHINE_DOWN')
@@ -4830,6 +4876,16 @@ class ProductionWorkflowTests(APITestCase):
         self.assertEqual(operation.handover_note, 'Da tiep quan tai Trung tam quet QR')
         self.assertEqual(operation.block_reason_code, '')
         self.assertEqual(operation.status, 'READY')
+        handoff = response.data['operations'][0]['operation']['execution_handoff']
+        self.assertEqual(handoff['state'], 'handover')
+        self.assertEqual(handoff['status'], ProductionOperationStatus.READY)
+        self.assertEqual(handoff['handover_status'], 'ACCEPTED')
+        self.assertEqual(handoff['handover_receiver'], 'To boi')
+        self.assertEqual(handoff['handover_note'], 'Da tiep quan tai Trung tam quet QR')
+        self.assertEqual(handoff['last_action'], 'HANDOVER')
+        self.assertEqual(handoff['last_actor'], self.user.username)
+        self.assertIn('Da tiep quan', handoff['last_note'])
+        self.assertTrue(handoff['audit_available'])
         audit = AuditLog.objects.filter(entity_type='ProductionOperation', entity_id=operation.id).latest('id')
         self.assertEqual(audit.action, 'HANDOVER')
         self.assertEqual(audit.new_values['handover_status'], 'ACCEPTED')

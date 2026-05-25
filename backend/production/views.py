@@ -67,6 +67,8 @@ from production.services import (
     add_issued_qty,
     add_produced_qty,
     advance_ready_operations,
+    attach_execution_handoff_payloads,
+    build_operation_execution_handoff,
     build_material_product_snapshot,
     build_operation_planning_snapshot,
     build_production_order_trace_code,
@@ -125,7 +127,7 @@ def _can_manage_production(user):
 
 
 def _log_production_audit(request, *, action, entity_type, entity_id, entity_code, old_values, new_values):
-    AuditLog.objects.create(
+    return AuditLog.objects.create(
         user=request.user,
         action=action,
         entity_type=entity_type,
@@ -3504,6 +3506,7 @@ def _matches_planning_filter(
 def _serialize_planning_card(order, operation, *, snapshot, today):
     setattr(operation, '_planning_snapshot', snapshot)
     operation_payload = ProductionOperationSerializer(operation).data
+    execution_handoff = operation_payload.get('execution_handoff') or {}
     customer = getattr(getattr(order, 'sales_order', None), 'customer', None)
     planned_date = getattr(operation, 'planned_date', None)
     issue_rows = list(order.issues.all())
@@ -3578,6 +3581,7 @@ def _serialize_planning_card(order, operation, *, snapshot, today):
             'reference': order.reference,
         },
         'operation': operation_payload,
+        'execution_handoff': execution_handoff,
         'product_readiness': snapshot.get('product_readiness') or {},
         'sales': {
             'sales_order_id': getattr(order, 'sales_order_id', None),
@@ -3620,6 +3624,12 @@ def _serialize_planning_card(order, operation, *, snapshot, today):
             'handover_receiver': operation.handover_receiver or '',
             'handover_note': operation.handover_note or '',
             'handover_at': operation.handover_at,
+            'last_action': execution_handoff.get('last_action', ''),
+            'last_action_label': execution_handoff.get('last_action_label', ''),
+            'last_actor': execution_handoff.get('last_actor', ''),
+            'last_at': execution_handoff.get('last_at'),
+            'last_note': execution_handoff.get('last_note', ''),
+            'audit_available': bool(execution_handoff.get('audit_available')),
         },
         'capacity': {
             'work_center_code': operation.work_center_code or '',
@@ -4630,7 +4640,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         operation.production_order = order
         snapshot = build_operation_planning_snapshot(operation, order=order)
         setattr(operation, '_planning_snapshot', snapshot)
-        _log_production_audit(
+        audit = _log_production_audit(
             request,
             action='UPDATE',
             entity_type='ProductionOperation',
@@ -4659,6 +4669,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 'dependency_state': snapshot['dependency_state'],
             },
         )
+        setattr(operation, '_execution_handoff', build_operation_execution_handoff(operation, latest_audit=audit))
         return Response({
             'order_status': ProductionOrder.objects.get(pk=order.id).status,
             'operation': ProductionOperationSerializer(operation).data,
@@ -4698,6 +4709,11 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             today=timezone.localdate(),
         )
         setattr(skipped_operation, '_planning_snapshot', snapshot)
+        setattr(
+            skipped_operation,
+            '_execution_handoff',
+            build_operation_execution_handoff(skipped_operation, latest_audit=result.get('audit')),
+        )
         response_data = {
             'message': 'Da bo qua cong doan.',
             'order_status': refreshed_order.status,
@@ -5384,7 +5400,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                     today=timezone.localdate(),
                 )
                 setattr(refreshed_operation, '_planning_snapshot', snapshot)
-                _log_production_audit(
+                audit = _log_production_audit(
                     request,
                     action='SIGNAL',
                     entity_type='ProductionOperation',
@@ -5400,6 +5416,11 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                         'handover_note': refreshed_operation.handover_note or '',
                         'signal_code': signal_code,
                     },
+                )
+                setattr(
+                    refreshed_operation,
+                    '_execution_handoff',
+                    build_operation_execution_handoff(refreshed_operation, latest_audit=audit),
                 )
                 updated_rows.append({
                     'order_id': refreshed_order.id,
@@ -5516,7 +5537,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                     today=timezone.localdate(),
                 )
                 setattr(refreshed_operation, '_planning_snapshot', snapshot)
-                _log_production_audit(
+                audit = _log_production_audit(
                     request,
                     action='HANDOVER',
                     entity_type='ProductionOperation',
@@ -5532,6 +5553,11 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
                         'handover_note': refreshed_operation.handover_note or '',
                         'handover_at': refreshed_operation.handover_at.isoformat() if refreshed_operation.handover_at else None,
                     },
+                )
+                setattr(
+                    refreshed_operation,
+                    '_execution_handoff',
+                    build_operation_execution_handoff(refreshed_operation, latest_audit=audit),
                 )
                 updated_rows.append({
                     'order_id': refreshed_order.id,
@@ -5914,9 +5940,15 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         affected_sales_order_ids = set()
         summary_cards = []
         active_orders = list(active_qs)
+        active_order_contexts = []
+        summary_operations = []
         for order in active_orders:
             operations = list(order.operations.all().order_by('sequence'))
             requirements = list(order.material_requirements.all())
+            active_order_contexts.append((order, operations, requirements))
+            summary_operations.extend(operations)
+        attach_execution_handoff_payloads(summary_operations)
+        for order, operations, requirements in active_order_contexts:
             order_needs_attention = False
             for operation in operations:
                 snapshot = build_operation_planning_snapshot(
@@ -6091,9 +6123,15 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
         orders = list(queryset)
         raw_cards = []
+        order_contexts = []
+        board_operations = []
         for order in orders:
             operations = list(order.operations.all())
             requirements = list(order.material_requirements.all())
+            order_contexts.append((order, operations, requirements))
+            board_operations.extend(operations)
+        attach_execution_handoff_payloads(board_operations)
+        for order, operations, requirements in order_contexts:
             for operation in operations:
                 if (planned_date_from or planned_date_to) and operation.planned_date is None:
                     continue
