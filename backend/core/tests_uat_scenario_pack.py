@@ -1,6 +1,7 @@
 import json
 from io import StringIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -12,6 +13,15 @@ from inventory.models import InventoryTransaction
 from products.models import Product
 from production.models import ProductionDemand, ProductionOrder
 from sales.models import SalesOrder
+
+
+def _create_backup_bundle(root: Path, name: str) -> Path:
+    bundle = root / name
+    bundle.mkdir()
+    (bundle / 'database.sql').write_text('-- test backup\n', encoding='utf-8')
+    (bundle / 'backup_manifest.json').write_text(json.dumps({'status': 'ok'}), encoding='utf-8')
+    (bundle / 'restore_dry_run.json').write_text(json.dumps({'status': 'ok'}), encoding='utf-8')
+    return bundle
 
 
 class ErpMainUatScenarioPackTests(SimpleTestCase):
@@ -129,3 +139,111 @@ class ErpMainRealDevUatDrillCommandTests(TestCase):
         self.assertIn('# ERP Main Real-Dev UAT Drill v1', output)
         self.assertIn('Mode: dry_run', output)
         self.assertIn('DB write requires --confirm-write.', output)
+
+
+class ErpMainUatEvidencePackCommandTests(TestCase):
+    prefix = 'QA_UAT9H_'
+
+    def _call_json(self, *args):
+        stdout = StringIO()
+        call_command('erp_main_uat_evidence_pack', '--format', 'json', *args, stdout=stdout)
+        return stdout.getvalue(), json.loads(stdout.getvalue())
+
+    def test_evidence_pack_is_read_only_and_reports_missing_retained_data(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            pre_backup = _create_backup_bundle(root, 'pre')
+            post_backup = _create_backup_bundle(root, 'post')
+            before_counts = {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            }
+
+            output, payload = self._call_json(
+                '--prefix',
+                self.prefix,
+                '--pre-backup',
+                str(pre_backup),
+                '--post-backup',
+                str(post_backup),
+            )
+
+        self.assertEqual(payload['pack'], 'ERP Main UAT Evidence & Operator Checklist v1')
+        self.assertEqual(payload['mode'], 'read_only_evidence_check')
+        self.assertEqual(payload['overall_status'], 'warning')
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['cleanup_enabled'])
+        self.assertFalse(payload['safety']['credentials_printed'])
+        self.assertEqual(len(payload['scenario_results']), 6)
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            },
+        )
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+
+    def test_evidence_pack_reports_retained_real_dev_uat_data(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            pre_backup = _create_backup_bundle(root, 'pre')
+            post_backup = _create_backup_bundle(root, 'post')
+            call_command('erp_main_real_dev_uat_drill', '--prefix', self.prefix, '--confirm-write', stdout=StringIO())
+
+            _output, payload = self._call_json(
+                '--prefix',
+                self.prefix,
+                '--pre-backup',
+                str(pre_backup),
+                '--post-backup',
+                str(post_backup),
+            )
+
+        self.assertEqual(payload['overall_status'], 'ok')
+        self.assertEqual(payload['backups']['pre_uat']['status'], 'ok')
+        self.assertEqual(payload['backups']['post_uat']['status'], 'ok')
+        self.assertTrue(payload['uat_data']['retained_for_audit'])
+        self.assertFalse(payload['uat_data']['cleanup_performed'])
+        self.assertEqual(payload['uat_data']['counts']['products'], 4)
+        self.assertEqual(payload['uat_data']['counts']['sales_orders'], 1)
+        self.assertEqual(payload['uat_data']['counts']['production_orders'], 1)
+        self.assertEqual(payload['uat_data']['counts']['inventory_transactions'], 5)
+        self.assertTrue(all(item['status'] == 'pass' for item in payload['scenario_results']))
+
+    def test_evidence_pack_markdown_is_operator_friendly(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            pre_backup = _create_backup_bundle(root, 'pre')
+            post_backup = _create_backup_bundle(root, 'post')
+            stdout = StringIO()
+            call_command(
+                'erp_main_uat_evidence_pack',
+                '--prefix',
+                self.prefix,
+                '--pre-backup',
+                str(pre_backup),
+                '--post-backup',
+                str(post_backup),
+                stdout=stdout,
+            )
+            output = stdout.getvalue()
+
+        self.assertIn('# ERP Main UAT Evidence & Operator Checklist v1', output)
+        self.assertIn('## Operator checklist', output)
+        self.assertIn('Product / Product manager', output)
+        self.assertIn('Inventory operator / Manager', output)
+        self.assertIn('This pack is read-only.', output)
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+
+    def test_evidence_pack_rejects_uncontrolled_prefix(self):
+        with self.assertRaises(CommandError):
+            self._call_json('--prefix', 'QA_')
