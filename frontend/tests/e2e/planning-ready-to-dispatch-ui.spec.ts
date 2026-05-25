@@ -365,14 +365,18 @@ test('planning board shows ready-to-dispatch badges, panel, and quick filter', a
   await expect(page.getByTestId('production-planning-ready-to-dispatch-ready').first()).toBeVisible();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-warning').first()).toBeVisible();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-blocker').first()).toBeVisible();
+  await expect(page.getByTestId('production-planning-ready-to-dispatch-action-plan')).toContainText('Kiểm tra vật tư/tồn nguồn');
+  await expect(page.getByTestId('production-planning-ready-to-dispatch-action-plan')).toContainText('Chờ bàn giao công đoạn trước');
 
   await page.getByTestId('production-planning-quick-dispatch-warning').click();
   await expect(page).toHaveURL(/ready_to_dispatch=WARNING/);
   await expect(page.getByText('MO-WARN')).toBeVisible();
   await expect(page.getByText('MO-READY')).toHaveCount(0);
   await expect(page.getByText('MO-BLOCK')).toHaveCount(0);
+  await expect(page.getByTestId('production-planning-card-dispatch-summary').first()).toContainText('Đối chiếu cấp vật tư');
 
   await page.getByRole('button', { name: 'Chi tiết' }).click();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-detail')).toBeVisible();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-detail')).toContainText('WARNING');
+  await expect(page.getByTestId('production-planning-ready-to-dispatch-actions')).toContainText('Kiểm tra vật tư/tồn nguồn');
 });
