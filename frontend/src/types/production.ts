@@ -23,6 +23,7 @@ export type ProductionOperationMaterialReadiness = 'READY' | 'PARTIAL' | 'WAITIN
 export type ProductionReadyToDispatchStatus = 'READY' | 'WARNING' | 'BLOCKER';
 export type ProductionOperationDependencyState = 'ROOT' | 'CLEAR' | 'WAIT_PREVIOUS_STEP';
 export type ProductionOperationRiskState = 'DONE' | 'UNSCHEDULED' | 'OVERDUE' | 'BLOCKED' | 'AT_RISK' | 'ON_TRACK';
+export type ProductionExecutionHandoffState = 'pending' | 'ready' | 'in-progress' | 'done' | 'skipped' | 'blocked' | 'handover' | string;
 export type ProductionIssueStatus = 'POSTED' | 'CANCELLED';
 export type ProductionReceiptStatus = 'POSTED' | 'CANCELLED';
 export type ProductionDemandPlanningStatus =
@@ -240,8 +241,40 @@ export interface ProductionOperation {
   next_step_name?: string | null;
   remaining_issue_qty?: string;
   remaining_issue_line_count?: number;
+  execution_handoff?: ProductionExecutionHandoff;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProductionExecutionHandoff {
+  state?: ProductionExecutionHandoffState;
+  state_label?: string;
+  status?: ProductionOperationStatus | string;
+  status_label?: string;
+  is_active_execution?: boolean;
+  is_terminal?: boolean;
+  is_blocked?: boolean;
+  block_reason_code?: ProductionOperationBlockReasonCode | '';
+  block_reason_label?: string;
+  block_reason_note?: string;
+  dispatch_owner?: string;
+  handover_status?: ProductionOperationHandoverStatus | '';
+  handover_status_label?: string;
+  handover_receiver?: string;
+  handover_note?: string;
+  handover_at?: string | null;
+  skip_reason?: string;
+  skipped_at?: string | null;
+  skipped_by?: number | null;
+  skipped_by_display?: string;
+  last_action?: string;
+  last_action_label?: string;
+  last_actor?: string;
+  last_at?: string | null;
+  last_note?: string;
+  audit_available?: boolean;
+  advisory_only?: boolean;
+  workflow_blocking?: boolean;
 }
 
 export interface ProductionOperationSkipPayload {
@@ -358,7 +391,14 @@ export interface ProductionPlanningCard {
     handover_receiver?: string;
     handover_note?: string;
     handover_at?: string | null;
+    last_action?: string;
+    last_action_label?: string;
+    last_actor?: string;
+    last_at?: string | null;
+    last_note?: string;
+    audit_available?: boolean;
   };
+  execution_handoff?: ProductionExecutionHandoff;
   capacity: {
     work_center_code?: string;
     work_center_name?: string;

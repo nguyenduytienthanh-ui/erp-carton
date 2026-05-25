@@ -86,7 +86,7 @@ function makeCard(id: number, status: DispatchStatus, overrides: Record<string, 
     : status === 'WARNING'
       ? readyIssue('WARNING', 'MATERIAL_NOT_READY', 'material', 'Vat tu chua duoc cap day du.')
       : readyIssue('BLOCKER', 'WAIT_PREVIOUS_STEP', 'dependency', 'Cong doan dang cho cong doan truoc hoan tat.');
-  const operation = {
+  const operationBase = {
     ...baseOperation,
     id,
     step_code: id === 3 ? 'BE' : 'IN',
@@ -99,6 +99,40 @@ function makeCard(id: number, status: DispatchStatus, overrides: Record<string, 
     planned_shift: status === 'WARNING' ? '' : 'FULLDAY',
     planned_shift_label: status === 'WARNING' ? '' : 'Ca ngay',
     ...(overrides.operation as Record<string, unknown> | undefined),
+  };
+  const executionHandoff = {
+    state: status === 'READY' ? 'handover' : 'blocked',
+    state_label: status === 'READY' ? 'Da ban giao' : 'Dang bi nghen',
+    status: operationBase.status,
+    status_label: status === 'READY' ? 'San sang' : 'Cho xu ly',
+    is_active_execution: status !== 'BLOCKER',
+    is_terminal: false,
+    is_blocked: status !== 'READY',
+    block_reason_code: status === 'WARNING' ? 'WAIT_MATERIAL' : status === 'BLOCKER' ? 'WAIT_PREVIOUS_STEP' : '',
+    block_reason_label: status === 'WARNING' ? 'Cho vat tu' : status === 'BLOCKER' ? 'Cho cong doan truoc' : '',
+    block_reason_note: status === 'WARNING' ? 'Kho chua cap giay.' : status === 'BLOCKER' ? 'Can hoan tat cong doan In.' : '',
+    dispatch_owner: 'Planner',
+    handover_status: status === 'READY' ? 'ACCEPTED' : '',
+    handover_status_label: status === 'READY' ? 'Da tiep quan' : '',
+    handover_receiver: status === 'READY' ? 'To In' : '',
+    handover_note: status === 'READY' ? 'Line accepted handover' : '',
+    handover_at: status === 'READY' ? '2026-05-23T08:30:00Z' : null,
+    skip_reason: '',
+    skipped_at: null,
+    skipped_by: null,
+    skipped_by_display: '',
+    last_action: status === 'READY' ? 'HANDOVER' : status === 'WARNING' ? 'SIGNAL' : 'UPDATE',
+    last_action_label: status === 'READY' ? 'Handover accepted' : status === 'WARNING' ? 'Shop-floor signal' : 'Planner update',
+    last_actor: status === 'WARNING' ? 'operator_a' : 'planner_a',
+    last_at: status === 'WARNING' ? '2026-05-23T09:00:00Z' : '2026-05-23T08:30:00Z',
+    last_note: status === 'WARNING' ? 'Floor reports waiting material' : status === 'BLOCKER' ? 'Waiting previous operation' : 'Line accepted handover',
+    audit_available: true,
+    advisory_only: true,
+    workflow_blocking: false,
+  };
+  const operation = {
+    ...operationBase,
+    execution_handoff: executionHandoff,
   };
   const materials = {
     material_readiness: status === 'WARNING' ? 'WAITING' : 'READY',
@@ -155,12 +189,19 @@ function makeCard(id: number, status: DispatchStatus, overrides: Record<string, 
     },
     shop_floor: {
       dispatch_owner: 'Planner',
-      handover_status: '',
-      handover_status_label: '',
-      handover_receiver: '',
-      handover_note: '',
-      handover_at: null,
+      handover_status: executionHandoff.handover_status,
+      handover_status_label: executionHandoff.handover_status_label,
+      handover_receiver: executionHandoff.handover_receiver,
+      handover_note: executionHandoff.handover_note,
+      handover_at: executionHandoff.handover_at,
+      last_action: executionHandoff.last_action,
+      last_action_label: executionHandoff.last_action_label,
+      last_actor: executionHandoff.last_actor,
+      last_at: executionHandoff.last_at,
+      last_note: executionHandoff.last_note,
+      audit_available: true,
     },
+    execution_handoff: executionHandoff,
     capacity: {
       work_center_code: status === 'WARNING' ? '' : 'WC-IN',
       work_center_name: status === 'WARNING' ? '' : 'To In',
@@ -365,6 +406,9 @@ test('planning board shows ready-to-dispatch badges, panel, and quick filter', a
   await expect(page.getByTestId('production-planning-ready-to-dispatch-ready').first()).toBeVisible();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-warning').first()).toBeVisible();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-blocker').first()).toBeVisible();
+  await expect(page.getByTestId('production-planning-execution-state-handover').first()).toBeVisible();
+  await expect(page.getByTestId('production-planning-execution-audit-1').first()).toContainText('Handover accepted');
+  await expect(page.getByTestId('production-planning-execution-audit-1').first()).toContainText('planner_a');
   await expect(page.getByTestId('production-planning-ready-to-dispatch-action-plan')).toContainText('Kiểm tra vật tư/tồn nguồn');
   await expect(page.getByTestId('production-planning-ready-to-dispatch-action-plan')).toContainText('Chờ bàn giao công đoạn trước');
 
@@ -373,10 +417,14 @@ test('planning board shows ready-to-dispatch badges, panel, and quick filter', a
   await expect(page.getByText('MO-WARN')).toBeVisible();
   await expect(page.getByText('MO-READY')).toHaveCount(0);
   await expect(page.getByText('MO-BLOCK')).toHaveCount(0);
+  await expect(page.getByTestId('production-planning-execution-audit-2')).toContainText('Shop-floor signal');
+  await expect(page.getByTestId('production-planning-execution-audit-2')).toContainText('operator_a');
   await expect(page.getByTestId('production-planning-card-dispatch-summary').first()).toContainText('Đối chiếu cấp vật tư');
 
   await page.getByRole('button', { name: 'Chi tiết' }).click();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-detail')).toBeVisible();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-detail')).toContainText('WARNING');
+  await expect(page.getByTestId('production-planning-execution-handoff-detail')).toBeVisible();
+  await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Floor reports waiting material');
   await expect(page.getByTestId('production-planning-ready-to-dispatch-actions')).toContainText('Kiểm tra vật tư/tồn nguồn');
 });

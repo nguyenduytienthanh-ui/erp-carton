@@ -240,6 +240,24 @@ const operationStatusLabel = {
   DONE: 'Hoàn thành',
   SKIPPED: 'Bỏ qua',
 } as const;
+const executionStateLabel: Record<string, string> = {
+  pending: 'Chờ xử lý',
+  ready: 'Sẵn sàng thực thi',
+  'in-progress': 'Đang thực thi',
+  done: 'Đã hoàn thành',
+  skipped: 'Đã bỏ qua',
+  blocked: 'Đang bị nghẽn',
+  handover: 'Đã bàn giao',
+};
+const executionStateColor: Record<string, string> = {
+  pending: 'default',
+  ready: 'processing',
+  'in-progress': 'gold',
+  done: 'success',
+  skipped: 'magenta',
+  blocked: 'volcano',
+  handover: 'cyan',
+};
 const isInactiveOperationStatus = (status?: string | null) => status === 'DONE' || status === 'SKIPPED';
 const DEFAULT_DISPATCH_SEQUENCE = 100;
 const DISPATCH_SEQUENCE_STEP = 10;
@@ -503,6 +521,134 @@ const formatDeliveryGap = (value?: number | null) => {
   return `Còn đệm ${value} ngày trước hạn giao`;
 };
 const getHandoverColor = (value?: ProductionOperationHandoverStatus | '') => (value ? handoverColor[value as ProductionOperationHandoverStatus] : 'default');
+const getExecutionHandoff = (card: ProductionPlanningCard): NonNullable<ProductionPlanningCard['execution_handoff']> => (
+  card.execution_handoff || card.operation.execution_handoff || {}
+);
+const getExecutionState = (card: ProductionPlanningCard) => {
+  const handoff = getExecutionHandoff(card);
+  const explicitState = String(handoff.state || '').trim().toLowerCase();
+  if (explicitState) {
+    return explicitState;
+  }
+  if (String(handoff.block_reason_code || card.operation.block_reason_code || '').trim()) {
+    return 'blocked';
+  }
+  if (card.operation.status === 'DONE') {
+    return 'done';
+  }
+  if (card.operation.status === 'SKIPPED') {
+    return 'skipped';
+  }
+  if (card.shop_floor.handover_status || handoff.handover_status) {
+    return 'handover';
+  }
+  if (card.operation.status === 'IN_PROGRESS') {
+    return 'in-progress';
+  }
+  if (card.operation.status === 'READY') {
+    return 'ready';
+  }
+  return 'pending';
+};
+const getExecutionStateLabel = (card: ProductionPlanningCard) => {
+  const handoff = getExecutionHandoff(card);
+  const state = getExecutionState(card);
+  return handoff.state_label || handoff.status_label || executionStateLabel[state] || state;
+};
+const getExecutionStateColor = (state: string) => executionStateColor[state] || 'default';
+const getExecutionLastAction = (card: ProductionPlanningCard) => {
+  const handoff = getExecutionHandoff(card);
+  const action = String(handoff.last_action_label || card.shop_floor.last_action_label || handoff.last_action || card.shop_floor.last_action || '').trim();
+  const actor = String(handoff.last_actor || card.shop_floor.last_actor || '').trim();
+  const at = handoff.last_at || card.shop_floor.last_at || null;
+  const note = String(handoff.last_note || card.shop_floor.last_note || '').trim();
+  const auditAvailable = Boolean(
+    handoff.audit_available
+    || card.shop_floor.audit_available
+    || action
+    || actor
+    || at
+    || note,
+  );
+  return {
+    action: action || 'Chưa có thao tác audit gần nhất',
+    actor: actor || 'Chưa rõ người thao tác',
+    at,
+    note,
+    auditAvailable,
+  };
+};
+const renderExecutionHandoffTag = (card: ProductionPlanningCard) => {
+  const state = getExecutionState(card);
+  const testState = state.replace(/[^a-z0-9-]/gi, '-');
+  return (
+    <Tooltip title="Payload execution_handoff chỉ phục vụ theo dõi/audit, không chặn workflow.">
+      <Tag color={getExecutionStateColor(state)} data-testid={`production-planning-execution-state-${testState}`}>
+        {getExecutionStateLabel(card)}
+      </Tag>
+    </Tooltip>
+  );
+};
+const renderExecutionAuditSummary = (card: ProductionPlanningCard, compact = false) => {
+  const handoff = getExecutionHandoff(card);
+  const lastAction = getExecutionLastAction(card);
+  return (
+    <Space
+      direction="vertical"
+      size={compact ? 2 : 4}
+      data-testid={`production-planning-execution-audit-${card.operation.id}`}
+      style={{ width: '100%' }}
+    >
+      <Space wrap size={4}>
+        {renderExecutionHandoffTag(card)}
+        {handoff.advisory_only || handoff.workflow_blocking === false ? <Tag color="default">Advisory</Tag> : null}
+      </Space>
+      <Text type="secondary">
+        {lastAction.auditAvailable
+          ? `${lastAction.action} · ${lastAction.actor} · ${formatDateTime(lastAction.at)}`
+          : 'Chưa có audit thao tác gần nhất'}
+      </Text>
+      {!compact && lastAction.note ? <Text type="secondary">{lastAction.note}</Text> : null}
+    </Space>
+  );
+};
+const renderExecutionHandoffDetails = (card: ProductionPlanningCard) => {
+  const handoff = getExecutionHandoff(card);
+  const lastAction = getExecutionLastAction(card);
+  const handoverStatus = handoff.handover_status_label || card.shop_floor.handover_status_label || 'Chưa chốt';
+  const handoverReceiver = handoff.handover_receiver || card.shop_floor.handover_receiver || 'Chưa có người nhận';
+  const handoverAt = handoff.handover_at || card.shop_floor.handover_at || null;
+  const handoverNote = handoff.handover_note || card.shop_floor.handover_note || '';
+  const blockReason = handoff.block_reason_label || card.operation.block_reason_label || card.exceptions.block_reason_label || 'Không có';
+  const blockNote = handoff.block_reason_note || card.operation.block_reason_note || card.exceptions.block_reason_note || '';
+  const skipReason = handoff.skip_reason || card.operation.skip_reason || '';
+  const skippedAt = handoff.skipped_at || card.operation.skipped_at || null;
+  const skippedBy = handoff.skipped_by_display || card.operation.skipped_by_display || '';
+  return (
+    <Card size="small" title="Bàn giao thực thi / audit" data-testid="production-planning-execution-handoff-detail">
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space wrap>
+          {renderExecutionHandoffTag(card)}
+          <Tag color="default">Chỉ hiển thị, không chặn workflow</Tag>
+          {handoff.audit_available ?? card.shop_floor.audit_available ? <Tag color="blue">Có audit</Tag> : <Tag>Chưa có audit</Tag>}
+        </Space>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+          <div><strong>Trạng thái công đoạn:</strong> {`${getExecutionStateLabel(card)} · ${operationStatusLabel[card.operation.status]}`}</div>
+          <div><strong>Floor owner:</strong> {handoff.dispatch_owner || card.shop_floor.dispatch_owner || 'Chưa gán'}</div>
+          <div><strong>Handover:</strong> {`${handoverStatus} · ${handoverReceiver} · ${formatDateTime(handoverAt)}`}</div>
+          <div><strong>Block reason:</strong> {blockReason}</div>
+          <div><strong>Skip:</strong> {skipReason ? `${skipReason} · ${skippedBy || 'Không rõ'} · ${formatDateTime(skippedAt)}` : 'Không bỏ qua'}</div>
+          <div><strong>Thao tác gần nhất:</strong> {lastAction.action}</div>
+          <div><strong>Người thao tác:</strong> {lastAction.actor}</div>
+          <div><strong>Thời điểm:</strong> {formatDateTime(lastAction.at)}</div>
+        </div>
+        {lastAction.note ? <Alert type="info" showIcon message="Ghi chú thao tác gần nhất" description={lastAction.note} /> : null}
+        {handoverNote ? <Text type="secondary">{`Ghi chú handover: ${handoverNote}`}</Text> : null}
+        {blockNote ? <Text type="secondary">{`Ghi chú nghẽn: ${blockNote}`}</Text> : null}
+      </Space>
+    </Card>
+  );
+};
 const getCapacityColor = (value?: ProductionCapacityState | '') => {
   if (value === 'OVER_CAPACITY') return 'error';
   if (value === 'AT_LIMIT') return 'gold';
@@ -2918,6 +3064,7 @@ export default function ProductionPlanningBoard() {
           <Tag color={readiness.color}>{readiness.label}</Tag>
         </Tooltip>
         {renderOperationStatusTag(card.operation)}
+        {renderExecutionHandoffTag(card)}
         {stepLabel ? <Tag>{`Bước ${stepLabel}`}</Tag> : null}
         {card.operation.group_code ? <Tag>{`Nhóm ${card.operation.group_code}`}</Tag> : null}
         {card.operation.allow_parallel ? (
@@ -3005,7 +3152,7 @@ export default function ProductionPlanningBoard() {
     {
       title: 'Shop-floor',
       key: 'shop-floor',
-      width: 210,
+      width: 260,
       render: (_, card) => (
         <Space direction="vertical" size={6}>
           {card.shop_floor.handover_status ? (
@@ -3014,6 +3161,7 @@ export default function ProductionPlanningBoard() {
             <Tag>Chưa chốt handover</Tag>
           )}
           <Text type="secondary">{card.shop_floor.dispatch_owner || 'Chưa gán người phụ trách'}</Text>
+          {renderExecutionAuditSummary(card, true)}
           <Text type="secondary">{formatDeliveryGap(card.exceptions.delivery_gap_days)}</Text>
         </Space>
       ),
@@ -4582,6 +4730,7 @@ export default function ProductionPlanningBoard() {
                                 </Tooltip>
                                 {renderReadyToDispatchTag(card)}
                                 {renderOperationStatusTag(card.operation)}
+                                {renderExecutionHandoffTag(card)}
                                 <Tag color={readinessColor[card.materials.material_readiness]}>{card.materials.material_readiness_label}</Tag>
                                 <Tag color={getCapacityColor(card.capacity.capacity_state)}>{card.capacity.capacity_state_label}</Tag>
                                 {card.operation.display_step || card.operation.route_step_no ? <Tag>{`Bước ${card.operation.display_step ?? card.operation.route_step_no}`}</Tag> : null}
@@ -4612,6 +4761,7 @@ export default function ProductionPlanningBoard() {
                             <Progress percent={getOperationProgressPercent(card)} size="small" showInfo={false} />
                             <div style={{ color: 'rgba(0,0,0,0.65)', fontSize: 12 }}>{`${card.exceptions.dependency_state_label} · Còn thiếu ${formatQty(card.materials.remaining_issue_qty)} · Tải ${formatCapacityLoad(card.capacity.work_center_load_ratio)}`}</div>
                             <div>{renderReadyToDispatchDetails(card, 3)}</div>
+                            {renderExecutionAuditSummary(card, true)}
                             <div data-testid="production-planning-card-dispatch-summary" style={{ color: 'rgba(0,0,0,0.65)', fontSize: 12 }}>
                               {`Việc tiếp theo: ${getReadyToDispatchActionItems(card)[0]?.action || 'Rà tín hiệu dispatch.'}`}
                             </div>
@@ -5304,6 +5454,7 @@ export default function ProductionPlanningBoard() {
                 </Tooltip>
               ) : null}
               {renderOperationStatusTag(selectedCard.operation)}
+              {renderExecutionHandoffTag(selectedCard)}
               {selectedCard.operation.display_step || selectedCard.operation.route_step_no ? <Tag>{`Bước ${selectedCard.operation.display_step ?? selectedCard.operation.route_step_no}`}</Tag> : null}
               {selectedCard.operation.group_code ? <Tag>{`Nhóm ${selectedCard.operation.group_code}`}</Tag> : null}
               {selectedCard.operation.allow_parallel ? <Tag color="cyan">Có thể chạy song song</Tag> : null}
@@ -5324,6 +5475,7 @@ export default function ProductionPlanningBoard() {
                 </div>
               </Space>
             </Card>
+            {renderExecutionHandoffDetails(selectedCard)}
             <Card size="small" title="Cảnh báo cần xử lý" data-testid="production-planning-detail-warning-panel">
               {selectedCardWarnings.length ? (
                 <List
