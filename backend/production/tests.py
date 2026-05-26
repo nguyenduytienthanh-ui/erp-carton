@@ -3,8 +3,9 @@ from datetime import timedelta
 from io import StringIO
 
 from django.core.management import call_command
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.db.models.deletion import ProtectedError
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APITestCase
 from django.utils import timezone
 
@@ -2232,6 +2233,77 @@ class ProductionDemandApiTests(APITestCase):
         self.assertEqual(audit.new_values['previous_status'], ProductionOperationStatus.READY)
         self.assertEqual(audit.new_values['new_status'], ProductionOperationStatus.SKIPPED)
         self.assertEqual(audit.new_values['dependency_state'], 'ROOT')
+
+    def test_production_order_detail_returns_execution_handoff_last_action_payload(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('DETAIL-HANDOFF')
+        note = 'Bat dau cong doan tu chi tiet lenh san xuat'
+
+        update_response = self.client.post(
+            f'/api/production/orders/{order.id}/update_operation/',
+            {
+                'operation_id': operations[0].id,
+                'status': ProductionOperationStatus.IN_PROGRESS,
+                'note': note,
+            },
+            format='json',
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.data)
+
+        detail_response = self.client.get(f'/api/production/orders/{order.id}/')
+
+        self.assertEqual(detail_response.status_code, 200, detail_response.data)
+        payload_by_operation_id = {
+            operation_payload['id']: operation_payload
+            for operation_payload in detail_response.data['operations']
+        }
+        handoff = payload_by_operation_id[operations[0].id]['execution_handoff']
+        self.assertEqual(handoff['last_action'], 'UPDATE')
+        self.assertEqual(handoff['last_actor'], self.user.username)
+        self.assertIsNotNone(handoff['last_at'])
+        self.assertIn(note, handoff['last_note'])
+        self.assertTrue(handoff['audit_available'])
+        self.assertTrue(handoff['advisory_only'])
+        self.assertFalse(handoff['workflow_blocking'])
+
+    def test_production_order_list_batches_execution_handoff_audit_payload(self):
+        _demand, order, operations, _release_response = self._create_released_order_from_demand('LIST-HANDOFF')
+        note = 'Cap nhat tu danh sach lenh san xuat'
+
+        update_response = self.client.post(
+            f'/api/production/orders/{order.id}/update_operation/',
+            {
+                'operation_id': operations[0].id,
+                'status': ProductionOperationStatus.IN_PROGRESS,
+                'note': note,
+            },
+            format='json',
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.data)
+
+        with CaptureQueriesContext(connection) as captured:
+            list_response = self.client.get('/api/production/orders/', {'q': order.code})
+
+        self.assertEqual(list_response.status_code, 200, list_response.data)
+        audit_queries = [
+            query['sql']
+            for query in captured.captured_queries
+            if 'core_auditlog' in query['sql'].lower()
+        ]
+        self.assertLessEqual(len(audit_queries), 1, audit_queries)
+        results = self._results(list_response)
+        self.assertEqual(len(results), 1)
+        payload_by_operation_id = {
+            operation_payload['id']: operation_payload
+            for operation_payload in results[0]['operations']
+        }
+        handoff = payload_by_operation_id[operations[0].id]['execution_handoff']
+        self.assertEqual(handoff['last_action'], 'UPDATE')
+        self.assertEqual(handoff['last_actor'], self.user.username)
+        self.assertIsNotNone(handoff['last_at'])
+        self.assertIn(note, handoff['last_note'])
+        self.assertTrue(handoff['audit_available'])
+        self.assertTrue(handoff['advisory_only'])
+        self.assertFalse(handoff['workflow_blocking'])
 
     def test_skip_in_progress_operation_with_reason_succeeds(self):
         _demand, order, operations, _release_response = self._create_released_order_from_demand('SKIP-IN-PROGRESS')

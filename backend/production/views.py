@@ -4220,6 +4220,37 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             )
         return self.apply_search(queryset)
 
+    @staticmethod
+    def _attach_execution_handoff_to_orders(orders):
+        order_rows = list(orders)
+        operations = []
+        for order in order_rows:
+            prefetched_operations = getattr(order, '_prefetched_objects_cache', {}).get('operations')
+            if prefetched_operations is not None:
+                operations.extend(prefetched_operations)
+            else:
+                operations.extend(list(order.operations.all()))
+        attach_execution_handoff_payloads(operations)
+        return order_rows
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            page = self._attach_execution_handoff_to_orders(page)
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        orders = self._attach_execution_handoff_to_orders(queryset)
+        serializer = self.get_serializer(orders, many=True)
+        return Response(serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self._attach_execution_handoff_to_orders([instance])
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
     def perform_create(self, serializer):
         if not _can_manage_production(self.request.user):
             raise PermissionDenied('Bạn không có quyền tạo lệnh sản xuất.')
