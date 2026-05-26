@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Alert, Button, Card, Empty, Form, Input, Modal, Progress, Select, Space, Statistic, Table, Tag, Typography, message, Skeleton } from 'antd';
+import { Alert, Button, Card, Empty, Form, Input, Modal, Progress, Select, Space, Statistic, Table, Tag, Tooltip, Typography, message, Skeleton } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, InboxOutlined, PlusOutlined, StopOutlined, ToolOutlined, UploadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -11,6 +11,7 @@ import { inventoryApi } from '../../api/inventory';
 import { salesApi } from '../../api/sales';
 import type {
   ProductionApprovalHistoryItem,
+  ProductionOperation,
   ProductionPlannerDigest,
   ProductionOrder,
   ProductionOrderFormValues,
@@ -45,6 +46,26 @@ const { Text, Title } = Typography;
 const STATUS_LABELS: Record<ProductionOrderStatus, string> = { DRAFT: 'Lệnh nháp', SUBMITTED: 'Chờ duyệt', APPROVED: 'Đã duyệt kế hoạch', REJECTED: 'Từ chối', RELEASED: 'Đã phát lệnh', IN_PROGRESS: 'Đang sản xuất', COMPLETED: 'Hoàn thành', CANCELLED: 'Đã hủy' };
 const STATUS_COLORS: Record<ProductionOrderStatus, string> = { DRAFT: 'default', SUBMITTED: 'processing', APPROVED: 'blue', REJECTED: 'error', RELEASED: 'cyan', IN_PROGRESS: 'gold', COMPLETED: 'success', CANCELLED: 'magenta' };
 const SOURCE_FILTER_LABELS: Record<ProductionOrderSourceFilter, string> = { ALL: 'Tất cả nguồn', DEMAND: 'Từ nhu cầu', MANUAL: 'Thủ công' };
+const OPERATION_STATUS_LABELS: Record<string, string> = { PENDING: 'Chờ', READY: 'Sẵn sàng', IN_PROGRESS: 'Đang làm', DONE: 'Hoàn tất', SKIPPED: 'Bỏ qua' };
+const OPERATION_STATUS_COLORS: Record<string, string> = { PENDING: 'default', READY: 'processing', IN_PROGRESS: 'gold', DONE: 'success', SKIPPED: 'magenta' };
+const EXECUTION_STATE_LABELS: Record<string, string> = {
+  pending: 'Chờ',
+  ready: 'Sẵn sàng',
+  'in-progress': 'Đang làm',
+  done: 'Hoàn tất',
+  skipped: 'Bỏ qua',
+  blocked: 'Đang nghẽn',
+  handover: 'Bàn giao',
+};
+const EXECUTION_STATE_COLORS: Record<string, string> = {
+  pending: 'default',
+  ready: 'processing',
+  'in-progress': 'gold',
+  done: 'success',
+  skipped: 'magenta',
+  blocked: 'error',
+  handover: 'cyan',
+};
 const TILE_STYLE = { height: '100%', borderRadius: 14 };
 const LANE_LABELS: Record<ProductionOrderLaneFilter, string> = {
   ALL: 'Toàn bộ lệnh',
@@ -107,6 +128,7 @@ const getProgressPercent = (order: ProductionOrder) => {
 const isOverdue = (order: ProductionOrder) => Boolean(order.planned_end_date && !['COMPLETED', 'CANCELLED'].includes(order.status) && dayjs(order.planned_end_date).isBefore(dayjs(), 'day'));
 const canEditOrder = (order: ProductionOrder) => order.status === 'DRAFT' || order.status === 'REJECTED';
 const formatQuantity = (value?: string | null) => Number(value || 0).toLocaleString('vi-VN');
+const formatDateTime = (value?: string | null) => (value ? dayjs(value).format('DD/MM/YYYY HH:mm') : 'Chưa ghi nhận');
 const getProductionDemandDisplayCode = (order: ProductionOrder) => (
   order.production_demand_display_code
   || order.production_demand_code
@@ -143,6 +165,86 @@ const matchesProductionOrderLane = (order: ProductionOrder, laneFilter: Producti
     default:
       return true;
   }
+};
+const getOperationExecutionHandoff = (operation: ProductionOperation): NonNullable<ProductionOperation['execution_handoff']> => (
+  operation.execution_handoff || {}
+);
+const getOperationExecutionState = (operation: ProductionOperation) => {
+  const handoff = getOperationExecutionHandoff(operation);
+  const explicitState = String(handoff.state || '').trim().toLowerCase();
+  if (explicitState) return explicitState;
+  if (String(handoff.block_reason_code || operation.block_reason_code || '').trim()) return 'blocked';
+  if (operation.status === 'DONE') return 'done';
+  if (operation.status === 'SKIPPED') return 'skipped';
+  if (handoff.handover_status || operation.handover_status) return 'handover';
+  if (operation.status === 'IN_PROGRESS') return 'in-progress';
+  if (operation.status === 'READY') return 'ready';
+  return 'pending';
+};
+const getOperationExecutionStateLabel = (operation: ProductionOperation) => {
+  const handoff = getOperationExecutionHandoff(operation);
+  const state = getOperationExecutionState(operation);
+  return handoff.state_label || handoff.status_label || EXECUTION_STATE_LABELS[state] || state;
+};
+const getOperationLastAction = (operation: ProductionOperation) => {
+  const handoff = getOperationExecutionHandoff(operation);
+  const action = String(handoff.last_action_label || handoff.last_action || '').trim();
+  const actor = String(handoff.last_actor || '').trim();
+  const note = String(handoff.last_note || '').trim();
+  const at = handoff.last_at || null;
+  const auditAvailable = Boolean(handoff.audit_available || action || actor || at || note);
+  return {
+    action: action || 'Chưa có thao tác audit gần nhất',
+    actor: actor || 'Chưa rõ người thao tác',
+    at,
+    note,
+    auditAvailable,
+  };
+};
+const renderOperationExecutionState = (operation: ProductionOperation) => {
+  const state = getOperationExecutionState(operation);
+  return (
+    <Tooltip title="Payload execution_handoff chỉ phục vụ theo dõi/audit, không chặn workflow.">
+      <Tag color={EXECUTION_STATE_COLORS[state] || 'default'} data-testid={`production-order-execution-state-${operation.id}`}>
+        {getOperationExecutionStateLabel(operation)}
+      </Tag>
+    </Tooltip>
+  );
+};
+const renderOperationAuditSummary = (operation: ProductionOperation, compact = false) => {
+  const handoff = getOperationExecutionHandoff(operation);
+  const lastAction = getOperationLastAction(operation);
+  return (
+    <Space direction="vertical" size={compact ? 2 : 4} data-testid={`production-order-execution-audit-${operation.id}`} style={{ width: '100%' }}>
+      <Space wrap size={4}>
+        {renderOperationExecutionState(operation)}
+        {handoff.audit_available || lastAction.auditAvailable ? <Tag color="blue">Có audit</Tag> : <Tag>Chưa có audit</Tag>}
+        {handoff.advisory_only || handoff.workflow_blocking === false ? <Tag color="default">Advisory</Tag> : null}
+      </Space>
+      <Text type="secondary">
+        {lastAction.auditAvailable
+          ? `${lastAction.action} · ${lastAction.actor} · ${formatDateTime(lastAction.at)}`
+          : 'Chưa có audit thao tác gần nhất'}
+      </Text>
+      {!compact && lastAction.note ? <Text type="secondary">{lastAction.note}</Text> : null}
+    </Space>
+  );
+};
+const getProductionOrderExecutionSummary = (order: ProductionOrder) => {
+  const operations = order.operations || [];
+  const blockedCount = operations.filter((operation) => getOperationExecutionState(operation) === 'blocked').length;
+  const skippedCount = operations.filter((operation) => operation.status === 'SKIPPED' || getOperationExecutionState(operation) === 'skipped').length;
+  const doneCount = operations.filter((operation) => operation.status === 'DONE' || getOperationExecutionState(operation) === 'done').length;
+  const activeCount = operations.filter((operation) => ['READY', 'IN_PROGRESS'].includes(operation.status) || ['ready', 'in-progress', 'handover'].includes(getOperationExecutionState(operation))).length;
+  const auditedOperations = operations
+    .map((operation) => ({ operation, lastAction: getOperationLastAction(operation) }))
+    .filter((item) => item.lastAction.auditAvailable);
+  const latest = auditedOperations.sort((a, b) => {
+    const bTime = b.lastAction.at ? dayjs(b.lastAction.at).valueOf() : 0;
+    const aTime = a.lastAction.at ? dayjs(a.lastAction.at).valueOf() : 0;
+    return bTime - aTime;
+  })[0] ?? null;
+  return { activeCount, blockedCount, skippedCount, doneCount, latest };
 };
 
 export default function ProductionOrderList() {
@@ -592,6 +694,31 @@ export default function ProductionOrderList() {
       ) : '-',
     },
     { title: 'Trạng thái', dataIndex: 'status', width: 150, render: (status: ProductionOrderStatus, row) => <Space size={4} wrap><Tag color={STATUS_COLORS[status]}>{STATUS_LABELS[status]}</Tag>{isOverdue(row) ? <Tag color="error">Trễ kế hoạch</Tag> : null}</Space> },
+    {
+      title: 'Audit thực thi',
+      key: 'execution_audit',
+      width: 290,
+      render: (_, row) => {
+        const executionSummary = getProductionOrderExecutionSummary(row);
+        return (
+          <Space direction="vertical" size={4} data-testid={`production-order-list-execution-audit-${row.id}`} style={{ width: '100%' }}>
+            <Space wrap size={4}>
+              <Tag color="processing">Active: {executionSummary.activeCount}</Tag>
+              <Tag color={executionSummary.blockedCount ? 'error' : 'default'}>Block: {executionSummary.blockedCount}</Tag>
+              <Tag color={executionSummary.skippedCount ? 'magenta' : 'default'}>Skip: {executionSummary.skippedCount}</Tag>
+              <Tag color="success">Done: {executionSummary.doneCount}</Tag>
+            </Space>
+            {executionSummary.latest ? (
+              <Text type="secondary">
+                {`${executionSummary.latest.lastAction.action} · ${executionSummary.latest.lastAction.actor} · ${formatDateTime(executionSummary.latest.lastAction.at)}`}
+              </Text>
+            ) : (
+              <Text type="secondary">Chưa có audit thao tác công đoạn</Text>
+            )}
+          </Space>
+        );
+      },
+    },
     { title: 'Tiến độ', width: 180, render: (_, row) => <div style={{ minWidth: 130 }}><Progress percent={getProgressPercent(row)} size="small" status={row.status === 'COMPLETED' ? 'success' : 'active'} /></div> },
     { title: 'Hạn kế hoạch', dataIndex: 'planned_end_date', width: 130, render: (value: string | null) => (value ? dayjs(value).format('DD/MM/YYYY') : '-') },
     {
@@ -775,7 +902,7 @@ export default function ProductionOrderList() {
         loading={listQuery.isLoading}
         columns={columns}
         dataSource={visibleRows}
-        scroll={{ x: 2180 }}
+        scroll={{ x: 2440 }}
         pagination={{ current: page, pageSize, total: listQuery.data?.count ?? 0, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], onChange: async (nextPage, nextPageSize) => { setPage(nextPage); if (nextPageSize !== pageSize) await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize }); } }}
         locale={{ emptyText: visibleRows.length === 0 && !listQuery.isLoading ? (activeFilterTags.length ? <div style={{ padding: 32 }}><Empty description="Không tìm thấy lệnh sản xuất phù hợp." /><Button type="link" onClick={resetFilters}>Xóa bộ lọc</Button></div> : <Empty description="Chưa có lệnh sản xuất nào." />) : undefined }}
       />
@@ -897,6 +1024,76 @@ export default function ProductionOrderList() {
               <Tag color="gold">Công đoạn: {detailData.operations.length}</Tag>
               <Tag color="green">Cấp vật tư: {detailIssues.length} chứng từ</Tag>
               <Tag color="cyan">Nhập TP: {detailReceipts.length} chứng từ</Tag>
+            </Space>
+          </Card>
+          <Card size="small" title="Thực thi / audit công đoạn" data-testid="production-order-execution-audit-panel">
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Alert
+                showIcon
+                type="info"
+                message="Thông tin execution_handoff chỉ phục vụ theo dõi/audit, không chặn workflow thao tác lệnh."
+              />
+              <Table<ProductionOperation>
+                data-testid="production-order-execution-audit-table"
+                rowKey="id"
+                dataSource={detailData.operations}
+                pagination={false}
+                size="small"
+                locale={{ emptyText: 'Lệnh sản xuất này chưa có công đoạn để audit.' }}
+                columns={[
+                  {
+                    title: 'Công đoạn',
+                    key: 'operation',
+                    width: 190,
+                    render: (_, operation) => (
+                      <Space direction="vertical" size={2}>
+                        <Text strong>{[operation.step_code, operation.step_name].filter(Boolean).join(' - ') || `#${operation.id}`}</Text>
+                        <Text type="secondary">{`Thứ tự ${operation.sequence}`}</Text>
+                      </Space>
+                    ),
+                  },
+                  {
+                    title: 'Trạng thái',
+                    key: 'status',
+                    width: 170,
+                    render: (_, operation) => (
+                      <Space direction="vertical" size={4}>
+                        <Tag color={OPERATION_STATUS_COLORS[operation.status] || 'default'}>{OPERATION_STATUS_LABELS[operation.status] || operation.status}</Tag>
+                        {renderOperationExecutionState(operation)}
+                      </Space>
+                    ),
+                  },
+                  {
+                    title: 'Block / Skip / Handover',
+                    key: 'exception',
+                    width: 280,
+                    render: (_, operation) => {
+                      const handoff = getOperationExecutionHandoff(operation);
+                      const blockReason = handoff.block_reason_label || operation.block_reason_label || '';
+                      const blockNote = handoff.block_reason_note || operation.block_reason_note || '';
+                      const skipReason = handoff.skip_reason || operation.skip_reason || '';
+                      const handoverStatus = handoff.handover_status_label || operation.handover_status_label || '';
+                      const handoverReceiver = handoff.handover_receiver || operation.handover_receiver || '';
+                      return (
+                        <Space direction="vertical" size={2} data-testid={`production-order-execution-exception-${operation.id}`}>
+                          {blockReason ? <Text type="danger">{`Block: ${blockReason}`}</Text> : null}
+                          {blockNote ? <Text type="secondary">{blockNote}</Text> : null}
+                          {skipReason ? <Text>{`Skip: ${skipReason}`}</Text> : null}
+                          {handoverStatus ? <Text>{`Handover: ${handoverStatus}${handoverReceiver ? ` · ${handoverReceiver}` : ''}`}</Text> : null}
+                          {!blockReason && !skipReason && !handoverStatus ? <Text type="secondary">Không có ngoại lệ</Text> : null}
+                        </Space>
+                      );
+                    },
+                  },
+                  {
+                    title: 'Audit gần nhất',
+                    key: 'audit',
+                    width: 340,
+                    render: (_, operation) => renderOperationAuditSummary(operation),
+                  },
+                ]}
+                scroll={{ x: 980 }}
+              />
             </Space>
           </Card>
           <Card size="small" title="Bước kế tiếp khuyến nghị">
