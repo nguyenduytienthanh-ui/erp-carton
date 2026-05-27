@@ -48,6 +48,31 @@ DEPENDENCY_ORDER = (
     'customers',
 )
 
+CLEANUP_DEPENDENCY_ORDER = tuple(key for key in DEPENDENCY_ORDER if key != 'support_audit_refs')
+
+CLEANUP_GROUP_SELECTORS = {
+    'inventory_transactions': 'code/reference/reason/note prefix or FK to QA_UAT9H_ product/order/stocktake/warehouse',
+    'stocktake_lines': 'FK to QA_UAT9H_ stocktake/product/warehouse or note prefix',
+    'stocktakes': 'code/note prefix or QA_UAT9H_ warehouse FK',
+    'production_material_requirements': 'FK to QA_UAT9H_ production order/material product or note prefix',
+    'production_operations': 'FK to QA_UAT9H_ production order or operation/resource code prefix',
+    'production_orders': 'code/reference/note prefix or FK to QA_UAT9H_ demand/sales/product',
+    'production_demands': 'demand code/key/source/note prefix or FK to QA_UAT9H_ sales/product',
+    'sales_order_delivery_plans': 'FK to QA_UAT9H_ sales order line',
+    'sales_order_lines': 'FK to QA_UAT9H_ sales order/product',
+    'sales_orders': 'code/reference/notes prefix or QA_UAT9H_ customer FK',
+    'product_routing_steps': 'FK to QA_UAT9H_ product/operation',
+    'product_operations': 'FK to QA_UAT9H_ product/operation',
+    'products': 'product code prefix',
+    'warehouse_locations': 'warehouse location code prefix',
+    'warehouses': 'warehouse code prefix',
+    'machines': 'machine code prefix',
+    'work_centers': 'work center code prefix',
+    'operations': 'operation code prefix',
+    'product_units': 'product unit code prefix',
+    'customers': 'customer code prefix',
+}
+
 
 def _validate_prefix(prefix: str) -> str:
     value = str(prefix or '').strip().upper()
@@ -78,7 +103,7 @@ def _group(key: str, queryset, selector: str, *, cleanup_candidate: bool = True)
     }
 
 
-def build_cleanup_plan(prefix: str) -> dict:
+def build_cleanup_querysets(prefix: str) -> tuple[str, dict]:
     prefix = _validate_prefix(prefix)
 
     customer_qs = Customer.objects.filter(code__startswith=prefix)
@@ -177,27 +202,37 @@ def build_cleanup_plan(prefix: str) -> dict:
         | Q(stocktake_line_id__in=stocktake_line_ids)
     ).distinct()
 
+    querysets = {
+        'inventory_transactions': inventory_transaction_qs,
+        'stocktake_lines': stocktake_line_qs,
+        'stocktakes': stocktake_qs,
+        'production_material_requirements': production_material_requirement_qs,
+        'production_operations': production_operation_qs,
+        'production_orders': production_order_qs,
+        'production_demands': production_demand_qs,
+        'sales_order_delivery_plans': sales_order_delivery_plan_qs,
+        'sales_order_lines': sales_order_line_qs,
+        'sales_orders': sales_order_qs,
+        'product_routing_steps': product_routing_step_qs,
+        'product_operations': product_operation_qs,
+        'products': product_qs,
+        'warehouse_locations': warehouse_location_qs,
+        'warehouses': warehouse_qs,
+        'machines': machine_qs,
+        'work_centers': work_center_qs,
+        'operations': operation_qs,
+        'product_units': product_unit_qs,
+        'customers': customer_qs,
+    }
+    return prefix, {key: querysets[key] for key in CLEANUP_DEPENDENCY_ORDER}
+
+
+def build_cleanup_plan(prefix: str) -> dict:
+    prefix, querysets = build_cleanup_querysets(prefix)
+
     groups = [
-        _group('inventory_transactions', inventory_transaction_qs, 'code/reference/reason/note prefix or FK to QA_UAT9H_ product/order/stocktake/warehouse'),
-        _group('stocktake_lines', stocktake_line_qs, 'FK to QA_UAT9H_ stocktake/product/warehouse or note prefix'),
-        _group('stocktakes', stocktake_qs, 'code/note prefix or QA_UAT9H_ warehouse FK'),
-        _group('production_material_requirements', production_material_requirement_qs, 'FK to QA_UAT9H_ production order/material product or note prefix'),
-        _group('production_operations', production_operation_qs, 'FK to QA_UAT9H_ production order or operation/resource code prefix'),
-        _group('production_orders', production_order_qs, 'code/reference/note prefix or FK to QA_UAT9H_ demand/sales/product'),
-        _group('production_demands', production_demand_qs, 'demand code/key/source/note prefix or FK to QA_UAT9H_ sales/product'),
-        _group('sales_order_delivery_plans', sales_order_delivery_plan_qs, 'FK to QA_UAT9H_ sales order line'),
-        _group('sales_order_lines', sales_order_line_qs, 'FK to QA_UAT9H_ sales order/product'),
-        _group('sales_orders', sales_order_qs, 'code/reference/notes prefix or QA_UAT9H_ customer FK'),
-        _group('product_routing_steps', product_routing_step_qs, 'FK to QA_UAT9H_ product/operation'),
-        _group('product_operations', product_operation_qs, 'FK to QA_UAT9H_ product/operation'),
-        _group('products', product_qs, 'product code prefix'),
-        _group('warehouse_locations', warehouse_location_qs, 'warehouse location code prefix'),
-        _group('warehouses', warehouse_qs, 'warehouse code prefix'),
-        _group('machines', machine_qs, 'machine code prefix'),
-        _group('work_centers', work_center_qs, 'work center code prefix'),
-        _group('operations', operation_qs, 'operation code prefix'),
-        _group('product_units', product_unit_qs, 'product unit code prefix'),
-        _group('customers', customer_qs, 'customer code prefix'),
+        _group(key, queryset, CLEANUP_GROUP_SELECTORS[key])
+        for key, queryset in querysets.items()
     ]
     blocked_or_unsafe_groups = [
         {
@@ -228,7 +263,7 @@ def build_cleanup_plan(prefix: str) -> dict:
             'separate VANG approval',
             'fresh verified backup',
             'rerun dry-run count',
-            'separate command/change with explicit delete path',
+            'gated erp_main_uat_cleanup_execute command with explicit delete path',
         ],
         'candidate_summary': {
             'total_candidate_rows': total_candidates,
@@ -284,7 +319,7 @@ def render_markdown(payload: dict) -> str:
         '',
         '## Safety',
         '- This command is read-only.',
-        '- No delete path exists in this milestone.',
+        '- No delete path exists in this command.',
         '- No cleanup runs from this command.',
         '- Broad QA_ prefixes are rejected.',
         '- No backup, restore, migration, deployment, or QC Printing action runs from this command.',

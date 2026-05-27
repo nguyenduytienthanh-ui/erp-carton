@@ -328,7 +328,132 @@ class ErpMainUatCleanupPlanCommandTests(TestCase):
         self.assertIn('# ERP Main UAT Data Cleanup Plan v1', output)
         self.assertIn('## Candidate cleanup scope', output)
         self.assertIn('## Blocked / unsafe groups', output)
-        self.assertIn('No delete path exists in this milestone.', output)
+        self.assertIn('No delete path exists in this command.', output)
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+
+
+class ErpMainUatCleanupExecuteCommandTests(TestCase):
+    prefix = 'QA_UAT9H_'
+
+    def _call_json(self, *args):
+        stdout = StringIO()
+        call_command('erp_main_uat_cleanup_execute', '--format', 'json', *args, stdout=stdout)
+        return stdout.getvalue(), json.loads(stdout.getvalue())
+
+    def test_cleanup_execute_dry_run_is_default_and_does_not_write(self):
+        call_command('erp_main_real_dev_uat_drill', '--prefix', self.prefix, '--confirm-write', stdout=StringIO())
+        before_counts = {
+            'customers': Customer.objects.filter(code__startswith=self.prefix).count(),
+            'products': Product.objects.filter(code__startswith=self.prefix).count(),
+            'sales_orders': SalesOrder.objects.filter(code__startswith=self.prefix).count(),
+            'inventory_transactions': InventoryTransaction.objects.filter(code__startswith=self.prefix).count(),
+        }
+
+        output, payload = self._call_json('--prefix', self.prefix)
+
+        self.assertEqual(payload['command'], 'erp_main_uat_cleanup_execute')
+        self.assertEqual(payload['mode'], 'dry_run')
+        self.assertEqual(payload['cleanup_status'], 'not_performed')
+        self.assertEqual(payload['candidate_summary']['total_candidate_rows'], 38)
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertTrue(payload['safety']['dry_run_is_default'])
+        self.assertTrue(payload['safety']['delete_requires_confirm_delete'])
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.filter(code__startswith=self.prefix).count(),
+                'products': Product.objects.filter(code__startswith=self.prefix).count(),
+                'sales_orders': SalesOrder.objects.filter(code__startswith=self.prefix).count(),
+                'inventory_transactions': InventoryTransaction.objects.filter(code__startswith=self.prefix).count(),
+            },
+        )
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+
+    def test_cleanup_execute_rejects_broad_prefixes(self):
+        with self.assertRaises(CommandError):
+            self._call_json('--prefix', 'QA_')
+        with self.assertRaises(CommandError):
+            self._call_json('--prefix', 'QA_UAT_')
+        with self.assertRaises(CommandError):
+            self._call_json('--prefix', '')
+
+    def test_cleanup_execute_expected_total_and_backup_gates_block_delete(self):
+        call_command('erp_main_real_dev_uat_drill', '--prefix', self.prefix, '--confirm-write', stdout=StringIO())
+
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'backup')
+            with self.assertRaises(CommandError):
+                self._call_json(
+                    '--prefix',
+                    self.prefix,
+                    '--confirm-delete',
+                    '--expected-total',
+                    '37',
+                    '--backup-path',
+                    str(backup),
+                )
+            with self.assertRaises(CommandError):
+                self._call_json(
+                    '--prefix',
+                    self.prefix,
+                    '--confirm-delete',
+                    '--expected-total',
+                    '38',
+                    '--backup-path',
+                    str(Path(tmpdir) / 'missing'),
+                )
+
+        self.assertEqual(Product.objects.filter(code__startswith=self.prefix).count(), 4)
+        self.assertEqual(InventoryTransaction.objects.filter(code__startswith=self.prefix).count(), 5)
+
+    def test_cleanup_execute_dependency_order_and_blocked_groups(self):
+        _output, payload = self._call_json('--prefix', self.prefix)
+
+        self.assertEqual(payload['dependency_order'][0], 'inventory_transactions')
+        self.assertEqual(payload['dependency_order'][-1], 'customers')
+        self.assertLess(
+            payload['dependency_order'].index('production_operations'),
+            payload['dependency_order'].index('production_orders'),
+        )
+        self.assertLess(
+            payload['dependency_order'].index('sales_order_lines'),
+            payload['dependency_order'].index('sales_orders'),
+        )
+        self.assertTrue(any(group['key'] == 'support_audit_refs' for group in payload['blocked_or_unsafe_groups']))
+
+    def test_cleanup_execute_confirm_delete_only_deletes_prefixed_test_data(self):
+        Customer.objects.create(code='REAL_KEEP', name='Real Keep')
+        call_command('erp_main_real_dev_uat_drill', '--prefix', self.prefix, '--confirm-write', stdout=StringIO())
+
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'backup')
+            output, payload = self._call_json(
+                '--prefix',
+                self.prefix,
+                '--confirm-delete',
+                '--expected-total',
+                '38',
+                '--backup-path',
+                str(backup),
+            )
+
+        self.assertEqual(payload['mode'], 'confirm_delete')
+        self.assertEqual(payload['cleanup_status'], 'deleted')
+        self.assertTrue(payload['backup']['verified'])
+        self.assertTrue(payload['gates']['expected_total_matches'])
+        self.assertEqual(payload['deleted_summary']['deleted_total'], 38)
+        self.assertTrue(payload['deleted_summary']['matches_expected_total'])
+        self.assertEqual(Customer.objects.filter(code__startswith=self.prefix).count(), 0)
+        self.assertEqual(Product.objects.filter(code__startswith=self.prefix).count(), 0)
+        self.assertEqual(SalesOrder.objects.filter(code__startswith=self.prefix).count(), 0)
+        self.assertEqual(ProductionDemand.objects.filter(demand_code__startswith=self.prefix).count(), 0)
+        self.assertEqual(ProductionOrder.objects.filter(code__startswith=self.prefix).count(), 0)
+        self.assertEqual(InventoryTransaction.objects.filter(code__startswith=self.prefix).count(), 0)
+        self.assertTrue(Customer.objects.filter(code='REAL_KEEP').exists())
         self.assertNotIn('password', output.lower())
         self.assertNotIn('token', output.lower())
         self.assertNotIn('secret', output.lower())
