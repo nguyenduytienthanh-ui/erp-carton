@@ -4611,12 +4611,12 @@ export default function ProductionPlanningBoard() {
             <Button size="small" onClick={() => void handleSendShopFloorSignal('MACHINE_DOWN', 'Floor báo máy dừng, cần đổi line', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-machine-down">
               Báo máy dừng
             </Button>
-            <Button size="small" onClick={() => void handleSendShopFloorSignal('WAIT_MATERIAL', 'Floor báo chờ cấp vật tư trước khi vào máy', 'ACTIVE')} disabled={!selectedCards.length}>
+            <Button size="small" onClick={() => void handleSendShopFloorSignal('WAIT_MATERIAL', 'Floor báo chờ cấp vật tư trước khi vào máy', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-wait-material">
               Báo chờ vật tư
             </Button>
             <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
               <span>
-                <Button size="small" onClick={() => void handleSendShopFloorSignal('CLEAR_TO_RUN', 'Floor đã sẵn sàng tiếp tục', 'ACTIVE')} disabled={!selectedCards.length || blockedSelectedCount > 0}>
+                <Button size="small" onClick={() => void handleSendShopFloorSignal('CLEAR_TO_RUN', 'Floor đã sẵn sàng tiếp tục', 'ACTIVE')} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-signal-clear-to-run">
                   Báo sẵn chạy
                 </Button>
               </span>
@@ -4750,7 +4750,7 @@ export default function ProductionPlanningBoard() {
                                 >
                                   {activeSelectedCardKeys.includes(card.card_key) ? 'Bỏ chọn' : 'Chọn'}
                                 </Button>
-                                <Button size="small" type="link" onClick={() => openCard(card)}>
+                                <Button size="small" type="link" onClick={() => openCard(card)} data-testid={`production-planning-open-card-${card.operation.id}`}>
                                   Chi tiết
                                 </Button>
                               </Space>
@@ -5177,7 +5177,7 @@ export default function ProductionPlanningBoard() {
         okText="Xác nhận bỏ qua"
         cancelText="Hủy"
         confirmLoading={skipMutation.isPending}
-        okButtonProps={{ danger: true, disabled: !selectedCard }}
+        okButtonProps={{ danger: true, disabled: !selectedCard, 'data-testid': 'production-planning-skip-submit' }}
         data-testid="production-planning-skip-modal"
       >
         {selectedCard ? (

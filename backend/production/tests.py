@@ -4912,6 +4912,45 @@ class ProductionWorkflowTests(APITestCase):
         self.assertEqual(audit.action, 'SIGNAL')
         self.assertEqual(audit.new_values['signal_code'], 'MACHINE_DOWN')
 
+    def test_shop_floor_signal_wait_material_keeps_audit_context(self):
+        order = self._create_production_order(planned_qty='4')
+        order_id = order['id']
+        self._release_order(order_id)
+        operation = ProductionOperation.objects.get(production_order_id=order_id, sequence=1)
+
+        response = self.client.post(
+            '/api/production/orders/shop_floor_signal/',
+            {
+                'items': [{'order_id': order_id, 'operation_id': operation.id}],
+                'signal_code': 'WAIT_MATERIAL',
+                'note': 'Cho cap giay truoc khi vao may',
+                'dispatch_owner': 'Ca vat tu',
+                'handover_status': 'ACTIVE',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, ProductionOperationStatus.READY)
+        self.assertEqual(operation.block_reason_code, 'WAIT_MATERIAL')
+        self.assertEqual(operation.block_reason_note, 'Cho cap giay truoc khi vao may')
+        self.assertEqual(operation.dispatch_owner, 'Ca vat tu')
+        handoff = response.data['operations'][0]['operation']['execution_handoff']
+        self.assertEqual(handoff['state'], 'blocked')
+        self.assertEqual(handoff['block_reason_code'], 'WAIT_MATERIAL')
+        self.assertEqual(handoff['dispatch_owner'], 'Ca vat tu')
+        self.assertEqual(handoff['last_action'], 'SIGNAL')
+        self.assertEqual(handoff['last_actor'], self.user.username)
+        self.assertIn('Cho cap giay', handoff['last_note'])
+        self.assertTrue(handoff['audit_available'])
+        self.assertTrue(handoff['advisory_only'])
+        self.assertFalse(handoff['workflow_blocking'])
+        audit = AuditLog.objects.filter(entity_type='ProductionOperation', entity_id=operation.id).latest('id')
+        self.assertEqual(audit.action, 'SIGNAL')
+        self.assertEqual(audit.new_values['signal_code'], 'WAIT_MATERIAL')
+        self.assertEqual(audit.new_values['block_reason_note'], 'Cho cap giay truoc khi vao may')
+
     def test_shop_floor_handover_sets_ready_and_clears_previous_wait(self):
         order = self._create_production_order(planned_qty='4')
         order_id = order['id']

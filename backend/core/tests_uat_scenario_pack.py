@@ -7,6 +7,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
 
+from core.management.commands.erp_main_shop_floor_handoff_drill import build_shop_floor_handoff_drill_pack
 from core.management.commands.erp_main_uat_scenarios import build_uat_scenario_pack
 from core.models import Customer
 from inventory.models import InventoryTransaction
@@ -64,6 +65,61 @@ class ErpMainUatScenarioPackTests(SimpleTestCase):
         self.assertEqual(payload['overall_status'], 'warning')
         self.assertEqual(payload['summary']['ok_count'], 0)
         self.assertEqual(payload['summary']['warning_count'], payload['summary']['scenario_count'])
+        first_evidence = payload['scenarios'][0]['evidence'][0]
+        self.assertFalse(first_evidence['exists'])
+        self.assertEqual(first_evidence['status'], 'warning')
+
+
+class ErpMainShopFloorHandoffDrillPackTests(SimpleTestCase):
+    def test_command_returns_copy_friendly_json_for_shop_floor_drill(self):
+        stdout = StringIO()
+        call_command('erp_main_shop_floor_handoff_drill', '--format', 'json', stdout=stdout)
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(payload['pack'], 'Production Execution Shop-Floor Handoff Drill v1')
+        self.assertEqual(payload['mode'], 'read_only_static_repository_check')
+        self.assertEqual(payload['overall_status'], 'ok')
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['creates_uat_data'])
+        self.assertFalse(payload['safety']['backup_restore_runs'])
+        self.assertFalse(payload['safety']['migration_runs'])
+        self.assertFalse(payload['safety']['deploy_runs'])
+        self.assertFalse(payload['safety']['cleanup_runs'])
+        self.assertFalse(payload['safety']['production_posting_runs'])
+        self.assertFalse(payload['safety']['material_reservation_runs'])
+        scenario_keys = {item['key'] for item in payload['scenarios']}
+        self.assertEqual(scenario_keys, {
+            'receive_work_from_planning_board',
+            'ready_warning_blocker_advisory',
+            'machine_down_signal',
+            'wait_material_signal',
+            'clear_to_run_and_handover',
+            'skip_with_reason',
+            'done_update_audit',
+        })
+        self.assertTrue(any('shop-floor-handoff-drill.spec.ts' in item for item in payload['recommended_commands']))
+        self.assertNotIn('password', stdout.getvalue().lower())
+
+    def test_command_returns_markdown_with_operator_checklist(self):
+        stdout = StringIO()
+        call_command('erp_main_shop_floor_handoff_drill', stdout=stdout)
+        output = stdout.getvalue()
+
+        self.assertIn('# Production Execution Shop-Floor Handoff Drill v1', output)
+        self.assertIn('## Shop-floor drill scenarios', output)
+        self.assertIn('Report machine down', output)
+        self.assertIn('Report waiting material', output)
+        self.assertIn('## Operator checklist', output)
+        self.assertIn('QC Printing is outside this ERP main drill pack.', output)
+
+    def test_pack_marks_missing_evidence_as_warning_without_db_writes(self):
+        payload = build_shop_floor_handoff_drill_pack(repo_root=Path('Z:/missing/repo'))
+
+        self.assertEqual(payload['overall_status'], 'warning')
+        self.assertEqual(payload['summary']['ok_count'], 0)
+        self.assertEqual(payload['summary']['warning_count'], payload['summary']['scenario_count'])
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['creates_uat_data'])
         first_evidence = payload['scenarios'][0]['evidence'][0]
         self.assertFalse(first_evidence['exists'])
         self.assertEqual(first_evidence['status'], 'warning')
