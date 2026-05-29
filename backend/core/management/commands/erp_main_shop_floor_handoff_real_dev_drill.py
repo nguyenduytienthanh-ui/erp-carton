@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
+from io import StringIO
 from pathlib import Path
 
 from django.contrib.auth import get_user_model
@@ -154,8 +155,6 @@ def _has_pending_migrations() -> bool:
 
 
 def _check_release_readiness() -> dict:
-    from io import StringIO
-
     stdout = StringIO()
     call_command('release_readiness', stdout=stdout)
     output = stdout.getvalue()
@@ -187,21 +186,151 @@ def _total_prefixed_count(counts: dict) -> int:
     return sum(int(value or 0) for value in counts.values())
 
 
-def _build_scenario_rows(status: str, *, results: dict | None = None) -> list[dict]:
+def _build_scenario_rows(status: str, *, results: dict | None = None, writes_database: bool = False) -> list[dict]:
     results = results or {}
     rows = []
     for scenario in SCENARIOS:
+        result = results.get(scenario, {})
         row = {
             'key': scenario,
-            'status': results.get(scenario, {}).get('status', status),
-            'writes_database': status == 'pass',
-            'audit_action': results.get(scenario, {}).get('audit_action', ''),
-            'last_action': results.get(scenario, {}).get('last_action', ''),
-            'advisory_only': results.get(scenario, {}).get('advisory_only'),
-            'workflow_blocking': results.get(scenario, {}).get('workflow_blocking'),
+            'status': result.get('status', status),
+            'writes_database': bool(result.get('writes_database', writes_database)),
+            'audit_action': result.get('audit_action', ''),
+            'actor': result.get('actor', ''),
+            'time': result.get('time'),
+            'note': result.get('note', ''),
+            'last_action': result.get('last_action', ''),
+            'last_actor': result.get('last_actor', ''),
+            'last_at': result.get('last_at'),
+            'last_note': result.get('last_note', ''),
+            'execution_handoff': result.get('execution_handoff'),
+            'advisory_only': result.get('advisory_only'),
+            'workflow_blocking': result.get('workflow_blocking'),
+            'checks': result.get('checks', {}),
         }
         rows.append(row)
     return rows
+
+
+def _latest_prefixed_audit(operation: ProductionOperation, prefix: str) -> AuditLog | None:
+    return (
+        AuditLog.objects
+        .filter(
+            entity_type='ProductionOperation',
+            entity_id=int(operation.id),
+            entity_code__startswith=prefix,
+        )
+        .select_related('user')
+        .order_by('-created_at', '-id')
+        .first()
+    )
+
+
+def _expected_existing_checks(scenario: str, operation: ProductionOperation, audit: AuditLog | None, handoff: dict, prefix: str) -> dict:
+    checks = {
+        'operation_present': True,
+        'audit_present': audit is not None,
+        'actor_present': bool(audit and audit.user and str(getattr(audit.user, 'username', '') or '').startswith(prefix)),
+        'time_present': bool(audit and audit.created_at),
+        'note_present': bool(handoff.get('last_note')),
+        'last_action_present': bool(handoff.get('last_action')),
+        'execution_handoff_present': bool(handoff),
+        'advisory_only': handoff.get('advisory_only') is True,
+        'workflow_blocking_false': handoff.get('workflow_blocking') is False,
+    }
+    if scenario == 'MACHINE_DOWN':
+        checks.update({
+            'block_reason_code': operation.block_reason_code == ProductionOperationBlockReason.MACHINE_DOWN,
+            'audit_action': bool(audit and audit.action == 'SIGNAL'),
+            'last_action': handoff.get('last_action') == 'SIGNAL',
+        })
+    elif scenario == 'WAIT_MATERIAL':
+        checks.update({
+            'block_reason_code': operation.block_reason_code == ProductionOperationBlockReason.WAIT_MATERIAL,
+            'audit_action': bool(audit and audit.action == 'SIGNAL'),
+            'last_action': handoff.get('last_action') == 'SIGNAL',
+        })
+    elif scenario == 'CLEAR_TO_RUN':
+        checks.update({
+            'block_reason_cleared': not operation.block_reason_code,
+            'audit_action': bool(audit and audit.action == 'SIGNAL'),
+            'last_action': handoff.get('last_action') == 'SIGNAL',
+        })
+    elif scenario == 'HANDOVER_READY':
+        checks.update({
+            'handover_status': operation.handover_status == ProductionHandoverStatus.READY,
+            'audit_action': bool(audit and audit.action == 'HANDOVER'),
+            'last_action': handoff.get('last_action') == 'HANDOVER',
+        })
+    elif scenario == 'HANDOVER_ACCEPTED':
+        checks.update({
+            'handover_status': operation.handover_status == ProductionHandoverStatus.ACCEPTED,
+            'audit_action': bool(audit and audit.action == 'HANDOVER'),
+            'last_action': handoff.get('last_action') == 'HANDOVER',
+        })
+    elif scenario == 'SKIP':
+        checks.update({
+            'operation_status': operation.status == ProductionOperationStatus.SKIPPED,
+            'skip_reason_present': bool(operation.skip_reason),
+            'audit_action': bool(audit and audit.action == 'SKIP_OPERATION'),
+            'last_action': handoff.get('last_action') == 'SKIP_OPERATION',
+        })
+    elif scenario == 'DONE_UPDATE':
+        checks.update({
+            'operation_status': operation.status == ProductionOperationStatus.DONE,
+            'completed_qty_present': Decimal(str(operation.completed_qty or 0)) > 0,
+            'audit_action': bool(audit and audit.action == 'UPDATE'),
+            'last_action': handoff.get('last_action') == 'UPDATE',
+        })
+    return checks
+
+
+def _existing_scenario_results(prefix: str, counts: dict) -> dict:
+    if _total_prefixed_count(counts) == 0:
+        return {}
+    results = {}
+    operations = {
+        operation.source_operation_code: operation
+        for operation in ProductionOperation.objects
+        .filter(
+            production_order__code__startswith=prefix,
+            source_operation_code__in=SCENARIOS,
+        )
+        .select_related('production_order')
+        .order_by('sequence')
+    }
+    for scenario in SCENARIOS:
+        operation = operations.get(scenario)
+        if not operation:
+            results[scenario] = {
+                'status': 'fail',
+                'writes_database': False,
+                'checks': {'operation_present': False},
+            }
+            continue
+        audit = _latest_prefixed_audit(operation, prefix)
+        handoff = build_operation_execution_handoff(operation, latest_audit=audit)
+        checks = _expected_existing_checks(scenario, operation, audit, handoff, prefix)
+        note = handoff.get('last_note') or ''
+        results[scenario] = {
+            'status': 'pass' if all(checks.values()) else 'fail',
+            'writes_database': False,
+            'operation_id': int(operation.id),
+            'operation_code': operation.step_code,
+            'audit_action': audit.action if audit else '',
+            'actor': getattr(audit.user, 'username', '') if audit and audit.user else '',
+            'time': audit.created_at if audit else None,
+            'note': note,
+            'last_action': handoff.get('last_action', ''),
+            'last_actor': handoff.get('last_actor', ''),
+            'last_at': handoff.get('last_at'),
+            'last_note': note,
+            'execution_handoff': handoff,
+            'advisory_only': handoff.get('advisory_only'),
+            'workflow_blocking': handoff.get('workflow_blocking'),
+            'checks': checks,
+        }
+    return results
 
 
 def _create_audit(user, action: str, operation: ProductionOperation, *, old_values: dict, new_values: dict) -> AuditLog:
@@ -582,6 +711,20 @@ def build_payload(prefix: str, *, backup_path: str | None, confirm_write: bool) 
         ],
     }
     if not confirm_write:
+        existing_results = _existing_scenario_results(prefix, existing_counts)
+        if existing_results:
+            payload['scenario_results'] = _build_scenario_rows('fail', results=existing_results)
+            payload['overall_status'] = (
+                'ok'
+                if all(row['status'] == 'pass' for row in payload['scenario_results'])
+                else 'warning'
+            )
+            payload['existing_data_report'] = {
+                'status': 'pass' if payload['overall_status'] == 'ok' else 'warning',
+                'source': 'existing_prefixed_data',
+                'writes_database': False,
+            }
+            return payload
         payload['overall_status'] = 'ok'
         return payload
 
@@ -590,7 +733,7 @@ def build_payload(prefix: str, *, backup_path: str | None, confirm_write: bool) 
     payload['overall_status'] = 'ok'
     payload['write_result'] = write_result
     payload['existing_prefixed_counts'] = _prefixed_counts(prefix)
-    payload['scenario_results'] = _build_scenario_rows('pass', results=write_result['scenario_results'])
+    payload['scenario_results'] = _build_scenario_rows('pass', results=write_result['scenario_results'], writes_database=True)
     payload['safety']['writes_database'] = True
     return payload
 
@@ -617,10 +760,15 @@ def render_markdown(payload: dict) -> str:
     lines.extend([f"- {key}: {value}" for key, value in payload['existing_prefixed_counts'].items()])
     lines.extend(['', '## Scenario report'])
     for row in payload['scenario_results']:
+        checks = row.get('checks') or {}
         lines.append(
             f"- {row['key']}: {str(row['status']).upper()}"
             f" | audit={row.get('audit_action') or '-'}"
             f" | last_action={row.get('last_action') or '-'}"
+            f" | actor_present={checks.get('actor_present')}"
+            f" | time_present={checks.get('time_present')}"
+            f" | note_present={checks.get('note_present')}"
+            f" | execution_handoff={checks.get('execution_handoff_present')}"
             f" | advisory_only={row.get('advisory_only')}"
             f" | workflow_blocking={row.get('workflow_blocking')}"
         )

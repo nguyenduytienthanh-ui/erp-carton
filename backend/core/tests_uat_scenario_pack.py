@@ -360,6 +360,65 @@ class ErpMainShopFloorHandoffRealDevDrillCommandTests(TestCase):
         self.assertNotIn('secret', output.lower())
         self.assertLegacyConsoleSafe(output)
 
+    def test_shop_floor_real_dev_drill_reports_existing_prefixed_data_read_only(self):
+        Customer.objects.create(code='REAL_KEEP', name='Real Keep')
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'backup')
+            with patch(self.db_patch, return_value='test_erp_dev_clean'), \
+                    patch(self.migration_patch, return_value=False), \
+                    patch(self.backup_patch, return_value=self._ok_release()):
+                self._call_json('--prefix', self.prefix, '--backup-path', str(backup), '--confirm-write')
+
+            before_counts = {
+                'products': Product.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'production_operations': ProductionOperation.objects.count(),
+                'audit_logs': AuditLog.objects.count(),
+            }
+            output, payload = self._call_json('--prefix', self.prefix, '--backup-path', str(backup))
+
+        self.assertEqual(payload['mode'], 'dry_run')
+        self.assertEqual(payload['overall_status'], 'ok')
+        self.assertEqual(payload['existing_data_report']['status'], 'pass')
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertEqual(payload['existing_prefixed_counts']['production_orders'], 1)
+        self.assertEqual(payload['existing_prefixed_counts']['production_operations'], 7)
+        self.assertEqual(payload['existing_prefixed_counts']['audit_logs'], 7)
+        self.assertEqual(
+            before_counts,
+            {
+                'products': Product.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'production_operations': ProductionOperation.objects.count(),
+                'audit_logs': AuditLog.objects.count(),
+            },
+        )
+        rows = {item['key']: item for item in payload['scenario_results']}
+        self.assertTrue(all(item['status'] == 'pass' for item in rows.values()))
+        self.assertEqual(rows['MACHINE_DOWN']['last_action'], 'SIGNAL')
+        self.assertEqual(rows['WAIT_MATERIAL']['last_action'], 'SIGNAL')
+        self.assertEqual(rows['CLEAR_TO_RUN']['last_action'], 'SIGNAL')
+        self.assertEqual(rows['HANDOVER_READY']['last_action'], 'HANDOVER')
+        self.assertEqual(rows['HANDOVER_ACCEPTED']['last_action'], 'HANDOVER')
+        self.assertEqual(rows['SKIP']['last_action'], 'SKIP_OPERATION')
+        self.assertEqual(rows['DONE_UPDATE']['last_action'], 'UPDATE')
+        for row in rows.values():
+            self.assertFalse(row['writes_database'])
+            self.assertTrue(row['checks']['actor_present'])
+            self.assertTrue(row['checks']['time_present'])
+            self.assertTrue(row['checks']['note_present'])
+            self.assertTrue(row['checks']['last_action_present'])
+            self.assertTrue(row['checks']['execution_handoff_present'])
+            self.assertTrue(row['checks']['advisory_only'])
+            self.assertTrue(row['checks']['workflow_blocking_false'])
+            self.assertTrue(row['advisory_only'])
+            self.assertFalse(row['workflow_blocking'])
+        self.assertTrue(Customer.objects.filter(code='REAL_KEEP').exists())
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
     def test_shop_floor_real_dev_drill_confirm_write_refuses_existing_prefixed_data(self):
         ProductUnit.objects.create(code='QA_SHF1_U', name='Existing unit')
         with TemporaryDirectory() as tmpdir:
