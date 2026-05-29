@@ -60,6 +60,29 @@ PLANNED_DATA_COUNTS = {
     'production_operations': 7,
     'production_material_requirements': 1,
 }
+OPERATOR_WORDING = {
+    'floor_signal': 'Tín hiệu sàn máy',
+    'machine_down': 'Báo máy dừng',
+    'wait_material': 'Chờ vật tư',
+    'clear_to_run': 'Sẵn chạy',
+    'handover': 'Bàn giao',
+    'handover_ready': 'Bàn giao sẵn sàng',
+    'handover_accepted': 'Đã nhận bàn giao',
+    'result_update': 'Cập nhật kết quả',
+    'skip_with_reason': 'Bỏ qua có lý do',
+    'done_update': 'Hoàn tất/cập nhật',
+    'advisory_only': 'Chỉ cảnh báo, không chặn workflow',
+    'execution_audit': 'Audit thực thi',
+}
+SCENARIO_OPERATOR_LABELS = {
+    'MACHINE_DOWN': ('Tín hiệu sàn máy', 'Báo máy dừng'),
+    'WAIT_MATERIAL': ('Tín hiệu sàn máy', 'Chờ vật tư'),
+    'CLEAR_TO_RUN': ('Tín hiệu sàn máy', 'Sẵn chạy'),
+    'HANDOVER_READY': ('Bàn giao', 'Bàn giao sẵn sàng'),
+    'HANDOVER_ACCEPTED': ('Bàn giao', 'Đã nhận bàn giao'),
+    'SKIP': ('Cập nhật kết quả', 'Bỏ qua có lý do'),
+    'DONE_UPDATE': ('Cập nhật kết quả', 'Hoàn tất/cập nhật'),
+}
 
 
 def _database_name() -> str:
@@ -191,8 +214,11 @@ def _build_scenario_rows(status: str, *, results: dict | None = None, writes_dat
     rows = []
     for scenario in SCENARIOS:
         result = results.get(scenario, {})
+        operator_group, operator_label = SCENARIO_OPERATOR_LABELS[scenario]
         row = {
             'key': scenario,
+            'operator_group': operator_group,
+            'operator_label': operator_label,
             'status': result.get('status', status),
             'writes_database': bool(result.get('writes_database', writes_database)),
             'audit_action': result.get('audit_action', ''),
@@ -678,6 +704,7 @@ def build_payload(prefix: str, *, backup_path: str | None, confirm_write: bool) 
         'overall_status': 'planned',
         'backup': backup,
         'planned_data_counts': PLANNED_DATA_COUNTS,
+        'operator_wording': OPERATOR_WORDING,
         'existing_prefixed_counts': existing_counts,
         'scenario_results': _build_scenario_rows('planned'),
         'gates': {
@@ -753,8 +780,13 @@ def render_markdown(payload: dict) -> str:
         f"- Backup path required on write: {payload['gates']['backup_path_required_on_write']}",
         f"- Reject existing prefixed data on write: {payload['gates']['reject_existing_prefixed_data_on_write']}",
         '',
-        '## Planned data',
+        '## Operator wording',
     ]
+    lines.extend([f"- {key}: {value}" for key, value in payload['operator_wording'].items()])
+    lines.extend([
+        '',
+        '## Planned data',
+    ])
     lines.extend([f"- {key}: {value}" for key, value in payload['planned_data_counts'].items()])
     lines.extend(['', '## Existing prefixed data'])
     lines.extend([f"- {key}: {value}" for key, value in payload['existing_prefixed_counts'].items()])
@@ -762,7 +794,7 @@ def render_markdown(payload: dict) -> str:
     for row in payload['scenario_results']:
         checks = row.get('checks') or {}
         lines.append(
-            f"- {row['key']}: {str(row['status']).upper()}"
+            f"- {row['key']} ({row['operator_group']} - {row['operator_label']}): {str(row['status']).upper()}"
             f" | audit={row.get('audit_action') or '-'}"
             f" | last_action={row.get('last_action') or '-'}"
             f" | actor_present={checks.get('actor_present')}"

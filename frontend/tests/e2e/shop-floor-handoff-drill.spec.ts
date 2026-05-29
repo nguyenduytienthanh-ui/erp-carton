@@ -340,15 +340,15 @@ const doneCard = makeCard(5, 'READY', {
   operation: {
     status: 'DONE',
     completed_qty: '100.0000',
-    note: 'Completed shop-floor drill quantity',
+    note: 'Hoàn tất/cập nhật số lượng drill',
     finished_at: '2026-05-28T11:00:00Z',
   },
   audit: {
     state: 'done',
     last_action: 'UPDATE',
-    last_action_label: 'Done update',
+    last_action_label: 'Hoàn tất/cập nhật',
     last_actor: 'operator_done',
-    last_note: 'Completed shop-floor drill quantity',
+    last_note: 'Hoàn tất/cập nhật số lượng drill',
   },
 });
 
@@ -533,17 +533,17 @@ async function setupMockApi(page: Page, records: RequestRecord[]) {
           card.operation.block_reason_note = '';
         } else {
           card.operation.block_reason_code = payload.signal_code;
-          card.operation.block_reason_label = payload.signal_code === 'MACHINE_DOWN' ? 'Machine down' : 'Waiting material';
+          card.operation.block_reason_label = payload.signal_code === 'MACHINE_DOWN' ? 'Máy dừng' : 'Chờ vật tư';
           card.operation.block_reason_note = payload.note || '';
         }
         card.operation.dispatch_owner = payload.dispatch_owner || card.operation.dispatch_owner;
         card.operation.handover_status = payload.handover_status || card.operation.handover_status || 'ACTIVE';
-        card.operation.handover_status_label = card.operation.handover_status === 'ACTIVE' ? 'Active' : card.operation.handover_status;
+        card.operation.handover_status_label = card.operation.handover_status === 'ACTIVE' ? 'Đang thao tác' : card.operation.handover_status;
         card.operation.handover_note = payload.note || card.operation.handover_note;
         refreshCard(card, {
           state: card.operation.block_reason_code ? 'blocked' : 'ready',
           last_action: 'SIGNAL',
-          last_action_label: 'Shop-floor signal',
+          last_action_label: 'Tín hiệu sàn máy',
           last_actor: 'operator_signal',
           last_note: payload.note || payload.signal_code,
         });
@@ -565,14 +565,14 @@ async function setupMockApi(page: Page, records: RequestRecord[]) {
           card.operation.block_reason_note = '';
         }
         card.operation.handover_status = payload.handover_status;
-        card.operation.handover_status_label = payload.handover_status === 'ACCEPTED' ? 'Accepted' : 'Ready handover';
+        card.operation.handover_status_label = payload.handover_status === 'ACCEPTED' ? 'Đã nhận bàn giao' : 'Bàn giao sẵn sàng';
         card.operation.handover_receiver = payload.handover_receiver || 'Scan center';
         card.operation.handover_note = payload.handover_note || '';
         card.operation.handover_at = '2026-05-28T09:30:00Z';
         refreshCard(card, {
           state: 'handover',
           last_action: 'HANDOVER',
-          last_action_label: 'Handover accepted',
+          last_action_label: 'Đã nhận bàn giao',
           last_actor: 'operator_handover',
           last_note: payload.handover_note || payload.handover_status,
         });
@@ -594,7 +594,7 @@ async function setupMockApi(page: Page, records: RequestRecord[]) {
         refreshCard(card, {
           state: 'skipped',
           last_action: 'SKIP_OPERATION',
-          last_action_label: 'Skip operation',
+          last_action_label: 'Bỏ qua có lý do',
           last_actor: 'operator_skip',
           last_note: payload.reason,
         });
@@ -657,6 +657,7 @@ test('shop-floor handoff drill covers PlanningBoard actions and ProductionOrder 
   await expect(page.getByTestId('production-planning-floor-signal-group')).toContainText('Tín hiệu sàn máy');
   await expect(page.getByTestId('production-planning-floor-signal-group')).toContainText('Báo máy dừng');
   await expect(page.getByTestId('production-planning-handover-action-group')).toContainText('Bàn giao');
+  await expect(page.getByTestId('production-planning-handover-action-group')).toContainText('Đã nhận bàn giao');
   await expect(page.getByTestId('production-planning-result-action-group')).toContainText('Cập nhật kết quả');
   await expect(page.getByTestId('production-planning-result-action-group')).toContainText('Chỉ cảnh báo');
 
@@ -685,9 +686,9 @@ test('shop-floor handoff drill covers PlanningBoard actions and ProductionOrder 
   await expect(page.getByTestId('production-planning-detail-drawer')).toBeVisible();
   await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Chỉ cảnh báo');
   await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Người thao tác');
-  await expect(page.getByText('Cập nhật kết quả / skip-done-update')).toBeVisible();
+  await expect(page.getByText('Cập nhật kết quả / Bỏ qua - Hoàn tất')).toBeVisible();
   await page.getByTestId('production-planning-skip-operation').click();
-  await page.getByTestId('production-planning-skip-reason').fill('Skip for shop-floor drill with audit reason');
+  await page.getByTestId('production-planning-skip-reason').fill('Bỏ qua có lý do cho drill audit');
   await page.getByTestId('production-planning-skip-submit').click();
   await expect.poll(() => records.some((item) => item.endpoint === 'skip_operation')).toBeTruthy();
 
@@ -697,13 +698,13 @@ test('shop-floor handoff drill covers PlanningBoard actions and ProductionOrder 
   await expect(page.getByTestId('production-order-execution-audit-panel')).toBeVisible();
   await expect(page.getByTestId('production-order-execution-audit-panel')).toContainText('không chặn workflow');
   await expect(page.getByTestId('production-order-execution-audit-table')).toBeVisible();
-  await expect(page.getByTestId('production-order-execution-audit-1')).toContainText('Shop-floor signal');
+  await expect(page.getByTestId('production-order-execution-audit-1')).toContainText('Tín hiệu sàn máy');
   await expect(page.getByTestId('production-order-execution-audit-1')).toContainText('operator_signal');
-  await expect(page.getByTestId('production-order-execution-audit-2')).toContainText('Shop-floor signal');
-  await expect(page.getByTestId('production-order-execution-audit-3')).toContainText('Skip operation');
-  await expect(page.getByTestId('production-order-execution-exception-3')).toContainText('Skip for shop-floor drill');
-  await expect(page.getByTestId('production-order-execution-audit-4')).toContainText('Handover accepted');
-  await expect(page.getByTestId('production-order-execution-exception-4')).toContainText('Handover: Accepted');
-  await expect(page.getByTestId('production-order-execution-audit-5')).toContainText('Done update');
+  await expect(page.getByTestId('production-order-execution-audit-2')).toContainText('Tín hiệu sàn máy');
+  await expect(page.getByTestId('production-order-execution-audit-3')).toContainText('Bỏ qua có lý do');
+  await expect(page.getByTestId('production-order-execution-exception-3')).toContainText('Bỏ qua có lý do cho drill audit');
+  await expect(page.getByTestId('production-order-execution-audit-4')).toContainText('Đã nhận bàn giao');
+  await expect(page.getByTestId('production-order-execution-exception-4')).toContainText('Handover: Đã nhận bàn giao');
+  await expect(page.getByTestId('production-order-execution-audit-5')).toContainText('Hoàn tất/cập nhật');
   await expect(page.getByTestId('production-order-execution-audit-5')).toContainText('Advisory');
 });

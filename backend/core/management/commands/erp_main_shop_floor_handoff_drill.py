@@ -83,32 +83,47 @@ FRONTEND_EVIDENCE = (
     ),
 )
 
+OPERATOR_WORDING = {
+    'floor_signal': 'Tín hiệu sàn máy',
+    'machine_down': 'Báo máy dừng',
+    'wait_material': 'Chờ vật tư',
+    'clear_to_run': 'Sẵn chạy',
+    'handover': 'Bàn giao',
+    'handover_ready': 'Bàn giao sẵn sàng',
+    'handover_accepted': 'Đã nhận bàn giao',
+    'result_update': 'Cập nhật kết quả',
+    'skip_with_reason': 'Bỏ qua có lý do',
+    'done_update': 'Hoàn tất/cập nhật',
+    'advisory_only': 'Chỉ cảnh báo, không chặn workflow',
+    'execution_audit': 'Audit thực thi',
+}
+
 SCENARIOS: tuple[DrillScenario, ...] = (
     DrillScenario(
         key='receive_work_from_planning_board',
-        title='Receive work from PlanningBoard and verify ProductionOrder audit',
-        operator_goal='Operator can find assigned work, inspect readiness, then compare the same operation in ProductionOrder detail.',
+        title='Nhận việc từ PlanningBoard và đối chiếu Audit thực thi',
+        operator_goal='Operator tìm đúng công việc, xem READY/WARNING/BLOCKER, rồi đối chiếu cùng công đoạn ở ProductionOrder detail.',
         entrypoints=('/production-planning', '/production-orders'),
         steps=(
-            'Open PlanningBoard and select a READY operation card.',
-            'Open the operation detail drawer and review ready-to-dispatch and execution handoff panels.',
-            'Open the ProductionOrder detail panel and compare execution_handoff audit fields.',
+            'Mở PlanningBoard và chọn một thẻ công đoạn READY.',
+            'Mở drawer công đoạn, xem khu READY/WARNING/BLOCKER và Audit thực thi.',
+            'Mở ProductionOrder detail và đối chiếu execution_handoff/audit fields.',
         ),
-        expected_result='The same status, handover, latest action, actor, timestamp, and note are visible in both screens.',
-        audit_focus='execution_handoff is advisory/read-only and does not hard-block production workflow.',
+        expected_result='Trạng thái, bàn giao, thao tác gần nhất, người thao tác, thời điểm và note hiển thị nhất quán ở hai màn.',
+        audit_focus='execution_handoff là Chỉ cảnh báo, không chặn workflow.',
         evidence=FRONTEND_EVIDENCE,
     ),
     DrillScenario(
         key='ready_warning_blocker_advisory',
-        title='READY / WARNING / BLOCKER are advisory',
-        operator_goal='Planner and operator can distinguish ready work from warning/blocker work without introducing new hard workflow rules.',
+        title='READY / WARNING / BLOCKER là chỉ cảnh báo',
+        operator_goal='Planner/operator phân biệt việc sẵn chạy, cảnh báo và blocker mà không thêm luật hard-block mới.',
         entrypoints=('/production-planning',),
         steps=(
-            'Review READY, WARNING, and BLOCKER cards on PlanningBoard.',
-            'Filter by dispatch readiness and inspect action guidance.',
-            'Confirm blocker dependency work cannot be started through quick ready/handover shortcuts.',
+            'Rà thẻ READY, WARNING và BLOCKER trên PlanningBoard.',
+            'Lọc theo readiness và xem hướng dẫn hành động tiếp theo.',
+            'Xác nhận công đoạn bị dependency block không đi qua shortcut Sẵn chạy/Bàn giao.',
         ),
-        expected_result='Advisory labels explain what to do next; existing dependency validation remains the gate.',
+        expected_result='Nhãn Chỉ cảnh báo, không chặn workflow giải thích bước tiếp theo; validation dependency hiện có vẫn là gate.',
         audit_focus='workflow_blocking remains false in execution_handoff and ready-to-dispatch rules.',
         evidence=(
             BACKEND_EVIDENCE[3],
@@ -117,16 +132,16 @@ SCENARIOS: tuple[DrillScenario, ...] = (
     ),
     DrillScenario(
         key='machine_down_signal',
-        title='Report machine down',
-        operator_goal='Operator can report a stopped machine with owner and note while preserving audit.',
+        title='Tín hiệu sàn máy - Báo máy dừng',
+        operator_goal='Operator báo máy dừng với người phụ trách và note, đồng thời giữ Audit thực thi.',
         entrypoints=('/production-planning', 'POST /api/production/orders/shop_floor_signal/'),
         steps=(
-            'Select a valid operation.',
-            'Send signal_code MACHINE_DOWN with note and dispatch owner.',
-            'Refresh PlanningBoard and ProductionOrder detail.',
+            'Chọn một công đoạn hợp lệ.',
+            'Bấm Báo máy dừng và gửi signal_code MACHINE_DOWN với note/owner.',
+            'Refresh PlanningBoard và ProductionOrder detail.',
         ),
-        expected_result='Operation is blocked with MACHINE_DOWN, note/owner are visible, latest audit action is SIGNAL.',
-        audit_focus='AuditLog entity_type ProductionOperation stores action SIGNAL and note context.',
+        expected_result='Công đoạn có MACHINE_DOWN, note/owner hiển thị rõ, latest audit action là SIGNAL.',
+        audit_focus='Audit thực thi lưu action SIGNAL và note context.',
         evidence=(
             BACKEND_EVIDENCE[0],
             FRONTEND_EVIDENCE[0],
@@ -134,16 +149,16 @@ SCENARIOS: tuple[DrillScenario, ...] = (
     ),
     DrillScenario(
         key='wait_material_signal',
-        title='Report waiting material',
-        operator_goal='Operator can report material wait without posting inventory or reserving stock.',
+        title='Tín hiệu sàn máy - Chờ vật tư',
+        operator_goal='Operator báo Chờ vật tư mà không posting inventory hoặc reservation.',
         entrypoints=('/production-planning', 'POST /api/production/orders/shop_floor_signal/'),
         steps=(
-            'Select a valid operation.',
-            'Send signal_code WAIT_MATERIAL with note.',
-            'Confirm material wait is shown as an advisory/action item.',
+            'Chọn một công đoạn hợp lệ.',
+            'Bấm Chờ vật tư và gửi signal_code WAIT_MATERIAL với note.',
+            'Xác nhận Chờ vật tư hiển thị như chỉ cảnh báo/action item.',
         ),
         expected_result='Operation carries WAIT_MATERIAL note and latest audit action SIGNAL; no inventory movement is posted.',
-        audit_focus='Signal updates only operation block/handover audit fields, not costing, valuation, or material reservation.',
+        audit_focus='Signal chỉ cập nhật block/bàn giao/audit fields, không costing, valuation hoặc material reservation.',
         evidence=(
             BACKEND_EVIDENCE[1],
             FRONTEND_EVIDENCE[0],
@@ -151,15 +166,15 @@ SCENARIOS: tuple[DrillScenario, ...] = (
     ),
     DrillScenario(
         key='clear_to_run_and_handover',
-        title='Clear to run and handover accepted',
-        operator_goal='Operator can mark an eligible operation ready, then record handover ready/accepted with receiver and note.',
+        title='Sẵn chạy và Bàn giao',
+        operator_goal='Operator đánh dấu công đoạn đủ điều kiện là Sẵn chạy, sau đó ghi Bàn giao sẵn sàng/Đã nhận bàn giao với receiver/note.',
         entrypoints=('/production-planning', 'POST /api/production/orders/shop_floor_handover/'),
         steps=(
-            'Select an operation not blocked by dependency.',
-            'Send CLEAR_TO_RUN or handover READY.',
-            'Send handover ACCEPTED with receiver/note and clear previous wait when valid.',
+            'Chọn công đoạn không bị dependency block.',
+            'Bấm Sẵn chạy hoặc Bàn giao sẵn sàng.',
+            'Bấm Đã nhận bàn giao với receiver/note và clear previous wait khi hợp lệ.',
         ),
-        expected_result='Handover fields, timestamp, receiver, note, and latest audit action HANDOVER are visible.',
+        expected_result='Bàn giao, thời điểm, receiver, note và latest audit action HANDOVER hiển thị rõ.',
         audit_focus='Dependency-blocked operations remain protected by existing validation.',
         evidence=(
             BACKEND_EVIDENCE[2],
@@ -168,16 +183,16 @@ SCENARIOS: tuple[DrillScenario, ...] = (
     ),
     DrillScenario(
         key='skip_with_reason',
-        title='Skip operation with required reason',
-        operator_goal='Operator can skip a valid operation only through the skip path and with a clear reason.',
+        title='Cập nhật kết quả - Bỏ qua có lý do',
+        operator_goal='Operator chỉ bỏ qua công đoạn qua nút Bỏ qua và phải nhập lý do rõ ràng.',
         entrypoints=('/production-planning', 'POST /api/production/orders/{id}/skip_operation/'),
         steps=(
-            'Open a selected operation detail.',
-            'Use the Skip action and enter a reason.',
-            'Confirm bulk/update status paths reject SKIPPED.',
+            'Mở detail của công đoạn đã chọn.',
+            'Dùng hành động Bỏ qua và nhập lý do.',
+            'Xác nhận bulk/update status không đi đường SKIPPED sai luồng.',
         ),
-        expected_result='Operation becomes SKIPPED, reason/actor/time are visible, latest audit action is SKIP_OPERATION.',
-        audit_focus='Skip is explicit and auditable; it does not silently go through bulk/update status.',
+        expected_result='Công đoạn thành SKIPPED, lý do/người/thời điểm hiển thị, latest audit action là SKIP_OPERATION.',
+        audit_focus='Bỏ qua có lý do là thao tác explicit và auditable.',
         evidence=(
             BACKEND_EVIDENCE[3],
             FRONTEND_EVIDENCE[0],
@@ -185,15 +200,15 @@ SCENARIOS: tuple[DrillScenario, ...] = (
     ),
     DrillScenario(
         key='done_update_audit',
-        title='Done/update operation audit',
-        operator_goal='Operator can complete/update an operation with quantity and note while preserving execution audit.',
+        title='Cập nhật kết quả - Hoàn tất/cập nhật',
+        operator_goal='Operator hoàn tất/cập nhật công đoạn với số lượng và note, đồng thời giữ Audit thực thi.',
         entrypoints=('/production-planning', 'POST /api/production/orders/{id}/update_operation/'),
         steps=(
-            'Open an eligible operation.',
-            'Update status, completed quantity, and note.',
-            'Review ProductionOrder detail audit row.',
+            'Mở công đoạn đủ điều kiện.',
+            'Cập nhật trạng thái, completed quantity và note.',
+            'Rà audit row ở ProductionOrder detail.',
         ),
-        expected_result='Latest audit action is UPDATE and completion information is visible without posting/costing side effects.',
+        expected_result='Latest audit action là UPDATE và thông tin hoàn tất hiển thị, không có posting/costing side effects.',
         audit_focus='No production posting, material reservation, costing, valuation, tax, or accounting action runs.',
         evidence=(
             BACKEND_EVIDENCE[4],
@@ -253,13 +268,14 @@ def build_shop_floor_handoff_drill_pack(repo_root: Path | None = None) -> dict:
         'mode': 'read_only_static_repository_check',
         'overall_status': 'ok' if summary['warning_count'] == 0 else 'warning',
         'summary': summary,
+        'operator_wording': OPERATOR_WORDING,
         'scenarios': scenario_rows,
         'operator_checklist': [
-            'Select READY, WARNING, and BLOCKER operations on PlanningBoard and confirm the next action is understandable.',
-            'Send MACHINE_DOWN and WAIT_MATERIAL signals only for selected operations that are allowed by current workflow.',
-            'Use handover READY/ACCEPTED for eligible operations and record receiver/note context.',
-            'Use Skip only through the skip action and enter a clear reason.',
-            'Open ProductionOrder detail and compare latest action, actor, timestamp, note, and advisory-only status.',
+            'PlanningBoard: nhóm Tín hiệu sàn máy gồm Báo máy dừng, Chờ vật tư và Sẵn chạy.',
+            'Bàn giao: dùng Bàn giao sẵn sàng hoặc Đã nhận bàn giao cho công đoạn đủ điều kiện.',
+            'Cập nhật kết quả: dùng Bỏ qua có lý do hoặc Hoàn tất/cập nhật, luôn kiểm tra note/số lượng trước khi lưu.',
+            'Luôn đọc nhãn Chỉ cảnh báo, không chặn workflow trước khi thao tác.',
+            'Đối chiếu Audit thực thi: ai thao tác, lúc nào, note/lý do, last action và execution_handoff.',
         ],
         'recommended_commands': [
             'python manage.py erp_main_shop_floor_handoff_drill --format markdown',
@@ -296,8 +312,14 @@ def render_markdown(payload: dict) -> str:
         f"- Mode: {payload['mode']}",
         f"- Scenarios: {payload['summary']['ok_count']}/{payload['summary']['scenario_count']} OK",
         '',
-        '## Shop-floor drill scenarios',
+        '## Operator wording',
     ]
+    for key, value in payload['operator_wording'].items():
+        lines.append(f"- {key}: {value}")
+    lines.extend([
+        '',
+        '## Shop-floor drill scenarios',
+    ])
     for scenario in payload['scenarios']:
         lines.extend([
             '',
@@ -343,6 +365,18 @@ def render_markdown(payload: dict) -> str:
     return '\n'.join(lines)
 
 
+def _safe_for_stdout(text: str, stdout) -> str:
+    stream = getattr(stdout, '_out', stdout)
+    encoding = getattr(stream, 'encoding', None)
+    if not encoding:
+        return text
+    try:
+        text.encode(encoding)
+    except UnicodeEncodeError:
+        return text.encode('ascii', errors='backslashreplace').decode('ascii')
+    return text
+
+
 class Command(BaseCommand):
     help = 'Print a read-only ERP main shop-floor handoff drill pack with repository evidence checks'
 
@@ -353,9 +387,9 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         payload = build_shop_floor_handoff_drill_pack()
         if options['format'] == 'json':
-            self.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+            self.stdout.write(json.dumps(payload, ensure_ascii=True, indent=2, default=str))
         else:
-            self.stdout.write(render_markdown(payload))
+            self.stdout.write(_safe_for_stdout(render_markdown(payload), self.stdout))
 
         if options.get('strict') and payload['overall_status'] != 'ok':
             raise CommandError('Shop-floor handoff drill pack has missing evidence.')

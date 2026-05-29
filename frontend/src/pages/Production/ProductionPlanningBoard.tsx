@@ -313,7 +313,7 @@ const handoverOptions = [
   { label: 'Tất cả bàn giao', value: 'ALL' },
   { label: 'Đang thao tác', value: 'ACTIVE' },
   { label: 'Sẵn sàng bàn giao', value: 'READY' },
-  { label: 'Đã tiếp quản', value: 'ACCEPTED' },
+  { label: 'Đã nhận bàn giao', value: 'ACCEPTED' },
   { label: 'Chưa chốt', value: 'NONE' },
 ];
 const capacityOptions = [
@@ -629,7 +629,7 @@ const renderExecutionHandoffDetails = (card: ProductionPlanningCard) => {
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Space wrap>
           {renderExecutionHandoffTag(card)}
-          <Tag color="default">Chỉ cảnh báo, không chặn</Tag>
+          <Tag color="default">Chỉ cảnh báo, không chặn workflow</Tag>
           {handoff.audit_available ?? card.shop_floor.audit_available ? <Tag color="blue">Có audit</Tag> : <Tag>Chưa có audit</Tag>}
         </Space>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
@@ -782,7 +782,7 @@ const getReadyToDispatchIssueTitle = (issue: { code?: string; category?: string 
   if (code.startsWith('CAPACITY_') || category === 'capacity') return 'Công suất';
   if (code.startsWith('MATERIAL_') || category === 'material') return 'Vật tư/tồn nguồn';
   if (code.includes('PRINT') || category === 'print_metadata') return 'Print metadata';
-  return issue.code || 'Advisory';
+  return issue.code || 'Chỉ cảnh báo';
 };
 const getReadyToDispatchSummary = (card: ProductionPlanningCard) => {
   const issues = getReadyToDispatchIssues(card);
@@ -2016,7 +2016,7 @@ export default function ProductionPlanningBoard() {
   };
   const getDispatchPresetDetail = (preset: DispatchPresetKey) => {
     if (preset === 'DISPATCH_READY') {
-      return 'Advisory sạch, chưa chặn workflow';
+      return 'Chỉ cảnh báo sạch, chưa chặn workflow';
     }
     if (preset === 'DISPATCH_WARNING') {
       return 'Cần rà vật tư, lịch, tài nguyên hoặc metadata';
@@ -3705,7 +3705,7 @@ export default function ProductionPlanningBoard() {
             <Card size="small"><Statistic title="Chưa gán WC" value={planningUsabilitySummary.unassignedWorkCenterCount} valueStyle={{ color: '#8c8c8c' }} /></Card>
             <Card size="small"><Statistic title="Máy dừng" value={workspace?.summary.machine_down_count ?? 0} valueStyle={{ color: '#cf1322' }} /></Card>
             <Card size="small"><Statistic title="Sẵn sàng bàn giao" value={workspace?.summary.handover_ready_count ?? 0} valueStyle={{ color: '#722ed1' }} /></Card>
-            <Card size="small"><Statistic title="Đã tiếp quản" value={workspace?.summary.handover_accepted_count ?? 0} valueStyle={{ color: '#389e0d' }} /></Card>
+            <Card size="small"><Statistic title="Đã nhận bàn giao" value={workspace?.summary.handover_accepted_count ?? 0} valueStyle={{ color: '#389e0d' }} /></Card>
             <Card size="small"><Statistic title="Chưa gán ngày/ca" value={planningUsabilitySummary.unscheduledCount} /></Card>
             <Card size="small"><Statistic title="Giờ active" value={planningUsabilitySummary.activeScheduledHours} precision={2} suffix="h" /></Card>
           </div>
@@ -4208,7 +4208,7 @@ export default function ProductionPlanningBoard() {
                 >
                   <Space direction="vertical" size={10} style={{ width: '100%' }}>
                     <Text type="secondary">{`Sẵn chạy ${group.ready_to_run_count} · Đang làm ${group.in_progress_count} · Nghẽn ${group.blocked_count}`}</Text>
-                    <Text type="secondary">{`Sẵn sàng bàn giao ${group.handover_ready_count} · Đã tiếp quản ${group.handover_accepted_count}`}</Text>
+                    <Text type="secondary">{`Sẵn sàng bàn giao ${group.handover_ready_count} · Đã nhận bàn giao ${group.handover_accepted_count}`}</Text>
                     <Text type="secondary">{group.owners.length ? `Người phụ trách: ${group.owners.join(', ')}` : 'Chưa gán người phụ trách'}</Text>
                     <Space wrap>
                       <Button size="small" onClick={() => setPlannedShift(plannedShift === group.key ? 'ALL' : (group.key as ShiftFilter))}>
@@ -4641,7 +4641,7 @@ export default function ProductionPlanningBoard() {
                   <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
                     <span>
                       <Button size="small" onClick={() => void handleSendShopFloorHandover('ACCEPTED', 'Người nhận đã tiếp quản và clear cho công đoạn trước', { clearPreviousWait: true, setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-accepted">
-                        Đã tiếp quản
+                        Đã nhận bàn giao
                       </Button>
                     </span>
                   </Tooltip>
@@ -4656,7 +4656,7 @@ export default function ProductionPlanningBoard() {
                   <Button size="small" type="primary" onClick={handleOpenBulkModal} disabled={!selectedCards.length} data-testid="production-planning-open-bulk-modal">
                     Cập nhật hàng loạt
                   </Button>
-                  <Tag color="default">Chỉ cảnh báo, không chặn</Tag>
+                  <Tag color="default">Chỉ cảnh báo, không chặn workflow</Tag>
                 </Space>
               </Space>
             </div>
@@ -5153,7 +5153,7 @@ export default function ProductionPlanningBoard() {
                   {`Sẵn chạy ${bulkPreviewQuery.data.current_summary.ready_to_run_count} -> ${bulkPreviewQuery.data.preview_summary.ready_to_run_count} · Cần xử lý ${bulkPreviewQuery.data.current_summary.needs_attention_count} -> ${bulkPreviewQuery.data.preview_summary.needs_attention_count}`}
                 </Text>
                 <Text type="secondary">
-                  {`Máy dừng ${bulkPreviewQuery.data.preview_summary.machine_down_count} · Ready handover ${bulkPreviewQuery.data.preview_summary.handover_ready_count} · Giao hàng bị trễ ${bulkPreviewQuery.data.preview_summary.negative_delivery_gap_count}`}
+                  {`Máy dừng ${bulkPreviewQuery.data.preview_summary.machine_down_count} · Sẵn sàng bàn giao ${bulkPreviewQuery.data.preview_summary.handover_ready_count} · Giao hàng bị trễ ${bulkPreviewQuery.data.preview_summary.negative_delivery_gap_count}`}
                 </Text>
                 <Text type="secondary">
                   {`Quá tải ${bulkPreviewQuery.data.current_summary.over_capacity_count} -> ${bulkPreviewQuery.data.preview_summary.over_capacity_count} · Chưa gán máy ${bulkPreviewQuery.data.current_summary.unassigned_machine_count} -> ${bulkPreviewQuery.data.preview_summary.unassigned_machine_count}`}
@@ -5570,7 +5570,7 @@ export default function ProductionPlanningBoard() {
                 />
               ) : null}
             </Card>
-            <Card size="small" title="Cập nhật kết quả / skip-done-update">
+            <Card size="small" title="Cập nhật kết quả / Bỏ qua - Hoàn tất">
               {!canEditSelectedCard ? (
                 <Alert
                   type="info"
@@ -5594,7 +5594,7 @@ export default function ProductionPlanningBoard() {
                   type="info"
                   showIcon
                   message="Thao tác trong drawer vẫn chỉ cảnh báo và ghi audit."
-                  description="Sau khi nạp ngày/ca/máy/tổ hoặc đổi trạng thái, kiểm tra thẻ Tác động dự kiến rồi bấm Cập nhật công đoạn. Skip cần nhập lý do riêng để ghi audit."
+                  description="Sau khi nạp ngày/ca/máy/tổ hoặc đổi trạng thái, kiểm tra thẻ Tác động dự kiến rồi bấm Cập nhật công đoạn. Bỏ qua cần nhập lý do riêng để ghi audit."
                   style={{ marginBottom: 16 }}
                 />
               ) : null}
@@ -5619,7 +5619,7 @@ export default function ProductionPlanningBoard() {
                   </Space>
                   <Space direction="vertical" size={6}>
                     <Text strong>Tín hiệu sàn máy / kết quả</Text>
-                    <Text type="secondary">Skip cần lý do riêng; done/update kiểm tra Tác động dự kiến trước khi lưu.</Text>
+                    <Text type="secondary">Bỏ qua cần lý do riêng; hoàn tất/cập nhật kiểm tra Tác động dự kiến trước khi lưu.</Text>
                     <Space wrap>
                       <Button onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_MATERIAL', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ cấp vật tư trước khi vào máy' })}>
                         Báo chờ vật tư

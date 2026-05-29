@@ -113,19 +113,19 @@ function makeCard(id: number, status: DispatchStatus, overrides: Record<string, 
     block_reason_note: status === 'WARNING' ? 'Kho chua cap giay.' : status === 'BLOCKER' ? 'Can hoan tat cong doan In.' : '',
     dispatch_owner: 'Planner',
     handover_status: status === 'READY' ? 'ACCEPTED' : '',
-    handover_status_label: status === 'READY' ? 'Da tiep quan' : '',
+    handover_status_label: status === 'READY' ? 'Đã nhận bàn giao' : '',
     handover_receiver: status === 'READY' ? 'To In' : '',
-    handover_note: status === 'READY' ? 'Line accepted handover' : '',
+    handover_note: status === 'READY' ? 'Đã nhận bàn giao trên line' : '',
     handover_at: status === 'READY' ? '2026-05-23T08:30:00Z' : null,
     skip_reason: '',
     skipped_at: null,
     skipped_by: null,
     skipped_by_display: '',
     last_action: status === 'READY' ? 'HANDOVER' : status === 'WARNING' ? 'SIGNAL' : 'UPDATE',
-    last_action_label: status === 'READY' ? 'Handover accepted' : status === 'WARNING' ? 'Shop-floor signal' : 'Planner update',
+    last_action_label: status === 'READY' ? 'Đã nhận bàn giao' : status === 'WARNING' ? 'Tín hiệu sàn máy' : 'Cập nhật planner',
     last_actor: status === 'WARNING' ? 'operator_a' : 'planner_a',
     last_at: status === 'WARNING' ? '2026-05-23T09:00:00Z' : '2026-05-23T08:30:00Z',
-    last_note: status === 'WARNING' ? 'Floor reports waiting material' : status === 'BLOCKER' ? 'Waiting previous operation' : 'Line accepted handover',
+    last_note: status === 'WARNING' ? 'Floor báo chờ vật tư' : status === 'BLOCKER' ? 'Chờ công đoạn trước' : 'Đã nhận bàn giao trên line',
     audit_available: true,
     advisory_only: true,
     workflow_blocking: false,
@@ -407,7 +407,7 @@ test('planning board shows ready-to-dispatch badges, panel, and quick filter', a
   await expect(page.getByTestId('production-planning-ready-to-dispatch-warning').first()).toBeVisible();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-blocker').first()).toBeVisible();
   await expect(page.getByTestId('production-planning-execution-state-handover').first()).toBeVisible();
-  await expect(page.getByTestId('production-planning-execution-audit-1').first()).toContainText('Handover accepted');
+  await expect(page.getByTestId('production-planning-execution-audit-1').first()).toContainText('Đã nhận bàn giao');
   await expect(page.getByTestId('production-planning-execution-audit-1').first()).toContainText('planner_a');
   await expect(page.getByTestId('production-planning-ready-to-dispatch-action-plan')).toContainText('Kiểm tra vật tư/tồn nguồn');
   await expect(page.getByTestId('production-planning-ready-to-dispatch-action-plan')).toContainText('Chờ bàn giao công đoạn trước');
@@ -417,7 +417,7 @@ test('planning board shows ready-to-dispatch badges, panel, and quick filter', a
   await expect(page.getByText('MO-WARN')).toBeVisible();
   await expect(page.getByText('MO-READY')).toHaveCount(0);
   await expect(page.getByText('MO-BLOCK')).toHaveCount(0);
-  await expect(page.getByTestId('production-planning-execution-audit-2')).toContainText('Shop-floor signal');
+  await expect(page.getByTestId('production-planning-execution-audit-2')).toContainText('Tín hiệu sàn máy');
   await expect(page.getByTestId('production-planning-execution-audit-2')).toContainText('operator_a');
   await expect(page.getByTestId('production-planning-card-dispatch-summary').first()).toContainText('Đối chiếu cấp vật tư');
 
@@ -425,6 +425,6 @@ test('planning board shows ready-to-dispatch badges, panel, and quick filter', a
   await expect(page.getByTestId('production-planning-ready-to-dispatch-detail')).toBeVisible();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-detail')).toContainText('WARNING');
   await expect(page.getByTestId('production-planning-execution-handoff-detail')).toBeVisible();
-  await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Floor reports waiting material');
+  await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Floor báo chờ vật tư');
   await expect(page.getByTestId('production-planning-ready-to-dispatch-actions')).toContainText('Kiểm tra vật tư/tồn nguồn');
 });
