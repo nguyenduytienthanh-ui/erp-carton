@@ -212,6 +212,9 @@ class ErpMainShopFloorHandoffRealDevDrillCommandTests(TestCase):
     def _ok_release(self):
         return {'status': 'ok', 'summary': 'Release readiness: OK'}
 
+    def assertLegacyConsoleSafe(self, output):
+        output.encode('ascii')
+
     def test_shop_floor_real_dev_drill_dry_run_is_default_and_does_not_write(self):
         before_counts = {
             'product_units': ProductUnit.objects.count(),
@@ -251,6 +254,7 @@ class ErpMainShopFloorHandoffRealDevDrillCommandTests(TestCase):
         self.assertNotIn('password', output.lower())
         self.assertNotIn('token', output.lower())
         self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
 
     def test_shop_floor_real_dev_drill_markdown_is_operator_friendly(self):
         with TemporaryDirectory() as tmpdir:
@@ -273,6 +277,7 @@ class ErpMainShopFloorHandoffRealDevDrillCommandTests(TestCase):
         self.assertNotIn('password', output.lower())
         self.assertNotIn('token', output.lower())
         self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
 
     def test_shop_floor_real_dev_drill_rejects_wrong_prefixes(self):
         for prefix in ['', 'QA_', 'QA_UAT9H_', 'QA_SHF2_', 'TMP_SHF1_']:
@@ -353,6 +358,7 @@ class ErpMainShopFloorHandoffRealDevDrillCommandTests(TestCase):
         self.assertNotIn('password', output.lower())
         self.assertNotIn('token', output.lower())
         self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
 
     def test_shop_floor_real_dev_drill_confirm_write_refuses_existing_prefixed_data(self):
         ProductUnit.objects.create(code='QA_SHF1_U', name='Existing unit')

@@ -628,7 +628,15 @@ def render_markdown(payload: dict) -> str:
     lines.extend([f"- {key}: {value}" for key, value in payload['safety'].items()])
     lines.extend(['', '## Safety notes'])
     lines.extend([f"- {item}" for item in payload['safety_notes']])
-    return '\n'.join(lines)
+    return _legacy_console_safe('\n'.join(lines))
+
+
+def render_json(payload: dict) -> str:
+    return _legacy_console_safe(json.dumps(payload, ensure_ascii=True, indent=2, default=str))
+
+
+def _legacy_console_safe(text: str) -> str:
+    return text.encode('ascii', errors='backslashreplace').decode('ascii')
 
 
 class Command(BaseCommand):
@@ -647,6 +655,6 @@ class Command(BaseCommand):
             confirm_write=bool(options.get('confirm_write')),
         )
         if options['format'] == 'json':
-            self.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+            self.stdout.write(render_json(payload))
         else:
             self.stdout.write(render_markdown(payload))
