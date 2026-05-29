@@ -654,6 +654,11 @@ test('shop-floor handoff drill covers PlanningBoard actions and ProductionOrder 
   await expect(page.getByTestId('production-planning-ready-to-dispatch-ready').first()).toBeVisible();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-warning').first()).toBeVisible();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-blocker').first()).toBeVisible();
+  await expect(page.getByTestId('production-planning-floor-signal-group')).toContainText('Tín hiệu sàn máy');
+  await expect(page.getByTestId('production-planning-floor-signal-group')).toContainText('Báo máy dừng');
+  await expect(page.getByTestId('production-planning-handover-action-group')).toContainText('Bàn giao');
+  await expect(page.getByTestId('production-planning-result-action-group')).toContainText('Cập nhật kết quả');
+  await expect(page.getByTestId('production-planning-result-action-group')).toContainText('Chỉ cảnh báo');
 
   await page.getByTestId('production-planning-select-visible').click();
   await expect(page.getByTestId('production-planning-signal-clear-to-run')).toBeDisabled();
@@ -678,6 +683,9 @@ test('shop-floor handoff drill covers PlanningBoard actions and ProductionOrder 
 
   await page.getByTestId('production-planning-open-card-3').click();
   await expect(page.getByTestId('production-planning-detail-drawer')).toBeVisible();
+  await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Chỉ cảnh báo');
+  await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Người thao tác');
+  await expect(page.getByText('Cập nhật kết quả / skip-done-update')).toBeVisible();
   await page.getByTestId('production-planning-skip-operation').click();
   await page.getByTestId('production-planning-skip-reason').fill('Skip for shop-floor drill with audit reason');
   await page.getByTestId('production-planning-skip-submit').click();

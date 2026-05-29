@@ -601,11 +601,11 @@ const renderExecutionAuditSummary = (card: ProductionPlanningCard, compact = fal
     >
       <Space wrap size={4}>
         {renderExecutionHandoffTag(card)}
-        {handoff.advisory_only || handoff.workflow_blocking === false ? <Tag color="default">Advisory</Tag> : null}
+        {handoff.advisory_only || handoff.workflow_blocking === false ? <Tag color="default">Chỉ cảnh báo</Tag> : null}
       </Space>
       <Text type="secondary">
         {lastAction.auditAvailable
-          ? `${lastAction.action} · ${lastAction.actor} · ${formatDateTime(lastAction.at)}`
+          ? `Thao tác: ${lastAction.action} · Người: ${lastAction.actor} · Lúc: ${formatDateTime(lastAction.at)}`
           : 'Chưa có audit thao tác gần nhất'}
       </Text>
       {!compact && lastAction.note ? <Text type="secondary">{lastAction.note}</Text> : null}
@@ -625,25 +625,25 @@ const renderExecutionHandoffDetails = (card: ProductionPlanningCard) => {
   const skippedAt = handoff.skipped_at || card.operation.skipped_at || null;
   const skippedBy = handoff.skipped_by_display || card.operation.skipped_by_display || '';
   return (
-    <Card size="small" title="Bàn giao thực thi / audit" data-testid="production-planning-execution-handoff-detail">
+    <Card size="small" title="Audit thao tác sàn máy / bàn giao" data-testid="production-planning-execution-handoff-detail">
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Space wrap>
           {renderExecutionHandoffTag(card)}
-          <Tag color="default">Chỉ hiển thị, không chặn workflow</Tag>
+          <Tag color="default">Chỉ cảnh báo, không chặn</Tag>
           {handoff.audit_available ?? card.shop_floor.audit_available ? <Tag color="blue">Có audit</Tag> : <Tag>Chưa có audit</Tag>}
         </Space>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-          <div><strong>Trạng thái công đoạn:</strong> {`${getExecutionStateLabel(card)} · ${operationStatusLabel[card.operation.status]}`}</div>
-          <div><strong>Floor owner:</strong> {handoff.dispatch_owner || card.shop_floor.dispatch_owner || 'Chưa gán'}</div>
-          <div><strong>Handover:</strong> {`${handoverStatus} · ${handoverReceiver} · ${formatDateTime(handoverAt)}`}</div>
-          <div><strong>Block reason:</strong> {blockReason}</div>
-          <div><strong>Skip:</strong> {skipReason ? `${skipReason} · ${skippedBy || 'Không rõ'} · ${formatDateTime(skippedAt)}` : 'Không bỏ qua'}</div>
+          <div><strong>Trạng thái:</strong> {`${getExecutionStateLabel(card)} · ${operationStatusLabel[card.operation.status]}`}</div>
+          <div><strong>Người phụ trách:</strong> {handoff.dispatch_owner || card.shop_floor.dispatch_owner || 'Chưa gán'}</div>
+          <div><strong>Bàn giao:</strong> {`${handoverStatus} · ${handoverReceiver} · ${formatDateTime(handoverAt)}`}</div>
+          <div><strong>Lý do nghẽn:</strong> {blockReason}</div>
+          <div><strong>Bỏ qua:</strong> {skipReason ? `${skipReason} · ${skippedBy || 'Không rõ'} · ${formatDateTime(skippedAt)}` : 'Không bỏ qua'}</div>
           <div><strong>Thao tác gần nhất:</strong> {lastAction.action}</div>
           <div><strong>Người thao tác:</strong> {lastAction.actor}</div>
           <div><strong>Thời điểm:</strong> {formatDateTime(lastAction.at)}</div>
         </div>
         {lastAction.note ? <Alert type="info" showIcon message="Ghi chú thao tác gần nhất" description={lastAction.note} /> : null}
-        {handoverNote ? <Text type="secondary">{`Ghi chú handover: ${handoverNote}`}</Text> : null}
+        {handoverNote ? <Text type="secondary">{`Ghi chú bàn giao: ${handoverNote}`}</Text> : null}
         {blockNote ? <Text type="secondary">{`Ghi chú nghẽn: ${blockNote}`}</Text> : null}
       </Space>
     </Card>
@@ -4574,9 +4574,9 @@ export default function ProductionPlanningBoard() {
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <div>
-              <Title level={5} style={{ margin: 0 }}>Bulk action công đoạn</Title>
+              <Title level={5} style={{ margin: 0 }}>Bảng thao tác sàn máy</Title>
               <Text type="secondary">
-                Dùng cho điều độ nhanh nhiều công đoạn cùng lúc, nhưng vẫn giữ audit từng dòng.
+                Chọn công đoạn rồi xử lý theo nhóm tín hiệu, bàn giao hoặc cập nhật kết quả. Mọi thao tác vẫn ghi audit từng dòng.
               </Text>
             </div>
             <Space wrap>
@@ -4586,9 +4586,6 @@ export default function ProductionPlanningBoard() {
               </Button>
               <Button onClick={() => setSelectedCardKeys([])} disabled={!selectedCards.length} data-testid="production-planning-clear-selection">
                 Bỏ chọn
-              </Button>
-              <Button type="primary" onClick={handleOpenBulkModal} disabled={!selectedCards.length} data-testid="production-planning-open-bulk-modal">
-                Cập nhật hàng loạt
               </Button>
               <Button href={plannerHandoverRoute} disabled={!selectedCards.length} data-testid="production-planning-open-scan-selected">
                 Mở Quét QR kiện theo chọn
@@ -4605,37 +4602,65 @@ export default function ProductionPlanningBoard() {
               {selectedCards.length > 8 ? <Tag>{`+${selectedCards.length - 8} công đoạn`}</Tag> : null}
             </Space>
           ) : (
-            <Text type="secondary">Chọn công đoạn trong board hoặc bảng danh sách để mở bulk action.</Text>
+            <Text type="secondary">Chọn công đoạn trong board hoặc bảng danh sách để mở bảng thao tác.</Text>
           )}
-          <Space wrap>
-            <Button size="small" onClick={() => void handleSendShopFloorSignal('MACHINE_DOWN', 'Floor báo máy dừng, cần đổi line', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-machine-down">
-              Báo máy dừng
-            </Button>
-            <Button size="small" onClick={() => void handleSendShopFloorSignal('WAIT_MATERIAL', 'Floor báo chờ cấp vật tư trước khi vào máy', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-wait-material">
-              Báo chờ vật tư
-            </Button>
-            <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
-              <span>
-                <Button size="small" onClick={() => void handleSendShopFloorSignal('CLEAR_TO_RUN', 'Floor đã sẵn sàng tiếp tục', 'ACTIVE')} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-signal-clear-to-run">
-                  Báo sẵn chạy
-                </Button>
-              </span>
-            </Tooltip>
-            <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
-              <span>
-                <Button size="small" onClick={() => void handleSendShopFloorHandover('READY', 'Đã chốt xong gói bàn giao cho ca sau', { setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-ready">
-                  Chốt sẵn sàng bàn giao
-                </Button>
-              </span>
-            </Tooltip>
-            <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
-              <span>
-                <Button size="small" onClick={() => void handleSendShopFloorHandover('ACCEPTED', 'Người nhận đã tiếp quản và clear cho công đoạn trước', { clearPreviousWait: true, setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-accepted">
-                  Chốt đã tiếp quản
-                </Button>
-              </span>
-            </Tooltip>
-          </Space>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+            <div data-testid="production-planning-floor-signal-group" style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 12 }}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Text strong>Tín hiệu sàn máy</Text>
+                <Text type="secondary">Báo nghẽn hoặc xác nhận công đoạn đã sẵn sàng chạy lại.</Text>
+                <Space wrap>
+                  <Button size="small" onClick={() => void handleSendShopFloorSignal('MACHINE_DOWN', 'Floor báo máy dừng, cần đổi line', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-machine-down">
+                    Báo máy dừng
+                  </Button>
+                  <Button size="small" onClick={() => void handleSendShopFloorSignal('WAIT_MATERIAL', 'Floor báo chờ cấp vật tư trước khi vào máy', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-wait-material">
+                    Báo chờ vật tư
+                  </Button>
+                  <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
+                    <span>
+                      <Button size="small" onClick={() => void handleSendShopFloorSignal('CLEAR_TO_RUN', 'Floor đã sẵn sàng tiếp tục', 'ACTIVE')} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-signal-clear-to-run">
+                        Báo sẵn chạy
+                      </Button>
+                    </span>
+                  </Tooltip>
+                </Space>
+              </Space>
+            </div>
+            <div data-testid="production-planning-handover-action-group" style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 12 }}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Text strong>Bàn giao</Text>
+                <Text type="secondary">Chốt sẵn sàng bàn giao hoặc xác nhận người nhận đã tiếp quản.</Text>
+                <Space wrap>
+                  <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
+                    <span>
+                      <Button size="small" onClick={() => void handleSendShopFloorHandover('READY', 'Đã chốt xong gói bàn giao cho ca sau', { setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-ready">
+                        Bàn giao sẵn sàng
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
+                    <span>
+                      <Button size="small" onClick={() => void handleSendShopFloorHandover('ACCEPTED', 'Người nhận đã tiếp quản và clear cho công đoạn trước', { clearPreviousWait: true, setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-accepted">
+                        Đã tiếp quản
+                      </Button>
+                    </span>
+                  </Tooltip>
+                </Space>
+              </Space>
+            </div>
+            <div data-testid="production-planning-result-action-group" style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 12 }}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Text strong>Cập nhật kết quả</Text>
+                <Text type="secondary">Skip, done và update cần đủ lý do/số lượng rồi xem tác động trước khi lưu.</Text>
+                <Space wrap>
+                  <Button size="small" type="primary" onClick={handleOpenBulkModal} disabled={!selectedCards.length} data-testid="production-planning-open-bulk-modal">
+                    Cập nhật hàng loạt
+                  </Button>
+                  <Tag color="default">Chỉ cảnh báo, không chặn</Tag>
+                </Space>
+              </Space>
+            </div>
+          </div>
         </Space>
       </Card>
       <div className="command-center-grid">
@@ -5461,7 +5486,7 @@ export default function ProductionPlanningBoard() {
               {selectedCard.shop_floor.handover_status ? <Tag color={getHandoverColor(selectedCard.shop_floor.handover_status)}>{selectedCard.shop_floor.handover_status_label}</Tag> : null}
               {selectedCard.operation.block_reason_label ? <Tag color="volcano">{selectedCard.operation.block_reason_label}</Tag> : null}
             </Space>
-            <Card size="small" title="Ready-to-dispatch advisory" data-testid="production-planning-ready-to-dispatch-detail">
+            <Card size="small" title="READY/WARNING/BLOCKER - chỉ cảnh báo" data-testid="production-planning-ready-to-dispatch-detail">
               <Space direction="vertical" size={10} style={{ width: '100%' }}>
                 <Space wrap>
                   {renderReadyToDispatchTag(selectedCard)}
@@ -5517,8 +5542,8 @@ export default function ProductionPlanningBoard() {
                 <div><strong>Bộ đệm giao hàng:</strong> {formatDeliveryGap(selectedCard.exceptions.delivery_gap_days)}</div>
                 <div><strong>Work center / máy:</strong> {`${selectedCard.capacity.work_center_name || selectedCard.capacity.work_center_code || 'Chưa gán WC'} · ${selectedCard.capacity.machine_name || selectedCard.capacity.machine_code || 'Chưa gán máy'}`}</div>
                 <div><strong>Công suất:</strong> {`${selectedCard.capacity.capacity_state_label} · ${formatHours(selectedCard.capacity.scheduled_hours)} · Tải ${formatCapacityLoad(selectedCard.capacity.work_center_load_ratio)}`}</div>
-                <div><strong>Floor owner:</strong> {selectedCard.shop_floor.dispatch_owner || 'Chưa gán'}</div>
-                <div><strong>Handover:</strong> {selectedCard.shop_floor.handover_status_label || 'Chưa chốt'}</div>
+                <div><strong>Người phụ trách sàn máy:</strong> {selectedCard.shop_floor.dispatch_owner || 'Chưa gán'}</div>
+                <div><strong>Bàn giao:</strong> {selectedCard.shop_floor.handover_status_label || 'Chưa chốt'}</div>
                 <div><strong>Routing step:</strong> {selectedCard.operation.display_step ? `Bước ${selectedCard.operation.display_step}` : selectedCard.operation.route_step_no ? `Route ${selectedCard.operation.route_step_no}` : 'Theo thứ tự sequence'}</div>
                 <div><strong>Nhóm routing:</strong> {selectedCard.operation.group_code || 'Không có'}</div>
                 <div><strong>Song song:</strong> {selectedCard.operation.allow_parallel ? 'Có thể chạy song song trong cùng bước' : 'Không đánh dấu song song'}</div>
@@ -5528,7 +5553,7 @@ export default function ProductionPlanningBoard() {
                 <div><strong>Tham chiếu:</strong> {selectedCard.order.reference || '-'}</div>
               </div>
               {selectedCard.exceptions.block_reason_note ? <div style={{ marginTop: 12 }}><strong>Ghi chú nghẽn:</strong> {selectedCard.exceptions.block_reason_note}</div> : null}
-              {selectedCard.shop_floor.handover_note ? <div style={{ marginTop: 12 }}><strong>Ghi chú handover:</strong> {selectedCard.shop_floor.handover_note}</div> : null}
+              {selectedCard.shop_floor.handover_note ? <div style={{ marginTop: 12 }}><strong>Ghi chú bàn giao:</strong> {selectedCard.shop_floor.handover_note}</div> : null}
               {selectedCard.operation.status === 'SKIPPED' ? (
                 <Alert
                   showIcon
@@ -5545,7 +5570,7 @@ export default function ProductionPlanningBoard() {
                 />
               ) : null}
             </Card>
-            <Card size="small" title="Điều độ công đoạn">
+            <Card size="small" title="Cập nhật kết quả / skip-done-update">
               {!canEditSelectedCard ? (
                 <Alert
                   type="info"
@@ -5568,8 +5593,8 @@ export default function ProductionPlanningBoard() {
                 <Alert
                   type="info"
                   showIcon
-                  message="Nạp lịch nhanh sẽ chỉ đổi form trước."
-                  description="Sau khi nạp ngày/ca/máy/tổ, kiểm tra thẻ Tác động dự kiến rồi bấm Cập nhật công đoạn."
+                  message="Thao tác trong drawer vẫn chỉ cảnh báo và ghi audit."
+                  description="Sau khi nạp ngày/ca/máy/tổ hoặc đổi trạng thái, kiểm tra thẻ Tác động dự kiến rồi bấm Cập nhật công đoạn. Skip cần nhập lý do riêng để ghi audit."
                   style={{ marginBottom: 16 }}
                 />
               ) : null}
@@ -5593,13 +5618,14 @@ export default function ProductionPlanningBoard() {
                     </Space>
                   </Space>
                   <Space direction="vertical" size={6}>
-                    <Text strong>Trạng thái và nghẽn</Text>
+                    <Text strong>Tín hiệu sàn máy / kết quả</Text>
+                    <Text type="secondary">Skip cần lý do riêng; done/update kiểm tra Tác động dự kiến trước khi lưu.</Text>
                     <Space wrap>
                       <Button onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_MATERIAL', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ cấp vật tư trước khi vào máy' })}>
-                        Đánh dấu chờ vật tư
+                        Báo chờ vật tư
                       </Button>
                       <Button onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_PREVIOUS_STEP', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ công đoạn trước bàn giao' })}>
-                        Chờ công đoạn trước
+                        Báo chờ công đoạn trước
                       </Button>
                       {canSkipSelectedCard ? (
                         <Tooltip title={selectedCardDependencyBlocked ? 'Ngoại lệ có audit: bỏ qua công đoạn này dù đang chờ công đoạn trước.' : 'Bỏ qua công đoạn này và ghi lý do/audit.'}>
@@ -5611,7 +5637,7 @@ export default function ProductionPlanningBoard() {
                       <Tooltip title={selectedCardDependencyBlocked ? selectedBlockedReason : ''}>
                         <span>
                           <Button onClick={() => runQuickUpdate({ status: 'READY', block_reason_code: '', block_reason_note: '' })} disabled={selectedCardDependencyBlocked}>
-                            Đánh dấu sẵn chạy
+                            Báo sẵn chạy
                           </Button>
                         </span>
                       </Tooltip>
