@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
+import type { CSSProperties } from 'react';
 import {
   Alert,
   AutoComplete,
@@ -8,6 +9,7 @@ import {
   Drawer,
   Empty,
   Form,
+  Grid,
   Input,
   InputNumber,
   List,
@@ -603,11 +605,14 @@ const renderExecutionAuditSummary = (card: ProductionPlanningCard, compact = fal
         {renderExecutionHandoffTag(card)}
         {handoff.advisory_only || handoff.workflow_blocking === false ? <Tag color="default">Chỉ cảnh báo</Tag> : null}
       </Space>
-      <Text type="secondary">
-        {lastAction.auditAvailable
-          ? `Thao tác: ${lastAction.action} · Người: ${lastAction.actor} · Lúc: ${formatDateTime(lastAction.at)}`
-          : 'Chưa có audit thao tác gần nhất'}
-      </Text>
+      {lastAction.auditAvailable ? (
+        <Space direction="vertical" size={0} style={{ width: '100%' }}>
+          <Text type="secondary">{`Thao tác: ${lastAction.action}`}</Text>
+          <Text type="secondary">{`Người: ${lastAction.actor} · Lúc: ${formatDateTime(lastAction.at)}`}</Text>
+        </Space>
+      ) : (
+        <Text type="secondary">Chưa có audit thao tác gần nhất</Text>
+      )}
       {!compact && lastAction.note ? <Text type="secondary">{lastAction.note}</Text> : null}
     </Space>
   );
@@ -1221,6 +1226,32 @@ export default function ProductionPlanningBoard() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [messageApi, contextHolder] = message.useMessage();
+  const screens = Grid.useBreakpoint();
+  const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth;
+  const isMobileViewport = viewportWidth < 576 || !screens.sm;
+  const isTabletViewport = (viewportWidth >= 576 && viewportWidth < 992) || Boolean(screens.sm && !screens.lg);
+  const isTouchViewport = viewportWidth < 992 || !screens.lg;
+  const detailDrawerWidth = isMobileViewport ? viewportWidth : isTabletViewport ? Math.round(viewportWidth * 0.92) : 760;
+  const bulkModalWidth = isMobileViewport ? Math.max(320, viewportWidth - 24) : isTabletViewport ? Math.round(viewportWidth * 0.9) : 920;
+  const touchButtonStyle: CSSProperties | undefined = isTouchViewport ? { width: '100%', minHeight: 40 } : undefined;
+  const touchButtonWrapperStyle: CSSProperties | undefined = isTouchViewport ? { width: '100%' } : undefined;
+  const shopFloorActionGridStyle: CSSProperties = isTouchViewport
+    ? {
+        display: 'grid',
+        gridTemplateColumns: isMobileViewport ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+        gap: 8,
+        width: '100%',
+      }
+    : {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 8,
+      };
+  const shopFloorGroupGridStyle: CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: isMobileViewport ? '1fr' : isTabletViewport ? 'repeat(2, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: isTouchViewport ? 10 : 12,
+  };
   const initial = useMemo(() => buildSnapshotFromParams(searchParams), [searchParams]);
   const [search, setSearch] = useState(initial.search);
   const [stepCode, setStepCode] = useState(initial.step_code);
@@ -4604,60 +4635,60 @@ export default function ProductionPlanningBoard() {
           ) : (
             <Text type="secondary">Chọn công đoạn trong board hoặc bảng danh sách để mở bảng thao tác.</Text>
           )}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+          <div style={shopFloorGroupGridStyle}>
             <div data-testid="production-planning-floor-signal-group" style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 12 }}>
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
                 <Text strong>Tín hiệu sàn máy</Text>
                 <Text type="secondary">Báo nghẽn hoặc xác nhận công đoạn đã sẵn sàng chạy lại.</Text>
-                <Space wrap>
-                  <Button size="small" onClick={() => void handleSendShopFloorSignal('MACHINE_DOWN', 'Floor báo máy dừng, cần đổi line', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-machine-down">
+                <div style={shopFloorActionGridStyle}>
+                  <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorSignal('MACHINE_DOWN', 'Floor báo máy dừng, cần đổi line', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-machine-down">
                     Báo máy dừng
                   </Button>
-                  <Button size="small" onClick={() => void handleSendShopFloorSignal('WAIT_MATERIAL', 'Floor báo chờ cấp vật tư trước khi vào máy', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-wait-material">
+                  <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorSignal('WAIT_MATERIAL', 'Floor báo chờ cấp vật tư trước khi vào máy', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-wait-material">
                     Báo chờ vật tư
                   </Button>
                   <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
-                    <span>
-                      <Button size="small" onClick={() => void handleSendShopFloorSignal('CLEAR_TO_RUN', 'Floor đã sẵn sàng tiếp tục', 'ACTIVE')} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-signal-clear-to-run">
+                    <span style={touchButtonWrapperStyle}>
+                      <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorSignal('CLEAR_TO_RUN', 'Floor đã sẵn sàng tiếp tục', 'ACTIVE')} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-signal-clear-to-run">
                         Báo sẵn chạy
                       </Button>
                     </span>
                   </Tooltip>
-                </Space>
+                </div>
               </Space>
             </div>
             <div data-testid="production-planning-handover-action-group" style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 12 }}>
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
                 <Text strong>Bàn giao</Text>
                 <Text type="secondary">Chốt sẵn sàng bàn giao hoặc xác nhận người nhận đã tiếp quản.</Text>
-                <Space wrap>
+                <div style={shopFloorActionGridStyle}>
                   <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
-                    <span>
-                      <Button size="small" onClick={() => void handleSendShopFloorHandover('READY', 'Đã chốt xong gói bàn giao cho ca sau', { setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-ready">
+                    <span style={touchButtonWrapperStyle}>
+                      <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorHandover('READY', 'Đã chốt xong gói bàn giao cho ca sau', { setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-ready">
                         Bàn giao sẵn sàng
                       </Button>
                     </span>
                   </Tooltip>
                   <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
-                    <span>
-                      <Button size="small" onClick={() => void handleSendShopFloorHandover('ACCEPTED', 'Người nhận đã tiếp quản và clear cho công đoạn trước', { clearPreviousWait: true, setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-accepted">
+                    <span style={touchButtonWrapperStyle}>
+                      <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorHandover('ACCEPTED', 'Người nhận đã tiếp quản và clear cho công đoạn trước', { clearPreviousWait: true, setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-accepted">
                         Đã nhận bàn giao
                       </Button>
                     </span>
                   </Tooltip>
-                </Space>
+                </div>
               </Space>
             </div>
             <div data-testid="production-planning-result-action-group" style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 12 }}>
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
                 <Text strong>Cập nhật kết quả</Text>
                 <Text type="secondary">Skip, done và update cần đủ lý do/số lượng rồi xem tác động trước khi lưu.</Text>
-                <Space wrap>
-                  <Button size="small" type="primary" onClick={handleOpenBulkModal} disabled={!selectedCards.length} data-testid="production-planning-open-bulk-modal">
+                <div style={shopFloorActionGridStyle}>
+                  <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} type="primary" onClick={handleOpenBulkModal} disabled={!selectedCards.length} data-testid="production-planning-open-bulk-modal">
                     Cập nhật hàng loạt
                   </Button>
-                  <Tag color="default">Chỉ cảnh báo, không chặn workflow</Tag>
-                </Space>
+                  <Tag color="default" style={isTouchViewport ? { marginInlineEnd: 0, textAlign: 'center', lineHeight: '38px', minHeight: 40 } : undefined}>Chỉ cảnh báo, không chặn workflow</Tag>
+                </div>
               </Space>
             </div>
           </div>
@@ -4906,7 +4937,8 @@ export default function ProductionPlanningBoard() {
       <Modal
         open={isBulkModalOpen}
         title={`Cập nhật hàng loạt ${selectedCards.length} công đoạn`}
-        width={920}
+        width={bulkModalWidth}
+        style={isTouchViewport ? { maxWidth: 'calc(100vw - 24px)' } : undefined}
         onCancel={() => {
           setIsBulkModalOpen(false);
           bulkForm.resetFields();
@@ -4985,30 +5017,30 @@ export default function ProductionPlanningBoard() {
               description={`Quá tải ${bulkSelectionSummary.overCapacityCount} · Gần kín ${bulkSelectionSummary.atLimitCount} · Thiếu máy/tổ ${bulkSelectionSummary.unassignedResourceCount} · Chưa gán ngày/ca ${bulkSelectionSummary.unscheduledCount}`}
             />
           ) : null}
-          <Space wrap>
-            <Button size="small" onClick={() => bulkForm.setFieldsValue({ planned_date: dayjs(), planned_shift: 'FULLDAY' })} data-testid="production-planning-bulk-today">
+          <div style={shopFloorActionGridStyle}>
+            <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => bulkForm.setFieldsValue({ planned_date: dayjs(), planned_shift: 'FULLDAY' })} data-testid="production-planning-bulk-today">
               Xếp hôm nay
             </Button>
-            <Button size="small" onClick={() => bulkForm.setFieldsValue({ planned_date: dayjs().add(1, 'day'), planned_shift: 'FULLDAY' })} data-testid="production-planning-bulk-tomorrow">
+            <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => bulkForm.setFieldsValue({ planned_date: dayjs().add(1, 'day'), planned_shift: 'FULLDAY' })} data-testid="production-planning-bulk-tomorrow">
               Xếp ngày mai
             </Button>
-            <Button size="small" onClick={() => bulkForm.setFieldsValue({ block_reason_code: 'WAIT_MATERIAL', block_reason_note: 'Chờ cấp vật tư trước khi vào máy' })} data-testid="production-planning-bulk-wait-material">
+            <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => bulkForm.setFieldsValue({ block_reason_code: 'WAIT_MATERIAL', block_reason_note: 'Chờ cấp vật tư trước khi vào máy' })} data-testid="production-planning-bulk-wait-material">
               Đánh dấu chờ vật tư
             </Button>
-            <Button size="small" onClick={() => bulkForm.setFieldsValue({ block_reason_code: 'WAIT_PREVIOUS_STEP', block_reason_note: 'Chờ công đoạn trước bàn giao' })}>
+            <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => bulkForm.setFieldsValue({ block_reason_code: 'WAIT_PREVIOUS_STEP', block_reason_note: 'Chờ công đoạn trước bàn giao' })}>
               Chờ công đoạn trước
             </Button>
             <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
-              <span>
-                <Button size="small" onClick={() => bulkForm.setFieldsValue({ status: 'READY', block_reason_code: '__CLEAR__', block_reason_note: '' })} disabled={blockedSelectedCount > 0} data-testid="production-planning-bulk-ready">
+              <span style={touchButtonWrapperStyle}>
+                <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => bulkForm.setFieldsValue({ status: 'READY', block_reason_code: '__CLEAR__', block_reason_note: '' })} disabled={blockedSelectedCount > 0} data-testid="production-planning-bulk-ready">
                   Đánh dấu sẵn chạy
                 </Button>
               </span>
             </Tooltip>
-            <Button size="small" onClick={() => bulkForm.setFieldsValue({ block_reason_code: '__CLEAR__', block_reason_note: '' })} data-testid="production-planning-bulk-clear-block">
+            <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => bulkForm.setFieldsValue({ block_reason_code: '__CLEAR__', block_reason_note: '' })} data-testid="production-planning-bulk-clear-block">
               Gỡ nghẽn
             </Button>
-          </Space>
+          </div>
           <Form form={bulkForm} layout="vertical">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
               <Form.Item name="status" label="Trạng thái">
@@ -5256,7 +5288,7 @@ export default function ProductionPlanningBoard() {
 
       <Drawer
         title={selectedQueue ? `${selectedQueue.machine_name || selectedQueue.machine_code || 'Queue máy'} · ${selectedQueue.shift_label}` : 'Queue theo máy'}
-        width={760}
+        width={detailDrawerWidth}
         open={Boolean(selectedQueue)}
         onClose={() => setSelectedQueueKey(null)}
         data-testid="production-planning-queue-drawer"
@@ -5445,7 +5477,7 @@ export default function ProductionPlanningBoard() {
 
       <Drawer
         title={selectedCard ? `${selectedCard.order.code} · ${selectedCard.operation.step_code} · ${selectedCard.operation.step_name}` : 'Chi tiết công đoạn'}
-        width={760}
+        width={detailDrawerWidth}
         open={Boolean(selectedCard)}
         destroyOnClose={false}
         onClose={() => { setSelectedCardKey(null); setFocusOperationId(''); }}
@@ -5620,31 +5652,31 @@ export default function ProductionPlanningBoard() {
                   <Space direction="vertical" size={6}>
                     <Text strong>Tín hiệu sàn máy / kết quả</Text>
                     <Text type="secondary">Bỏ qua cần lý do riêng; hoàn tất/cập nhật kiểm tra Tác động dự kiến trước khi lưu.</Text>
-                    <Space wrap>
-                      <Button onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_MATERIAL', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ cấp vật tư trước khi vào máy' })}>
+                    <div style={shopFloorActionGridStyle}>
+                      <Button size={isTouchViewport ? 'middle' : undefined} style={touchButtonStyle} onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_MATERIAL', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ cấp vật tư trước khi vào máy' })}>
                         Báo chờ vật tư
                       </Button>
-                      <Button onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_PREVIOUS_STEP', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ công đoạn trước bàn giao' })}>
+                      <Button size={isTouchViewport ? 'middle' : undefined} style={touchButtonStyle} onClick={() => runQuickUpdate({ block_reason_code: 'WAIT_PREVIOUS_STEP', block_reason_note: form.getFieldValue('block_reason_note') || 'Chờ công đoạn trước bàn giao' })}>
                         Báo chờ công đoạn trước
                       </Button>
                       {canSkipSelectedCard ? (
                         <Tooltip title={selectedCardDependencyBlocked ? 'Ngoại lệ có audit: bỏ qua công đoạn này dù đang chờ công đoạn trước.' : 'Bỏ qua công đoạn này và ghi lý do/audit.'}>
-                          <Button danger onClick={handleOpenSkipModal} loading={skipMutation.isPending} data-testid="production-planning-skip-operation">
+                          <Button size={isTouchViewport ? 'middle' : undefined} style={touchButtonStyle} danger onClick={handleOpenSkipModal} loading={skipMutation.isPending} data-testid="production-planning-skip-operation">
                             Bỏ qua
                           </Button>
                         </Tooltip>
                       ) : null}
                       <Tooltip title={selectedCardDependencyBlocked ? selectedBlockedReason : ''}>
-                        <span>
-                          <Button onClick={() => runQuickUpdate({ status: 'READY', block_reason_code: '', block_reason_note: '' })} disabled={selectedCardDependencyBlocked}>
+                        <span style={touchButtonWrapperStyle}>
+                          <Button size={isTouchViewport ? 'middle' : undefined} style={touchButtonStyle} onClick={() => runQuickUpdate({ status: 'READY', block_reason_code: '', block_reason_note: '' })} disabled={selectedCardDependencyBlocked}>
                             Báo sẵn chạy
                           </Button>
                         </span>
                       </Tooltip>
-                      <Button onClick={() => runQuickUpdate({ block_reason_code: '', block_reason_note: '' })}>
+                      <Button size={isTouchViewport ? 'middle' : undefined} style={touchButtonStyle} onClick={() => runQuickUpdate({ block_reason_code: '', block_reason_note: '' })}>
                         Gỡ nghẽn
                       </Button>
-                    </Space>
+                    </div>
                   </Space>
                 </Space>
               ) : null}

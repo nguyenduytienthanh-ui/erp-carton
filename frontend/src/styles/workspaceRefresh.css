@@ -1092,6 +1092,26 @@ pre {
     width: 100%;
   }
 
+  .workspace-toolbar-group {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .workspace-toolbar-group > .ant-input,
+  .workspace-toolbar-group > .ant-picker,
+  .workspace-toolbar-group > .ant-select,
+  .workspace-toolbar-group > .ant-btn,
+  .workspace-toolbar-group > span {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+
+  .workspace-toolbar-group > .ant-input,
+  .workspace-toolbar-group > .ant-picker,
+  .workspace-toolbar-group > .ant-select {
+    width: 100% !important;
+  }
+
   .command-center-signal-grid,
   .command-center-module-grid,
   .workspace-metric-grid {
@@ -1109,6 +1129,19 @@ pre {
   }
 
   .command-center-hero-actions .ant-btn {
+    width: 100%;
+  }
+
+  .workspace-toolbar-group > .ant-input,
+  .workspace-toolbar-group > .ant-picker,
+  .workspace-toolbar-group > .ant-select,
+  .workspace-toolbar-group > .ant-btn,
+  .workspace-toolbar-group > span {
+    flex-basis: 100%;
+  }
+
+  .workspace-toolbar-group > .ant-btn,
+  .workspace-toolbar-group > span .ant-btn {
     width: 100%;
   }
 

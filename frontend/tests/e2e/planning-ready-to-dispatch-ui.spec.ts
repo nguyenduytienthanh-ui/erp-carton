@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 test.use({ channel: 'msedge', video: 'off' });
 
@@ -10,6 +10,15 @@ function json(route: Route, body: unknown, status = 200) {
     contentType: 'application/json',
     body: JSON.stringify(body),
   });
+}
+
+async function expectWithinViewport(locator: Locator, page: Page) {
+  await expect(locator).toBeVisible();
+  await expect.poll(async () => {
+    const box = await locator.boundingBox();
+    const viewport = page.viewportSize();
+    return Boolean(box && viewport && box.x >= -4 && box.x + box.width <= viewport.width + 4);
+  }).toBeTruthy();
 }
 
 const readyIssue = (status: DispatchStatus, code: string, category: string, message: string) => ({
@@ -421,10 +430,32 @@ test('planning board shows ready-to-dispatch badges, panel, and quick filter', a
   await expect(page.getByTestId('production-planning-execution-audit-2')).toContainText('operator_a');
   await expect(page.getByTestId('production-planning-card-dispatch-summary').first()).toContainText('Đối chiếu cấp vật tư');
 
-  await page.getByRole('button', { name: 'Chi tiết' }).click();
+  await page.getByTestId('production-planning-open-card-2').click();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-detail')).toBeVisible();
   await expect(page.getByTestId('production-planning-ready-to-dispatch-detail')).toContainText('WARNING');
   await expect(page.getByTestId('production-planning-execution-handoff-detail')).toBeVisible();
   await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Floor báo chờ vật tư');
   await expect(page.getByTestId('production-planning-ready-to-dispatch-actions')).toContainText('Kiểm tra vật tư/tồn nguồn');
+});
+
+test('tablet viewport keeps PlanningBoard filters and audit drawer within screen', async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await setupMockApi(page);
+
+  await page.goto('/production-planning');
+
+  await page.getByTestId('production-planning-command-strip').scrollIntoViewIfNeeded();
+  await expectWithinViewport(page.getByTestId('production-planning-search'), page);
+  await expectWithinViewport(page.getByTestId('production-planning-ready-to-dispatch-filter'), page);
+
+  await page.getByTestId('production-planning-bulk-strip').scrollIntoViewIfNeeded();
+  await expectWithinViewport(page.getByTestId('production-planning-floor-signal-group'), page);
+  await expectWithinViewport(page.getByTestId('production-planning-handover-action-group'), page);
+  await expectWithinViewport(page.getByTestId('production-planning-result-action-group'), page);
+
+  await page.getByTestId('production-planning-open-card-2').click();
+  await expect(page.getByTestId('production-planning-detail-drawer')).toBeVisible();
+  await expectWithinViewport(page.getByTestId('production-planning-execution-handoff-detail'), page);
+  await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Người thao tác');
+  await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Chỉ cảnh báo');
 });

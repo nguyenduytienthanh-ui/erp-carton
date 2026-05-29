@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 test.use({ channel: 'msedge', video: 'off' });
 
@@ -32,6 +32,15 @@ function json(route: Route, body: unknown, status = 200) {
     contentType: 'application/json',
     body: JSON.stringify(body),
   });
+}
+
+async function expectWithinViewport(locator: Locator, page: Page) {
+  await expect(locator).toBeVisible();
+  await expect.poll(async () => {
+    const box = await locator.boundingBox();
+    const viewport = page.viewportSize();
+    return Boolean(box && viewport && box.x >= -4 && box.x + box.width <= viewport.width + 4);
+  }).toBeTruthy();
 }
 
 const baseOperation = {
@@ -707,4 +716,40 @@ test('shop-floor handoff drill covers PlanningBoard actions and ProductionOrder 
   await expect(page.getByTestId('production-order-execution-exception-4')).toContainText('Handover: Đã nhận bàn giao');
   await expect(page.getByTestId('production-order-execution-audit-5')).toContainText('Hoàn tất/cập nhật');
   await expect(page.getByTestId('production-order-execution-audit-5')).toContainText('Advisory');
+});
+
+test('mobile viewport keeps PlanningBoard shop-floor actions touch friendly', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const records: RequestRecord[] = [];
+  await setupMockApi(page, records);
+
+  await page.goto('/production-planning');
+
+  const bulkStrip = page.getByTestId('production-planning-bulk-strip');
+  await expect(bulkStrip).toBeVisible();
+  await expectWithinViewport(page.getByTestId('production-planning-floor-signal-group'), page);
+  await expectWithinViewport(page.getByTestId('production-planning-handover-action-group'), page);
+  await expectWithinViewport(page.getByTestId('production-planning-result-action-group'), page);
+
+  const machineDown = page.getByTestId('production-planning-signal-machine-down');
+  await expect(machineDown).toBeVisible();
+  await expect(machineDown).toContainText('Báo máy dừng');
+  const machineDownBox = await machineDown.boundingBox();
+  expect(machineDownBox).not.toBeNull();
+  expect(machineDownBox!.height).toBeGreaterThanOrEqual(38);
+
+  await page.getByTestId('production-planning-select-card-1').click();
+  await page.getByTestId('production-planning-open-bulk-modal').click();
+  const bulkDialog = page.getByRole('dialog', { name: /Cập nhật hàng loạt/ });
+  await expect(bulkDialog).toBeVisible();
+  await expectWithinViewport(bulkDialog, page);
+  await expect(page.getByTestId('production-planning-bulk-wait-material')).toBeVisible();
+  await page.locator('.ant-modal-close').last().click();
+  await expect(bulkDialog).toBeHidden();
+
+  await page.getByTestId('production-planning-open-card-1').click();
+  await expect(page.getByTestId('production-planning-detail-drawer')).toBeVisible();
+  await expectWithinViewport(page.getByTestId('production-planning-execution-handoff-detail'), page);
+  await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Chỉ cảnh báo');
+  await expect(page.getByTestId('production-planning-execution-handoff-detail')).toContainText('Người thao tác');
 });
