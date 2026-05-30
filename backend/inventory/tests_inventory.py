@@ -1560,12 +1560,21 @@ class InventoryApiFlowTest(TestCase):
         self.assertEqual(Decimal(source_row['in_qty']), Decimal('5'))
         self.assertEqual(Decimal(source_row['out_qty']), Decimal('9'))
         self.assertEqual(Decimal(source_row['closing_qty']), Decimal('16'))
+        self.assertEqual(Decimal(source_row['source_breakdown']['MANUAL']['in_qty']), Decimal('5'))
+        self.assertEqual(Decimal(source_row['source_breakdown']['MANUAL']['out_qty']), Decimal('3'))
+        self.assertEqual(Decimal(source_row['source_breakdown']['TRANSFER']['out_qty']), Decimal('6'))
+        self.assertEqual(source_row['source_breakdown']['TRANSFER']['source_document_types']['TRANSFER_TRANSACTION'], 1)
+        self.assertEqual(source_row['source_breakdown']['TRANSFER']['source_document_types']['WAREHOUSE_TRANSFER_REFERENCE'], 1)
+        self.assertEqual(source_row['source_warnings']['TRANSFER_REFERENCE_ONLY'], 1)
 
         target_row = rows[(self.product.id, target_warehouse.id)]
         self.assertEqual(Decimal(target_row['opening_qty']), Decimal('0'))
         self.assertEqual(Decimal(target_row['in_qty']), Decimal('6'))
         self.assertEqual(Decimal(target_row['out_qty']), Decimal('0'))
         self.assertEqual(Decimal(target_row['closing_qty']), Decimal('6'))
+        self.assertEqual(Decimal(target_row['source_breakdown']['TRANSFER']['in_qty']), Decimal('6'))
+        self.assertEqual(target_row['source_breakdown']['TRANSFER']['source_document_types']['WAREHOUSE_TRANSFER_REFERENCE'], 1)
+        self.assertEqual(target_row['source_warnings']['TRANSFER_REFERENCE_ONLY'], 1)
 
         filtered_response = self.client.get(
             '/api/inventory/transactions/nxt_report/',
@@ -1581,6 +1590,227 @@ class InventoryApiFlowTest(TestCase):
         self.assertEqual(len(filtered_rows), 1)
         self.assertEqual(filtered_rows[0]['warehouse_id'], target_warehouse.id)
         self.assertEqual(Decimal(filtered_rows[0]['in_qty']), Decimal('6'))
+
+    def test_nxt_report_source_breakdown_keeps_totals_and_transfer_direction(self):
+        target_warehouse = Warehouse.objects.create(code='K-NXT-SRC', name='Kho NXT source')
+        supplier = Supplier.objects.create(code='SUP-NXT-SRC', name='Supplier NXT source')
+        date_from = timezone.localdate() - timedelta(days=3)
+        date_to = timezone.localdate()
+        opening_date = date_from - timedelta(days=2)
+        period_date = date_from + timedelta(days=1)
+
+        purchase_order = PurchaseOrder.objects.create(
+            code='PO-NXT-SRC',
+            order_date=period_date,
+            supplier=supplier,
+            warehouse=self.warehouse,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        purchase_receipt = PurchaseReceipt.objects.create(
+            code='GRN-NXT-SRC',
+            purchase_order=purchase_order,
+            receipt_date=period_date,
+            warehouse=self.warehouse,
+            posted_by=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        production_order = ProductionOrder.objects.create(
+            code='MO-NXT-SRC',
+            order_date=period_date,
+            product=self.product,
+            planned_qty=Decimal('1'),
+            target_warehouse=self.warehouse,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        production_issue = ProductionIssue.objects.create(
+            code='PMI-NXT-SRC',
+            production_order=production_order,
+            issue_date=period_date,
+            posted_by=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        production_receipt = ProductionReceipt.objects.create(
+            code='FGR-NXT-SRC',
+            production_order=production_order,
+            receipt_date=period_date,
+            warehouse=self.warehouse,
+            posted_by=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        stocktake = Stocktake.objects.create(
+            code='STKT-NXT-SRC',
+            warehouse=self.warehouse,
+            count_date=period_date,
+            status='COMPLETED',
+            created_by=self.user,
+        )
+
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-SRC-OPEN',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            transaction_date=opening_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            quantity=Decimal('10'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-SRC-PURCHASE',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            purchase_order=purchase_order,
+            purchase_receipt=purchase_receipt,
+            quantity=Decimal('5'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-SRC-PROD-ISSUE',
+            transaction_type=InventoryTransactionType.ISSUE,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            production_order=production_order,
+            production_issue=production_issue,
+            quantity=Decimal('2'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-SRC-PROD-RECEIPT',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            production_order=production_order,
+            production_receipt=production_receipt,
+            quantity=Decimal('3'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-SRC-STOCKTAKE',
+            transaction_type=InventoryTransactionType.ADJUSTMENT_OUT,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            stocktake=stocktake,
+            quantity=Decimal('1'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-SRC-TRANSFER',
+            transaction_type=InventoryTransactionType.TRANSFER,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            target_warehouse=target_warehouse,
+            quantity=Decimal('4'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-SRC-MANUAL',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            reference='T-NXT-SRC-MANUAL',
+            quantity=Decimal('2'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+        InventoryTransaction.objects.create(
+            code='INVTX-NXT-SRC-CANCELLED',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            status=InventoryTransactionStatus.CANCELLED,
+            transaction_date=period_date,
+            product=self.product,
+            warehouse=self.warehouse,
+            purchase_order=purchase_order,
+            purchase_receipt=purchase_receipt,
+            quantity=Decimal('99'),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+
+        response = self.client.get(
+            '/api/inventory/transactions/nxt_report/',
+            {'date_from': str(date_from), 'date_to': str(date_to), 'product': self.product.id},
+        )
+        self.assertEqual(response.status_code, 200, response.json())
+        rows = {(row['product_id'], row['warehouse_id']): row for row in response.json()['results']}
+
+        source_row = rows[(self.product.id, self.warehouse.id)]
+        self.assertEqual(Decimal(source_row['opening_qty']), Decimal('10'))
+        self.assertEqual(Decimal(source_row['in_qty']), Decimal('10'))
+        self.assertEqual(Decimal(source_row['out_qty']), Decimal('7'))
+        self.assertEqual(Decimal(source_row['closing_qty']), Decimal('13'))
+
+        breakdown = source_row['source_breakdown']
+        self.assertEqual(Decimal(breakdown['PURCHASE']['in_qty']), Decimal('5'))
+        self.assertEqual(Decimal(breakdown['PURCHASE']['out_qty']), Decimal('0'))
+        self.assertEqual(breakdown['PURCHASE']['count'], 1)
+        self.assertEqual(breakdown['PURCHASE']['source_document_types']['PURCHASE_RECEIPT'], 1)
+        self.assertEqual(Decimal(breakdown['PRODUCTION']['in_qty']), Decimal('3'))
+        self.assertEqual(Decimal(breakdown['PRODUCTION']['out_qty']), Decimal('2'))
+        self.assertEqual(breakdown['PRODUCTION']['count'], 2)
+        self.assertEqual(breakdown['PRODUCTION']['source_document_types']['PRODUCTION_ISSUE'], 1)
+        self.assertEqual(breakdown['PRODUCTION']['source_document_types']['PRODUCTION_RECEIPT'], 1)
+        self.assertEqual(Decimal(breakdown['STOCKTAKE']['out_qty']), Decimal('1'))
+        self.assertEqual(breakdown['STOCKTAKE']['source_document_types']['STOCKTAKE'], 1)
+        self.assertEqual(Decimal(breakdown['TRANSFER']['out_qty']), Decimal('4'))
+        self.assertEqual(breakdown['TRANSFER']['source_document_types']['TRANSFER_TRANSACTION'], 1)
+        self.assertEqual(Decimal(breakdown['MANUAL']['in_qty']), Decimal('2'))
+        self.assertEqual(breakdown['MANUAL']['source_document_types']['MANUAL'], 1)
+
+        source_in_total = sum(Decimal(item['in_qty']) for item in breakdown.values())
+        source_out_total = sum(Decimal(item['out_qty']) for item in breakdown.values())
+        source_net_total = sum(Decimal(item['net_qty']) for item in breakdown.values())
+        self.assertEqual(source_in_total, Decimal(source_row['in_qty']))
+        self.assertEqual(source_out_total, Decimal(source_row['out_qty']))
+        self.assertEqual(source_net_total, Decimal(source_row['in_qty']) - Decimal(source_row['out_qty']))
+        self.assertEqual(source_row['source_warnings'], {})
+
+        target_row = rows[(self.product.id, target_warehouse.id)]
+        self.assertEqual(Decimal(target_row['opening_qty']), Decimal('0'))
+        self.assertEqual(Decimal(target_row['in_qty']), Decimal('4'))
+        self.assertEqual(Decimal(target_row['out_qty']), Decimal('0'))
+        self.assertEqual(Decimal(target_row['closing_qty']), Decimal('4'))
+        self.assertEqual(Decimal(target_row['source_breakdown']['TRANSFER']['in_qty']), Decimal('4'))
+        self.assertEqual(target_row['source_breakdown']['TRANSFER']['count'], 1)
+
+        filtered_response = self.client.get(
+            '/api/inventory/transactions/nxt_report/',
+            {
+                'date_from': str(date_from),
+                'date_to': str(date_to),
+                'warehouse': target_warehouse.id,
+                'product': self.product.id,
+            },
+        )
+        self.assertEqual(filtered_response.status_code, 200, filtered_response.json())
+        filtered_row = filtered_response.json()['results'][0]
+        self.assertEqual(filtered_row['warehouse_id'], target_warehouse.id)
+        self.assertEqual(Decimal(filtered_row['source_breakdown']['TRANSFER']['in_qty']), Decimal('4'))
+        self.assertEqual(Decimal(filtered_row['source_breakdown']['TRANSFER']['out_qty']), Decimal('0'))
 
     def test_transaction_list_filters_by_involved_warehouse_and_source_type(self):
         target_warehouse = Warehouse.objects.create(code='K-FLT', name='Kho filter')

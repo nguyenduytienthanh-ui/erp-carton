@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime as dt_parse
 from decimal import Decimal
 
@@ -39,15 +39,85 @@ from inventory.serializers import (
     InventoryReservationSerializer,
     InventoryTransactionSerializer,
     OutboundShipmentSerializer,
+    SOURCE_TYPE_LABELS,
+    SOURCE_TYPE_MANUAL,
+    SOURCE_TYPE_PRODUCTION,
+    SOURCE_TYPE_PURCHASE,
+    SOURCE_TYPE_STOCKTAKE,
+    SOURCE_TYPE_TRANSFER,
     StockAlertSerializer,
     StocktakeSerializer,
     WarehouseLocationSerializer,
     WarehouseSerializer,
+    build_inventory_source_audit,
 )
 from inventory.services import build_stock_balance_map
 from inventory.services import apply_reservation_fulfillment, cancel_inventory_transaction_record
 from products.models import Product
 from sales.services import apply_delivery_plan_shipment
+
+
+NXT_SOURCE_TYPES = (
+    SOURCE_TYPE_PURCHASE,
+    SOURCE_TYPE_PRODUCTION,
+    SOURCE_TYPE_STOCKTAKE,
+    SOURCE_TYPE_TRANSFER,
+    SOURCE_TYPE_MANUAL,
+)
+
+
+def _empty_nxt_source_bucket():
+    return {
+        'in_qty': Decimal('0'),
+        'out_qty': Decimal('0'),
+        'count': 0,
+        'source_document_types': Counter(),
+        'source_warnings': Counter(),
+    }
+
+
+def _empty_nxt_source_breakdown():
+    return {source_type: _empty_nxt_source_bucket() for source_type in NXT_SOURCE_TYPES}
+
+
+def _normalize_nxt_source_audit(tx):
+    audit = build_inventory_source_audit(tx)
+    source_type = audit.get('type') or SOURCE_TYPE_MANUAL
+    if source_type in NXT_SOURCE_TYPES:
+        return audit
+
+    warning_flags = list(audit.get('warning_flags') or [])
+    warning_flags.append(f'NXT_SOURCE_COLLAPSED_{source_type}')
+    normalized = dict(audit)
+    normalized['type'] = SOURCE_TYPE_MANUAL
+    normalized['warning_flags'] = warning_flags
+    return normalized
+
+
+def _serialize_nxt_source_breakdown(source_breakdown):
+    serialized = {}
+    for source_type in NXT_SOURCE_TYPES:
+        bucket = source_breakdown.get(source_type) or _empty_nxt_source_bucket()
+        in_qty = bucket['in_qty']
+        out_qty = bucket['out_qty']
+        serialized[source_type] = {
+            'source_type': source_type,
+            'source_label': SOURCE_TYPE_LABELS.get(source_type, source_type),
+            'in_qty': str(in_qty),
+            'out_qty': str(out_qty),
+            'net_qty': str(in_qty - out_qty),
+            'count': bucket['count'],
+            'source_document_types': dict(bucket['source_document_types']),
+            'source_warnings': dict(bucket['source_warnings']),
+        }
+    return serialized
+
+
+def _flatten_nxt_source_counter(source_breakdown, counter_key):
+    summary = Counter()
+    for bucket in source_breakdown.values():
+        summary.update(bucket[counter_key])
+    return dict(summary)
 
 
 def _user_role_names(user):
@@ -287,38 +357,64 @@ class InventoryTransactionViewSet(InventoryManagePermissionMixin, viewsets.Model
         opening_out = defaultdict(Decimal)
         period_in = defaultdict(Decimal)
         period_out = defaultdict(Decimal)
+        period_source_breakdown = defaultdict(_empty_nxt_source_breakdown)
 
-        def _add_movement(bucket, tx, movement_warehouse_id):
+        def _add_source_movement(tx, movement_warehouse_id, direction):
+            audit = _normalize_nxt_source_audit(tx)
+            source_type = audit.get('type') or SOURCE_TYPE_MANUAL
+            bucket = period_source_breakdown[(tx.product_id, movement_warehouse_id)][source_type]
+            qty = tx.quantity or Decimal('0')
+            if direction == 'in':
+                bucket['in_qty'] += qty
+            else:
+                bucket['out_qty'] += qty
+            bucket['count'] += 1
+            document_type = audit.get('document_type')
+            if document_type:
+                bucket['source_document_types'][document_type] += 1
+            for warning in audit.get('warning_flags') or []:
+                bucket['source_warnings'][warning] += 1
+
+        def _add_movement(bucket, tx, movement_warehouse_id, source_direction=None):
             if not movement_warehouse_id:
                 return
             if warehouse_id and movement_warehouse_id != warehouse_id:
                 return
             bucket[(tx.product_id, movement_warehouse_id)] += tx.quantity or Decimal('0')
+            if source_direction:
+                _add_source_movement(tx, movement_warehouse_id, source_direction)
 
-        for tx in base.only(
-            'product_id',
-            'warehouse_id',
-            'target_warehouse_id',
-            'transaction_type',
-            'transaction_date',
-            'quantity',
+        for tx in base.select_related(
+            'purchase_order',
+            'purchase_receipt',
+            'production_order',
+            'production_issue',
+            'production_receipt',
+            'stocktake',
+            'reservation',
+            'shipment_batch',
+            'sales_order',
         ):
             if tx.transaction_date < date_from:
                 in_bucket = opening_in
                 out_bucket = opening_out
+                in_source_direction = None
+                out_source_direction = None
             elif date_from <= tx.transaction_date <= date_to:
                 in_bucket = period_in
                 out_bucket = period_out
+                in_source_direction = 'in'
+                out_source_direction = 'out'
             else:
                 continue
 
             if tx.transaction_type in {InventoryTransactionType.RECEIPT, InventoryTransactionType.ADJUSTMENT_IN}:
-                _add_movement(in_bucket, tx, tx.warehouse_id)
+                _add_movement(in_bucket, tx, tx.warehouse_id, in_source_direction)
             elif tx.transaction_type in {InventoryTransactionType.ISSUE, InventoryTransactionType.ADJUSTMENT_OUT}:
-                _add_movement(out_bucket, tx, tx.warehouse_id)
+                _add_movement(out_bucket, tx, tx.warehouse_id, out_source_direction)
             elif tx.transaction_type == InventoryTransactionType.TRANSFER:
-                _add_movement(out_bucket, tx, tx.warehouse_id)
-                _add_movement(in_bucket, tx, tx.target_warehouse_id)
+                _add_movement(out_bucket, tx, tx.warehouse_id, out_source_direction)
+                _add_movement(in_bucket, tx, tx.target_warehouse_id, in_source_direction)
 
         keys = set(opening_in) | set(opening_out) | set(period_in) | set(period_out)
         product_ids = [k[0] for k in keys if k[0]]
@@ -346,6 +442,9 @@ class InventoryTransactionViewSet(InventoryManagePermissionMixin, viewsets.Model
                 'in_qty': str(in_p),
                 'out_qty': str(out_p),
                 'closing_qty': str(closing),
+                'source_breakdown': _serialize_nxt_source_breakdown(period_source_breakdown.get((pid, wid), {})),
+                'source_document_types': _flatten_nxt_source_counter(period_source_breakdown.get((pid, wid), {}), 'source_document_types'),
+                'source_warnings': _flatten_nxt_source_counter(period_source_breakdown.get((pid, wid), {}), 'source_warnings'),
             })
         return Response({'date_from': date_from_s, 'date_to': date_to_s, 'results': rows})
 
