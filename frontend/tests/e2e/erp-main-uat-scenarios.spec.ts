@@ -962,6 +962,13 @@ const observabilityWorkspace = {
 
 const emptyPage = { count: 0, next: null, previous: null, results: [] };
 
+const round2ScenarioDomains = ['Product', 'Sales', 'Production', 'Planning', 'Shop-floor', 'Inventory', 'Ops'];
+const round2ClassificationSummary = {
+  mockNoDb: 6,
+  readOnlyCommand: 7,
+  realDevDbGate: 5,
+};
+
 async function setupMockApi(page: Page) {
   await page.addInitScript(() => {
     window.localStorage.setItem('access_token', 'mock-access-token');
@@ -1087,9 +1094,74 @@ async function setupMockApi(page: Page) {
             warehouse_code: warehouse.code,
             warehouse_name: warehouse.name,
             opening_qty: '10',
-            in_qty: '9',
-            out_qty: '2',
-            closing_qty: '17',
+            in_qty: '14',
+            out_qty: '6',
+            closing_qty: '18',
+            source_breakdown: {
+              PURCHASE: {
+                source_type: 'PURCHASE',
+                source_label: 'PURCHASE',
+                in_qty: '5',
+                out_qty: '0',
+                net_qty: '5',
+                count: 1,
+                source_document_types: { PURCHASE_RECEIPT: 1 },
+                source_warnings: {},
+              },
+              PRODUCTION: {
+                source_type: 'PRODUCTION',
+                source_label: 'PRODUCTION',
+                in_qty: '3',
+                out_qty: '2',
+                net_qty: '1',
+                count: 2,
+                source_document_types: { PRODUCTION_ISSUE: 1, PRODUCTION_RECEIPT: 1 },
+                source_warnings: { PRODUCTION_REFERENCE_ONLY: 1 },
+              },
+              STOCKTAKE: {
+                source_type: 'STOCKTAKE',
+                source_label: 'STOCKTAKE',
+                in_qty: '0',
+                out_qty: '1',
+                net_qty: '-1',
+                count: 1,
+                source_document_types: { STOCKTAKE: 1 },
+                source_warnings: {},
+              },
+              TRANSFER: {
+                source_type: 'TRANSFER',
+                source_label: 'TRANSFER',
+                in_qty: '4',
+                out_qty: '3',
+                net_qty: '1',
+                count: 2,
+                source_document_types: { TRANSFER_TRANSACTION: 1, WAREHOUSE_TRANSFER_REFERENCE: 1 },
+                source_warnings: { TRANSFER_REFERENCE_ONLY: 1 },
+              },
+              MANUAL: {
+                source_type: 'MANUAL',
+                source_label: 'MANUAL',
+                in_qty: '2',
+                out_qty: '0',
+                net_qty: '2',
+                count: 1,
+                source_document_types: { MANUAL: 1 },
+                source_warnings: {},
+              },
+            },
+            source_document_types: {
+              PURCHASE_RECEIPT: 1,
+              PRODUCTION_ISSUE: 1,
+              PRODUCTION_RECEIPT: 1,
+              STOCKTAKE: 1,
+              TRANSFER_TRANSACTION: 1,
+              WAREHOUSE_TRANSFER_REFERENCE: 1,
+              MANUAL: 1,
+            },
+            source_warnings: {
+              PRODUCTION_REFERENCE_ONLY: 1,
+              TRANSFER_REFERENCE_ONLY: 1,
+            },
           },
         ],
       });
@@ -1107,6 +1179,13 @@ async function setupMockApi(page: Page) {
 
 test('ERP main UAT mock pack covers readiness, handoff, planning, inventory, and ops signals', async ({ page }) => {
   await setupMockApi(page);
+
+  expect(round2ScenarioDomains).toEqual(['Product', 'Sales', 'Production', 'Planning', 'Shop-floor', 'Inventory', 'Ops']);
+  expect(round2ClassificationSummary).toEqual({
+    mockNoDb: 6,
+    readOnlyCommand: 7,
+    realDevDbGate: 5,
+  });
 
   await page.goto('/products');
   await expect(page.getByText(productReadinessItem.code, { exact: true }).first()).toBeVisible();
@@ -1152,6 +1231,15 @@ test('ERP main UAT mock pack covers readiness, handoff, planning, inventory, and
   await expect(page.getByTestId('inventory-source-audit-102')).toBeVisible();
   await expect(page.getByTestId('inventory-source-audit-103')).toBeVisible();
   await expect(page.getByTestId('inventory-nxt-table')).toContainText(auditProduct.code);
+  const nxtBreakdown = page.getByTestId(`inventory-nxt-source-breakdown-${auditProduct.id}-${warehouse.id}`);
+  await expect(nxtBreakdown).toContainText('+5 / -0 / net 5');
+  await expect(nxtBreakdown).toContainText('+3 / -2 / net 1');
+  await expect(nxtBreakdown).toContainText('+0 / -1 / net -1');
+  await expect(nxtBreakdown).toContainText('+4 / -3 / net 1');
+  await expect(nxtBreakdown).toContainText('+2 / -0 / net 2');
+  await expect(page.getByTestId(`inventory-nxt-source-documents-${auditProduct.id}-${warehouse.id}`)).toBeVisible();
+  await expect(page.getByTestId(`inventory-nxt-source-warnings-${auditProduct.id}-${warehouse.id}`)).toBeVisible();
+  await expect(page.getByTestId('inventory-nxt-export-csv')).toBeEnabled();
 
   await page.goto('/admin/observability');
   await expect(page.getByTestId('admin-observability-run-alert-drill')).toBeVisible();
