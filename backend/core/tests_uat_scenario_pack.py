@@ -9,6 +9,7 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
 
 from core.management.commands.erp_main_shop_floor_handoff_drill import build_shop_floor_handoff_drill_pack
+from core.management.commands.erp_main_uat_round2_scenarios import build_uat_round2_scenario_pack
 from core.management.commands.erp_main_uat_scenarios import build_uat_scenario_pack
 from core.models import AuditLog, Customer
 from inventory.models import InventoryTransaction
@@ -66,6 +67,80 @@ class ErpMainUatScenarioPackTests(SimpleTestCase):
         self.assertEqual(payload['overall_status'], 'warning')
         self.assertEqual(payload['summary']['ok_count'], 0)
         self.assertEqual(payload['summary']['warning_count'], payload['summary']['scenario_count'])
+        first_evidence = payload['scenarios'][0]['evidence'][0]
+        self.assertFalse(first_evidence['exists'])
+        self.assertEqual(first_evidence['status'], 'warning')
+
+
+class ErpMainUatRound2ScenarioPackTests(SimpleTestCase):
+    def test_command_returns_copy_friendly_json_for_round2_scenarios(self):
+        stdout = StringIO()
+        call_command('erp_main_uat_round2_scenarios', '--format', 'json', stdout=stdout)
+        output = stdout.getvalue()
+        payload = json.loads(output)
+
+        self.assertEqual(payload['pack'], 'ERP Main UAT Round 2 Scenario Selection v1')
+        self.assertEqual(payload['command'], 'erp_main_uat_round2_scenarios')
+        self.assertEqual(payload['mode'], 'read_only_static_repository_check')
+        self.assertEqual(payload['overall_status'], 'ok')
+        self.assertEqual(payload['summary']['scenario_count'], 7)
+        self.assertEqual(payload['summary']['warning_count'], 0)
+        self.assertEqual(payload['context']['qa_uat9h_status'], 'cleaned_up_post_count_0')
+        self.assertEqual(payload['context']['qa_shf1_status'], 'retained_for_shop_floor_audit')
+        self.assertEqual(
+            {item['domain'] for item in payload['scenarios']},
+            {'Product', 'Sales', 'Production', 'Planning', 'Shop-floor', 'Inventory', 'Ops'},
+        )
+        self.assertEqual(payload['summary']['classification_counts']['mock_no_db'], 6)
+        self.assertEqual(payload['summary']['classification_counts']['read_only_command'], 7)
+        self.assertEqual(payload['summary']['classification_counts']['real_dev_db_gate'], 5)
+        inventory = next(item for item in payload['scenarios'] if item['key'] == 'inventory_nxt_source_round2')
+        self.assertEqual(inventory['status'], 'ok')
+        self.assertIn('mock_no_db', inventory['classifications'])
+        self.assertIn('read_only_command', inventory['classifications'])
+        self.assertIn('real_dev_db_gate', inventory['classifications'])
+        self.assertTrue(any('erp_main_uat_round2_scenarios' in item for item in payload['recommended_read_only_commands']))
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['creates_uat_data'])
+        self.assertFalse(payload['safety']['confirm_write_runs'])
+        self.assertFalse(payload['safety']['cleanup_runs'])
+        self.assertFalse(payload['safety']['backup_restore_runs'])
+        self.assertFalse(payload['safety']['migration_runs'])
+        self.assertFalse(payload['safety']['deploy_runs'])
+        self.assertFalse(payload['safety']['smoke_http_runs'])
+        self.assertFalse(payload['safety']['credentials_printed'])
+        self.assertFalse(payload['safety']['qc_printing_in_scope'])
+        output.encode('ascii')
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+
+    def test_command_returns_markdown_with_classification_and_gate(self):
+        stdout = StringIO()
+        call_command('erp_main_uat_round2_scenarios', stdout=stdout)
+        output = stdout.getvalue()
+
+        self.assertIn('# ERP Main UAT Round 2 Scenario Selection v1', output)
+        self.assertIn('## Classification reference', output)
+        self.assertIn('mock/no-DB', output)
+        self.assertIn('read-only command', output)
+        self.assertIn('real-dev DB requires separate gate', output)
+        self.assertIn('Inventory - Inventory NXT source breakdown and CSV', output)
+        self.assertIn('Shop-floor - Shop-floor handoff retained-data report', output)
+        self.assertIn('## Real-dev DB gate requirements', output)
+        self.assertIn('No cleanup or restore is part of Round 2 scenario selection.', output)
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+
+    def test_pack_marks_missing_evidence_as_warning_without_db_writes(self):
+        payload = build_uat_round2_scenario_pack(repo_root=Path('Z:/missing/repo'))
+
+        self.assertEqual(payload['overall_status'], 'warning')
+        self.assertEqual(payload['summary']['ok_count'], 0)
+        self.assertEqual(payload['summary']['warning_count'], payload['summary']['scenario_count'])
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['creates_uat_data'])
         first_evidence = payload['scenarios'][0]['evidence'][0]
         self.assertFalse(first_evidence['exists'])
         self.assertEqual(first_evidence['status'], 'warning')
