@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 test.use({ channel: 'msedge', video: 'off' });
@@ -81,9 +83,74 @@ async function setupMockApi(page: Page) {
             warehouse_code: warehouse.code,
             warehouse_name: warehouse.name,
             opening_qty: '10',
-            in_qty: '4',
+            in_qty: '14',
             out_qty: '6',
-            closing_qty: '8',
+            closing_qty: '18',
+            source_breakdown: {
+              PURCHASE: {
+                source_type: 'PURCHASE',
+                source_label: 'Mua hàng',
+                in_qty: '5',
+                out_qty: '0',
+                net_qty: '5',
+                count: 1,
+                source_document_types: { PURCHASE_RECEIPT: 1 },
+                source_warnings: {},
+              },
+              PRODUCTION: {
+                source_type: 'PRODUCTION',
+                source_label: 'Sản xuất',
+                in_qty: '3',
+                out_qty: '2',
+                net_qty: '1',
+                count: 2,
+                source_document_types: { PRODUCTION_ISSUE: 1, PRODUCTION_RECEIPT: 1 },
+                source_warnings: { PRODUCTION_REFERENCE_ONLY: 1 },
+              },
+              STOCKTAKE: {
+                source_type: 'STOCKTAKE',
+                source_label: 'Kiểm tồn',
+                in_qty: '0',
+                out_qty: '1',
+                net_qty: '-1',
+                count: 1,
+                source_document_types: { STOCKTAKE: 1 },
+                source_warnings: {},
+              },
+              TRANSFER: {
+                source_type: 'TRANSFER',
+                source_label: 'Chuyển kho',
+                in_qty: '4',
+                out_qty: '3',
+                net_qty: '1',
+                count: 2,
+                source_document_types: { TRANSFER_TRANSACTION: 1, WAREHOUSE_TRANSFER_REFERENCE: 1 },
+                source_warnings: { TRANSFER_REFERENCE_ONLY: 1 },
+              },
+              MANUAL: {
+                source_type: 'MANUAL',
+                source_label: 'Thủ công',
+                in_qty: '2',
+                out_qty: '0',
+                net_qty: '2',
+                count: 1,
+                source_document_types: { MANUAL: 1 },
+                source_warnings: {},
+              },
+            },
+            source_document_types: {
+              PURCHASE_RECEIPT: 1,
+              PRODUCTION_ISSUE: 1,
+              PRODUCTION_RECEIPT: 1,
+              STOCKTAKE: 1,
+              TRANSFER_TRANSACTION: 1,
+              WAREHOUSE_TRANSFER_REFERENCE: 1,
+              MANUAL: 1,
+            },
+            source_warnings: {
+              PRODUCTION_REFERENCE_ONLY: 1,
+              TRANSFER_REFERENCE_ONLY: 1,
+            },
           },
         ],
       });
@@ -281,8 +348,33 @@ test('inventory ledger exposes audit filters and NXT panel', async ({ page }) =>
   await expect(page.getByTestId('inventory-source-audit-103')).toContainText('Sản xuất');
   await expect(page.getByTestId('inventory-source-audit-103')).toContainText('Nhận diện từ tham chiếu');
   await expect(page.getByTestId('inventory-nxt-table')).toContainText('P-AUDIT');
+  await expect(page.getByTestId('inventory-nxt-table')).toContainText('14');
+  await expect(page.getByTestId('inventory-nxt-table')).toContainText('18');
+  const nxtBreakdown = page.getByTestId('inventory-nxt-source-breakdown-10-1');
+  await expect(nxtBreakdown).toContainText('Mua hàng: +5');
+  await expect(nxtBreakdown).toContainText('Sản xuất: +3 / -2');
+  await expect(nxtBreakdown).toContainText('Kiểm tồn: +0 / -1');
+  await expect(nxtBreakdown).toContainText('Chuyển kho: +4 / -3');
+  await expect(nxtBreakdown).toContainText('Thủ công: +2');
+  await expect(page.getByTestId('inventory-nxt-source-documents-10-1')).toContainText('Phiếu nhập mua');
+  await expect(page.getByTestId('inventory-nxt-source-documents-10-1')).toContainText('Nhập thành phẩm');
+  await expect(page.getByTestId('inventory-nxt-source-warnings-10-1')).toContainText('Nhận diện từ tham chiếu');
   await expect(page.getByTestId('inventory-transactions-export-csv')).toBeEnabled();
   await expect(page.getByTestId('inventory-nxt-export-csv')).toBeEnabled();
+
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByTestId('inventory-nxt-export-csv').click();
+  const download = await downloadPromise;
+  const downloadPath = await download.path();
+  expect(downloadPath).toBeTruthy();
+  const csv = await readFile(downloadPath as string, 'utf-8');
+  expect(csv).toContain('Mua hàng - Nhập');
+  expect(csv).toContain('Sản xuất - Xuất');
+  expect(csv).toContain('Kiểm tồn - Net');
+  expect(csv).toContain('Chuyển kho - Số GD');
+  expect(csv).toContain('Thủ công - Nhập');
+  expect(csv).toContain('Cảnh báo nguồn');
+  expect(csv).toContain('Loại chứng từ nguồn');
 
   await page.getByTestId('inventory-transactions-date-from').fill('2026-05-01');
   await page.getByTestId('inventory-transactions-date-to').fill('2026-05-31');

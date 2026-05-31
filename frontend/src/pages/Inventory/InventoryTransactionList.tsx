@@ -6,7 +6,7 @@ import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { inventoryApi } from '../../api/inventory';
 import { productsApi } from '../../api/products';
-import type { InventoryNxtReportRow, InventorySourceType, InventoryTransaction } from '../../types/inventory';
+import type { InventoryNxtReportRow, InventoryNxtSourceBreakdownItem, InventoryNxtSourceType, InventorySourceType, InventoryTransaction } from '../../types/inventory';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
@@ -119,6 +119,8 @@ const SOURCE_TYPE_OPTIONS = Object.entries(SOURCE_TYPE_LABELS).map(([value, labe
   value: value as InventorySourceType,
   label,
 }));
+
+const NXT_SOURCE_TYPES: InventoryNxtSourceType[] = ['PURCHASE', 'PRODUCTION', 'STOCKTAKE', 'TRANSFER', 'MANUAL'];
 
 const SOURCE_TYPE_COLORS: Record<InventorySourceType, string> = {
   PURCHASE: 'green',
@@ -267,6 +269,76 @@ function getSourceDisplay(row: InventoryTransaction): {
     reference: audit?.reference || row.reference || '',
     warnings: getSourceWarningLabels(warnings),
   };
+}
+
+function getNxtRowKey(row: InventoryNxtReportRow): string {
+  return `${row.product_id}-${row.warehouse_id ?? 'none'}`;
+}
+
+function getNxtSourceBreakdownItem(row: InventoryNxtReportRow, sourceType: InventoryNxtSourceType): InventoryNxtSourceBreakdownItem {
+  return row.source_breakdown?.[sourceType] ?? {
+    source_type: sourceType,
+    source_label: getSourceTypeLabel(sourceType),
+    in_qty: '0',
+    out_qty: '0',
+    net_qty: '0',
+    count: 0,
+    source_document_types: {},
+    source_warnings: {},
+  };
+}
+
+function hasNxtSourceMovement(item: InventoryNxtSourceBreakdownItem): boolean {
+  return toNumber(item.in_qty) !== 0 || toNumber(item.out_qty) !== 0 || toNumber(item.net_qty) !== 0 || item.count > 0;
+}
+
+function formatNxtCounter(
+  counter: Record<string, number> | undefined,
+  labelFn: (value: string) => string = (value) => value,
+): string {
+  return Object.entries(counter ?? {})
+    .filter(([, count]) => Number(count) > 0)
+    .map(([key, count]) => `${labelFn(key)} (${count})`)
+    .join('; ');
+}
+
+function getNxtDocumentTypesSummary(row: InventoryNxtReportRow): string {
+  const rowSummary = formatNxtCounter(row.source_document_types, getSourceDocumentLabel);
+  if (rowSummary) return rowSummary;
+  const merged: Record<string, number> = {};
+  NXT_SOURCE_TYPES.forEach((sourceType) => {
+    const item = getNxtSourceBreakdownItem(row, sourceType);
+    Object.entries(item.source_document_types ?? {}).forEach(([key, count]) => {
+      merged[key] = (merged[key] ?? 0) + Number(count ?? 0);
+    });
+  });
+  return formatNxtCounter(merged, getSourceDocumentLabel);
+}
+
+function getNxtWarningsSummary(row: InventoryNxtReportRow): string {
+  const rowSummary = formatNxtCounter(row.source_warnings, (value) => SOURCE_WARNING_LABELS[value] ?? value);
+  if (rowSummary) return rowSummary;
+  const merged: Record<string, number> = {};
+  NXT_SOURCE_TYPES.forEach((sourceType) => {
+    const item = getNxtSourceBreakdownItem(row, sourceType);
+    Object.entries(item.source_warnings ?? {}).forEach(([key, count]) => {
+      merged[key] = (merged[key] ?? 0) + Number(count ?? 0);
+    });
+  });
+  return formatNxtCounter(merged, (value) => SOURCE_WARNING_LABELS[value] ?? value);
+}
+
+function buildNxtSourceBreakdownCsvColumns(row: InventoryNxtReportRow): Record<string, string | number> {
+  const result: Record<string, string | number> = {};
+  NXT_SOURCE_TYPES.forEach((sourceType) => {
+    const item = getNxtSourceBreakdownItem(row, sourceType);
+    const label = getSourceTypeLabel(sourceType);
+    result[`${label} - Nhập`] = item.in_qty || '0';
+    result[`${label} - Xuất`] = item.out_qty || '0';
+    result[`${label} - Net`] = item.net_qty || '0';
+    result[`${label} - Số GD`] = item.count ?? 0;
+  });
+  return result;
 }
 
 export default function InventoryTransactionList() {
@@ -669,6 +741,9 @@ export default function InventoryTransactionList() {
         Nhập: row.in_qty,
         Xuất: row.out_qty,
         'Tồn cuối': row.closing_qty,
+        ...buildNxtSourceBreakdownCsvColumns(row),
+        'Cảnh báo nguồn': getNxtWarningsSummary(row),
+        'Loại chứng từ nguồn': getNxtDocumentTypesSummary(row),
       })),
       `nxt-${nxtFilters.date_from}-${nxtFilters.date_to}`,
     );
@@ -802,6 +877,43 @@ export default function InventoryTransactionList() {
     { title: 'Nhập', dataIndex: 'in_qty', width: 120, align: 'right', render: (value) => formatQty(value as string) },
     { title: 'Xuất', dataIndex: 'out_qty', width: 120, align: 'right', render: (value) => formatQty(value as string) },
     { title: 'Tồn cuối', dataIndex: 'closing_qty', width: 120, align: 'right', render: (value) => formatQty(value as string) },
+    {
+      title: 'Phân rã nguồn',
+      width: 460,
+      render: (_, row) => {
+        const activeSources = NXT_SOURCE_TYPES
+          .map((sourceType) => getNxtSourceBreakdownItem(row, sourceType))
+          .filter(hasNxtSourceMovement);
+        const documentTypes = getNxtDocumentTypesSummary(row);
+        const warnings = getNxtWarningsSummary(row);
+
+        return (
+          <Space data-testid={`inventory-nxt-source-breakdown-${getNxtRowKey(row)}`} direction="vertical" size={6}>
+            <Space size={4} wrap>
+              {activeSources.length > 0 ? (
+                activeSources.map((item) => (
+                  <Tag key={item.source_type} color={SOURCE_TYPE_COLORS[item.source_type]} style={{ marginInlineEnd: 0 }}>
+                    {getSourceTypeLabel(item.source_type)}: +{formatQty(item.in_qty)} / -{formatQty(item.out_qty)} / net {formatQty(item.net_qty)} ({item.count} GD)
+                  </Tag>
+                ))
+              ) : (
+                <Tag color="default">Không có phát sinh theo nguồn</Tag>
+              )}
+            </Space>
+            {documentTypes ? (
+              <Text type="secondary" data-testid={`inventory-nxt-source-documents-${getNxtRowKey(row)}`}>
+                Loại chứng từ nguồn: {documentTypes}
+              </Text>
+            ) : null}
+            {warnings ? (
+              <Text type="warning" data-testid={`inventory-nxt-source-warnings-${getNxtRowKey(row)}`}>
+                Cảnh báo nguồn: {warnings}
+              </Text>
+            ) : null}
+          </Space>
+        );
+      },
+    },
   ];
 
   const onSubmit = async () => {
@@ -1142,12 +1254,12 @@ export default function InventoryTransactionList() {
         </div>
         <Table<InventoryNxtReportRow>
           data-testid="inventory-nxt-table"
-          rowKey={(row) => `${row.product_id}-${row.warehouse_id ?? 'none'}`}
+          rowKey={getNxtRowKey}
           loading={nxtQuery.isLoading}
           columns={nxtColumns}
           dataSource={nxtRows}
           pagination={false}
-          scroll={{ x: 1020 }}
+          scroll={{ x: 1480 }}
           locale={{ emptyText: 'Không có dữ liệu NXT trong kỳ đã chọn.' }}
         />
       </Card>

@@ -18,6 +18,8 @@ export type InventorySourceType =
   | 'SALES'
   | 'MANUAL';
 
+export type InventoryNxtSourceType = 'PURCHASE' | 'PRODUCTION' | 'STOCKTAKE' | 'TRANSFER' | 'MANUAL';
+
 export interface PaginatedResponse<T> {
   count: number;
   next: string | null;
@@ -159,6 +161,20 @@ export interface InventoryNxtReportRow {
   in_qty: string;
   out_qty: string;
   closing_qty: string;
+  source_breakdown?: Partial<Record<InventoryNxtSourceType, InventoryNxtSourceBreakdownItem>>;
+  source_document_types?: Record<string, number>;
+  source_warnings?: Record<string, number>;
+}
+
+export interface InventoryNxtSourceBreakdownItem {
+  source_type: InventoryNxtSourceType;
+  source_label: string;
+  in_qty: string;
+  out_qty: string;
+  net_qty: string;
+  count: number;
+  source_document_types?: Record<string, number>;
+  source_warnings?: Record<string, number>;
 }
 
 export interface InventoryNxtReportResponse {
