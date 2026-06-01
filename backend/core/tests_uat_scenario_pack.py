@@ -9,6 +9,7 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
 
 from core.management.commands.erp_main_shop_floor_handoff_drill import build_shop_floor_handoff_drill_pack
+from core.management.commands.erp_main_uat_round2_operator_evidence import build_operator_evidence_pack
 from core.management.commands.erp_main_uat_round2_scenarios import build_uat_round2_scenario_pack
 from core.management.commands.erp_main_uat_scenarios import build_uat_scenario_pack
 from core.models import AuditLog, Customer
@@ -568,6 +569,194 @@ class ErpMainUatRound2RealDevDrillCommandTests(TestCase):
         self.assertNotIn('token', output.lower())
         self.assertNotIn('secret', output.lower())
         self.assertLegacyConsoleSafe(output)
+
+
+class ErpMainUatRound2OperatorEvidenceCommandTests(TestCase):
+    prefix = 'QA_UAT2R_'
+    command = 'erp_main_uat_round2_operator_evidence'
+    release_patch = 'core.management.commands.erp_main_uat_round2_operator_evidence._check_release_readiness'
+    shop_floor_patch = 'core.management.commands.erp_main_uat_round2_operator_evidence._safe_shop_floor_report'
+    round2_release_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._check_release_readiness'
+    round2_migration_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._has_pending_migrations'
+    round2_db_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._database_name'
+    round2_shop_floor_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._shop_floor_report'
+
+    def _call_json(self, *args):
+        stdout = StringIO()
+        call_command(self.command, '--format', 'json', *args, stdout=stdout)
+        return stdout.getvalue(), json.loads(stdout.getvalue())
+
+    def _ok_release(self):
+        return {'status': 'ok', 'summary': 'Release readiness: OK'}
+
+    def _shop_floor_ok(self):
+        return {
+            'status': 'pass',
+            'prefix': 'QA_SHF1_',
+            'summary': 'QA_SHF1_ retained report ok',
+            'counts': {'production_orders': 1, 'production_operations': 7, 'audit_logs': 7},
+            'scenario_results': [],
+            'writes_database': False,
+        }
+
+    def _round2_shop_floor_ok(self):
+        return {
+            'status': 'pass',
+            'source': 'read_only_existing_report',
+            'writes_database': False,
+            'summary': 'QA_SHF1_ report ok',
+            'counts': {'production_orders': 1, 'production_operations': 7, 'audit_logs': 7},
+        }
+
+    def assertLegacyConsoleSafe(self, output):
+        output.encode('ascii')
+
+    def test_operator_evidence_is_read_only_when_round2_data_is_missing(self):
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'post_uat')
+            before_counts = {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            }
+            with patch(self.release_patch, return_value=self._ok_release()), \
+                    patch(self.round2_release_patch, return_value=self._ok_release()), \
+                    patch(self.round2_migration_patch, return_value=False), \
+                    patch(self.shop_floor_patch, return_value=self._shop_floor_ok()), \
+                    patch(self.round2_shop_floor_patch, return_value=self._round2_shop_floor_ok()):
+                output, payload = self._call_json('--backup-path', str(backup))
+
+        self.assertEqual(payload['pack'], 'ERP Main UAT Round 2 Operator Evidence Review v1')
+        self.assertEqual(payload['command'], self.command)
+        self.assertEqual(payload['mode'], 'read_only_operator_evidence')
+        self.assertEqual(payload['overall_status'], 'warning')
+        self.assertEqual(payload['data_retained']['qa_uat2r']['total_rows'], 0)
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['creates_uat_data'])
+        self.assertFalse(payload['safety']['confirm_write_runs'])
+        self.assertFalse(payload['safety']['cleanup_runs'])
+        self.assertFalse(payload['safety']['backup_restore_runs'])
+        self.assertFalse(payload['safety']['migration_runs'])
+        self.assertFalse(payload['safety']['deploy_runs'])
+        self.assertFalse(payload['safety']['credentials_printed'])
+        self.assertFalse(payload['safety']['qc_printing_in_scope'])
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            },
+        )
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_operator_evidence_reports_existing_round2_data_for_operators(self):
+        Customer.objects.create(code='REAL_KEEP', name='Real Keep')
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'post_uat')
+            with patch(self.round2_db_patch, return_value='test_erp_dev_clean'), \
+                    patch(self.round2_migration_patch, return_value=False), \
+                    patch(self.round2_release_patch, return_value=self._ok_release()), \
+                    patch(self.round2_shop_floor_patch, return_value=self._round2_shop_floor_ok()):
+                call_command(
+                    'erp_main_uat_round2_real_dev_drill',
+                    '--prefix',
+                    self.prefix,
+                    '--backup-path',
+                    str(backup),
+                    '--confirm-write',
+                    '--format',
+                    'json',
+                    stdout=StringIO(),
+                )
+            before_counts = {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            }
+            with patch(self.release_patch, return_value=self._ok_release()), \
+                    patch(self.round2_release_patch, return_value=self._ok_release()), \
+                    patch(self.round2_migration_patch, return_value=False), \
+                    patch(self.shop_floor_patch, return_value=self._shop_floor_ok()), \
+                    patch(self.round2_shop_floor_patch, return_value=self._round2_shop_floor_ok()):
+                output, payload = self._call_json('--backup-path', str(backup))
+
+        self.assertEqual(payload['overall_status'], 'ok')
+        self.assertEqual(payload['data_retained']['qa_uat2r']['status'], 'retained_for_audit')
+        self.assertEqual(payload['data_retained']['qa_uat2r']['total_rows'], 38)
+        self.assertTrue(payload['data_retained']['qa_uat2r']['confirm_write_ran_exactly_once'])
+        self.assertEqual(payload['data_retained']['qa_shf1']['report_status'], 'pass')
+        self.assertEqual(payload['data_retained']['qa_uat9h']['status'], 'cleaned_up_post_count_0')
+        self.assertTrue(payload['cleanup_guidance']['requires_future_vang_milestone'])
+        self.assertEqual(payload['source_breakdown']['groups'], [
+            'MANUAL',
+            'PRODUCTION',
+            'PURCHASE',
+            'STOCKTAKE',
+            'TRANSFER',
+        ])
+        self.assertTrue(payload['source_breakdown']['all_groups_present'])
+        module_rows = {item['domain']: item for item in payload['module_evidence']}
+        self.assertEqual(set(module_rows), {'Product', 'Sales', 'Production', 'Planning', 'Shop-floor', 'Inventory', 'Ops'})
+        self.assertTrue(all(item['status'] == 'pass' for item in module_rows.values()))
+        self.assertTrue(all(not item['writes_database'] for item in module_rows.values()))
+        self.assertIn('Product', payload['scenario_classification']['mock_no_db'])
+        self.assertIn('Inventory', payload['scenario_classification']['read_only_command'])
+        self.assertIn('Sales', payload['scenario_classification']['real_dev_db_gate'])
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['confirm_write_runs'])
+        self.assertEqual(payload['safety']['historical_round2_confirm_write_total'], 1)
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            },
+        )
+        self.assertTrue(Customer.objects.filter(code='REAL_KEEP').exists())
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_operator_evidence_markdown_is_copy_friendly_and_read_only(self):
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'post_uat')
+            with patch(self.release_patch, return_value=self._ok_release()), \
+                    patch(self.round2_release_patch, return_value=self._ok_release()), \
+                    patch(self.round2_migration_patch, return_value=False), \
+                    patch(self.shop_floor_patch, return_value=self._shop_floor_ok()), \
+                    patch(self.round2_shop_floor_patch, return_value=self._round2_shop_floor_ok()):
+                stdout = StringIO()
+                call_command(self.command, '--backup-path', str(backup), stdout=stdout)
+                output = stdout.getvalue()
+
+        self.assertIn('# ERP Main UAT Round 2 Operator Evidence Review v1', output)
+        self.assertIn('## Module evidence', output)
+        self.assertIn('## Data retained for audit', output)
+        self.assertIn('QA_UAT2R_ remains retained for audit.', output)
+        self.assertIn('This command is read-only and has no confirm-write option.', output)
+        self.assertIn('QC Printing', output)
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_operator_evidence_rejects_wrong_prefix(self):
+        for prefix in ['', 'QA_', 'QA_UAT9H_', 'QA_SHF1_', 'QA_UAT3_']:
+            with self.subTest(prefix=prefix):
+                with self.assertRaises(CommandError):
+                    build_operator_evidence_pack(prefix)
 
 
 class ErpMainShopFloorHandoffRealDevDrillCommandTests(TestCase):
