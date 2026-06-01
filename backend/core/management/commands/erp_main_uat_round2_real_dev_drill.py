@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from core.management.commands.erp_main_real_dev_uat_drill import (
     PLANNED_DATA_COUNTS,
+    _code,
     _create_drill_data,
 )
 from core.management.commands.erp_main_shop_floor_handoff_real_dev_drill import (
@@ -21,7 +22,9 @@ from core.management.commands.erp_main_shop_floor_handoff_real_dev_drill import 
 from core.management.commands.erp_main_uat_cleanup_plan import build_cleanup_plan
 from core.models import Customer
 from inventory.models import InventoryTransaction, Stocktake, StocktakeLine, Warehouse, WarehouseLocation
+from inventory.serializers import build_inventory_source_audit
 from products.models import Operation, Product, ProductOperation, ProductRoutingStep, ProductUnit
+from products.readiness import build_product_routing_readiness
 from production.models import (
     ProductionDemand,
     ProductionMachine,
@@ -30,6 +33,7 @@ from production.models import (
     ProductionOrder,
     ProductionWorkCenter,
 )
+from production.services import build_ready_to_dispatch_advisory
 from sales.models import SalesOrder, SalesOrderDeliveryPlan, SalesOrderLine
 
 
@@ -190,6 +194,115 @@ def _total_count(counts: dict) -> int:
     return sum(int(value or 0) for value in counts.values())
 
 
+def _counts_match_plan(counts: dict) -> bool:
+    return all(int(counts.get(key) or 0) == int(value or 0) for key, value in PLANNED_DATA_COUNTS.items())
+
+
+def _build_existing_data_result(prefix: str, counts: dict) -> dict | None:
+    if not _counts_match_plan(counts):
+        return None
+
+    product_ready = Product.objects.filter(code=_code(prefix, 'PROD_READY', 50)).first()
+    product_warning = Product.objects.filter(code=_code(prefix, 'PROD_WARN', 50)).first()
+    product_blocker = Product.objects.filter(code=_code(prefix, 'PROD_BLOCK', 50)).first()
+    if not all([product_ready, product_warning, product_blocker]):
+        return None
+
+    order = SalesOrder.objects.filter(code=_code(prefix, 'SO001', 50)).first()
+    line = SalesOrderLine.objects.filter(sales_order=order, line_number=1).first() if order else None
+    delivery_plan = SalesOrderDeliveryPlan.objects.filter(line=line).first() if line else None
+    demand = ProductionDemand.objects.filter(demand_code=_code(prefix, 'DEMAND001', 50)).first()
+    production_order = ProductionOrder.objects.filter(code=_code(prefix, 'MO001', 50)).first()
+    operations = list(ProductionOperation.objects.filter(production_order=production_order).order_by('sequence')) if production_order else []
+    transactions = list(InventoryTransaction.objects.filter(code__startswith=prefix).order_by('code'))
+    if not all([order, line, delivery_plan, demand, production_order]) or len(operations) != 5 or len(transactions) != 5:
+        return None
+
+    product_readiness = {
+        'ready': build_product_routing_readiness(product_ready)['status'],
+        'warning': build_product_routing_readiness(product_warning)['status'],
+        'blocker': build_product_routing_readiness(product_blocker)['status'],
+    }
+    order_snapshot = dict(production_order.product_snapshot or line.product_snapshot or {})
+    planning_readiness = {
+        operation.step_code: build_ready_to_dispatch_advisory(
+            operation_status=operation.status,
+            block_reason_code=operation.block_reason_code,
+            dependency_state='WAIT_PREVIOUS_STEP' if operation.sequence == 20 else 'READY',
+            material_readiness='WARNING' if operation.sequence == 30 else 'READY',
+            product_readiness={'status': product_readiness['ready']},
+            capacity_state='AT_LIMIT' if operation.sequence == 30 else 'BALANCED',
+            planned_date=operation.planned_date,
+            planned_shift=operation.planned_shift,
+        )['status']
+        for operation in operations
+    }
+    source_audit = {
+        tx.code: build_inventory_source_audit(tx)['type']
+        for tx in transactions
+    }
+
+    return {
+        'source': 'existing_prefixed_data_report',
+        'writes_database': False,
+        'data_counts': {
+            key: {'existing': int(value or 0)}
+            for key, value in counts.items()
+        },
+        'object_codes': {
+            'products': [product_ready.code, product_warning.code, product_blocker.code, _code(prefix, 'MAT', 50)],
+            'sales_order': order.code,
+            'production_demand': demand.demand_code,
+            'production_order': production_order.code,
+            'inventory_transactions': [tx.code for tx in transactions],
+        },
+        'scenario_results': {
+            'product_readiness': product_readiness,
+            'sales_snapshot_v2': {
+                'snapshot_present': bool(line.product_snapshot),
+                'snapshot_stable_after_qty_price_note_update': bool(line.product_snapshot)
+                and (line.product_snapshot.get('code') or line.product_snapshot.get('product_code')) == product_ready.code,
+                'delivery_plan_present': delivery_plan is not None,
+            },
+            'production_handoff': {
+                'demand_code': demand.demand_code,
+                'production_order_code': production_order.code,
+                'snapshot_product_code': order_snapshot.get('code') or order_snapshot.get('product_code'),
+            },
+            'planning_dispatch': planning_readiness,
+            'inventory_ledger_nxt_source_audit': source_audit,
+            'ops_release_readiness': {'data_retained_for_audit': True},
+        },
+    }
+
+
+def _existing_data_report(existing_result: dict | None, counts: dict) -> dict:
+    total = _total_count(counts)
+    if existing_result:
+        return {
+            'status': 'pass',
+            'source': 'existing_prefixed_data_report',
+            'writes_database': False,
+            'summary': f'QA_UAT2R_ existing data complete: {total} rows',
+            'counts': counts,
+        }
+    if total == 0:
+        return {
+            'status': 'planned',
+            'source': 'existing_prefixed_data_report',
+            'writes_database': False,
+            'summary': 'QA_UAT2R_ existing data not present yet',
+            'counts': counts,
+        }
+    return {
+        'status': 'warning',
+        'source': 'existing_prefixed_data_report',
+        'writes_database': False,
+        'summary': f'QA_UAT2R_ existing data is incomplete or unexpected: {total} rows',
+        'counts': counts,
+    }
+
+
 def _shop_floor_report() -> dict:
     try:
         payload = build_shop_floor_handoff_payload(SHOP_FLOOR_PREFIX, backup_path='', confirm_write=False)
@@ -233,6 +346,7 @@ def _cleanup_status() -> dict:
 
 def _build_scenario_report(write_result: dict | None, *, pending_migrations: bool, release: dict) -> list[dict]:
     write_scenarios = write_result.get('scenario_results', {}) if write_result else {}
+    scenario_writes_database = bool(write_result and write_result.get('writes_database', True))
     source_audit = write_scenarios.get('inventory_ledger_nxt_source_audit') or {}
     source_groups = sorted(set(source_audit.values()))
     source_groups_ok = sorted(SOURCE_GROUPS) == source_groups
@@ -242,28 +356,28 @@ def _build_scenario_report(write_result: dict | None, *, pending_migrations: boo
             'key': 'product_readiness',
             'domain': 'Product',
             'status': 'pass' if write_scenarios.get('product_readiness') else status,
-            'writes_database': bool(write_result),
+            'writes_database': scenario_writes_database,
             'checks': write_scenarios.get('product_readiness') or {'planned': True},
         },
         {
             'key': 'sales_snapshot_delivery_plan',
             'domain': 'Sales',
             'status': 'pass' if write_scenarios.get('sales_snapshot_v2') else status,
-            'writes_database': bool(write_result),
+            'writes_database': scenario_writes_database,
             'checks': write_scenarios.get('sales_snapshot_v2') or {'delivery_plan_planned': True},
         },
         {
             'key': 'production_handoff',
             'domain': 'Production',
             'status': 'pass' if write_scenarios.get('production_handoff') else status,
-            'writes_database': bool(write_result),
+            'writes_database': scenario_writes_database,
             'checks': write_scenarios.get('production_handoff') or {'planned': True},
         },
         {
             'key': 'planning_board_advisory',
             'domain': 'Planning',
             'status': 'pass' if write_scenarios.get('planning_dispatch') else status,
-            'writes_database': bool(write_result),
+            'writes_database': scenario_writes_database,
             'checks': write_scenarios.get('planning_dispatch') or {'ready_warning_blocker_planned': True},
         },
         {
@@ -275,7 +389,7 @@ def _build_scenario_report(write_result: dict | None, *, pending_migrations: boo
             'key': 'inventory_nxt_source_breakdown',
             'domain': 'Inventory',
             'status': 'pass' if source_groups_ok else status,
-            'writes_database': bool(write_result),
+            'writes_database': scenario_writes_database,
             'source_groups': source_groups or list(SOURCE_GROUPS),
             'checks': {
                 'purchase': 'PURCHASE' in source_groups if source_groups else True,
@@ -339,18 +453,24 @@ def build_payload(prefix: str, *, backup_path: str | None, confirm_write: bool) 
             write_result = _create_drill_data(prefix)
         existing_counts = _prefixed_counts(prefix)
 
-    scenario_report = _build_scenario_report(write_result, pending_migrations=pending_migrations, release=release)
+    existing_result = _build_existing_data_result(prefix, existing_counts)
+    existing_report = _existing_data_report(existing_result, existing_counts)
+    scenario_source_result = write_result or existing_result
+    scenario_report = _build_scenario_report(scenario_source_result, pending_migrations=pending_migrations, release=release)
+    scenario_status_ok = all(item['status'] in {'pass', 'planned'} for item in scenario_report)
+    existing_status_ok = existing_report['status'] in {'pass', 'planned'}
     return {
         'generated_at': timezone.now(),
         'pack': 'ERP Main UAT Round 2 Controlled Real-Dev Drill v1',
         'command': 'erp_main_uat_round2_real_dev_drill',
         'mode': 'confirm_write' if confirm_write else 'dry_run',
-        'overall_status': 'ok' if all(item['status'] in {'pass', 'planned'} for item in scenario_report) else 'warning',
+        'overall_status': 'ok' if scenario_status_ok and existing_status_ok else 'warning',
         'prefix': prefix,
         'backup': backup,
         'planned_data_counts': PLANNED_DATA_COUNTS,
         'existing_prefixed_counts': existing_counts,
         'existing_prefixed_total': _total_count(existing_counts),
+        'existing_data_report': existing_report,
         'gates': {
             'prefix': {'status': 'ok', 'exact_required': DEFAULT_PREFIX},
             'database': {

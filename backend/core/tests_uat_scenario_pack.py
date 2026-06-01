@@ -444,7 +444,17 @@ class ErpMainUatRound2RealDevDrillCommandTests(TestCase):
             backup = _create_backup_bundle(Path(tmpdir), 'backup')
             with patch(self.db_patch, return_value='test_erp_dev_clean'), \
                     patch(self.migration_patch, return_value=False), \
-                    patch(self.release_patch, return_value=self._ok_release()):
+                    patch(self.release_patch, return_value=self._ok_release()), \
+                    patch(
+                        'core.management.commands.erp_main_uat_round2_real_dev_drill._shop_floor_report',
+                        return_value={
+                            'status': 'pass',
+                            'source': 'read_only_existing_report',
+                            'writes_database': False,
+                            'summary': 'QA_SHF1_ report ok',
+                            'counts': {'production_orders': 1, 'production_operations': 7, 'audit_logs': 7},
+                        },
+                    ):
                 output, payload = self._call_json(
                     '--prefix',
                     self.prefix,
@@ -478,6 +488,82 @@ class ErpMainUatRound2RealDevDrillCommandTests(TestCase):
         ])
         self.assertFalse(rows['shop_floor_retained_report']['writes_database'])
         self.assertFalse(rows['cleanup_status_qa_uat9h']['writes_database'])
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_round2_real_dev_drill_reports_existing_prefixed_data_read_only(self):
+        Customer.objects.create(code='REAL_KEEP', name='Real Keep')
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'backup')
+            with patch(self.db_patch, return_value='test_erp_dev_clean'), \
+                    patch(self.migration_patch, return_value=False), \
+                    patch(self.release_patch, return_value=self._ok_release()), \
+                    patch(
+                        'core.management.commands.erp_main_uat_round2_real_dev_drill._shop_floor_report',
+                        return_value={
+                            'status': 'pass',
+                            'source': 'read_only_existing_report',
+                            'writes_database': False,
+                            'summary': 'QA_SHF1_ report ok',
+                            'counts': {'production_orders': 1, 'production_operations': 7, 'audit_logs': 7},
+                        },
+                    ):
+                self._call_json(
+                    '--prefix',
+                    self.prefix,
+                    '--backup-path',
+                    str(backup),
+                    '--confirm-write',
+                )
+                before_counts = {
+                    'customers': Customer.objects.count(),
+                    'products': Product.objects.count(),
+                    'sales_orders': SalesOrder.objects.count(),
+                    'production_orders': ProductionOrder.objects.count(),
+                    'inventory_transactions': InventoryTransaction.objects.count(),
+                }
+                output, payload = self._call_json('--prefix', self.prefix, '--backup-path', str(backup))
+
+        self.assertEqual(payload['mode'], 'dry_run')
+        self.assertEqual(payload['overall_status'], 'ok')
+        self.assertIsNone(payload['write_result'])
+        self.assertEqual(payload['existing_data_report']['status'], 'pass')
+        self.assertFalse(payload['existing_data_report']['writes_database'])
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertEqual(payload['existing_prefixed_total'], 38)
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            },
+        )
+
+        rows = {item['key']: item for item in payload['scenario_report']}
+        self.assertEqual(rows['product_readiness']['status'], 'pass')
+        self.assertEqual(rows['sales_snapshot_delivery_plan']['status'], 'pass')
+        self.assertEqual(rows['production_handoff']['status'], 'pass')
+        self.assertEqual(rows['planning_board_advisory']['status'], 'pass')
+        self.assertEqual(rows['shop_floor_retained_report']['status'], 'pass')
+        self.assertEqual(rows['inventory_nxt_source_breakdown']['status'], 'pass')
+        self.assertEqual(rows['ops_readiness']['status'], 'pass')
+        self.assertEqual(rows['cleanup_status_qa_uat9h']['status'], 'pass')
+        self.assertTrue(rows['sales_snapshot_delivery_plan']['checks']['snapshot_stable_after_qty_price_note_update'])
+        self.assertEqual(rows['production_handoff']['checks']['production_order_code'], f'{self.prefix}MO001')
+        self.assertEqual(rows['inventory_nxt_source_breakdown']['source_groups'], [
+            'MANUAL',
+            'PRODUCTION',
+            'PURCHASE',
+            'STOCKTAKE',
+            'TRANSFER',
+        ])
+        self.assertTrue(all(not item['writes_database'] for item in rows.values()))
+        self.assertTrue(Customer.objects.filter(code='REAL_KEEP').exists())
         self.assertNotIn('password', output.lower())
         self.assertNotIn('token', output.lower())
         self.assertNotIn('secret', output.lower())
