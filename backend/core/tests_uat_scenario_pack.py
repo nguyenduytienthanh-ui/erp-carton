@@ -282,6 +282,208 @@ class ErpMainRealDevUatDrillCommandTests(TestCase):
         self.assertIn('DB write requires --confirm-write.', output)
 
 
+class ErpMainUatRound2RealDevDrillCommandTests(TestCase):
+    prefix = 'QA_UAT2R_'
+    command = 'erp_main_uat_round2_real_dev_drill'
+    release_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._check_release_readiness'
+    migration_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._has_pending_migrations'
+    db_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._database_name'
+
+    def _call_json(self, *args):
+        stdout = StringIO()
+        call_command(self.command, '--format', 'json', *args, stdout=stdout)
+        return stdout.getvalue(), json.loads(stdout.getvalue())
+
+    def _ok_release(self):
+        return {'status': 'ok', 'summary': 'Release readiness: OK'}
+
+    def _warning_release(self):
+        return {'status': 'warning', 'summary': 'Release readiness: WARNING'}
+
+    def assertLegacyConsoleSafe(self, output):
+        output.encode('ascii')
+
+    def test_round2_real_dev_drill_dry_run_is_default_and_does_not_write(self):
+        before_counts = {
+            'customers': Customer.objects.count(),
+            'products': Product.objects.count(),
+            'sales_orders': SalesOrder.objects.count(),
+            'inventory_transactions': InventoryTransaction.objects.count(),
+        }
+
+        with patch(self.migration_patch, return_value=False), \
+                patch(self.release_patch, return_value=self._ok_release()):
+            output, payload = self._call_json('--prefix', self.prefix)
+
+        self.assertEqual(payload['pack'], 'ERP Main UAT Round 2 Controlled Real-Dev Drill v1')
+        self.assertEqual(payload['command'], self.command)
+        self.assertEqual(payload['mode'], 'dry_run')
+        self.assertEqual(payload['prefix'], self.prefix)
+        self.assertEqual(payload['backup']['status'], 'pending')
+        self.assertFalse(payload['safety']['default_writes_database'])
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertTrue(payload['safety']['write_requires_confirm_write'])
+        self.assertTrue(payload['safety']['backup_required_for_write'])
+        self.assertFalse(payload['safety']['cleanup_runs'])
+        self.assertFalse(payload['safety']['restore_runs'])
+        self.assertFalse(payload['safety']['migration_runs'])
+        self.assertFalse(payload['safety']['deploy_runs'])
+        self.assertFalse(payload['safety']['direct_sql_used'])
+        self.assertFalse(payload['safety']['credentials_printed'])
+        self.assertFalse(payload['safety']['qc_printing_in_scope'])
+        self.assertFalse(payload['safety']['shop_floor_confirm_write_runs'])
+        self.assertEqual(payload['planned_data_counts']['products'], 4)
+        self.assertEqual({item['domain'] for item in payload['scenario_report']}, {
+            'Product',
+            'Sales',
+            'Production',
+            'Planning',
+            'Shop-floor',
+            'Inventory',
+            'Ops',
+        })
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            },
+        )
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_round2_real_dev_drill_markdown_is_copy_friendly(self):
+        with patch(self.migration_patch, return_value=False), \
+                patch(self.release_patch, return_value=self._ok_release()):
+            stdout = StringIO()
+            call_command(self.command, '--prefix', self.prefix, stdout=stdout)
+            output = stdout.getvalue()
+
+        self.assertIn('# ERP Main UAT Round 2 Controlled Real-Dev Drill v1', output)
+        self.assertIn('Mode: dry_run', output)
+        self.assertIn('Backup gate: pending', output)
+        self.assertIn('## Planned Round 2 data', output)
+        self.assertIn('## Scenario report', output)
+        self.assertIn('Shop-floor QA_SHF1_ report is read-only', output)
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_round2_real_dev_drill_rejects_wrong_prefixes(self):
+        for prefix in ['', 'QA_', 'QA_UAT9H_', 'QA_SHF1_', 'QA_UAT3_']:
+            with self.subTest(prefix=prefix):
+                with self.assertRaises(CommandError):
+                    self._call_json('--prefix', prefix)
+
+    def test_round2_real_dev_drill_confirm_write_requires_backup_path(self):
+        with self.assertRaises(CommandError):
+            with patch(self.db_patch, return_value='test_erp_dev_clean'), \
+                    patch(self.migration_patch, return_value=False), \
+                    patch(self.release_patch, return_value=self._ok_release()):
+                self._call_json('--prefix', self.prefix, '--confirm-write')
+
+    def test_round2_real_dev_drill_confirm_write_rejects_bad_backup(self):
+        with TemporaryDirectory() as tmpdir:
+            with self.assertRaises(CommandError):
+                with patch(self.db_patch, return_value='test_erp_dev_clean'), \
+                        patch(self.migration_patch, return_value=False), \
+                        patch(self.release_patch, return_value=self._ok_release()):
+                    self._call_json(
+                        '--prefix',
+                        self.prefix,
+                        '--backup-path',
+                        str(Path(tmpdir) / 'missing'),
+                        '--confirm-write',
+                    )
+
+    def test_round2_real_dev_drill_confirm_write_rejects_unsafe_db(self):
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'backup')
+            with self.assertRaises(CommandError):
+                with patch(self.db_patch, return_value='prod_main'), \
+                        patch(self.migration_patch, return_value=False), \
+                        patch(self.release_patch, return_value=self._ok_release()):
+                    self._call_json('--prefix', self.prefix, '--backup-path', str(backup), '--confirm-write')
+
+    def test_round2_real_dev_drill_confirm_write_rejects_pending_migrations(self):
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'backup')
+            with self.assertRaises(CommandError):
+                with patch(self.db_patch, return_value='test_erp_dev_clean'), \
+                        patch(self.migration_patch, return_value=True), \
+                        patch(self.release_patch, return_value=self._ok_release()):
+                    self._call_json('--prefix', self.prefix, '--backup-path', str(backup), '--confirm-write')
+
+    def test_round2_real_dev_drill_confirm_write_rejects_release_warning(self):
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'backup')
+            with self.assertRaises(CommandError):
+                with patch(self.db_patch, return_value='test_erp_dev_clean'), \
+                        patch(self.migration_patch, return_value=False), \
+                        patch(self.release_patch, return_value=self._warning_release()):
+                    self._call_json('--prefix', self.prefix, '--backup-path', str(backup), '--confirm-write')
+
+    def test_round2_real_dev_drill_confirm_write_rejects_existing_prefix(self):
+        ProductUnit.objects.create(code='QA_UAT2R_U', name='Existing Round 2 unit')
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'backup')
+            with self.assertRaises(CommandError):
+                with patch(self.db_patch, return_value='test_erp_dev_clean'), \
+                        patch(self.migration_patch, return_value=False), \
+                        patch(self.release_patch, return_value=self._ok_release()):
+                    self._call_json('--prefix', self.prefix, '--backup-path', str(backup), '--confirm-write')
+
+    def test_round2_real_dev_drill_confirm_write_creates_only_prefixed_test_data(self):
+        Customer.objects.create(code='REAL_KEEP', name='Real Keep')
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'backup')
+            with patch(self.db_patch, return_value='test_erp_dev_clean'), \
+                    patch(self.migration_patch, return_value=False), \
+                    patch(self.release_patch, return_value=self._ok_release()):
+                output, payload = self._call_json(
+                    '--prefix',
+                    self.prefix,
+                    '--backup-path',
+                    str(backup),
+                    '--confirm-write',
+                )
+
+        self.assertEqual(payload['mode'], 'confirm_write')
+        self.assertEqual(payload['overall_status'], 'ok')
+        self.assertTrue(payload['backup']['verified'])
+        self.assertTrue(payload['safety']['writes_database'])
+        self.assertEqual(Product.objects.filter(code__startswith=self.prefix).count(), 4)
+        self.assertEqual(SalesOrder.objects.filter(code__startswith=self.prefix).count(), 1)
+        self.assertEqual(ProductionDemand.objects.filter(demand_code__startswith=self.prefix).count(), 1)
+        self.assertEqual(ProductionOrder.objects.filter(code__startswith=self.prefix).count(), 1)
+        self.assertEqual(InventoryTransaction.objects.filter(code__startswith=self.prefix).count(), 5)
+        self.assertTrue(Customer.objects.filter(code='REAL_KEEP').exists())
+        rows = {item['key']: item for item in payload['scenario_report']}
+        self.assertEqual(rows['product_readiness']['status'], 'pass')
+        self.assertEqual(rows['sales_snapshot_delivery_plan']['status'], 'pass')
+        self.assertEqual(rows['production_handoff']['status'], 'pass')
+        self.assertEqual(rows['planning_board_advisory']['status'], 'pass')
+        self.assertEqual(rows['inventory_nxt_source_breakdown']['status'], 'pass')
+        self.assertEqual(rows['inventory_nxt_source_breakdown']['source_groups'], [
+            'MANUAL',
+            'PRODUCTION',
+            'PURCHASE',
+            'STOCKTAKE',
+            'TRANSFER',
+        ])
+        self.assertFalse(rows['shop_floor_retained_report']['writes_database'])
+        self.assertFalse(rows['cleanup_status_qa_uat9h']['writes_database'])
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+
 class ErpMainShopFloorHandoffRealDevDrillCommandTests(TestCase):
     prefix = 'QA_SHF1_'
     backup_patch = 'core.management.commands.erp_main_shop_floor_handoff_real_dev_drill._check_release_readiness'
