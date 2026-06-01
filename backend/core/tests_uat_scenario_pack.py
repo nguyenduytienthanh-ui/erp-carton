@@ -9,6 +9,7 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
 
 from core.management.commands.erp_main_shop_floor_handoff_drill import build_shop_floor_handoff_drill_pack
+from core.management.commands.erp_main_uat_round2_cleanup_decision import build_cleanup_decision_pack
 from core.management.commands.erp_main_uat_round2_operator_evidence import build_operator_evidence_pack
 from core.management.commands.erp_main_uat_round2_scenarios import build_uat_round2_scenario_pack
 from core.management.commands.erp_main_uat_scenarios import build_uat_scenario_pack
@@ -757,6 +758,197 @@ class ErpMainUatRound2OperatorEvidenceCommandTests(TestCase):
             with self.subTest(prefix=prefix):
                 with self.assertRaises(CommandError):
                     build_operator_evidence_pack(prefix)
+
+
+class ErpMainUatRound2CleanupDecisionCommandTests(TestCase):
+    prefix = 'QA_UAT2R_'
+    command = 'erp_main_uat_round2_cleanup_decision'
+    operator_release_patch = 'core.management.commands.erp_main_uat_round2_operator_evidence._check_release_readiness'
+    operator_shop_floor_patch = 'core.management.commands.erp_main_uat_round2_operator_evidence._safe_shop_floor_report'
+    round2_release_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._check_release_readiness'
+    round2_migration_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._has_pending_migrations'
+    round2_db_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._database_name'
+    round2_shop_floor_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._shop_floor_report'
+    cleanup_execute_migration_patch = 'core.management.commands.erp_main_uat_cleanup_execute._pending_migrations'
+    cleanup_execute_db_patch = 'core.management.commands.erp_main_uat_cleanup_execute._database_name'
+
+    def _call_json(self, *args):
+        stdout = StringIO()
+        call_command(self.command, '--format', 'json', *args, stdout=stdout)
+        return stdout.getvalue(), json.loads(stdout.getvalue())
+
+    def _ok_release(self):
+        return {'status': 'ok', 'summary': 'Release readiness: OK'}
+
+    def _shop_floor_ok(self):
+        return {
+            'status': 'pass',
+            'prefix': 'QA_SHF1_',
+            'summary': 'QA_SHF1_ retained report ok',
+            'counts': {'production_orders': 1, 'production_operations': 7, 'audit_logs': 7},
+            'scenario_results': [],
+            'writes_database': False,
+        }
+
+    def _round2_shop_floor_ok(self):
+        return {
+            'status': 'pass',
+            'source': 'read_only_existing_report',
+            'writes_database': False,
+            'summary': 'QA_SHF1_ report ok',
+            'counts': {'production_orders': 1, 'production_operations': 7, 'audit_logs': 7},
+        }
+
+    def _safe_patches(self):
+        return (
+            patch(self.operator_release_patch, return_value=self._ok_release()),
+            patch(self.operator_shop_floor_patch, return_value=self._shop_floor_ok()),
+            patch(self.round2_release_patch, return_value=self._ok_release()),
+            patch(self.round2_migration_patch, return_value=False),
+            patch(self.round2_shop_floor_patch, return_value=self._round2_shop_floor_ok()),
+            patch(self.cleanup_execute_migration_patch, return_value=[]),
+            patch(self.cleanup_execute_db_patch, return_value='test_erp_dev_clean'),
+        )
+
+    def assertLegacyConsoleSafe(self, output):
+        output.encode('ascii')
+
+    def test_cleanup_decision_is_read_only_when_round2_data_is_missing(self):
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'post_uat')
+            before_counts = {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            }
+            patches = self._safe_patches()
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+                output, payload = self._call_json('--backup-path', str(backup))
+
+        self.assertEqual(payload['pack'], 'ERP Main UAT Round 2 Cleanup Decision Plan v1')
+        self.assertEqual(payload['command'], self.command)
+        self.assertEqual(payload['mode'], 'read_only_cleanup_decision')
+        self.assertEqual(payload['overall_status'], 'warning')
+        self.assertEqual(payload['data_status']['qa_uat2r']['total_rows'], 0)
+        self.assertEqual(payload['data_status']['qa_uat2r']['cleanup_candidate_rows'], 0)
+        self.assertEqual(payload['cleanup_decision']['recommended_decision'], 'investigate_before_cleanup')
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['cleanup_runs'])
+        self.assertFalse(payload['safety']['confirm_delete_runs'])
+        self.assertFalse(payload['safety']['confirm_write_runs'])
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            },
+        )
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_cleanup_decision_reports_retained_round2_scope_and_future_gate(self):
+        Customer.objects.create(code='REAL_KEEP', name='Real Keep')
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'post_uat')
+            with patch(self.round2_db_patch, return_value='test_erp_dev_clean'), \
+                    patch(self.round2_migration_patch, return_value=False), \
+                    patch(self.round2_release_patch, return_value=self._ok_release()), \
+                    patch(self.round2_shop_floor_patch, return_value=self._round2_shop_floor_ok()):
+                call_command(
+                    'erp_main_uat_round2_real_dev_drill',
+                    '--prefix',
+                    self.prefix,
+                    '--backup-path',
+                    str(backup),
+                    '--confirm-write',
+                    '--format',
+                    'json',
+                    stdout=StringIO(),
+                )
+            before_counts = {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            }
+            patches = self._safe_patches()
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+                output, payload = self._call_json('--backup-path', str(backup))
+
+        self.assertEqual(payload['overall_status'], 'ok')
+        self.assertEqual(payload['cleanup_decision']['status'], 'ready_for_decision')
+        self.assertEqual(payload['cleanup_decision']['recommended_decision'], 'defer_cleanup')
+        self.assertTrue(payload['cleanup_decision']['business_signoff_required_before_cleanup'])
+        self.assertEqual(payload['data_status']['qa_uat2r']['total_rows'], 38)
+        self.assertEqual(payload['data_status']['qa_uat2r']['cleanup_candidate_rows'], 38)
+        self.assertEqual(payload['data_status']['qa_uat2r']['dry_run_candidate_rows'], 38)
+        self.assertFalse(payload['data_status']['qa_shf1']['cleanup_round2_scope'])
+        self.assertEqual(payload['data_status']['qa_uat9h']['cleanup_plan_candidate_rows'], 0)
+        self.assertEqual(payload['cleanup_scope']['allowed_prefix'], self.prefix)
+        self.assertEqual(payload['cleanup_scope']['expected_total'], 38)
+        selectors = ' '.join(group['selector'] for group in payload['cleanup_scope']['candidate_groups'])
+        self.assertIn(self.prefix, selectors)
+        self.assertNotIn('QA_UAT9H_', selectors)
+        self.assertIn('QA_SHF1_', payload['do_not_touch'])
+        self.assertIn('QA_UAT9H_', payload['do_not_touch'])
+        self.assertIn('QC Printing', payload['do_not_touch'])
+        gate = payload['future_cleanup_gate']['current_dry_run']
+        self.assertEqual(gate['candidate_total'], 38)
+        self.assertTrue(gate['expected_total_matches'])
+        self.assertTrue(gate['backup_verified'])
+        self.assertFalse(gate['confirm_delete'])
+        self.assertFalse(gate['writes_database'])
+        self.assertTrue(payload['future_cleanup_gate']['fresh_backup_required_for_actual_cleanup'])
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['cleanup_runs'])
+        self.assertFalse(payload['safety']['backup_created'])
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            },
+        )
+        self.assertTrue(Customer.objects.filter(code='REAL_KEEP').exists())
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_cleanup_decision_markdown_is_copy_friendly_and_read_only(self):
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'post_uat')
+            patches = self._safe_patches()
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+                stdout = StringIO()
+                call_command(self.command, '--backup-path', str(backup), stdout=stdout)
+                output = stdout.getvalue()
+
+        self.assertIn('# ERP Main UAT Round 2 Cleanup Decision Plan v1', output)
+        self.assertIn('Recommended decision:', output)
+        self.assertIn('## Future cleanup gate', output)
+        self.assertIn('Actual cleanup is a separate VANG milestone.', output)
+        self.assertIn('This command is read-only.', output)
+        self.assertIn('QC Printing', output)
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_cleanup_decision_rejects_wrong_prefix(self):
+        for prefix in ['', 'QA_', 'QA_UAT9H_', 'QA_SHF1_', 'QA_UAT3_']:
+            with self.subTest(prefix=prefix):
+                with self.assertRaises(CommandError):
+                    build_cleanup_decision_pack(prefix)
 
 
 class ErpMainShopFloorHandoffRealDevDrillCommandTests(TestCase):
