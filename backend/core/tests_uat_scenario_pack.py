@@ -10,6 +10,7 @@ from django.test import SimpleTestCase, TestCase
 
 from core.management.commands.erp_main_shop_floor_handoff_drill import build_shop_floor_handoff_drill_pack
 from core.management.commands.erp_main_inventory_nxt_real_data_audit import build_nxt_real_data_audit_pack
+from core.management.commands.erp_main_ops_post_uat_evidence import build_ops_post_uat_evidence_pack
 from core.management.commands.erp_main_uat_round2_cleanup_decision import build_cleanup_decision_pack
 from core.management.commands.erp_main_uat_round2_operator_evidence import build_operator_evidence_pack
 from core.management.commands.erp_main_uat_round2_scenarios import build_uat_round2_scenario_pack
@@ -1116,6 +1117,301 @@ class ErpMainInventoryNxtRealDataAuditCommandTests(TestCase):
             with self.subTest(prefix=prefix):
                 with self.assertRaises(CommandError):
                     build_nxt_real_data_audit_pack(prefix)
+
+
+class ErpMainOpsPostUatEvidenceCommandTests(TestCase):
+    command = 'erp_main_ops_post_uat_evidence'
+    git_patch = 'core.management.commands.erp_main_ops_post_uat_evidence._git_evidence'
+    migration_patch = 'core.management.commands.erp_main_ops_post_uat_evidence._migration_evidence'
+    release_patch = 'core.management.commands.erp_main_ops_post_uat_evidence._safe_release_readiness'
+    alert_patch = 'core.management.commands.erp_main_ops_post_uat_evidence._safe_alert_readiness'
+    operator_patch = 'core.management.commands.erp_main_ops_post_uat_evidence._safe_operator_evidence'
+    nxt_patch = 'core.management.commands.erp_main_ops_post_uat_evidence._safe_nxt_real_data_audit'
+    cleanup_patch = 'core.management.commands.erp_main_ops_post_uat_evidence._safe_cleanup_decision'
+
+    def _call_json(self, *args):
+        stdout = StringIO()
+        call_command(self.command, '--format', 'json', *args, stdout=stdout)
+        return stdout.getvalue(), json.loads(stdout.getvalue())
+
+    def _git_ok(self):
+        return {
+            'repo_root': 'D:\\ERP-Carton-2D-snapshot',
+            'branch': 'feature/sales-snapshot-v2',
+            'head': '85e4784',
+            'head_message': '85e4784 Add inventory NXT real-data audit report',
+            'status_line': '## feature/sales-snapshot-v2...origin/feature/sales-snapshot-v2',
+            'clean': True,
+            'dirty_files': [],
+            'ahead': 0,
+            'behind': 0,
+            'synced_with_origin': True,
+            'tags_at_head': ['checkpoint-9v-inventory-nxt-real-data-audit-drill-v1'],
+            'latest_checkpoint_tag': 'checkpoint-9v-inventory-nxt-real-data-audit-drill-v1',
+            'expected_checkpoint_tag': 'checkpoint-9v-inventory-nxt-real-data-audit-drill-v1',
+            'expected_checkpoint_head': '85e4784',
+        }
+
+    def _migrations_ok(self):
+        return {
+            'status': 'ok',
+            'pending_count': 0,
+            'apps': [],
+            'items': [],
+            'migration_runs': False,
+        }
+
+    def _release_ok(self):
+        return {
+            'status': 'ok',
+            'summary': 'Release readiness: OK',
+            'checks': {'pending_migrations': '0'},
+        }
+
+    def _alert_ok(self):
+        return {
+            'status': 'ok',
+            'summary': 'Alert channel readiness: OK',
+            'configured_count': 1,
+            'delivery_status': 'ok',
+            'email_delivery_status': 'ok',
+            'warning_count': 0,
+        }
+
+    def _operator_ok(self):
+        return {
+            'status': 'ok',
+            'summary': 'operator evidence ok',
+            'module_statuses': {
+                'Product': 'pass',
+                'Sales': 'pass',
+                'Production': 'pass',
+                'Planning': 'pass',
+                'Shop-floor': 'pass',
+                'Inventory': 'pass',
+                'Ops': 'pass',
+            },
+            'module_evidence': [],
+            'data_retained': {
+                'qa_uat2r': {
+                    'prefix': 'QA_UAT2R_',
+                    'status': 'retained_for_audit',
+                    'total_rows': 38,
+                },
+                'qa_shf1': {
+                    'prefix': 'QA_SHF1_',
+                    'status': 'retained_for_shop_floor_audit',
+                    'cleanup_round2_scope': False,
+                },
+                'qa_uat9h': {
+                    'prefix': 'QA_UAT9H_',
+                    'status': 'cleaned_up_post_count_0',
+                    'candidate_total': 0,
+                },
+            },
+            'source_breakdown': {
+                'status': 'pass',
+                'groups': ['MANUAL', 'PRODUCTION', 'PURCHASE', 'STOCKTAKE', 'TRANSFER'],
+                'all_groups_present': True,
+            },
+            'safety': {'writes_database': False},
+        }
+
+    def _nxt_ok(self):
+        return {
+            'status': 'ok',
+            'summary': 'NXT real-data audit ok',
+            'data_status': {
+                'status': 'retained_for_audit',
+                'round2_scoped_rows': 38,
+                'inventory_transactions': 5,
+            },
+            'source_results': {
+                'PURCHASE': 'pass',
+                'PRODUCTION': 'pass',
+                'STOCKTAKE': 'pass',
+                'TRANSFER': 'pass',
+                'MANUAL': 'pass',
+            },
+            'totals_reconciliation': {
+                'status': 'pass',
+                'source_in_matches_total': True,
+                'source_out_matches_total': True,
+                'net_qty': '46',
+            },
+            'safety': {'writes_database': False},
+        }
+
+    def _cleanup_ok(self):
+        return {
+            'status': 'ok',
+            'summary': 'cleanup decision defer_cleanup',
+            'cleanup_decision': {
+                'recommended_decision': 'defer_cleanup',
+            },
+            'data_status': {
+                'qa_uat2r': {
+                    'prefix': 'QA_UAT2R_',
+                    'status': 'retained_for_audit',
+                    'total_rows': 38,
+                    'cleanup_candidate_rows': 38,
+                },
+                'qa_shf1': {
+                    'prefix': 'QA_SHF1_',
+                    'status': 'retained_for_shop_floor_audit',
+                    'cleanup_round2_scope': False,
+                },
+                'qa_uat9h': {
+                    'prefix': 'QA_UAT9H_',
+                    'status': 'cleaned_up_post_count_0',
+                    'cleanup_plan_candidate_rows': 0,
+                },
+            },
+            'future_cleanup_gate': {},
+            'safety': {'writes_database': False},
+        }
+
+    def _patch_evidence(self):
+        return (
+            patch(self.git_patch, return_value=self._git_ok()),
+            patch(self.migration_patch, return_value=self._migrations_ok()),
+            patch(self.release_patch, return_value=self._release_ok()),
+            patch(self.alert_patch, return_value=self._alert_ok()),
+            patch(self.operator_patch, return_value=self._operator_ok()),
+            patch(self.nxt_patch, return_value=self._nxt_ok()),
+            patch(self.cleanup_patch, return_value=self._cleanup_ok()),
+        )
+
+    def assertLegacyConsoleSafe(self, output):
+        output.encode('ascii')
+
+    def test_ops_post_uat_evidence_reports_release_packet_read_only(self):
+        Customer.objects.create(code='REAL_KEEP', name='Real Keep')
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'post_uat')
+            before_counts = {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            }
+            patches = self._patch_evidence()
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+                output, payload = self._call_json('--backup-path', str(backup))
+
+        self.assertEqual(payload['pack'], 'Ops Release Readiness Post-UAT Evidence v1')
+        self.assertEqual(payload['command'], self.command)
+        self.assertEqual(payload['mode'], 'read_only_ops_post_uat_evidence')
+        self.assertEqual(payload['overall_status'], 'ok')
+        self.assertEqual(payload['git']['branch'], 'feature/sales-snapshot-v2')
+        self.assertEqual(payload['git']['head'], '85e4784')
+        self.assertEqual(payload['migrations']['pending_count'], 0)
+        self.assertEqual(payload['release_readiness']['status'], 'ok')
+        self.assertEqual(payload['alert_channel_readiness']['status'], 'ok')
+        self.assertTrue(payload['backup_evidence']['verified'])
+        self.assertEqual(payload['backup_evidence']['manifest_status'], 'ok')
+        self.assertEqual(payload['backup_evidence']['restore_dry_run_status'], 'ok')
+        self.assertEqual(payload['data_status']['qa_uat2r']['total_rows'], 38)
+        self.assertEqual(payload['data_status']['qa_uat2r']['cleanup_status'], 'deferred_future_vang')
+        self.assertEqual(payload['data_status']['qa_uat9h']['candidate_total'], 0)
+        self.assertTrue(all(status == 'pass' for status in payload['operator_evidence']['module_statuses'].values()))
+        self.assertEqual(set(payload['nxt_real_data_audit']['source_results']), {
+            'PURCHASE',
+            'PRODUCTION',
+            'STOCKTAKE',
+            'TRANSFER',
+            'MANUAL',
+        })
+        self.assertTrue(all(status == 'pass' for status in payload['nxt_real_data_audit']['source_results'].values()))
+        self.assertEqual(payload['cleanup_decision']['recommended_decision'], 'defer_cleanup')
+        self.assertTrue(all(item['status'] in {'pass', 'planned'} for item in payload['release_checklist']))
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['backup_created'])
+        self.assertFalse(payload['safety']['restore_runs'])
+        self.assertFalse(payload['safety']['cleanup_runs'])
+        self.assertFalse(payload['safety']['confirm_delete_runs'])
+        self.assertFalse(payload['safety']['confirm_write_runs'])
+        self.assertFalse(payload['safety']['migration_runs'])
+        self.assertFalse(payload['safety']['deploy_runs'])
+        self.assertFalse(payload['safety']['direct_sql_used'])
+        self.assertFalse(payload['safety']['credentials_printed'])
+        self.assertFalse(payload['safety']['qc_printing_in_scope'])
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            },
+        )
+        self.assertTrue(Customer.objects.filter(code='REAL_KEEP').exists())
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_ops_post_uat_evidence_markdown_is_copy_friendly(self):
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'post_uat')
+            patches = self._patch_evidence()
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+                stdout = StringIO()
+                call_command(self.command, '--backup-path', str(backup), stdout=stdout)
+                output = stdout.getvalue()
+
+        self.assertIn('# Ops Release Readiness Post-UAT Evidence v1', output)
+        self.assertIn('## Repo and git', output)
+        self.assertIn('## DB, readiness, alert', output)
+        self.assertIn('## Backup evidence', output)
+        self.assertIn('## Release checklist', output)
+        self.assertIn('QA_UAT2R_', output)
+        self.assertIn('QA_SHF1_', output)
+        self.assertIn('QA_UAT9H_', output)
+        self.assertIn('This command is read-only', output)
+        self.assertIn('QC Printing', output)
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_ops_post_uat_evidence_marks_warning_when_gates_are_not_ready(self):
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'post_uat')
+            git_state = {**self._git_ok(), 'clean': False, 'dirty_files': [' M backend/core/file.py']}
+            migrations = {**self._migrations_ok(), 'status': 'warning', 'pending_count': 1, 'items': ['core.0001']}
+            release = {**self._release_ok(), 'status': 'warning', 'summary': 'Release readiness: WARNING'}
+            patches = (
+                patch(self.git_patch, return_value=git_state),
+                patch(self.migration_patch, return_value=migrations),
+                patch(self.release_patch, return_value=release),
+                patch(self.alert_patch, return_value=self._alert_ok()),
+                patch(self.operator_patch, return_value=self._operator_ok()),
+                patch(self.nxt_patch, return_value=self._nxt_ok()),
+                patch(self.cleanup_patch, return_value=self._cleanup_ok()),
+            )
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+                _, payload = self._call_json('--backup-path', str(backup))
+
+        self.assertEqual(payload['overall_status'], 'warning')
+        self.assertEqual(payload['release_readiness']['status'], 'warning')
+        checklist = {item['key']: item['status'] for item in payload['release_checklist']}
+        self.assertEqual(checklist['repo_clean_synced'], 'warning')
+        self.assertEqual(checklist['no_pending_migrations'], 'warning')
+        self.assertEqual(checklist['release_readiness'], 'warning')
+
+    def test_ops_post_uat_evidence_builder_accepts_repo_root_for_git_evidence(self):
+        payload = build_ops_post_uat_evidence_pack(repo_root=Path('Z:/missing/repo'), backup_path='Z:/missing/backup')
+
+        self.assertEqual(payload['pack'], 'Ops Release Readiness Post-UAT Evidence v1')
+        self.assertEqual(payload['mode'], 'read_only_ops_post_uat_evidence')
+        self.assertEqual(payload['overall_status'], 'warning')
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['backup_created'])
+        self.assertFalse(payload['safety']['cleanup_runs'])
+        self.assertFalse(payload['safety']['deploy_runs'])
 
 
 class ErpMainShopFloorHandoffRealDevDrillCommandTests(TestCase):
