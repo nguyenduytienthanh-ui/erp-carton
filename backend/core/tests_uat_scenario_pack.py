@@ -9,6 +9,7 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
 
 from core.management.commands.erp_main_shop_floor_handoff_drill import build_shop_floor_handoff_drill_pack
+from core.management.commands.erp_main_inventory_nxt_real_data_audit import build_nxt_real_data_audit_pack
 from core.management.commands.erp_main_uat_round2_cleanup_decision import build_cleanup_decision_pack
 from core.management.commands.erp_main_uat_round2_operator_evidence import build_operator_evidence_pack
 from core.management.commands.erp_main_uat_round2_scenarios import build_uat_round2_scenario_pack
@@ -949,6 +950,172 @@ class ErpMainUatRound2CleanupDecisionCommandTests(TestCase):
             with self.subTest(prefix=prefix):
                 with self.assertRaises(CommandError):
                     build_cleanup_decision_pack(prefix)
+
+
+class ErpMainInventoryNxtRealDataAuditCommandTests(TestCase):
+    prefix = 'QA_UAT2R_'
+    command = 'erp_main_inventory_nxt_real_data_audit'
+    round2_release_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._check_release_readiness'
+    round2_migration_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._has_pending_migrations'
+    round2_db_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._database_name'
+    round2_shop_floor_patch = 'core.management.commands.erp_main_uat_round2_real_dev_drill._shop_floor_report'
+
+    def _call_json(self, *args):
+        stdout = StringIO()
+        call_command(self.command, '--format', 'json', *args, stdout=stdout)
+        return stdout.getvalue(), json.loads(stdout.getvalue())
+
+    def _ok_release(self):
+        return {'status': 'ok', 'summary': 'Release readiness: OK'}
+
+    def _round2_shop_floor_ok(self):
+        return {
+            'status': 'pass',
+            'source': 'read_only_existing_report',
+            'writes_database': False,
+            'summary': 'QA_SHF1_ report ok',
+            'counts': {'production_orders': 1, 'production_operations': 7, 'audit_logs': 7},
+        }
+
+    def assertLegacyConsoleSafe(self, output):
+        output.encode('ascii')
+
+    def _create_round2_data(self, backup_path):
+        with patch(self.round2_db_patch, return_value='test_erp_dev_clean'), \
+                patch(self.round2_migration_patch, return_value=False), \
+                patch(self.round2_release_patch, return_value=self._ok_release()), \
+                patch(self.round2_shop_floor_patch, return_value=self._round2_shop_floor_ok()):
+            call_command(
+                'erp_main_uat_round2_real_dev_drill',
+                '--prefix',
+                self.prefix,
+                '--backup-path',
+                str(backup_path),
+                '--confirm-write',
+                '--format',
+                'json',
+                stdout=StringIO(),
+            )
+
+    def test_nxt_real_data_audit_is_read_only_when_data_is_missing(self):
+        before_counts = {
+            'customers': Customer.objects.count(),
+            'products': Product.objects.count(),
+            'sales_orders': SalesOrder.objects.count(),
+            'production_orders': ProductionOrder.objects.count(),
+            'inventory_transactions': InventoryTransaction.objects.count(),
+        }
+
+        output, payload = self._call_json('--prefix', self.prefix)
+
+        self.assertEqual(payload['pack'], 'Inventory NXT Real-Data Audit Drill v1')
+        self.assertEqual(payload['command'], self.command)
+        self.assertEqual(payload['mode'], 'read_only_nxt_real_data_audit')
+        self.assertEqual(payload['overall_status'], 'warning')
+        self.assertEqual(payload['data_status']['inventory_transactions'], 0)
+        self.assertEqual(payload['scope']['status'], 'warning')
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['creates_uat_data'])
+        self.assertFalse(payload['safety']['cleanup_runs'])
+        self.assertFalse(payload['safety']['confirm_write_available'])
+        self.assertFalse(payload['safety']['confirm_delete_available'])
+        self.assertFalse(payload['safety']['backup_created'])
+        self.assertFalse(payload['safety']['restore_runs'])
+        self.assertFalse(payload['safety']['migration_runs'])
+        self.assertFalse(payload['safety']['deploy_runs'])
+        self.assertFalse(payload['safety']['direct_sql_used'])
+        self.assertFalse(payload['safety']['credentials_printed'])
+        self.assertFalse(payload['safety']['qc_printing_in_scope'])
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            },
+        )
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_nxt_real_data_audit_reports_retained_round2_nxt_breakdown(self):
+        Customer.objects.create(code='REAL_KEEP', name='Real Keep')
+        with TemporaryDirectory() as tmpdir:
+            backup = _create_backup_bundle(Path(tmpdir), 'post_uat')
+            self._create_round2_data(backup)
+
+            before_counts = {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            }
+            output, payload = self._call_json('--prefix', self.prefix)
+
+        self.assertEqual(payload['overall_status'], 'ok')
+        self.assertEqual(payload['data_status']['round2_scoped_rows'], 38)
+        self.assertEqual(payload['data_status']['inventory_transactions'], 5)
+        self.assertEqual(payload['scope']['status'], 'ok')
+        self.assertEqual(set(payload['source_results']), {'PURCHASE', 'PRODUCTION', 'STOCKTAKE', 'TRANSFER', 'MANUAL'})
+        self.assertTrue(all(row['status'] == 'pass' for row in payload['source_results'].values()))
+        self.assertEqual(payload['source_results']['PURCHASE']['in_qty'], '50')
+        self.assertEqual(payload['source_results']['PRODUCTION']['out_qty'], '5')
+        self.assertEqual(payload['source_results']['STOCKTAKE']['in_qty'], '2')
+        self.assertEqual(payload['source_results']['TRANSFER']['in_qty'], '3')
+        self.assertEqual(payload['source_results']['TRANSFER']['out_qty'], '3')
+        self.assertEqual(payload['source_results']['MANUAL']['out_qty'], '1')
+        self.assertEqual(payload['source_results']['PURCHASE']['source_document_types']['PURCHASE_REFERENCE'], 1)
+        self.assertEqual(payload['source_results']['PRODUCTION']['source_document_types']['PRODUCTION_ORDER'], 1)
+        self.assertEqual(payload['source_results']['STOCKTAKE']['source_document_types']['STOCKTAKE'], 1)
+        self.assertEqual(payload['source_results']['TRANSFER']['source_document_types']['TRANSFER_TRANSACTION'], 2)
+        self.assertEqual(payload['source_results']['MANUAL']['source_document_types']['MANUAL'], 1)
+        self.assertEqual(payload['totals_reconciliation']['status'], 'pass')
+        self.assertTrue(payload['totals_reconciliation']['source_in_matches_total'])
+        self.assertTrue(payload['totals_reconciliation']['source_out_matches_total'])
+        self.assertTrue(all(row['closing_matches_formula'] for row in payload['totals_reconciliation']['row_checks']))
+        self.assertFalse(payload['safety']['writes_database'])
+        self.assertFalse(payload['safety']['cleanup_runs'])
+        self.assertEqual(
+            before_counts,
+            {
+                'customers': Customer.objects.count(),
+                'products': Product.objects.count(),
+                'sales_orders': SalesOrder.objects.count(),
+                'production_orders': ProductionOrder.objects.count(),
+                'inventory_transactions': InventoryTransaction.objects.count(),
+            },
+        )
+        self.assertTrue(Customer.objects.filter(code='REAL_KEEP').exists())
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_nxt_real_data_audit_markdown_is_copy_friendly(self):
+        stdout = StringIO()
+        call_command(self.command, '--prefix', self.prefix, stdout=stdout)
+        output = stdout.getvalue()
+
+        self.assertIn('# Inventory NXT Real-Data Audit Drill v1', output)
+        self.assertIn('Writes database: False', output)
+        self.assertIn('## Source group result', output)
+        self.assertIn('## Totals reconciliation', output)
+        self.assertIn('This command is read-only', output)
+        self.assertIn('QC Printing', output)
+        self.assertNotIn('password', output.lower())
+        self.assertNotIn('token', output.lower())
+        self.assertNotIn('secret', output.lower())
+        self.assertLegacyConsoleSafe(output)
+
+    def test_nxt_real_data_audit_rejects_wrong_prefix(self):
+        for prefix in ['', 'QA_', 'QA_UAT9H_', 'QA_SHF1_', 'QA_UAT3_']:
+            with self.subTest(prefix=prefix):
+                with self.assertRaises(CommandError):
+                    build_nxt_real_data_audit_pack(prefix)
 
 
 class ErpMainShopFloorHandoffRealDevDrillCommandTests(TestCase):
