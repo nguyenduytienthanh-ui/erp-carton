@@ -1,4 +1,5 @@
 import json
+import os
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -11,8 +12,24 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--backend-base', default='http://127.0.0.1:8000', help='Backend base URL')
         parser.add_argument('--frontend-base', default='', help='Optional frontend base URL')
-        parser.add_argument('--username', required=True, help='Login username')
-        parser.add_argument('--password', required=True, help='Login password')
+        parser.add_argument('--username', default='', help='Login username; prefer --username-env for release smoke')
+        parser.add_argument('--password', default='', help='Login password; prefer --password-env for release smoke')
+        parser.add_argument('--username-env', default='', help='Environment variable name that contains the login username')
+        parser.add_argument('--password-env', default='', help='Environment variable name that contains the login password')
+
+    def _resolve_credential(self, *, raw_value, env_name, option_name):
+        raw_value = str(raw_value or '')
+        env_name = str(env_name or '').strip()
+        if raw_value.strip() and env_name:
+            raise CommandError(f'Use either --{option_name} or --{option_name}-env, not both.')
+        if env_name:
+            resolved = os.environ.get(env_name)
+            if not resolved or not resolved.strip():
+                raise CommandError(f'Missing required environment variable: {env_name}')
+            return resolved
+        if raw_value.strip():
+            return raw_value
+        raise CommandError(f'Provide --{option_name}-env or --{option_name}.')
 
     def _request_json(self, url, *, method='GET', data=None, headers=None):
         payload = None if data is None else json.dumps(data).encode('utf-8')
@@ -30,8 +47,16 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         backend_base = str(options['backend_base']).rstrip('/')
         frontend_base = str(options['frontend_base']).rstrip('/')
-        username = options['username']
-        password = options['password']
+        username = self._resolve_credential(
+            raw_value=options['username'],
+            env_name=options['username_env'],
+            option_name='username',
+        )
+        password = self._resolve_credential(
+            raw_value=options['password'],
+            env_name=options['password_env'],
+            option_name='password',
+        )
 
         try:
             live_status, live_body = self._request_json(f'{backend_base}/health/live/')

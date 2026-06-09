@@ -3,8 +3,10 @@ param(
     [string]$FrontendBase = "http://127.0.0.1:5173",
     [string]$ApiPublicUrl = "",
     [string]$FrontendPublicUrl = "",
-    [string]$Username = "uat_admin",
-    [string]$Password = "Demo123!"
+    [string]$Username = "",
+    [string]$Password = "",
+    [string]$UsernameEnv = "",
+    [string]$PasswordEnv = ""
 )
 
 function Resolve-BackendBase([string]$ExplicitBase, [string]$ExplicitApiUrl) {
@@ -54,6 +56,54 @@ function Resolve-FrontendBase([string]$ExplicitBase, [string]$ExplicitPublicUrl)
     return $ExplicitBase.TrimEnd('/')
 }
 
+function Resolve-SmokeCredentialArgs(
+    [string]$RawUsername,
+    [string]$RawPassword,
+    [string]$UsernameEnvName,
+    [string]$PasswordEnvName
+) {
+    if ([string]::IsNullOrWhiteSpace($RawUsername) -and [string]::IsNullOrWhiteSpace($UsernameEnvName)) {
+        $UsernameEnvName = "E2E_ADMIN_USERNAME"
+    }
+    if ([string]::IsNullOrWhiteSpace($RawPassword) -and [string]::IsNullOrWhiteSpace($PasswordEnvName)) {
+        $PasswordEnvName = "E2E_ADMIN_PASSWORD"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($RawUsername) -and -not [string]::IsNullOrWhiteSpace($UsernameEnvName)) {
+        throw "Use either -Username or -UsernameEnv, not both."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RawPassword) -and -not [string]::IsNullOrWhiteSpace($PasswordEnvName)) {
+        throw "Use either -Password or -PasswordEnv, not both."
+    }
+
+    $credentialArgs = @()
+    if (-not [string]::IsNullOrWhiteSpace($UsernameEnvName)) {
+        $usernameValue = [Environment]::GetEnvironmentVariable($UsernameEnvName, "Process")
+        if ([string]::IsNullOrWhiteSpace($usernameValue)) {
+            throw "Missing required environment variable: $UsernameEnvName"
+        }
+        $credentialArgs += @("--username-env", $UsernameEnvName)
+    } elseif (-not [string]::IsNullOrWhiteSpace($RawUsername)) {
+        $credentialArgs += @("--username", $RawUsername)
+    } else {
+        throw "Provide -UsernameEnv or -Username."
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($PasswordEnvName)) {
+        $passwordValue = [Environment]::GetEnvironmentVariable($PasswordEnvName, "Process")
+        if ([string]::IsNullOrWhiteSpace($passwordValue)) {
+            throw "Missing required environment variable: $PasswordEnvName"
+        }
+        $credentialArgs += @("--password-env", $PasswordEnvName)
+    } elseif (-not [string]::IsNullOrWhiteSpace($RawPassword)) {
+        $credentialArgs += @("--password", $RawPassword)
+    } else {
+        throw "Provide -PasswordEnv or -Password."
+    }
+
+    return $credentialArgs
+}
+
 Set-Location "$PSScriptRoot\.."
 
 Write-Host "=== ERP Carton Deploy Validate ===" -ForegroundColor Cyan
@@ -62,6 +112,13 @@ $resolvedBackendBase = Resolve-BackendBase $BackendBase $ApiPublicUrl
 $resolvedApiBase = Resolve-ApiBase $ApiPublicUrl $resolvedBackendBase
 Assert-ApiBaseContract $resolvedApiBase
 $resolvedFrontendBase = Resolve-FrontendBase $FrontendBase $FrontendPublicUrl
+$credentialInput = @{
+    RawUsername = $Username
+    RawPassword = $Password
+    UsernameEnvName = $UsernameEnv
+    PasswordEnvName = $PasswordEnv
+}
+$credentialArgs = Resolve-SmokeCredentialArgs @credentialInput
 
 Push-Location backend
 python manage.py preflight_check --strict
@@ -73,7 +130,7 @@ if (-not $?) { Pop-Location; exit 1 }
 python manage.py release_readiness --strict --json
 if (-not $?) { Pop-Location; exit 1 }
 
-python manage.py smoke_http --backend-base $resolvedBackendBase --frontend-base $resolvedFrontendBase --username $Username --password $Password
+python manage.py smoke_http --backend-base $resolvedBackendBase --frontend-base $resolvedFrontendBase @credentialArgs
 if (-not $?) { Pop-Location; exit 1 }
 Pop-Location
 
