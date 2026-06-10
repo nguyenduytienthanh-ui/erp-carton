@@ -28,7 +28,14 @@ import { inventoryApi } from '../../api/inventory';
 import { productsApi } from '../../api/products';
 import { purchasingApi } from '../../api/purchasing';
 import PurchaseOrderForm from './PurchaseOrderForm';
-import type { PurchaseApprovalHistoryItem, PurchaseOrder, PurchaseOrderFormValues, PurchaseReceipt, Supplier } from '../../types/purchasing';
+import type {
+  PurchaseApprovalHistoryItem,
+  PurchaseOrder,
+  PurchaseOrderFormValues,
+  PurchaseOrderStatus,
+  PurchaseReceipt,
+  Supplier,
+} from '../../types/purchasing';
 import { PAGES } from '../../utils/constants';
 import {
   canApprovePurchaseOrders,
@@ -87,6 +94,108 @@ const STATUS_LABELS: Record<string, string> = {
   CANCELLED: 'Đã hủy',
 };
 
+const STATUS_NEXT_STEPS: Record<PurchaseOrderStatus, string> = {
+  DRAFT: 'Kiểm tra nhà cung cấp, kho nhận và dòng hàng, sau đó gửi duyệt.',
+  SUBMITTED: 'Chờ duyệt đơn mua. Nếu sai thông tin, người duyệt có thể từ chối kèm lý do.',
+  APPROVED: 'Đơn đã duyệt, bước tiếp theo là nhận hàng vào kho.',
+  REJECTED: 'Xem lý do từ chối, chỉnh lại đơn rồi gửi duyệt lại nếu vẫn cần mua.',
+  PARTIAL_RECEIVED: 'Đơn đã nhận một phần, tiếp tục nhập phần còn lại khi hàng về.',
+  RECEIVED: 'Đơn đã nhận đủ, chuyển sang đối chiếu phiếu nhập và công nợ mua hàng.',
+  CANCELLED: 'Đơn đã hủy, không tiếp tục nhận hàng từ đơn này.',
+};
+
+const STATUS_HELP_TEXT: Record<PurchaseOrderStatus, string> = {
+  DRAFT: 'Đơn còn sửa được trước khi gửi duyệt.',
+  SUBMITTED: 'Đơn đang khóa để chờ quyết định duyệt.',
+  APPROVED: 'Đơn đã sẵn sàng cho bước nhập kho mua hàng.',
+  REJECTED: 'Đơn bị từ chối nhưng vẫn có thể sửa và gửi duyệt lại.',
+  PARTIAL_RECEIVED: 'Chỉ nhập tiếp số lượng còn lại, tránh nhập trùng phần đã nhận.',
+  RECEIVED: 'Không còn số lượng cần nhận từ đơn này.',
+  CANCELLED: 'Đơn đã dừng vòng đời và chỉ dùng để tra cứu.',
+};
+
+type PurchaseOrderActionKey = 'edit' | 'submit' | 'approve' | 'reject' | 'receive' | 'cancel' | 'delete';
+type PurchaseOrderActionPermissions = {
+  canManage: boolean;
+  canSubmit: boolean;
+  canApprove: boolean;
+  canReceive: boolean;
+  canCancel: boolean;
+};
+
+function getPurchaseOrderRemainingQty(order: Pick<PurchaseOrder, 'lines'>): number {
+  return (order.lines ?? []).reduce((sum, line) => sum + Number(line.remaining_qty ?? 0), 0);
+}
+
+function getPurchaseOrderNextStep(order?: PurchaseOrder | null): string {
+  if (!order) return 'Chọn một đơn mua để xem bước xử lý tiếp theo.';
+  const remainingQty = getPurchaseOrderRemainingQty(order);
+  if (order.status === 'APPROVED') {
+    return remainingQty > 0
+      ? `Nhập kho phần hàng đã về. Còn ${remainingQty.toLocaleString('vi-VN')} đơn vị chưa nhận.`
+      : 'Đơn đã duyệt nhưng không còn số lượng cần nhận; kiểm tra phiếu nhập liên quan.';
+  }
+  if (order.status === 'PARTIAL_RECEIVED') {
+    return remainingQty > 0
+      ? `Tiếp tục nhập phần còn lại khi hàng về. Còn ${remainingQty.toLocaleString('vi-VN')} đơn vị chưa nhận.`
+      : 'Đơn đã nhận hết số lượng, kiểm tra trạng thái phiếu nhập liên quan.';
+  }
+  return STATUS_NEXT_STEPS[order.status] ?? 'Kiểm tra trạng thái hiện tại trước khi thao tác tiếp.';
+}
+
+function getPurchaseOrderStatusHelp(order?: PurchaseOrder | null): string {
+  if (!order) return '';
+  return STATUS_HELP_TEXT[order.status] ?? '';
+}
+
+function getPurchaseOrderAlertType(order?: PurchaseOrder | null): 'info' | 'success' | 'warning' | 'error' {
+  if (!order) return 'info';
+  if (order.status === 'APPROVED' || order.status === 'PARTIAL_RECEIVED') return 'success';
+  if (order.status === 'RECEIVED') return 'info';
+  if (order.status === 'DRAFT' || order.status === 'SUBMITTED') return 'info';
+  if (order.status === 'REJECTED') return 'warning';
+  if (order.status === 'CANCELLED') return 'error';
+  return 'info';
+}
+
+function getPurchaseOrderActionDisabledReason(
+  order: PurchaseOrder,
+  action: PurchaseOrderActionKey,
+  permissions: PurchaseOrderActionPermissions,
+): string {
+  if (action === 'edit') {
+    if (!permissions.canManage) return 'Bạn chưa có quyền sửa đơn mua.';
+    return ['DRAFT', 'REJECTED'].includes(order.status) ? '' : 'Chỉ sửa được đơn Nháp hoặc Từ chối.';
+  }
+  if (action === 'submit') {
+    if (!permissions.canSubmit) return 'Bạn chưa có quyền gửi duyệt đơn mua.';
+    return ['DRAFT', 'REJECTED'].includes(order.status) ? '' : 'Chỉ đơn Nháp hoặc Từ chối mới gửi duyệt được.';
+  }
+  if (action === 'approve') {
+    if (!permissions.canApprove) return 'Bạn chưa có quyền duyệt đơn mua.';
+    return order.status === 'SUBMITTED' ? '' : 'Chỉ đơn Chờ duyệt mới duyệt được.';
+  }
+  if (action === 'reject') {
+    if (!permissions.canApprove) return 'Bạn chưa có quyền từ chối đơn mua.';
+    return order.status === 'SUBMITTED' ? '' : 'Chỉ đơn Chờ duyệt mới từ chối được.';
+  }
+  if (action === 'receive') {
+    if (!permissions.canReceive) return 'Bạn chưa có quyền nhập kho mua hàng.';
+    if (!['APPROVED', 'PARTIAL_RECEIVED'].includes(order.status)) return 'Chỉ đơn Đã duyệt hoặc Nhập một phần mới nhập kho được.';
+    return getPurchaseOrderRemainingQty(order) > 0 ? '' : 'Đơn này không còn số lượng cần nhận.';
+  }
+  if (action === 'cancel') {
+    if (!permissions.canCancel) return 'Bạn chưa có quyền hủy đơn mua.';
+    return ['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED'].includes(order.status)
+      ? ''
+      : 'Chỉ hủy được đơn Nháp, Chờ duyệt, Đã duyệt hoặc Từ chối.';
+  }
+  if (action === 'delete') {
+    if (!permissions.canManage) return 'Bạn chưa có quyền xóa đơn mua.';
+    return ['DRAFT', 'REJECTED'].includes(order.status) ? '' : 'Chỉ xóa được đơn Nháp hoặc Từ chối.';
+  }
+  return '';
+}
 
 function serializeFilters(filters: Filters): string {
   return JSON.stringify(filters);
@@ -572,8 +681,18 @@ export default function PurchaseOrderList() {
     {
       title: 'Trạng thái',
       dataIndex: 'status',
-      width: 130,
-      render: (value) => <Tag color={STATUS_COLORS[value] || 'default'}>{STATUS_LABELS[value] || value}</Tag>,
+      width: 290,
+      render: (_, row) => (
+        <div>
+          <Tag color={STATUS_COLORS[row.status] || 'default'}>{STATUS_LABELS[row.status] || row.status}</Tag>
+          <div
+            data-testid={`purchase-order-next-step-${row.id}`}
+            style={{ marginTop: 4, color: '#595959', fontSize: 12, lineHeight: 1.45 }}
+          >
+            {getPurchaseOrderNextStep(row)}
+          </div>
+        </div>
+      ),
     },
     { title: 'Kho nhập', dataIndex: 'warehouse_name', width: 160, render: (value) => value || '-' },
     { title: 'Số dòng', key: 'line_count', width: 80, render: (_, row) => row.lines?.length ?? 0 },
@@ -584,83 +703,101 @@ export default function PurchaseOrderList() {
       key: 'actions',
       width: 420,
       fixed: 'right',
-      render: (_, row) => (
-        <Space wrap>
-          <Button size="small" data-testid={`purchase-order-view-${row.id}`} onClick={() => { setDrawerOrderId(row.id); setDismissedFocusKey(focusKey); }}>
-            Xem
-          </Button>
-          <Button
-            size="small"
-            data-testid={`purchase-order-edit-${row.id}`}
-            disabled={!canManage || !['DRAFT', 'REJECTED'].includes(row.status)}
-            onClick={() => {
-              setEditingOrder(row);
-              setOpenForm(true);
-            }}
-          >
-            Sửa
-          </Button>
-          <Button
-            size="small"
-            data-testid={`purchase-order-submit-${row.id}`}
-            disabled={!canSubmit || !['DRAFT', 'REJECTED'].includes(row.status)}
-            onClick={() => void submitMutation.mutateAsync(row.id)}
-          >
-            Gửi duyệt
-          </Button>
-          <Button
-            size="small"
-            type="primary"
-            data-testid={`purchase-order-approve-${row.id}`}
-            disabled={!canApprove || row.status !== 'SUBMITTED'}
-            onClick={() => void approveMutation.mutateAsync(row.id)}
-          >
-            Duyệt
-          </Button>
-          <Button
-            size="small"
-            danger
-            data-testid={`purchase-order-reject-${row.id}`}
-            disabled={!canApprove || row.status !== 'SUBMITTED'}
-            onClick={() => openReasonModal({ type: 'reject', order: row })}
-          >
-            Từ chối
-          </Button>
-          <Button
-            size="small"
-            data-testid={`purchase-order-receive-${row.id}`}
-            disabled={!canReceive || !['APPROVED', 'PARTIAL_RECEIVED'].includes(row.status)}
-            onClick={() => setReceiveModalState({ order: row })}
-          >
-            Nhập kho
-          </Button>
-          <Button
-            size="small"
-            danger
-            data-testid={`purchase-order-cancel-${row.id}`}
-            disabled={!canCancel || !['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED'].includes(row.status)}
-            onClick={() => openReasonModal({ type: 'cancel', order: row })}
-          >
-            Hủy
-          </Button>
-          <Button
-            size="small"
-            danger
-            data-testid={`purchase-order-delete-${row.id}`}
-            disabled={!canManage || !['DRAFT', 'REJECTED'].includes(row.status)}
-            onClick={() =>
-              Modal.confirm({
-                title: `Xóa đơn mua ${row.code}?`,
-                okText: 'Xóa',
-                cancelText: 'Hủy',
-                onOk: () => deleteMutation.mutateAsync(row.id),
-              })
-            }
-          >
-            Xóa
-          </Button>
-        </Space>
-      ),
+      render: (_, row) => {
+        const permissions = { canManage, canSubmit, canApprove, canReceive, canCancel };
+        const editReason = getPurchaseOrderActionDisabledReason(row, 'edit', permissions);
+        const submitReason = getPurchaseOrderActionDisabledReason(row, 'submit', permissions);
+        const approveReason = getPurchaseOrderActionDisabledReason(row, 'approve', permissions);
+        const rejectReason = getPurchaseOrderActionDisabledReason(row, 'reject', permissions);
+        const receiveReason = getPurchaseOrderActionDisabledReason(row, 'receive', permissions);
+        const cancelReason = getPurchaseOrderActionDisabledReason(row, 'cancel', permissions);
+        const deleteReason = getPurchaseOrderActionDisabledReason(row, 'delete', permissions);
+
+        return (
+          <Space wrap>
+            <Button size="small" data-testid={`purchase-order-view-${row.id}`} onClick={() => { setDrawerOrderId(row.id); setDismissedFocusKey(focusKey); }}>
+              Xem
+            </Button>
+            <Button
+              size="small"
+              data-testid={`purchase-order-edit-${row.id}`}
+              disabled={Boolean(editReason)}
+              title={editReason || 'Sửa đơn mua trước khi gửi duyệt'}
+              onClick={() => {
+                setEditingOrder(row);
+                setOpenForm(true);
+              }}
+            >
+              Sửa
+            </Button>
+            <Button
+              size="small"
+              data-testid={`purchase-order-submit-${row.id}`}
+              disabled={Boolean(submitReason)}
+              title={submitReason || 'Gửi đơn mua sang bước duyệt'}
+              onClick={() => void submitMutation.mutateAsync(row.id)}
+            >
+              Gửi duyệt
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              data-testid={`purchase-order-approve-${row.id}`}
+              disabled={Boolean(approveReason)}
+              title={approveReason || 'Duyệt đơn mua để chuyển sang nhận hàng'}
+              onClick={() => void approveMutation.mutateAsync(row.id)}
+            >
+              Duyệt
+            </Button>
+            <Button
+              size="small"
+              danger
+              data-testid={`purchase-order-reject-${row.id}`}
+              disabled={Boolean(rejectReason)}
+              title={rejectReason || 'Từ chối đơn mua và nhập lý do rõ ràng'}
+              onClick={() => openReasonModal({ type: 'reject', order: row })}
+            >
+              Từ chối
+            </Button>
+            <Button
+              size="small"
+              data-testid={`purchase-order-receive-${row.id}`}
+              disabled={Boolean(receiveReason)}
+              title={receiveReason || 'Tạo phiếu nhập kho từ đơn mua'}
+              onClick={() => setReceiveModalState({ order: row })}
+            >
+              Nhập kho
+            </Button>
+            <Button
+              size="small"
+              danger
+              data-testid={`purchase-order-cancel-${row.id}`}
+              disabled={Boolean(cancelReason)}
+              title={cancelReason || 'Hủy đơn mua với lý do bắt buộc'}
+              onClick={() => openReasonModal({ type: 'cancel', order: row })}
+            >
+              Hủy
+            </Button>
+            <Button
+              size="small"
+              danger
+              data-testid={`purchase-order-delete-${row.id}`}
+              disabled={Boolean(deleteReason)}
+              title={deleteReason || 'Xóa đơn mua chưa đi tiếp quy trình'}
+              onClick={() =>
+                Modal.confirm({
+                  title: `Xóa đơn mua ${row.code}?`,
+                  okText: 'Xóa',
+                  cancelText: 'Hủy',
+                  onOk: () => deleteMutation.mutateAsync(row.id),
+                })
+              }
+            >
+              Xóa
+            </Button>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -928,6 +1065,13 @@ export default function PurchaseOrderList() {
         width={960}
       >
         <Form form={receiveForm} layout="vertical">
+          <Alert
+            showIcon
+            type="info"
+            message={receiveModalState ? getPurchaseOrderNextStep(receiveModalState.order) : 'Nhập kho từ đơn mua'}
+            description="Chỉ nhập số lượng thực nhận cho từng dòng còn lại; hệ thống sẽ tạo phiếu nhập theo contract hiện có."
+            style={{ marginBottom: 16 }}
+          />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
             <Form.Item name="receipt_date" label="Ngày nhận" rules={[{ required: true, message: 'Bắt buộc' }]}>
               <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" />
@@ -1025,6 +1169,13 @@ export default function PurchaseOrderList() {
               {drawerOrder.reject_reason ? <Descriptions.Item label="Lý do từ chối" span={2}>{drawerOrder.reject_reason}</Descriptions.Item> : null}
               {drawerOrder.cancel_reason ? <Descriptions.Item label="Lý do hủy" span={2}>{drawerOrder.cancel_reason}</Descriptions.Item> : null}
             </Descriptions>
+            <Alert
+              showIcon
+              data-testid="purchase-order-detail-next-step"
+              type={getPurchaseOrderAlertType(drawerOrder)}
+              message={getPurchaseOrderNextStep(drawerOrder)}
+              description={getPurchaseOrderStatusHelp(drawerOrder)}
+            />
 
             <div>
               <h3 style={{ marginBottom: 8 }}>Dòng hàng</h3>

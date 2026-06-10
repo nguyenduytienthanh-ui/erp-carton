@@ -57,6 +57,48 @@ const STATUS_LABEL: Record<PurchaseRequestStatus, string> = {
   REJECTED: 'Từ chối',
 };
 
+const REQUEST_NEXT_STEPS: Record<PurchaseRequestStatus, string> = {
+  DRAFT: 'Bổ sung đủ dòng hàng và ghi chú cần thiết, sau đó gửi duyệt.',
+  SUBMITTED: 'Chờ người có quyền duyệt quyết định trước khi chuyển sang bước mua hàng.',
+  APPROVED: 'Yêu cầu đã được duyệt, có thể dùng làm căn cứ tạo đơn mua.',
+  REJECTED: 'Xem lý do từ chối, cập nhật lại nếu yêu cầu vẫn còn cần mua.',
+};
+
+const REQUEST_HELP_TEXT: Record<PurchaseRequestStatus, string> = {
+  DRAFT: 'Phiếu nháp còn sửa và xóa được trước khi gửi duyệt.',
+  SUBMITTED: 'Phiếu đang khóa để chờ duyệt hoặc từ chối.',
+  APPROVED: 'Phiếu đã chốt duyệt và nên được đối chiếu với bước tạo đơn mua.',
+  REJECTED: 'Phiếu bị từ chối; cần đọc lý do trước khi tạo vòng yêu cầu mới.',
+};
+
+type PurchaseRequestActionKey = 'edit' | 'delete' | 'submit' | 'approve' | 'reject';
+
+function getPurchaseRequestNextStep(request?: PurchaseRequest | null): string {
+  if (!request) return 'Chọn một yêu cầu mua để xem bước xử lý tiếp theo.';
+  return REQUEST_NEXT_STEPS[request.status] ?? 'Kiểm tra trạng thái hiện tại trước khi thao tác tiếp.';
+}
+
+function getPurchaseRequestStatusHelp(request?: PurchaseRequest | null): string {
+  if (!request) return '';
+  return REQUEST_HELP_TEXT[request.status] ?? '';
+}
+
+function getPurchaseRequestAlertType(request?: PurchaseRequest | null): 'info' | 'success' | 'warning' {
+  if (!request) return 'info';
+  if (request.status === 'APPROVED') return 'success';
+  if (request.status === 'REJECTED') return 'warning';
+  return 'info';
+}
+
+function getPurchaseRequestActionDisabledReason(request: PurchaseRequest, action: PurchaseRequestActionKey): string {
+  if (action === 'edit') return request.status === 'DRAFT' ? '' : 'Chỉ sửa được yêu cầu mua Nháp.';
+  if (action === 'delete') return request.status === 'DRAFT' ? '' : 'Chỉ xóa được yêu cầu mua Nháp.';
+  if (action === 'submit') return request.status === 'DRAFT' ? '' : 'Chỉ yêu cầu mua Nháp mới gửi duyệt được.';
+  if (action === 'approve') return request.status === 'SUBMITTED' ? '' : 'Chỉ yêu cầu mua Chờ duyệt mới duyệt được.';
+  if (action === 'reject') return request.status === 'SUBMITTED' ? '' : 'Chỉ yêu cầu mua Chờ duyệt mới từ chối được.';
+  return '';
+}
+
 const PurchaseRequestList: React.FC = () => {
   const [searchParams] = useSearchParams();
   const initialSearch = searchParams.get('q') || searchParams.get('search') || '';
@@ -281,8 +323,18 @@ const PurchaseRequestList: React.FC = () => {
       title: 'Trạng thái',
       dataIndex: 'status',
       key: 'status',
-      width: 120,
-      render: (requestStatus: PurchaseRequestStatus) => <Tag color={STATUS_COLOR[requestStatus]}>{STATUS_LABEL[requestStatus]}</Tag>,
+      width: 280,
+      render: (_: PurchaseRequestStatus, row: PurchaseRequest) => (
+        <div>
+          <Tag color={STATUS_COLOR[row.status]}>{STATUS_LABEL[row.status]}</Tag>
+          <div
+            data-testid={`purchase-request-next-step-${row.id}`}
+            style={{ marginTop: 4, color: '#595959', fontSize: 12, lineHeight: 1.45 }}
+          >
+            {getPurchaseRequestNextStep(row)}
+          </div>
+        </div>
+      ),
     },
     {
       title: 'Ghi chú',
@@ -295,69 +347,95 @@ const PurchaseRequestList: React.FC = () => {
       title: 'Hành động',
       key: 'actions',
       width: 300,
-      render: (_: unknown, row: PurchaseRequest) => (
-        <Space wrap size="small">
-          <Button size="small" icon={<EyeOutlined />} onClick={() => { setDetailRequestId(row.id); setDismissedFocusKey(focusKey); }}>
-            Xem
-          </Button>
-          <Button
-            size="small"
-            disabled={row.status !== 'DRAFT'}
-            onClick={() => {
-              setEditRequest(row);
-              form.setFieldsValue({
-                request_date: dayjs(row.request_date),
-                reference: row.reference || '',
-                notes: row.notes || '',
-              });
-              setFormOpen(true);
-            }}
-          >
-            Sửa
-          </Button>
-          {row.status === 'DRAFT' && (
+      render: (_: unknown, row: PurchaseRequest) => {
+        const editReason = getPurchaseRequestActionDisabledReason(row, 'edit');
+        const deleteReason = getPurchaseRequestActionDisabledReason(row, 'delete');
+        const submitReason = getPurchaseRequestActionDisabledReason(row, 'submit');
+        const approveReason = getPurchaseRequestActionDisabledReason(row, 'approve');
+        const rejectReason = getPurchaseRequestActionDisabledReason(row, 'reject');
+
+        return (
+          <Space wrap size="small">
+            <Button size="small" icon={<EyeOutlined />} onClick={() => { setDetailRequestId(row.id); setDismissedFocusKey(focusKey); }}>
+              Xem
+            </Button>
             <Button
               size="small"
-              danger
-              icon={<DeleteOutlined />}
+              disabled={Boolean(editReason)}
+              title={editReason || 'Sửa yêu cầu mua trước khi gửi duyệt'}
               onClick={() => {
-                Modal.confirm({
-                  title: 'Xóa yêu cầu mua',
-                  content: `Xóa yêu cầu mua ${row.code}?`,
-                  okText: 'Xóa',
-                  cancelText: 'Hủy',
-                  onOk: () => deleteMutation.mutate(row.id),
+                setEditRequest(row);
+                form.setFieldsValue({
+                  request_date: dayjs(row.request_date),
+                  reference: row.reference || '',
+                  notes: row.notes || '',
                 });
+                setFormOpen(true);
               }}
             >
-              Xóa
+              Sửa
             </Button>
-          )}
-          {row.status === 'DRAFT' && (
-            <Button size="small" type="primary" onClick={() => submitMutation.mutate(row.id)}>
-              Gửi duyệt
-            </Button>
-          )}
-          {row.status === 'SUBMITTED' && (
-            <>
-              <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => approveMutation.mutate(row.id)}>
-                Duyệt
-              </Button>
+            {row.status === 'DRAFT' && (
               <Button
                 size="small"
                 danger
-                icon={<CloseOutlined />}
+                icon={<DeleteOutlined />}
+                disabled={Boolean(deleteReason)}
+                title={deleteReason || 'Xóa yêu cầu mua còn ở trạng thái nháp'}
                 onClick={() => {
-                  setRejectTarget(row);
-                  setRejectReason('');
+                  Modal.confirm({
+                    title: 'Xóa yêu cầu mua',
+                    content: `Xóa yêu cầu mua ${row.code}?`,
+                    okText: 'Xóa',
+                    cancelText: 'Hủy',
+                    onOk: () => deleteMutation.mutate(row.id),
+                  });
                 }}
               >
-                Từ chối
+                Xóa
               </Button>
-            </>
-          )}
-        </Space>
-      ),
+            )}
+            {row.status === 'DRAFT' && (
+              <Button
+                size="small"
+                type="primary"
+                disabled={Boolean(submitReason)}
+                title={submitReason || 'Gửi yêu cầu mua sang bước duyệt'}
+                onClick={() => submitMutation.mutate(row.id)}
+              >
+                Gửi duyệt
+              </Button>
+            )}
+            {row.status === 'SUBMITTED' && (
+              <>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<CheckOutlined />}
+                  disabled={Boolean(approveReason)}
+                  title={approveReason || 'Duyệt yêu cầu mua để chuyển sang bước mua hàng'}
+                  onClick={() => approveMutation.mutate(row.id)}
+                >
+                  Duyệt
+                </Button>
+                <Button
+                  size="small"
+                  danger
+                  icon={<CloseOutlined />}
+                  disabled={Boolean(rejectReason)}
+                  title={rejectReason || 'Từ chối yêu cầu mua và nhập lý do rõ ràng'}
+                  onClick={() => {
+                    setRejectTarget(row);
+                    setRejectReason('');
+                  }}
+                >
+                  Từ chối
+                </Button>
+              </>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -518,77 +596,84 @@ const PurchaseRequestList: React.FC = () => {
       >
         {detailRequest ? (
           <div data-testid="purchase-request-detail-panel">
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Descriptions bordered size="small" column={2}>
-              <Descriptions.Item label="Mã">{detailRequest.code}</Descriptions.Item>
-              <Descriptions.Item label="Trạng thái">
-                <Tag color={STATUS_COLOR[detailRequest.status]}>{STATUS_LABEL[detailRequest.status]}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Ngày">{dayjs(detailRequest.request_date).format('DD/MM/YYYY')}</Descriptions.Item>
-              <Descriptions.Item label="Người yêu cầu">{detailRequest.requested_by_name || '-'}</Descriptions.Item>
-              <Descriptions.Item label="Tham chiếu">{detailRequest.reference || '-'}</Descriptions.Item>
-              <Descriptions.Item label="Duyệt lúc">{detailRequest.approved_at ? dayjs(detailRequest.approved_at).format('DD/MM/YYYY HH:mm') : '-'}</Descriptions.Item>
-              <Descriptions.Item label="Ghi chú" span={2}>{detailRequest.notes || '-'}</Descriptions.Item>
-              {detailRequest.reject_reason ? <Descriptions.Item label="Lý do từ chối" span={2}>{detailRequest.reject_reason}</Descriptions.Item> : null}
-            </Descriptions>
-
-            <div>
-              <Title level={5}>Dòng hàng</Title>
-              <Table
-                rowKey={(row) => row.id}
-                dataSource={detailRequest.lines ?? []}
-                pagination={false}
-                locale={{ emptyText: 'Yêu cầu mua này chưa có dòng hàng chi tiết.' }}
-                columns={[
-                  { title: '#', dataIndex: 'line_number', width: 60 },
-                  { title: 'Mã SP', dataIndex: 'product_code', width: 120, render: (value) => value || '-' },
-                  { title: 'Tên SP', dataIndex: 'product_name', width: 220, render: (value) => value || '-' },
-                  { title: 'Số lượng', dataIndex: 'qty', width: 120 },
-                  { title: 'Ghi chú', dataIndex: 'note', width: 220, render: (value) => value || '-' },
-                ]}
-                scroll={{ x: 720 }}
+            <Space direction="vertical" size={16} style={{ width: '100%' }}>
+              <Alert
+                showIcon
+                data-testid="purchase-request-detail-next-step"
+                type={getPurchaseRequestAlertType(detailRequest)}
+                message={getPurchaseRequestNextStep(detailRequest)}
+                description={getPurchaseRequestStatusHelp(detailRequest)}
               />
-            </div>
+              <Descriptions bordered size="small" column={2}>
+                <Descriptions.Item label="Mã">{detailRequest.code}</Descriptions.Item>
+                <Descriptions.Item label="Trạng thái">
+                  <Tag color={STATUS_COLOR[detailRequest.status]}>{STATUS_LABEL[detailRequest.status]}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="Ngày">{dayjs(detailRequest.request_date).format('DD/MM/YYYY')}</Descriptions.Item>
+                <Descriptions.Item label="Người yêu cầu">{detailRequest.requested_by_name || '-'}</Descriptions.Item>
+                <Descriptions.Item label="Tham chiếu">{detailRequest.reference || '-'}</Descriptions.Item>
+                <Descriptions.Item label="Duyệt lúc">{detailRequest.approved_at ? dayjs(detailRequest.approved_at).format('DD/MM/YYYY HH:mm') : '-'}</Descriptions.Item>
+                <Descriptions.Item label="Ghi chú" span={2}>{detailRequest.notes || '-'}</Descriptions.Item>
+                {detailRequest.reject_reason ? <Descriptions.Item label="Lý do từ chối" span={2}>{detailRequest.reject_reason}</Descriptions.Item> : null}
+              </Descriptions>
 
-            <div>
-              <Title level={5}>Lịch sử duyệt</Title>
-              <Table<PurchaseApprovalHistoryItem>
-                data-testid="purchase-request-approval-history"
-                rowKey={(row) => `${row.action}-${row.created_at}`}
-                loading={approvalHistoryQuery.isLoading}
-                dataSource={approvalHistoryQuery.data ?? []}
-                pagination={false}
-                locale={{ emptyText: 'Yêu cầu mua này chưa có lịch sử duyệt.' }}
-                columns={[
-                  {
-                    title: 'Hành động',
-                    dataIndex: 'action',
-                    width: 160,
-                    render: (_, row) => row.action_label || row.action,
-                  },
-                  {
-                    title: 'Người thực hiện',
-                    dataIndex: 'user',
-                    width: 180,
-                    render: (value) => value || '-',
-                  },
-                  {
-                    title: 'Ghi chú',
-                    dataIndex: 'comments',
-                    width: 260,
-                    render: (value) => value || '-',
-                  },
-                  {
-                    title: 'Thời gian',
-                    dataIndex: 'created_at',
-                    width: 180,
-                    render: (value) => dayjs(value).format('DD/MM/YYYY HH:mm'),
-                  },
-                ]}
-                scroll={{ x: 760 }}
-              />
-            </div>
-          </Space>
+              <div>
+                <Title level={5}>Dòng hàng</Title>
+                <Table
+                  rowKey={(row) => row.id}
+                  dataSource={detailRequest.lines ?? []}
+                  pagination={false}
+                  locale={{ emptyText: 'Yêu cầu mua này chưa có dòng hàng chi tiết.' }}
+                  columns={[
+                    { title: '#', dataIndex: 'line_number', width: 60 },
+                    { title: 'Mã SP', dataIndex: 'product_code', width: 120, render: (value) => value || '-' },
+                    { title: 'Tên SP', dataIndex: 'product_name', width: 220, render: (value) => value || '-' },
+                    { title: 'Số lượng', dataIndex: 'qty', width: 120 },
+                    { title: 'Ghi chú', dataIndex: 'note', width: 220, render: (value) => value || '-' },
+                  ]}
+                  scroll={{ x: 720 }}
+                />
+              </div>
+
+              <div>
+                <Title level={5}>Lịch sử duyệt</Title>
+                <Table<PurchaseApprovalHistoryItem>
+                  data-testid="purchase-request-approval-history"
+                  rowKey={(row) => `${row.action}-${row.created_at}`}
+                  loading={approvalHistoryQuery.isLoading}
+                  dataSource={approvalHistoryQuery.data ?? []}
+                  pagination={false}
+                  locale={{ emptyText: 'Yêu cầu mua này chưa có lịch sử duyệt.' }}
+                  columns={[
+                    {
+                      title: 'Hành động',
+                      dataIndex: 'action',
+                      width: 160,
+                      render: (_, row) => row.action_label || row.action,
+                    },
+                    {
+                      title: 'Người thực hiện',
+                      dataIndex: 'user',
+                      width: 180,
+                      render: (value) => value || '-',
+                    },
+                    {
+                      title: 'Ghi chú',
+                      dataIndex: 'comments',
+                      width: 260,
+                      render: (value) => value || '-',
+                    },
+                    {
+                      title: 'Thời gian',
+                      dataIndex: 'created_at',
+                      width: 180,
+                      render: (value) => dayjs(value).format('DD/MM/YYYY HH:mm'),
+                    },
+                  ]}
+                  scroll={{ x: 760 }}
+                />
+              </div>
+            </Space>
           </div>
         ) : null}
       </Modal>
