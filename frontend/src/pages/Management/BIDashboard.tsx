@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { ArrowDownOutlined, ArrowUpOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Button, Card, Col, Input, Modal, Progress, Row, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Empty, Input, Modal, Progress, Row, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
+import { Link } from 'react-router-dom';
 import { financeApi } from '../../api/finance';
 import { inventoryApi } from '../../api/inventory';
 import { salesApi } from '../../api/sales';
@@ -187,6 +188,102 @@ const BIDashboard: React.FC = () => {
   const previousPostedOrders = getPostedOrders(previousOrders);
   const topCustomers = buildTopCustomers(currentPostedOrders, previousPostedOrders);
   const topProducts = buildTopProducts(currentPostedOrders, previousPostedOrders);
+  const overdueReceivableCount = dashboardQuery.data?.receivableSummary?.overdue_count ?? 0;
+  const overduePayableCount = dashboardQuery.data?.payableSummary?.overdue_count ?? 0;
+  const belowMinCount = dashboardQuery.data?.inventorySummary?.below_min_count ?? 0;
+  const pendingSalesCount = dashboardQuery.data?.salesCurrent?.pending_approval_count ?? 0;
+  const cashDelta = toNumber(dashboardQuery.data?.cashCurrent?.cash_delta);
+
+  const biOwnerInsight = useMemo(() => {
+    if (dashboardQuery.isError) {
+      return {
+        type: 'error' as const,
+        message: 'Không tải được dữ liệu BI',
+        description: 'Hãy thử làm mới dashboard. Nếu vẫn lỗi, dùng Reports Center hoặc các màn nghiệp vụ để đối chiếu số liệu trước khi ra quyết định.',
+        actionLabel: 'Thử tải lại',
+        actionPath: '',
+      };
+    }
+    if (dashboardQuery.isLoading) {
+      return {
+        type: 'info' as const,
+        message: 'Đang tổng hợp dashboard BI',
+        description: 'Hệ thống đang gom doanh thu, công nợ, tồn kho và dòng tiền trong kỳ đang xem.',
+        actionLabel: 'Đang tải',
+        actionPath: '',
+      };
+    }
+    if (overdueReceivableCount > 0) {
+      return {
+        type: 'warning' as const,
+        message: 'Ưu tiên thu hồi công nợ quá hạn',
+        description: `Có ${overdueReceivableCount} chứng từ phải thu quá hạn trong kỳ ${PERIOD_LABELS[period]}. Nên mở AR để phân công follow-up trước khi xem các chỉ số tăng trưởng.`,
+        actionLabel: 'Mở công nợ phải thu',
+        actionPath: '/receivables',
+      };
+    }
+    if (belowMinCount > 0) {
+      return {
+        type: 'warning' as const,
+        message: 'Tồn kho dưới định mức cần rà ngay',
+        description: `${belowMinCount} dòng tồn đang dưới min. Nên kiểm tra tồn khả dụng trước khi chốt kế hoạch bán hàng hoặc sản xuất.`,
+        actionLabel: 'Mở tồn kho',
+        actionPath: '/inventory-stock',
+      };
+    }
+    if (pendingSalesCount > 0) {
+      return {
+        type: 'info' as const,
+        message: 'Có đơn bán đang chờ duyệt',
+        description: `${pendingSalesCount} đơn bán chưa được duyệt có thể ảnh hưởng doanh thu kỳ này. Mở đơn bán để chốt hoặc trả lại người phụ trách.`,
+        actionLabel: 'Mở đơn bán',
+        actionPath: '/sales-orders',
+      };
+    }
+    if (overduePayableCount > 0) {
+      return {
+        type: 'info' as const,
+        message: 'Cần cân đối lịch chi trả',
+        description: `${overduePayableCount} chứng từ phải trả quá hạn. Nên rà AP cùng dòng tiền trước khi cam kết thanh toán mới.`,
+        actionLabel: 'Mở công nợ phải trả',
+        actionPath: '/payables',
+      };
+    }
+    if (cashDelta < 0) {
+      return {
+        type: 'warning' as const,
+        message: 'Dòng tiền thuần đang âm',
+        description: 'Kỳ đang xem có dòng tiền thuần âm. Nên mở sổ quỹ để xem khoản chi lớn và đối chiếu với lịch thu.',
+        actionLabel: 'Mở sổ quỹ',
+        actionPath: '/cash-book',
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'BI dashboard chưa ghi nhận điểm nóng nổi bật',
+      description: 'Có thể dùng màn này để đọc xu hướng, sau đó chạy Reports Center để chốt snapshot chia sẻ cho owner hoặc quản lý ca.',
+      actionLabel: 'Mở Reports Center',
+      actionPath: '/reports',
+    };
+  }, [
+    belowMinCount,
+    cashDelta,
+    dashboardQuery.isError,
+    dashboardQuery.isLoading,
+    overduePayableCount,
+    overdueReceivableCount,
+    pendingSalesCount,
+    period,
+  ]);
+
+  const biQuickLinks = [
+    { to: '/sales-orders', label: 'Đơn bán', detail: `${pendingSalesCount} chờ duyệt` },
+    { to: '/inventory-stock', label: 'Tồn kho', detail: `${belowMinCount} dưới min` },
+    { to: '/receivables', label: 'Phải thu', detail: `${overdueReceivableCount} quá hạn` },
+    { to: '/payables', label: 'Phải trả', detail: `${overduePayableCount} quá hạn` },
+    { to: '/cash-book', label: 'Sổ quỹ', detail: cashDelta < 0 ? 'Dòng tiền âm' : 'Đối chiếu thu chi' },
+    { to: '/reports', label: 'Reports', detail: 'Chốt snapshot' },
+  ];
 
   const kpis = [
     {
@@ -425,6 +522,34 @@ const BIDashboard: React.FC = () => {
         </Space>
       </Card>
 
+      <Alert
+        type={biOwnerInsight.type}
+        showIcon
+        message={biOwnerInsight.message}
+        description={biOwnerInsight.description}
+        action={biOwnerInsight.actionPath ? (
+          <Link to={biOwnerInsight.actionPath}>
+            <Button size="small">{biOwnerInsight.actionLabel}</Button>
+          </Link>
+        ) : (
+          <Button size="small" loading={dashboardQuery.isFetching} onClick={() => dashboardQuery.refetch()}>
+            {biOwnerInsight.actionLabel}
+          </Button>
+        )}
+      />
+
+      <Card title="Đi tới màn xử lý">
+        <Space wrap size={[12, 12]}>
+          {biQuickLinks.map((item) => (
+            <Link key={item.to} to={item.to}>
+              <Button>
+                {item.label} · {item.detail}
+              </Button>
+            </Link>
+          ))}
+        </Space>
+      </Card>
+
       <Row gutter={[16, 16]}>
         {kpis.map((item) => {
           const change = calculateGrowth(item.value, item.previous);
@@ -468,6 +593,7 @@ const BIDashboard: React.FC = () => {
               pagination={false}
               size="small"
               scroll={{ x: 680 }}
+              locale={{ emptyText: <Empty description="Chưa có sản phẩm phát sinh doanh thu trong kỳ này." /> }}
             />
           </Card>
         </Col>
@@ -494,6 +620,7 @@ const BIDashboard: React.FC = () => {
               pagination={false}
               size="small"
               scroll={{ x: 620 }}
+              locale={{ emptyText: <Empty description="Chưa có khách hàng phát sinh doanh thu trong kỳ này." /> }}
             />
           </Card>
         </Col>

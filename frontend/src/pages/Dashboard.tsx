@@ -78,6 +78,15 @@ type PlaybookItem = {
   tone: Tone;
 };
 
+type OwnerFocusItem = {
+  key: string;
+  title: string;
+  detail: string;
+  route: string;
+  actionLabel: string;
+  tone: Tone;
+};
+
 function formatMoney(value: string | number | null | undefined): string {
   const numeric = Number(value ?? 0);
   return `${Number.isFinite(numeric) ? numeric.toLocaleString('vi-VN') : '0'} đ`;
@@ -653,7 +662,6 @@ export default function Dashboard() {
     canManageOnboarding,
     canManageProduction,
     canManageWorkforce,
-    canViewSales,
     canViewSalesFulfillmentCenter,
     overdue90Count,
     salaryAdvancePendingCount,
@@ -1085,6 +1093,49 @@ export default function Dashboard() {
     taskSummary?.overdue,
   ]);
 
+  const ownerFocusItems = useMemo<OwnerFocusItem[]>(() => {
+    const items: OwnerFocusItem[] = [];
+    const primarySignal = signalCards.find((card) => card.tone !== 'steady' && card.value !== '0') ?? signalCards[0];
+
+    if (primarySignal) {
+      items.push({
+        key: `signal-${primarySignal.key}`,
+        title: primarySignal.tone === 'steady' ? 'Không có điểm nóng lớn trong phiên này' : `Ưu tiên trước: ${primarySignal.title}`,
+        detail: primarySignal.tone === 'steady'
+          ? 'Có thể dùng phiên này để chốt báo cáo, rà tiến độ và xử lý các việc còn mở theo từng phân hệ.'
+          : `${primarySignal.detail} Bấm vào lối tắt này để đi thẳng tới màn xử lý.`,
+        route: primarySignal.route,
+        actionLabel: primarySignal.actionLabel,
+        tone: primarySignal.tone,
+      });
+    }
+
+    const moduleHotspot = moduleCards.find((card) => card.tone !== 'steady' && card.key !== primarySignal?.key);
+    if (moduleHotspot) {
+      items.push({
+        key: `module-${moduleHotspot.key}`,
+        title: `Rà luồng nghiệp vụ: ${moduleHotspot.title}`,
+        detail: `${moduleHotspot.detail} Đây là điểm nên kiểm tra sau tín hiệu nóng đầu tiên.`,
+        route: moduleHotspot.route,
+        actionLabel: moduleHotspot.actionLabel,
+        tone: moduleHotspot.tone,
+      });
+    }
+
+    if (canViewReports) {
+      items.push({
+        key: 'reports-snapshot',
+        title: 'Chốt snapshot báo cáo cho buổi điều hành',
+        detail: 'Mở Reports Center để chạy nhanh báo cáo tổng hợp hoặc đối chiếu số liệu trước khi ra quyết định.',
+        route: '/reports',
+        actionLabel: 'Mở Reports Center',
+        tone: 'steady',
+      });
+    }
+
+    return items.slice(0, 3);
+  }, [canViewReports, moduleCards, signalCards]);
+
   const primaryHeroAction = signalCards[0] ?? {
     key: 'task-inbox',
     title: 'Ưu tiên nhiệm vụ',
@@ -1170,6 +1221,35 @@ export default function Dashboard() {
           </div>
         </div>
       </section>
+
+      <PanelSection
+        kicker="Việc cần chú ý"
+        title="Hôm nay nên nhìn gì trước?"
+        subtitle="Ba lối đi này gom câu trả lời nhanh cho owner: điểm nóng nào đang chờ xử lý, rủi ro nằm ở đâu và bấm vào đâu để xử lý tiếp."
+      >
+        <div className="command-center-shortcuts">
+          {ownerFocusItems.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className="command-center-shortcut"
+              onClick={() => navigate(item.route)}
+            >
+              <div className="command-center-shortcut-meta">
+                <div className="command-center-shortcut-title">{item.title}</div>
+                <span className={`command-center-card-tone command-center-card-tone--${item.tone}`}>
+                  {toneLabel(item.tone)}
+                </span>
+              </div>
+              <div className="command-center-shortcut-description">{item.detail}</div>
+              <div className="command-center-card-footer">
+                <span>{item.actionLabel}</span>
+                <ArrowRightOutlined />
+              </div>
+            </button>
+          ))}
+        </div>
+      </PanelSection>
 
       {canManageFinance && (
         <section className={`command-center-finance-alert ${overdue90Count > 0 ? 'command-center-finance-alert--warning' : 'command-center-finance-alert--steady'}`}>

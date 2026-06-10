@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
+  Alert,
   Button,
   Card,
   Col,
@@ -349,6 +350,56 @@ function formatSchedule(
   return 'Không lập lịch';
 }
 
+function getReportNextStep(report: CustomReportDefinition): { color: string; label: string; detail: string } {
+  if (report.last_run_status === 'FAILED') {
+    return {
+      color: 'red',
+      label: 'Cần sửa lỗi',
+      detail: 'Mở chi tiết để xem lần chạy lỗi, sau đó chỉnh cấu hình hoặc chạy lại.',
+    };
+  }
+  if (report.status === 'DRAFT') {
+    return {
+      color: 'gold',
+      label: 'Hoàn thiện nháp',
+      detail: 'Rà tên, kỳ dữ liệu và người dùng trước khi đưa vào vận hành.',
+    };
+  }
+  if (!report.last_generated_at) {
+    return {
+      color: 'orange',
+      label: 'Chưa có dữ liệu',
+      detail: 'Chạy lần đầu để owner có snapshot ra quyết định.',
+    };
+  }
+  if (dayjs().diff(dayjs(report.last_generated_at), 'day') >= 14) {
+    return {
+      color: 'gold',
+      label: 'Nên chạy lại',
+      detail: 'Dữ liệu đã cũ, nên làm mới trước khi dùng trong phiên điều hành.',
+    };
+  }
+  if (report.schedule_enabled && report.next_run_at && dayjs(report.next_run_at).isBefore(dayjs().add(48, 'hour'))) {
+    return {
+      color: 'blue',
+      label: 'Rà trước lịch chạy',
+      detail: 'Kiểm tra đầu ra và người nhận trước khi lịch tự động chạy.',
+    };
+  }
+  if (report.status === 'ARCHIVED') {
+    return {
+      color: 'default',
+      label: 'Chỉ tra cứu',
+      detail: 'Báo cáo đã lưu trữ, chỉ dùng để đối chiếu lịch sử.',
+    };
+  }
+  return {
+    color: 'green',
+    label: 'Sẵn sàng dùng',
+    detail: 'Có thể mở chi tiết, chạy lại hoặc dùng cho snapshot điều hành.',
+  };
+}
+
 export default function ReportsCenter() {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
@@ -500,6 +551,59 @@ export default function ReportsCenter() {
     if (!latest) return report.last_generated_at;
     return dayjs(report.last_generated_at).isAfter(dayjs(latest)) ? report.last_generated_at : latest;
   }, null);
+  const reportOwnerAlert = (() => {
+    if (failedReports > 0) {
+      return {
+        type: 'error' as const,
+        message: 'Có báo cáo chạy lỗi cần xử lý trước',
+        description: `Hiện có ${failedReports} báo cáo lỗi trong danh sách đang xem. Mở chi tiết báo cáo để xem lịch sử chạy và lỗi gần nhất trước khi dùng số liệu.`,
+        actionLabel: 'Xem danh mục',
+        onClick: () => setPage(1),
+      };
+    }
+    if (staleReports > 0) {
+      return {
+        type: 'warning' as const,
+        message: 'Có báo cáo đã cũ dữ liệu',
+        description: `${staleReports} báo cáo chưa từng chạy hoặc đã hơn 14 ngày chưa làm mới. Nên chạy lại các báo cáo này trước buổi điều hành.`,
+        actionLabel: 'Xem báo cáo cũ',
+        onClick: () => setPage(1),
+      };
+    }
+    if (draftCount > 0) {
+      return {
+        type: 'warning' as const,
+        message: 'Có báo cáo nháp chưa hoàn thiện',
+        description: `${draftCount} báo cáo đang ở trạng thái nháp. Lọc nháp để chốt mẫu cần dùng hoặc dọn các mẫu không còn phù hợp.`,
+        actionLabel: 'Lọc báo cáo nháp',
+        onClick: () => {
+          setFilters((current) => ({ ...current, status: 'DRAFT' }));
+          setPage(1);
+        },
+      };
+    }
+    if (totalReports > 0 && scheduledCount === 0) {
+      return {
+        type: 'info' as const,
+        message: 'Chưa có báo cáo nào được tự động hóa',
+        description: 'Nếu owner cần snapshot định kỳ, hãy chọn một báo cáo quan trọng rồi bật lịch chạy hằng ngày, hằng tuần hoặc hằng tháng.',
+        actionLabel: 'Lọc chưa lập lịch',
+        onClick: () => {
+          setFilters((current) => ({ ...current, schedule_enabled: 'false' }));
+          setPage(1);
+        },
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'Reports Center đang sẵn sàng cho phiên điều hành',
+      description: dueSoonReports > 0
+        ? `${dueSoonReports} lịch sẽ chạy trong 48 giờ tới. Rà người nhận và đầu ra nếu đây là báo cáo gửi owner.`
+        : 'Không có lỗi hoặc báo cáo cũ nổi bật trong tập đang xem. Có thể chạy nhanh snapshot hoặc mở báo cáo liên quan để đối chiếu.',
+      actionLabel: 'Tạo báo cáo mới',
+      onClick: openCreateModal,
+    };
+  })();
 
   const reportShortcuts = [
     {
@@ -968,6 +1072,20 @@ export default function ReportsCenter() {
       render: (value: number) => value.toLocaleString('vi-VN'),
     },
     {
+      title: 'Việc tiếp theo',
+      key: 'next_step',
+      width: 300,
+      render: (_value, row) => {
+        const nextStep = getReportNextStep(row);
+        return (
+          <Space direction="vertical" size={4}>
+            <Tag color={nextStep.color}>{nextStep.label}</Tag>
+            <Typography.Text type="secondary">{nextStep.detail}</Typography.Text>
+          </Space>
+        );
+      },
+    },
+    {
       title: 'Hành động',
       key: 'actions',
       fixed: 'right',
@@ -1110,6 +1228,19 @@ export default function ReportsCenter() {
             </div>
           </div>
         </section>
+
+        <Alert
+          type={reportOwnerAlert.type}
+          showIcon
+          message={reportOwnerAlert.message}
+          description={reportOwnerAlert.description}
+          action={(
+            <Button size="small" onClick={reportOwnerAlert.onClick}>
+              {reportOwnerAlert.actionLabel}
+            </Button>
+          )}
+          style={{ marginBottom: 16 }}
+        />
 
         <div className="workspace-split-grid">
           <div className="command-center-stack">
@@ -1312,7 +1443,7 @@ export default function ReportsCenter() {
               columns={reportColumns}
               dataSource={rows}
               rowKey="id"
-              scroll={{ x: 1700 }}
+              scroll={{ x: 2000 }}
               pagination={{
                 current: page,
                 pageSize,
