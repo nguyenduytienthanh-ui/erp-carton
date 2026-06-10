@@ -307,6 +307,43 @@ export default function ProductionResourceCatalog() {
   const hasError = workCenterQuery.isError || machineQuery.isError;
   const isSavingWorkCenter = createWorkCenterMutation.isPending || updateWorkCenterMutation.isPending;
   const isSavingMachine = createMachineMutation.isPending || updateMachineMutation.isPending;
+  const resourceReadinessAlert = useMemo(() => {
+    if (hasError || workCenterQuery.isLoading || machineQuery.isLoading) {
+      return null;
+    }
+    const workCenterCount = workCenterQuery.data?.count ?? 0;
+    const machineCount = machineQuery.data?.count ?? 0;
+    const hasNarrowFilter = Boolean(commonSearch || intentFilters.workCenterCode || !intentFilters.activeOnly);
+    if (workCenterCount === 0) {
+      return {
+        type: 'warning' as const,
+        message: hasNarrowFilter
+          ? 'Bộ lọc hiện tại không còn tổ sản xuất phù hợp; hãy xóa lọc nếu cần chọn lại nguồn lực cho điều độ.'
+          : 'Chưa có tổ sản xuất đang dùng; cần tạo tổ trước khi lập máy và điều độ công đoạn.',
+      };
+    }
+    if (machineCount === 0) {
+      return {
+        type: 'warning' as const,
+        message: hasNarrowFilter
+          ? 'Bộ lọc hiện tại không còn máy sản xuất phù hợp; hãy kiểm tra tổ hoặc trạng thái đang dùng.'
+          : 'Chưa có máy sản xuất đang dùng; planning sẽ thiếu nguồn lực máy cho công đoạn.',
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'Danh mục nguồn lực đã có tổ và máy phù hợp để phục vụ điều độ sản xuất.',
+    };
+  }, [
+    commonSearch,
+    hasError,
+    intentFilters.activeOnly,
+    intentFilters.workCenterCode,
+    machineQuery.data?.count,
+    machineQuery.isLoading,
+    workCenterQuery.data?.count,
+    workCenterQuery.isLoading,
+  ]);
 
   const openCreateWorkCenter = () => {
     setEditingWorkCenter(null);
@@ -623,6 +660,14 @@ export default function ProductionResourceCatalog() {
           description={getToastMessage(workCenterQuery.error || machineQuery.error)}
         />
       )}
+      {resourceReadinessAlert ? (
+        <Alert
+          showIcon
+          type={resourceReadinessAlert.type}
+          message={resourceReadinessAlert.message}
+          data-testid="production-resource-readiness-alert"
+        />
+      ) : null}
 
       <section data-testid="production-work-center-section" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div>

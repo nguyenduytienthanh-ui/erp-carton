@@ -108,6 +108,20 @@ function matchesMaterialIssueLane(
   }
 }
 
+function getMaterialIssueOwnerStep(issue: ProductionIssue): string {
+  if (issue.status === 'CANCELLED') {
+    return 'Đã hủy: đối soát hoàn tác tồn kho nguồn và lý do hủy trước khi cấp lại.';
+  }
+  if (issue.lines.length === 0) {
+    return 'Đã ghi nhận nhưng chưa có dòng vật tư; kiểm tra định mức và tồn kho nguồn.';
+  }
+  return 'Đã cấp vật tư: theo dõi lệnh sản xuất và cấp bù nếu công đoạn còn thiếu vật tư.';
+}
+
+function getProductionOrderFocusHref(productionOrderId?: number | null): string {
+  return productionOrderId ? `/production-orders?focus_id=${productionOrderId}` : '/production-orders';
+}
+
 export default function MaterialIssueList() {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
@@ -501,6 +515,12 @@ export default function MaterialIssueList() {
       render: (value: ProductionIssueStatus) => <Tag color={STATUS_COLORS[value]}>{STATUS_LABELS[value]}</Tag>,
     },
     {
+      title: 'Việc tiếp theo',
+      key: 'owner_next_step',
+      width: 290,
+      render: (_, row) => <Text type="secondary">{getMaterialIssueOwnerStep(row)}</Text>,
+    },
+    {
       title: 'Thao tác',
       key: 'actions',
       width: 190,
@@ -516,6 +536,7 @@ export default function MaterialIssueList() {
               size="small"
               danger
               icon={<StopOutlined />}
+              title="Hủy chứng từ và hoàn tác số lượng vật tư đã cấp"
               onClick={() => {
                 cancelForm.setFieldsValue({ reason: '' });
                 setCancelTarget(row);
@@ -737,7 +758,7 @@ export default function MaterialIssueList() {
         columns={columns}
         dataSource={visibleRows}
         loading={listQuery.isLoading}
-        scroll={{ x: 1350 }}
+        scroll={{ x: 1640 }}
         pagination={{
           current: page,
           pageSize,
@@ -893,6 +914,7 @@ export default function MaterialIssueList() {
           </div>
         ) : detailData ? (
           <div data-testid="material-issue-detail-panel" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <Alert showIcon type={detailData.status === 'CANCELLED' ? 'warning' : 'info'} message={getMaterialIssueOwnerStep(detailData)} />
             <div
               style={{
                 display: 'grid',
@@ -917,7 +939,13 @@ export default function MaterialIssueList() {
             <Card size="small" title="Tổng quan chứng từ">
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
                 <div>
-                  <strong>Lệnh sản xuất:</strong> {detailData.production_order_code || '-'}
+                  <strong>Lệnh sản xuất:</strong>{' '}
+                  <Space size={6} wrap>
+                    <span>{detailData.production_order_code || '-'}</span>
+                    <Button size="small" href={getProductionOrderFocusHref(detailData.production_order)}>
+                      Xem lệnh
+                    </Button>
+                  </Space>
                 </div>
                 <div>
                   <strong>Trạng thái:</strong> <Tag color={STATUS_COLORS[detailData.status]}>{STATUS_LABELS[detailData.status]}</Tag>

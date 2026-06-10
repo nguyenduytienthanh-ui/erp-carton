@@ -69,6 +69,20 @@ function matchesProductionReceiptLane(
   }
 }
 
+function getProductionReceiptOwnerStep(receipt: ProductionReceipt): string {
+  if (receipt.status === 'CANCELLED') {
+    return 'Đã hủy: đối soát hoàn tác kho thành phẩm và lý do hủy trước khi nhập lại.';
+  }
+  if (receipt.lines.length === 0) {
+    return 'Đã ghi nhận nhưng chưa có dòng thành phẩm; kiểm tra lại lệnh sản xuất và cấu hình sản phẩm.';
+  }
+  return 'Đã nhập thành phẩm: đối soát kho đích, sản lượng còn lại và hoàn tất lệnh khi đủ số lượng.';
+}
+
+function getProductionOrderFocusHref(productionOrderId?: number | null): string {
+  return productionOrderId ? `/production-orders?focus_id=${productionOrderId}` : '/production-orders';
+}
+
 export default function ProductionReceiptList() {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
@@ -343,13 +357,19 @@ export default function ProductionReceiptList() {
     { title: 'Giá trị', dataIndex: 'total_amount', width: 140, align: 'right', render: (value: string) => Number(value || 0).toLocaleString('vi-VN') },
     { title: 'Trạng thái', dataIndex: 'status', width: 140, render: (value: ProductionReceiptStatus) => <Tag color={STATUS_COLORS[value]}>{STATUS_LABELS[value]}</Tag> },
     {
+      title: 'Việc tiếp theo',
+      key: 'owner_next_step',
+      width: 300,
+      render: (_, row) => <Text type="secondary">{getProductionReceiptOwnerStep(row)}</Text>,
+    },
+    {
       title: 'Thao tác',
       key: 'actions',
       width: 190,
       fixed: 'right',
       render: (_, row) => <Space wrap size="small">
         <Button data-testid={`production-receipt-view-${row.id}`} size="small" icon={<EyeOutlined />} onClick={() => setDetailReceipt(row)}>Xem</Button>
-        {row.status === 'POSTED' ? <Button data-testid={`production-receipt-cancel-${row.id}`} size="small" danger icon={<StopOutlined />} onClick={() => { cancelForm.setFieldsValue({ reason: '' }); setCancelTarget(row); }}>Hủy chứng từ</Button> : null}
+        {row.status === 'POSTED' ? <Button data-testid={`production-receipt-cancel-${row.id}`} size="small" danger icon={<StopOutlined />} title="Hủy chứng từ và hoàn tác lượng thành phẩm đã nhập" onClick={() => { cancelForm.setFieldsValue({ reason: '' }); setCancelTarget(row); }}>Hủy chứng từ</Button> : null}
       </Space>,
     },
   ];
@@ -446,7 +466,7 @@ export default function ProductionReceiptList() {
         columns={columns}
         dataSource={visibleRows}
         loading={listQuery.isLoading}
-        scroll={{ x: 1350 }}
+        scroll={{ x: 1650 }}
         pagination={{ current: page, pageSize, total: listQuery.data?.count ?? 0, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], onChange: async (nextPage, nextPageSize) => { setPage(nextPage); if (nextPageSize !== pageSize) await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize }); } }}
         locale={{ emptyText: visibleRows.length === 0 && !listQuery.isLoading ? (activeFilterTags.length ? <div style={{ padding: 32 }}><Empty description="Không tìm thấy chứng từ nhập thành phẩm phù hợp." /><Button type="link" onClick={resetFilters}>Xóa bộ lọc</Button></div> : <Empty description="Chưa có chứng từ nhập thành phẩm nào." />) : undefined }}
       />
@@ -501,6 +521,7 @@ export default function ProductionReceiptList() {
 
       <Modal title={detailReceipt ? `Chi tiết nhập thành phẩm - ${detailReceipt.code}` : 'Chi tiết nhập thành phẩm'} open={Boolean(detailReceipt)} onCancel={() => setDetailReceipt(null)} footer={null} width={980}>
         {detailQuery.isLoading ? <Skeleton active paragraph={{ rows: 8 }} /> : detailData ? <div data-testid="production-receipt-detail-panel" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Alert showIcon type={detailData.status === 'CANCELLED' ? 'warning' : 'info'} message={getProductionReceiptOwnerStep(detailData)} />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
             <Card size="small" style={TILE_STYLE}><Statistic title="Tổng số dòng" value={detailData.lines.length} /></Card>
             <Card size="small" style={TILE_STYLE}><Statistic title="Tổng SL" value={Number(detailData.total_qty || 0)} precision={2} /></Card>
@@ -509,7 +530,15 @@ export default function ProductionReceiptList() {
           </div>
           <Card size="small" title="Tổng quan chứng từ">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
-              <div><strong>Lệnh sản xuất:</strong> {detailData.production_order_code || '-'}</div>
+              <div>
+                <strong>Lệnh sản xuất:</strong>{' '}
+                <Space size={6} wrap>
+                  <span>{detailData.production_order_code || '-'}</span>
+                  <Button size="small" href={getProductionOrderFocusHref(detailData.production_order)}>
+                    Xem lệnh
+                  </Button>
+                </Space>
+              </div>
               <div><strong>Trạng thái:</strong> <Tag color={STATUS_COLORS[detailData.status]}>{STATUS_LABELS[detailData.status]}</Tag></div>
               <div><strong>Kho đích:</strong> {detailData.warehouse_name || '-'}</div>
               <div><strong>Vị trí đích:</strong> {detailData.location_name || '-'}</div>

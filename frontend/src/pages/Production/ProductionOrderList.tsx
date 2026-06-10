@@ -129,6 +129,47 @@ const isOverdue = (order: ProductionOrder) => Boolean(order.planned_end_date && 
 const canEditOrder = (order: ProductionOrder) => order.status === 'DRAFT' || order.status === 'REJECTED';
 const formatQuantity = (value?: string | null) => Number(value || 0).toLocaleString('vi-VN');
 const formatDateTime = (value?: string | null) => (value ? dayjs(value).format('DD/MM/YYYY HH:mm') : 'Chưa ghi nhận');
+const getMaterialShortageCount = (order: ProductionOrder) => (
+  order.material_requirements.filter((item) => Number(item.remaining_issue_qty ?? item.required_qty ?? 0) > 0).length
+);
+const getProductionOrderOwnerStep = (order: ProductionOrder) => {
+  const shortageCount = getMaterialShortageCount(order);
+  const progressPercent = getProgressPercent(order);
+  if (isOverdue(order)) {
+    return {
+      color: 'error',
+      text: 'Trễ kế hoạch: mở điều độ để kiểm tra công đoạn, máy và vật tư còn nghẽn.',
+    };
+  }
+  if (order.status === 'DRAFT' || order.status === 'REJECTED') {
+    return {
+      color: 'default',
+      text: order.status === 'REJECTED' ? 'Sửa lý do bị từ chối rồi gửi duyệt lại.' : 'Rà soát số lượng, BOM và ngày kế hoạch trước khi gửi duyệt.',
+    };
+  }
+  if (order.status === 'SUBMITTED') {
+    return { color: 'processing', text: 'Chờ trưởng bộ phận duyệt để có thể phát lệnh.' };
+  }
+  if (order.status === 'APPROVED') {
+    return { color: 'blue', text: 'Đã duyệt kế hoạch, bước tiếp theo là phát lệnh cho xưởng.' };
+  }
+  if (order.status === 'RELEASED') {
+    return {
+      color: shortageCount > 0 ? 'gold' : 'cyan',
+      text: shortageCount > 0 ? `Còn ${shortageCount} dòng vật tư cần cấp trước khi chạy ổn định.` : 'Đã phát lệnh, sẵn sàng chạy công đoạn và ghi nhận đầu ra.',
+    };
+  }
+  if (order.status === 'IN_PROGRESS') {
+    return {
+      color: progressPercent >= 100 ? 'success' : 'gold',
+      text: progressPercent >= 100 ? 'Sản lượng đã đủ, kiểm tra nhập TP và hoàn tất lệnh.' : 'Theo dõi công đoạn đang chạy, cấp bù vật tư hoặc nhập TP khi có sản lượng.',
+    };
+  }
+  if (order.status === 'COMPLETED') {
+    return { color: 'success', text: 'Đã hoàn thành, chỉ cần đối soát chứng từ vật tư và nhập TP khi cần audit.' };
+  }
+  return { color: 'magenta', text: 'Đã hủy, kiểm tra lý do hủy và chứng từ liên quan trước khi tạo lệnh thay thế.' };
+};
 const getProductionDemandDisplayCode = (order: ProductionOrder) => (
   order.production_demand_display_code
   || order.production_demand_code
@@ -695,6 +736,20 @@ export default function ProductionOrderList() {
     },
     { title: 'Trạng thái', dataIndex: 'status', width: 150, render: (status: ProductionOrderStatus, row) => <Space size={4} wrap><Tag color={STATUS_COLORS[status]}>{STATUS_LABELS[status]}</Tag>{isOverdue(row) ? <Tag color="error">Trễ kế hoạch</Tag> : null}</Space> },
     {
+      title: 'Việc tiếp theo',
+      key: 'owner_next_step',
+      width: 300,
+      render: (_, row) => {
+        const ownerStep = getProductionOrderOwnerStep(row);
+        return (
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <Tag color={ownerStep.color}>Owner next step</Tag>
+            <Text type="secondary">{ownerStep.text}</Text>
+          </Space>
+        );
+      },
+    },
+    {
       title: 'Audit thực thi',
       key: 'execution_audit',
       width: 290,
@@ -740,8 +795,8 @@ export default function ProductionOrderList() {
           </> : null}
           {row.status === 'APPROVED' ? <Button data-testid={`production-order-release-${row.id}`} size="small" type="primary" icon={<ToolOutlined />} onClick={() => releaseMutation.mutate(row.id)}>Phát lệnh</Button> : null}
           {['RELEASED', 'IN_PROGRESS'].includes(row.status) ? <>
-            <Button data-testid={`production-order-issue-${row.id}`} size="small" onClick={() => issueMutation.mutate(row.id)}>Cấp vật tư</Button>
-            <Button data-testid={`production-order-receive-${row.id}`} size="small" type="primary" icon={<InboxOutlined />} onClick={() => receiveMutation.mutate(row.id)}>Nhập TP</Button>
+            <Button data-testid={`production-order-issue-${row.id}`} size="small" title="Cấp toàn bộ vật tư còn thiếu theo định mức của lệnh này" onClick={() => issueMutation.mutate(row.id)}>Cấp vật tư</Button>
+            <Button data-testid={`production-order-receive-${row.id}`} size="small" type="primary" icon={<InboxOutlined />} title="Ghi nhận nhập kho thành phẩm cho lệnh này" onClick={() => receiveMutation.mutate(row.id)}>Nhập TP</Button>
           </> : null}
           {!['COMPLETED', 'CANCELLED'].includes(row.status) ? <Button data-testid={`production-order-cancel-${row.id}`} size="small" danger icon={<StopOutlined />} onClick={() => { actionForm.setFieldsValue({ reason: '' }); setActionModal({ type: 'cancel', order: row }); }}>Hủy</Button> : null}
         </Space>
@@ -902,7 +957,7 @@ export default function ProductionOrderList() {
         loading={listQuery.isLoading}
         columns={columns}
         dataSource={visibleRows}
-        scroll={{ x: 2440 }}
+        scroll={{ x: 2740 }}
         pagination={{ current: page, pageSize, total: listQuery.data?.count ?? 0, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], onChange: async (nextPage, nextPageSize) => { setPage(nextPage); if (nextPageSize !== pageSize) await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize }); } }}
         locale={{ emptyText: visibleRows.length === 0 && !listQuery.isLoading ? (activeFilterTags.length ? <div style={{ padding: 32 }}><Empty description="Không tìm thấy lệnh sản xuất phù hợp." /><Button type="link" onClick={resetFilters}>Xóa bộ lọc</Button></div> : <Empty description="Chưa có lệnh sản xuất nào." />) : undefined }}
       />
@@ -1097,18 +1152,21 @@ export default function ProductionOrderList() {
             </Space>
           </Card>
           <Card size="small" title="Bước kế tiếp khuyến nghị">
-            <div data-testid="production-order-next-states" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Tag color="blue">Hiện tại: {STATUS_LABELS[detailData.status]}</Tag>
-              {(nextStatesQuery.data?.next_states ?? []).length > 0 ? (
-                (nextStatesQuery.data?.next_states ?? []).map((state) => (
-                  <Tag key={state} color="gold">
-                    {STATUS_LABELS[state as ProductionOrderStatus] || state}
-                  </Tag>
-                ))
-              ) : (
-                <Tag>Không còn bước tiếp theo</Tag>
-              )}
-            </div>
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <Alert showIcon type="info" message={getProductionOrderOwnerStep(detailData).text} />
+              <div data-testid="production-order-next-states" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Tag color="blue">Hiện tại: {STATUS_LABELS[detailData.status]}</Tag>
+                {(nextStatesQuery.data?.next_states ?? []).length > 0 ? (
+                  (nextStatesQuery.data?.next_states ?? []).map((state) => (
+                    <Tag key={state} color="gold">
+                      {STATUS_LABELS[state as ProductionOrderStatus] || state}
+                    </Tag>
+                  ))
+                ) : (
+                  <Tag>Không còn bước tiếp theo</Tag>
+                )}
+              </div>
+            </Space>
           </Card>
           <Card size="small" title="Lịch sử duyệt">
             <Table<ProductionApprovalHistoryItem>
