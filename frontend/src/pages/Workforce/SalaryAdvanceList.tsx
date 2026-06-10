@@ -145,6 +145,41 @@ function formatPercent(value: number | null | undefined): string {
   return `${Number(value ?? 0).toFixed(1)}%`;
 }
 
+function getSalaryAdvanceNextStep(row: SalaryAdvanceRecord, canManage: boolean): string {
+  if (!canManage) {
+    return 'Theo dõi trạng thái duyệt và liên hệ người phụ trách nhân sự khi cần cập nhật.';
+  }
+  if (row.approval_status === 'DRAFT') {
+    return 'Kiểm tra thông tin nhân viên, số tiền và gửi duyệt khi hồ sơ đã đủ dữ liệu.';
+  }
+  if (row.approval_status === 'PENDING_L1') {
+    return 'Chờ duyệt L1; người quản lý nên duyệt hoặc từ chối kèm lý do rõ ràng.';
+  }
+  if (row.approval_status === 'PENDING_L2') {
+    return 'Chờ duyệt L2; ưu tiên chốt trước khi giải ngân.';
+  }
+  if (row.approval_status === 'REJECTED') {
+    return 'Xem lý do từ chối, sửa hồ sơ và gửi duyệt lại nếu vẫn cần ứng lương.';
+  }
+  if (row.approval_status === 'APPROVED' && row.disbursement_status !== 'DISBURSED') {
+    return 'Hồ sơ đã duyệt; chọn nguồn tiền và ghi nhận chi tiền.';
+  }
+  if (row.disbursement_status === 'DISBURSED' && row.status === 'UNDEDUCTED') {
+    return 'Đã chi tiền; theo dõi khấu trừ trong kỳ lương tương ứng.';
+  }
+  return 'Hồ sơ đã hoàn tất luồng chính; chỉ mở chi tiết khi cần đối soát lịch sử.';
+}
+
+function getSalaryAdvanceEditLockReason(row: SalaryAdvanceRecord): string {
+  if (row.approval_status === 'PENDING_L1' || row.approval_status === 'PENDING_L2') {
+    return 'Hồ sơ đang chờ duyệt nên không sửa/xóa để giữ nguyên dấu vết phê duyệt.';
+  }
+  if (row.approval_status === 'APPROVED') {
+    return 'Hồ sơ đã duyệt nên không sửa/xóa; nếu sai cần xử lý theo quy trình hủy/đối soát.';
+  }
+  return '';
+}
+
 export default function SalaryAdvanceList() {
   const [searchParams] = useSearchParams();
   const initialSearch = searchParams.get('q') || searchParams.get('search') || '';
@@ -484,6 +519,63 @@ export default function SalaryAdvanceList() {
     };
   }, [approvalMetrics.avgLeadHours, approvalMetrics.overdueTotal, approvalMetrics.pendingTotal, canManage]);
 
+  const ownerNextStepAlert = useMemo(() => {
+    if (!canManage) {
+      return {
+        type: 'info' as const,
+        message: 'Bạn đang ở chế độ theo dõi theo quyền hiện tại.',
+        description: 'Tiếp tục đọc trạng thái duyệt/chi tiền; mọi thao tác thay đổi cần tài khoản quản lý nhân sự.',
+      };
+    }
+    if (approvalMetrics.overdueTotal > 0) {
+      return {
+        type: 'warning' as const,
+        message: 'Bước tiếp theo: xử lý các hồ sơ quá hạn SLA trước.',
+        description: 'Mở từng hồ sơ chờ L1/L2, duyệt hoặc từ chối có lý do để tránh tắc giải ngân trong kỳ lương.',
+      };
+    }
+    if (approvalMetrics.pendingL1 > 0) {
+      return {
+        type: 'info' as const,
+        message: 'Bước tiếp theo: chốt hàng đợi L1.',
+        description: 'Ưu tiên hồ sơ chờ L1 để giảm tồn đọng trước khi chuyển sang cấp duyệt cuối.',
+      };
+    }
+    if (approvalMetrics.pendingL2 > 0) {
+      return {
+        type: 'info' as const,
+        message: 'Bước tiếp theo: chốt hàng đợi L2.',
+        description: 'Các hồ sơ này đã qua bước đầu; cần quyết định cuối trước khi chi tiền.',
+      };
+    }
+    if (summary.approvedNotDisbursed > 0) {
+      return {
+        type: 'warning' as const,
+        message: 'Bước tiếp theo: giải ngân các hồ sơ đã duyệt.',
+        description: `Còn ${formatCurrency(summary.approvedNotDisbursed)} đã duyệt nhưng chưa chi tiền.`,
+      };
+    }
+    if (summary.disbursedNotDeducted > 0) {
+      return {
+        type: 'info' as const,
+        message: 'Bước tiếp theo: theo dõi khấu trừ lương.',
+        description: `Còn ${formatCurrency(summary.disbursedNotDeducted)} đã chi nhưng chưa trừ trong kỳ đang xem.`,
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'Luồng ứng lương không có việc nổi bật cần chốt ngay.',
+      description: 'Tiếp tục theo dõi hàng đợi duyệt, lịch sử nhắc SLA và trạng thái chi/trừ lương.',
+    };
+  }, [
+    approvalMetrics.overdueTotal,
+    approvalMetrics.pendingL1,
+    approvalMetrics.pendingL2,
+    canManage,
+    summary.approvedNotDisbursed,
+    summary.disbursedNotDeducted,
+  ]);
+
   const columns: ColumnsType<SalaryAdvanceRecord> = [
     { title: 'Ngày', dataIndex: 'advance_date', width: 110 },
     { title: 'Tháng trừ', dataIndex: 'month', width: 100 },
@@ -509,114 +601,132 @@ export default function SalaryAdvanceList() {
       render: (status: SalaryAdvanceRecord['disbursement_status']) => <Tag color={status === 'DISBURSED' ? 'green' : 'default'}>{status === 'DISBURSED' ? 'Đã chi' : 'Chưa chi'}</Tag>,
     },
     {
+      title: 'Việc tiếp theo',
+      key: 'next_step',
+      width: 260,
+      render: (_, row) => (
+        <Space direction="vertical" size={2}>
+          <Text>{getSalaryAdvanceNextStep(row, canManage)}</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {row.required_approval_level > 1 ? 'Yêu cầu đủ 2 cấp duyệt.' : 'Yêu cầu 1 cấp duyệt.'}
+          </Text>
+        </Space>
+      ),
+    },
+    {
       title: 'Thao tác',
       key: 'actions',
       width: 470,
       fixed: 'right',
-      render: (_, row) => (
-        <Space>
-          <Button
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => {
-              setDismissedInitialFocus(false);
-              setDetailAdvanceId(row.id);
-            }}
-          >
-            Xem
-          </Button>
-          {canManage && (
-            <>
-              {(row.approval_status === 'DRAFT' || row.approval_status === 'REJECTED') && (
-                <Button size="small" onClick={() => submitApprovalMutation.mutate(row.id)} loading={submitApprovalMutation.isPending}>Gửi duyệt</Button>
-              )}
-              {row.approval_status === 'PENDING_L1' && (
-                <Button size="small" onClick={() => approveLevel1Mutation.mutate(row.id)} loading={approveLevel1Mutation.isPending}>Duyệt L1</Button>
-              )}
-              {row.approval_status === 'PENDING_L2' && (
-                <Button size="small" type="primary" onClick={() => approveLevel2Mutation.mutate(row.id)} loading={approveLevel2Mutation.isPending}>Duyệt L2</Button>
-              )}
-              {(row.approval_status === 'PENDING_L1' || row.approval_status === 'PENDING_L2') && (
+      render: (_, row) => {
+        const editLockReason = getSalaryAdvanceEditLockReason(row);
+        return (
+          <Space wrap>
+            <Button
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={() => {
+                setDismissedInitialFocus(false);
+                setDetailAdvanceId(row.id);
+              }}
+            >
+              Xem
+            </Button>
+            {canManage && (
+              <>
+                {(row.approval_status === 'DRAFT' || row.approval_status === 'REJECTED') && (
+                  <Button size="small" onClick={() => submitApprovalMutation.mutate(row.id)} loading={submitApprovalMutation.isPending}>Gửi duyệt</Button>
+                )}
+                {row.approval_status === 'PENDING_L1' && (
+                  <Button size="small" onClick={() => approveLevel1Mutation.mutate(row.id)} loading={approveLevel1Mutation.isPending}>Duyệt L1</Button>
+                )}
+                {row.approval_status === 'PENDING_L2' && (
+                  <Button size="small" type="primary" onClick={() => approveLevel2Mutation.mutate(row.id)} loading={approveLevel2Mutation.isPending}>Duyệt L2</Button>
+                )}
+                {(row.approval_status === 'PENDING_L1' || row.approval_status === 'PENDING_L2') && (
+                  <Button
+                    size="small"
+                    danger
+                    onClick={() => {
+                      setRejectReason('');
+                      rejectForm.resetFields();
+                      setRejectModal({ open: true, id: row.id });
+                    }}
+                    loading={rejectApprovalMutation.isPending && rejectModal.id === row.id}
+                  >
+                    Từ chối
+                  </Button>
+                )}
+                {row.approval_status === 'APPROVED' && row.disbursement_status !== 'DISBURSED' && (
+                  <Button
+                    size="small"
+                    type="primary"
+                    onClick={() => {
+                      disbursementForm.setFieldsValue(emptyDisbursementForm);
+                      setDisbursementModal({ open: true, row });
+                    }}
+                  >
+                    Chi tiền
+                  </Button>
+                )}
+                {row.disbursement_status === 'DISBURSED' && (
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      Modal.confirm({
+                        title: 'Hủy chứng từ chi tiền ứng lương?',
+                        okText: 'Hủy chi',
+                        cancelText: 'Đóng',
+                        onOk: () => reverseDisbursementMutation.mutateAsync(row.id),
+                      })
+                    }
+                    loading={reverseDisbursementMutation.isPending}
+                  >
+                    Hủy chi
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  disabled={Boolean(editLockReason)}
+                  title={editLockReason || 'Sửa hồ sơ ứng lương'}
+                  onClick={() => {
+                    setEditing(row);
+                    form.setFieldsValue({
+                      employee: row.employee,
+                      advance_date: row.advance_date,
+                      month: row.month,
+                      amount: toNumber(row.amount),
+                      reason: row.reason,
+                      approved_by_name: row.approved_by_name,
+                      note: row.note,
+                      is_active: row.is_active,
+                    });
+                    setOpenModal(true);
+                  }}
+                >
+                  Sửa
+                </Button>
                 <Button
                   size="small"
                   danger
-                  onClick={() => {
-                    setRejectReason('');
-                    rejectForm.resetFields();
-                    setRejectModal({ open: true, id: row.id });
-                  }}
-                  loading={rejectApprovalMutation.isPending && rejectModal.id === row.id}
-                >
-                  Từ chối
-                </Button>
-              )}
-              {row.approval_status === 'APPROVED' && row.disbursement_status !== 'DISBURSED' && (
-                <Button
-                  size="small"
-                  type="primary"
-                  onClick={() => {
-                    disbursementForm.setFieldsValue(emptyDisbursementForm);
-                    setDisbursementModal({ open: true, row });
-                  }}
-                >
-                  Chi tiền
-                </Button>
-              )}
-              {row.disbursement_status === 'DISBURSED' && (
-                <Button
-                  size="small"
+                  disabled={Boolean(editLockReason)}
+                  title={editLockReason || 'Xóa hồ sơ ứng lương'}
                   onClick={() =>
                     Modal.confirm({
-                      title: 'Hủy chứng từ chi tiền ứng lương?',
-                      okText: 'Hủy chi',
-                      cancelText: 'Đóng',
-                      onOk: () => reverseDisbursementMutation.mutateAsync(row.id),
+                      title: 'Xóa ứng lương này?',
+                      okText: 'Xóa',
+                      cancelText: 'Hủy',
+                      onOk: () => deleteMutation.mutateAsync(row.id),
                     })
                   }
-                  loading={reverseDisbursementMutation.isPending}
                 >
-                  Hủy chi
+                  Xóa
                 </Button>
-              )}
-              <Button
-                size="small"
-                disabled={row.approval_status === 'PENDING_L1' || row.approval_status === 'PENDING_L2' || row.approval_status === 'APPROVED'}
-                onClick={() => {
-                  setEditing(row);
-                  form.setFieldsValue({
-                    employee: row.employee,
-                    advance_date: row.advance_date,
-                    month: row.month,
-                    amount: toNumber(row.amount),
-                    reason: row.reason,
-                    approved_by_name: row.approved_by_name,
-                    note: row.note,
-                    is_active: row.is_active,
-                  });
-                  setOpenModal(true);
-                }}
-              >
-                Sửa
-              </Button>
-              <Button
-                size="small"
-                danger
-                disabled={row.approval_status === 'PENDING_L1' || row.approval_status === 'PENDING_L2' || row.approval_status === 'APPROVED'}
-                onClick={() =>
-                  Modal.confirm({
-                    title: 'Xóa ứng lương này?',
-                    okText: 'Xóa',
-                    cancelText: 'Hủy',
-                    onOk: () => deleteMutation.mutateAsync(row.id),
-                  })
-                }
-              >
-                Xóa
-              </Button>
-            </>
-          )}
-        </Space>
-      ),
+              </>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -726,6 +836,7 @@ export default function SalaryAdvanceList() {
           </div>
 
           <Alert showIcon type={statusAlert.type} message={statusAlert.message} description={statusAlert.description} />
+          <Alert showIcon type={ownerNextStepAlert.type} message={ownerNextStepAlert.message} description={ownerNextStepAlert.description} />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
             {[
@@ -827,10 +938,10 @@ export default function SalaryAdvanceList() {
               <Button size="small" onClick={openApprovalPolicyEditor}>
                 Cấu hình SLA
               </Button>
-              <Button size="small" loading={previewPendingApprovalsMutation.isPending} onClick={() => previewPendingApprovalsMutation.mutate()}>
+              <Button size="small" title="Chỉ mô phỏng danh sách nhắc, không gửi thông báo thật." loading={previewPendingApprovalsMutation.isPending} onClick={() => previewPendingApprovalsMutation.mutate()}>
                 Mô phỏng nhắc duyệt
               </Button>
-              <Button size="small" loading={remindPendingApprovalsMutation.isPending} onClick={() => remindPendingApprovalsMutation.mutate()}>
+              <Button size="small" title="Gửi nhắc thật cho người duyệt; nên chạy mô phỏng trước khi dùng." loading={remindPendingApprovalsMutation.isPending} onClick={() => remindPendingApprovalsMutation.mutate()}>
                 Nhắc phê duyệt ngay
               </Button>
             </Space>
@@ -912,7 +1023,15 @@ export default function SalaryAdvanceList() {
         loading={listQuery.isLoading}
         columns={columns}
         dataSource={rows}
-        scroll={{ x: 1300 }}
+        scroll={{ x: 1560 }}
+        locale={{
+          emptyText: (
+            <Space direction="vertical" size={2}>
+              <Text>Không có hồ sơ ứng lương phù hợp.</Text>
+              <Text type="secondary">Thử bỏ bộ lọc hoặc đổi tháng để kiểm tra hàng đợi rộng hơn.</Text>
+            </Space>
+          ),
+        }}
         pagination={{
           current: page,
           pageSize,
@@ -988,6 +1107,13 @@ export default function SalaryAdvanceList() {
                 </Descriptions.Item>
               ) : null}
             </Descriptions>
+
+            <Alert
+              showIcon
+              type={detailAdvanceData.approval_status === 'APPROVED' && detailAdvanceData.disbursement_status === 'DISBURSED' ? 'success' : 'info'}
+              message="Việc tiếp theo"
+              description={getSalaryAdvanceNextStep(detailAdvanceData, canManage)}
+            />
 
             <div>
               <Title level={5}>Lịch sử duyệt</Title>

@@ -1,5 +1,5 @@
 import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Badge, Button, Card, Empty, Input, Modal, Segmented, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
+import { Alert, Badge, Button, Card, Empty, Input, Modal, Segmented, Select, Space, Spin, Switch, Table, Tag, Tooltip, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { EyeOutlined, InboxOutlined, StarFilled, StarOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -109,6 +109,51 @@ function canManageBulkByRole(): boolean {
     })
     .filter(Boolean);
   return roleNames.some((name) => ['admin', 'manager', 'quan-ly', 'quanly'].includes(name));
+}
+
+function isOpenTask(task: TaskItem): boolean {
+  return task.status === 'TODO' || task.status === 'IN_PROGRESS';
+}
+
+function isTaskOverdue(task: TaskItem): boolean {
+  return Boolean(task.due_date && isOpenTask(task) && dayjs(task.due_date).isBefore(dayjs(), 'day'));
+}
+
+function getInboxTaskNextStep(task: TaskItem): string {
+  if (task.depends_on_info && task.depends_on_info.status !== 'DONE') {
+    return `Chờ "${task.depends_on_info.title}" hoàn tất trước khi bắt đầu.`;
+  }
+  if (task.is_blocking) {
+    return 'Mở workspace để tháo điểm chặn và ghi rõ trạng thái xử lý.';
+  }
+  if (task.needs_help) {
+    return 'Phản hồi yêu cầu hỗ trợ hoặc chuyển người phụ trách phù hợp.';
+  }
+  if (!task.assigned_to_info) {
+    return 'Cần gán người xử lý trước khi theo dõi trách nhiệm.';
+  }
+  if (isTaskOverdue(task)) {
+    return 'Ưu tiên xử lý ngay, cập nhật tiến độ hoặc nhắc người phụ trách.';
+  }
+  if (task.due_date && dayjs(task.due_date).isSame(dayjs(), 'day')) {
+    return 'Chốt trong hôm nay hoặc ghi chú lý do chưa hoàn tất.';
+  }
+  if (task.status === 'TODO') {
+    return 'Bắt đầu nhiệm vụ khi đã sẵn sàng.';
+  }
+  if (task.status === 'IN_PROGRESS') {
+    return 'Cập nhật tiến độ, vướng mắc hoặc hoàn thành nhiệm vụ.';
+  }
+  return 'Theo dõi lịch sử và mở workspace khi cần đối soát.';
+}
+
+function getInboxEmptyGuidance(tab: InboxTab, hasFilter: boolean): string {
+  if (hasFilter) return 'Thử xóa bộ lọc hoặc đổi chế độ xem để kiểm tra queue rộng hơn.';
+  if (tab === 'OVERDUE') return 'Không còn nhiệm vụ quá hạn trong chế độ xem này.';
+  if (tab === 'ASSIGNED') return 'Không có việc mở đang giao cho tài khoản hiện tại.';
+  if (tab === 'CREATED') return 'Không có nhiệm vụ mở do bạn tạo trong bối cảnh hiện tại.';
+  if (tab === 'WATCHING') return 'Không có nhiệm vụ đang theo dõi cần xử lý ngay.';
+  return 'Không có nhiệm vụ mở nổi bật trong nhóm hiện tại.';
 }
 
 export default function TaskInbox() {
@@ -359,6 +404,37 @@ export default function TaskInbox() {
       unassigned: 0,
     });
   }, [filteredData]);
+  const ownerNextStepAlert = useMemo(() => {
+    if (inboxMetrics.blocking > 0 || inboxMetrics.overdue > 0) {
+      return {
+        type: 'warning' as const,
+        message: 'Bảng điều phối đang có nhiệm vụ cần ưu tiên xử lý',
+        description: [
+          inboxMetrics.blocking > 0 ? `${inboxMetrics.blocking} nhiệm vụ đang chặn luồng` : null,
+          inboxMetrics.overdue > 0 ? `${inboxMetrics.overdue} nhiệm vụ quá hạn` : null,
+          inboxMetrics.needHelp > 0 ? `${inboxMetrics.needHelp} nhiệm vụ cần hỗ trợ` : null,
+          'Nên mở workspace của từng dòng nóng để chốt owner, ghi chú tiến độ và hành động kế tiếp.',
+        ].filter(Boolean).join(' · '),
+      };
+    }
+    if (inboxMetrics.needHelp > 0 || inboxMetrics.unassigned > 0 || inboxMetrics.dueToday > 0) {
+      return {
+        type: 'info' as const,
+        message: 'Queue đang ổn nhưng vẫn cần điều phối trong ngày',
+        description: [
+          inboxMetrics.needHelp > 0 ? `${inboxMetrics.needHelp} nhiệm vụ cần hỗ trợ` : null,
+          inboxMetrics.unassigned > 0 ? `${inboxMetrics.unassigned} nhiệm vụ chưa giao người xử lý` : null,
+          inboxMetrics.dueToday > 0 ? `${inboxMetrics.dueToday} nhiệm vụ đến hạn hôm nay` : null,
+          `Chế độ hiện tại: ${INBOX_TAB_LABELS[tab]}.`,
+        ].filter(Boolean).join(' · '),
+      };
+    }
+    return {
+      type: 'success' as const,
+      message: 'Không có điểm nóng nổi bật trong queue hiện tại',
+      description: 'Tiếp tục theo dõi live sync, hoặc chuyển tab để rà soát việc tạo bởi bạn, việc đang theo dõi và việc của nhóm.',
+    };
+  }, [inboxMetrics, tab]);
   const bulkHistoryMetrics = useMemo(() => {
     return visibleBulkHistory.reduce((acc, item) => {
       acc.total += 1;
@@ -845,6 +921,9 @@ export default function TaskInbox() {
             {r.is_blocking && <Tag color="error">Đang chặn luồng</Tag>}
             {r.due_date && dayjs(r.due_date).isBefore(dayjs(), 'day') && <Tag color="gold">Quá hạn</Tag>}
           </Space>
+          <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.4 }}>
+            Tiếp theo: {getInboxTaskNextStep(r)}
+          </Text>
         </Space>
       ),
     },
@@ -900,6 +979,11 @@ export default function TaskInbox() {
 
   const summary = summaryQuery.data;
   const lastBulkHistoryAt = visibleBulkHistory[0]?.created_at ?? null;
+  const bulkActionDisabledReason = !canBulkManage
+    ? 'Tài khoản hiện tại chưa có quyền thao tác hàng loạt.'
+    : bulkInProgress !== null
+      ? 'Đang chạy một thao tác hàng loạt khác.'
+      : '';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -964,19 +1048,13 @@ export default function TaskInbox() {
             </div>
           ))}
         </div>
-        {(inboxMetrics.overdue > 0 || inboxMetrics.needHelp > 0 || inboxMetrics.blocking > 0) && (
-          <Alert
-            style={{ marginTop: 14 }}
-            type={inboxMetrics.overdue > 0 || inboxMetrics.blocking > 0 ? 'warning' : 'info'}
-            showIcon
-            message="Bảng điều phối đang có nhiệm vụ cần ưu tiên xử lý"
-            description={[
-              inboxMetrics.overdue > 0 ? `${inboxMetrics.overdue} nhiệm vụ quá hạn` : null,
-              inboxMetrics.needHelp > 0 ? `${inboxMetrics.needHelp} nhiệm vụ đang cần hỗ trợ` : null,
-              inboxMetrics.blocking > 0 ? `${inboxMetrics.blocking} nhiệm vụ đang chặn luồng` : null,
-            ].filter(Boolean).join(' · ')}
-          />
-        )}
+        <Alert
+          style={{ marginTop: 14 }}
+          type={ownerNextStepAlert.type}
+          showIcon
+          message={ownerNextStepAlert.message}
+          description={ownerNextStepAlert.description}
+        />
         <div
           data-testid="task-inbox-command-strip"
           style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}
@@ -1115,28 +1193,36 @@ export default function TaskInbox() {
         {selectedEffectiveIds.length > 0 && (
           <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Tag color="purple">Đã chọn {selectedEffectiveIds.length} nhiệm vụ</Tag>
-            <Button size="small" disabled={!canBulkManage || bulkInProgress !== null} loading={bulkInProgress === 'START'} onClick={() => void runBulkAction('START')}>
-              Bắt đầu hàng loạt
-            </Button>
-            <Button size="small" type="primary" disabled={!canBulkManage || bulkInProgress !== null} loading={bulkInProgress === 'COMPLETE'} onClick={() => void runBulkAction('COMPLETE')}>
-              Hoàn thành hàng loạt
-            </Button>
-            <Button size="small" disabled={!canBulkManage || bulkInProgress !== null} loading={bulkInProgress === 'REMIND_OVERDUE'} onClick={() => void runBulkAction('REMIND_OVERDUE')}>
-              Nhắc quá hạn hàng loạt
-            </Button>
-            <Button
-              size="small"
-              disabled={!canBulkManage || bulkInProgress !== null}
-              loading={bulkInProgress === 'REASSIGN'}
-              onClick={() => {
-                setBulkReassignSearch('');
-                setBulkReassignTo(null);
-                setBulkReassignNote('');
-                setBulkReassignOpen(true);
-              }}
-            >
-              Chuyển người hàng loạt
-            </Button>
+            <Tooltip title={bulkActionDisabledReason || 'Bắt đầu các nhiệm vụ đã chọn nếu đủ điều kiện.'}>
+              <Button size="small" disabled={Boolean(bulkActionDisabledReason)} loading={bulkInProgress === 'START'} onClick={() => void runBulkAction('START')}>
+                Bắt đầu hàng loạt
+              </Button>
+            </Tooltip>
+            <Tooltip title={bulkActionDisabledReason || 'Hoàn thành các nhiệm vụ đã chọn nếu đã xử lý xong.'}>
+              <Button size="small" type="primary" disabled={Boolean(bulkActionDisabledReason)} loading={bulkInProgress === 'COMPLETE'} onClick={() => void runBulkAction('COMPLETE')}>
+                Hoàn thành hàng loạt
+              </Button>
+            </Tooltip>
+            <Tooltip title={bulkActionDisabledReason || 'Gửi nhắc cho các nhiệm vụ quá hạn trong danh sách đã chọn.'}>
+              <Button size="small" disabled={Boolean(bulkActionDisabledReason)} loading={bulkInProgress === 'REMIND_OVERDUE'} onClick={() => void runBulkAction('REMIND_OVERDUE')}>
+                Nhắc quá hạn hàng loạt
+              </Button>
+            </Tooltip>
+            <Tooltip title={bulkActionDisabledReason || 'Chuyển các nhiệm vụ đã chọn sang người xử lý mới.'}>
+              <Button
+                size="small"
+                disabled={Boolean(bulkActionDisabledReason)}
+                loading={bulkInProgress === 'REASSIGN'}
+                onClick={() => {
+                  setBulkReassignSearch('');
+                  setBulkReassignTo(null);
+                  setBulkReassignNote('');
+                  setBulkReassignOpen(true);
+                }}
+              >
+                Chuyển người hàng loạt
+              </Button>
+            </Tooltip>
             <Button size="small" onClick={clearSelection}>
               Bỏ chọn
             </Button>
@@ -1241,7 +1327,15 @@ export default function TaskInbox() {
         {tasksQuery.isLoading ? (
           <div style={{ textAlign: 'center', padding: 30 }}><Spin /></div>
         ) : filteredData.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có nhiệm vụ phù hợp với bộ lọc hiện tại." />
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={(
+              <Space direction="vertical" size={2}>
+                <Text>Không có nhiệm vụ phù hợp với bộ lọc hiện tại.</Text>
+                <Text type="secondary">{getInboxEmptyGuidance(tab, activeFilterTags.length > 0)}</Text>
+              </Space>
+            )}
+          />
         ) : (
           <Table<TaskItem>
             rowKey="id"

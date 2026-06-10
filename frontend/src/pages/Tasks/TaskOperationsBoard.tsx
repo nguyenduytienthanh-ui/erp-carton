@@ -90,6 +90,34 @@ function getDueLabel(value: string | null) {
   return `Còn ${dayjs(value).diff(dayjs(), 'day') + 1} ngày`;
 }
 
+function getOperationsNextStep(task: TaskItem): string {
+  if (task.depends_on_info && task.depends_on_info.status !== 'DONE') {
+    return `Chờ hoàn tất "${task.depends_on_info.title}" trước khi xử lý tiếp.`;
+  }
+  if (task.is_blocking) {
+    return 'Mở workspace để tháo điểm chặn trước khi tiếp tục luồng vận hành.';
+  }
+  if (task.needs_help) {
+    return 'Điều phối người hỗ trợ hoặc phản hồi lý do vướng mắc trong workspace.';
+  }
+  if (!task.assigned_to_info) {
+    return 'Gán người phụ trách để nhiệm vụ có owner rõ ràng.';
+  }
+  if (task.due_date && dayjs(task.due_date).isBefore(dayjs(), 'day')) {
+    return 'Ưu tiên cập nhật tiến độ, hoàn thành hoặc chuyển người xử lý ngay.';
+  }
+  if (task.due_date && dayjs(task.due_date).isSame(dayjs(), 'day')) {
+    return 'Chốt trạng thái trong hôm nay hoặc ghi chú lý do chưa xong.';
+  }
+  if (task.status === 'TODO') {
+    return 'Bắt đầu nhiệm vụ khi đủ điều kiện phụ thuộc và nguồn lực.';
+  }
+  if (task.status === 'IN_PROGRESS') {
+    return 'Cập nhật tiến độ, ghi chú vướng mắc hoặc hoàn thành nhiệm vụ.';
+  }
+  return 'Theo dõi lịch sử và mở workspace khi cần đối soát.';
+}
+
 export default function TaskOperationsBoard() {
   const navigate = useNavigate();
   const [searchInput, setSearchInput] = useState('');
@@ -379,36 +407,41 @@ export default function TaskOperationsBoard() {
       key: 'status',
       width: 270,
       render: (_value, record) => (
-        <Space size={4} wrap>
-          <Tag color="blue" style={{ marginInlineEnd: 0 }}>
-            {record.status_display}
-          </Tag>
-          {record.is_pinned ? <Tag color="magenta" style={{ marginInlineEnd: 0 }}>Ghim</Tag> : null}
-          {record.is_blocking ? (
-            <Tag color="error" icon={<LockOutlined />} style={{ marginInlineEnd: 0 }}>
-              Đang chặn
+        <Space direction="vertical" size={4}>
+          <Space size={4} wrap>
+            <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+              {record.status_display}
             </Tag>
-          ) : null}
-          {record.needs_help ? (
-            <Tag color="warning" icon={<AlertOutlined />} style={{ marginInlineEnd: 0 }}>
-              Cần hỗ trợ
-            </Tag>
-          ) : null}
-          {record.due_date && dayjs(record.due_date).isSame(dayjs(), 'day') ? (
-            <Tag color="gold" icon={<ClockCircleOutlined />} style={{ marginInlineEnd: 0 }}>
-              Đến hạn hôm nay
-            </Tag>
-          ) : null}
-          {record.due_date && dayjs(record.due_date).isBefore(dayjs(), 'day') ? (
-            <Tag color="error" icon={<ClockCircleOutlined />} style={{ marginInlineEnd: 0 }}>
-              Quá hạn
-            </Tag>
-          ) : null}
-          {record.depends_on_info && record.depends_on_info.status !== 'DONE' ? (
-            <Tag color="default" style={{ marginInlineEnd: 0 }}>
-              Chờ: {record.depends_on_info.title}
-            </Tag>
-          ) : null}
+            {record.is_pinned ? <Tag color="magenta" style={{ marginInlineEnd: 0 }}>Ghim</Tag> : null}
+            {record.is_blocking ? (
+              <Tag color="error" icon={<LockOutlined />} style={{ marginInlineEnd: 0 }}>
+                Đang chặn
+              </Tag>
+            ) : null}
+            {record.needs_help ? (
+              <Tag color="warning" icon={<AlertOutlined />} style={{ marginInlineEnd: 0 }}>
+                Cần hỗ trợ
+              </Tag>
+            ) : null}
+            {record.due_date && dayjs(record.due_date).isSame(dayjs(), 'day') ? (
+              <Tag color="gold" icon={<ClockCircleOutlined />} style={{ marginInlineEnd: 0 }}>
+                Đến hạn hôm nay
+              </Tag>
+            ) : null}
+            {record.due_date && dayjs(record.due_date).isBefore(dayjs(), 'day') ? (
+              <Tag color="error" icon={<ClockCircleOutlined />} style={{ marginInlineEnd: 0 }}>
+                Quá hạn
+              </Tag>
+            ) : null}
+            {record.depends_on_info && record.depends_on_info.status !== 'DONE' ? (
+              <Tag color="default" style={{ marginInlineEnd: 0 }}>
+                Chờ: {record.depends_on_info.title}
+              </Tag>
+            ) : null}
+          </Space>
+          <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.4 }}>
+            Tiếp theo: {getOperationsNextStep(record)}
+          </Text>
         </Space>
       ),
     },

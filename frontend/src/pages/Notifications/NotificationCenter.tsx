@@ -57,6 +57,45 @@ function isConversationType(type: string): boolean {
   return ['mention', 'comment'].includes(type);
 }
 
+function getNotificationTargetPath(item: NotificationItem): string {
+  const normalizedEntityType = (item.entity_type || '').toLowerCase().replace(/[_-]/g, '');
+  if (normalizedEntityType === 'task') return '/task-inbox';
+  if (normalizedEntityType.includes('salaryadvance')) return '/salary-advance';
+  if (normalizedEntityType.includes('employee')) return '/employees';
+  if (item.notification_type === 'assignment' || item.notification_type === 'due_date') return '/task-inbox';
+  return '/workflow-pipeline';
+}
+
+function getNotificationTargetLabel(item: NotificationItem): string {
+  const targetPath = getNotificationTargetPath(item);
+  if (targetPath === '/task-inbox') return 'Mở inbox';
+  if (targetPath === '/salary-advance') return 'Mở ứng lương';
+  if (targetPath === '/employees') return 'Mở nhân sự';
+  return 'Mở workflow';
+}
+
+function getNotificationNextStep(item: NotificationItem): string {
+  if (item.notification_type === 'approval_request') {
+    return 'Mở luồng liên quan để duyệt, từ chối hoặc giao lại owner xử lý.';
+  }
+  if (item.notification_type === 'approval_rejected') {
+    return 'Mở hồ sơ liên quan để xem lý do từ chối và bổ sung lại thông tin.';
+  }
+  if (item.notification_type === 'approval_approved') {
+    return 'Mở luồng liên quan để kiểm tra bước sau duyệt hoặc tiếp tục vận hành.';
+  }
+  if (item.notification_type === 'assignment') {
+    return 'Mở inbox để nhận việc, bắt đầu xử lý hoặc chuyển người nếu không đúng owner.';
+  }
+  if (item.notification_type === 'due_date') {
+    return 'Mở nhiệm vụ để chốt hạn, cập nhật tiến độ hoặc nhắc người phụ trách.';
+  }
+  if (isConversationType(item.notification_type)) {
+    return 'Mở luồng liên quan để đọc đầy đủ bối cảnh và phản hồi đúng chỗ.';
+  }
+  return 'Đọc nội dung, đánh dấu đã đọc khi đã đối chiếu xong.';
+}
+
 function isReadFilter(value: unknown): value is ReadFilter {
   return value === 'ALL' || value === 'UNREAD' || value === 'READ';
 }
@@ -365,12 +404,7 @@ export default function NotificationCenter() {
   const systemQueue = data.filter((item) => item.notification_type === 'system').slice(0, 3);
 
   const openRelated = (item: NotificationItem) => {
-    const eType = (item.entity_type || '').toLowerCase();
-    if (eType === 'task') {
-      navigate('/task-inbox');
-      return;
-    }
-    navigate('/workflow-pipeline');
+    navigate(getNotificationTargetPath(item));
   };
 
   const columns: ColumnsType<NotificationItem> = [
@@ -391,6 +425,9 @@ export default function NotificationCenter() {
             {!r.is_read && needsAction(r.notification_type) && <Tag color="volcano">Cần xử lý</Tag>}
           </Space>
           <Text type="secondary">{r.message}</Text>
+          <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.4 }}>
+            Tiếp theo: {getNotificationNextStep(r)}
+          </Text>
         </Space>
       ),
     },
@@ -420,7 +457,7 @@ export default function NotificationCenter() {
             </Button>
           )}
           <Button size="small" type="primary" onClick={() => openRelated(r)}>
-            Mở liên quan
+            {getNotificationTargetLabel(r)}
           </Button>
         </Space>
       ),
@@ -636,7 +673,15 @@ export default function NotificationCenter() {
           {listQuery.isLoading ? (
             <div style={{ textAlign: 'center', padding: 30 }}><Spin /></div>
           ) : !data.length ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có thông báo phù hợp." />
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={(
+                <Space direction="vertical" size={2}>
+                  <Text>Chưa có thông báo phù hợp.</Text>
+                  <Text type="secondary">Thử bỏ bộ lọc hoặc mở inbox nhiệm vụ để kiểm tra các việc đang chờ xử lý.</Text>
+                </Space>
+              )}
+            />
           ) : (
             <Table<NotificationItem>
               rowKey="id"
@@ -675,6 +720,9 @@ export default function NotificationCenter() {
                   <div className="workspace-inline-note">
                     {TYPE_LABELS[item.notification_type] || item.notification_type} • {dayjs(item.created_at).format('DD/MM HH:mm')}
                   </div>
+                  <div className="workspace-inline-note">
+                    Tiếp theo: {getNotificationNextStep(item)}
+                  </div>
                 </button>
               ))}
             </div>
@@ -704,6 +752,9 @@ export default function NotificationCenter() {
                   <div className="command-center-watch-title">{item.title}</div>
                   <div className="command-center-watch-detail">{item.message}</div>
                   <div className="workspace-inline-note">{dayjs(item.created_at).format('DD/MM/YYYY HH:mm')}</div>
+                  <div className="workspace-inline-note">
+                    Tiếp theo: {getNotificationNextStep(item)}
+                  </div>
                 </button>
               ))}
             </div>
@@ -735,6 +786,9 @@ export default function NotificationCenter() {
                       <div className="command-center-playbook-detail">{item.message}</div>
                       <div className="workspace-inline-note">
                         {item.actor_username || 'Hệ thống'} • {dayjs(item.created_at).format('DD/MM HH:mm')}
+                      </div>
+                      <div className="workspace-inline-note">
+                        Tiếp theo: {getNotificationNextStep(item)}
                       </div>
                     </button>
                   ))}
