@@ -111,6 +111,34 @@ function formatMoney(value: number | string | null | undefined): string {
   return Number.isFinite(numeric) ? numeric.toLocaleString('vi-VN') : '0';
 }
 
+function getPayableOwnerStep(document: PayableDocument): { color: string; text: string } {
+  const outstanding = Number(document.outstanding_amount || 0);
+  const daysOverdue = Number(document.days_overdue || 0);
+  if (document.status === 'CANCELLED') {
+    return { color: 'default', text: 'Đã hủy: chỉ giữ để đối soát lịch sử, không chi trả thêm.' };
+  }
+  if (document.status === 'PAID' || outstanding <= 0) {
+    return { color: 'success', text: 'Đã thanh toán đủ: kiểm tra giao dịch chi và sổ quỹ khi cần đối chiếu.' };
+  }
+  if (daysOverdue > 0 || document.status === 'OVERDUE') {
+    return { color: 'error', text: `Quá hạn ${daysOverdue || 1} ngày: ưu tiên xác nhận lịch chi trả với nhà cung cấp.` };
+  }
+  if (document.status === 'PARTIAL_PAID') {
+    return { color: 'gold', text: `Đã chi một phần, còn ${formatMoney(outstanding)} đ cần theo dõi.` };
+  }
+  return { color: 'blue', text: 'Chưa chi: theo dõi ngày đến hạn và ghi nhận thanh toán khi đã chi tiền.' };
+}
+
+function getPayableActionDisabledReason(document: PayableDocument, canManage: boolean, action: 'pay' | 'cancel'): string | undefined {
+  if (!canManage) return 'Bạn không có quyền thao tác tài chính.';
+  if (document.status === 'CANCELLED') return 'Công nợ đã hủy.';
+  if (action === 'pay' && (document.status === 'PAID' || Number(document.outstanding_amount || 0) <= 0)) {
+    return 'Công nợ đã thanh toán đủ.';
+  }
+  if (action === 'cancel' && document.status === 'PAID') return 'Công nợ đã thanh toán đủ, không hủy từ màn này.';
+  return undefined;
+}
+
 function parseViewSnapshot(value: unknown): PayableViewSnapshot | null {
   if (!value || typeof value !== 'object') return null;
   const obj = value as Record<string, unknown>;
@@ -484,6 +512,20 @@ export default function AccountsPayableList() {
       render: (value?: number) => (value ? <Tag color="red">{`${value} ngày`}</Tag> : <Text type="secondary">-</Text>),
     },
     {
+      title: 'Việc tiếp theo',
+      key: 'owner_next_step',
+      width: 300,
+      render: (_, row) => {
+        const ownerStep = getPayableOwnerStep(row);
+        return (
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <Tag color={ownerStep.color}>Owner next step</Tag>
+            <Text type="secondary">{ownerStep.text}</Text>
+          </Space>
+        );
+      },
+    },
+    {
       title: 'Thao tác',
       key: 'actions',
       width: 220,
@@ -497,7 +539,8 @@ export default function AccountsPayableList() {
             size="small"
             type="primary"
             icon={<DollarOutlined />}
-            disabled={!canManage || ['PAID', 'CANCELLED'].includes(row.status) || Number(row.outstanding_amount || 0) <= 0}
+            disabled={Boolean(getPayableActionDisabledReason(row, canManage, 'pay'))}
+            title={getPayableActionDisabledReason(row, canManage, 'pay') || 'Ghi nhận giao dịch chi trả cho công nợ này'}
             onClick={() => {
               setPaymentDoc(row);
               paymentForm.setFieldsValue({
@@ -517,7 +560,8 @@ export default function AccountsPayableList() {
             size="small"
             danger
             icon={<DeleteOutlined />}
-            disabled={!canManage || ['PAID', 'CANCELLED'].includes(row.status)}
+            disabled={Boolean(getPayableActionDisabledReason(row, canManage, 'cancel'))}
+            title={getPayableActionDisabledReason(row, canManage, 'cancel') || 'Hủy công nợ khi chứng từ phát sinh sai và chưa tất toán'}
             onClick={() => {
               setCancelDoc(row);
               cancelForm.setFieldsValue({ reason: '' });
@@ -719,7 +763,7 @@ export default function AccountsPayableList() {
         loading={listQuery.isLoading}
         columns={columns}
         dataSource={rows}
-        scroll={{ x: 1680 }}
+        scroll={{ x: 1980 }}
         pagination={{
           current: page,
           pageSize,
@@ -770,7 +814,8 @@ export default function AccountsPayableList() {
               <Button
                 type="primary"
                 icon={<DollarOutlined />}
-                disabled={!canManage || ['PAID', 'CANCELLED'].includes(detail.status) || Number(detail.outstanding_amount || 0) <= 0}
+                disabled={Boolean(getPayableActionDisabledReason(detail, canManage, 'pay'))}
+                title={getPayableActionDisabledReason(detail, canManage, 'pay') || 'Ghi nhận giao dịch chi trả cho công nợ này'}
                 onClick={() => {
                   setPaymentDoc(detail);
                   paymentForm.setFieldsValue({
@@ -788,7 +833,8 @@ export default function AccountsPayableList() {
               </Button>
               <Button
                 danger
-                disabled={!canManage || ['PAID', 'CANCELLED'].includes(detail.status)}
+                disabled={Boolean(getPayableActionDisabledReason(detail, canManage, 'cancel'))}
+                title={getPayableActionDisabledReason(detail, canManage, 'cancel') || 'Hủy công nợ khi chứng từ phát sinh sai và chưa tất toán'}
                 onClick={() => {
                   setCancelDoc(detail);
                   cancelForm.setFieldsValue({ reason: '' });
@@ -804,6 +850,7 @@ export default function AccountsPayableList() {
           <Skeleton active paragraph={{ rows: 8 }} />
         ) : detail ? (
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Alert showIcon type={detail.status === 'OVERDUE' ? 'warning' : 'info'} message={getPayableOwnerStep(detail).text} />
             <Card size="small">
               <Descriptions column={2} size="small">
                 <Descriptions.Item label="Nhà cung cấp">{detail.supplier_name || '-'}</Descriptions.Item>

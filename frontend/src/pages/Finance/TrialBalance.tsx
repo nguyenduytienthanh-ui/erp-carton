@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Table, Button, Space, DatePicker, Skeleton, Empty, message, Tag, Card, Statistic, Row, Col,
+  Alert, Table, Button, Space, DatePicker, Skeleton, Empty, message, Tag, Card, Statistic, Row, Col, Typography,
 } from 'antd';
 import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
@@ -9,6 +9,8 @@ import dayjs from 'dayjs';
 import { generalLedgerApi } from '../../api/generalLedger';
 import type { TrialBalanceRow } from '../../types/generalLedger';
 import { downloadCSV } from '../../utils/csvExport';
+
+const { Text, Title } = Typography;
 
 const TrialBalance: React.FC = () => {
   const [dateFrom, setDateFrom] = useState<string>('');
@@ -60,6 +62,19 @@ const TrialBalance: React.FC = () => {
   const totalDebit = totalRow ? Number(totalRow.debit) : 0;
   const totalCredit = totalRow ? Number(totalRow.credit) : 0;
   const isBalanced = totalDebit === totalCredit;
+  const balanceAlert = entries.length
+    ? {
+        type: isBalanced ? 'success' as const : 'error' as const,
+        message: isBalanced ? 'Bảng cân đối đang khớp Nợ/Có.' : 'Bảng cân đối đang lệch Nợ/Có.',
+        description: isBalanced
+          ? 'Có thể dùng số liệu này để đối chiếu với sổ cái và báo cáo tài chính trong kỳ.'
+          : 'Cần kiểm tra lại bút toán trong sổ cái, chứng từ chưa ghi sổ hoặc tài khoản bị hạch toán sai.',
+      }
+    : {
+        type: 'info' as const,
+        message: 'Chưa có dữ liệu bảng cân đối cho khoảng ngày đang chọn.',
+        description: 'Chọn ngày kết thúc hoặc mở rộng khoảng ngày để xem phát sinh Nợ/Có.',
+      };
 
   const columns = [
     {
@@ -125,6 +140,17 @@ const TrialBalance: React.FC = () => {
   return (
     <div style={{ padding: '20px' }}>
       <Card style={{ marginBottom: '20px' }}>
+        <Space direction="vertical" size={12} style={{ width: '100%', marginBottom: 16 }}>
+          <Space wrap>
+            <Tag color="blue">Tài chính</Tag>
+            <Tag color={isBalanced ? 'success' : 'error'}>{isBalanced ? 'Cân đối' : 'Cần rà lệch'}</Tag>
+          </Space>
+          <div>
+            <Title level={3} style={{ margin: 0 }}>Bảng cân đối phát sinh</Title>
+            <Text type="secondary">Kiểm tra tổng Nợ/Có theo kỳ để phát hiện lệch sổ trước khi chốt báo cáo.</Text>
+          </div>
+          <Alert showIcon type={balanceAlert.type} message={balanceAlert.message} description={balanceAlert.description} />
+        </Space>
         <Row gutter={16} style={{ marginBottom: '20px' }}>
           <Col span={12}>
             <div style={{ marginBottom: '10px' }}>

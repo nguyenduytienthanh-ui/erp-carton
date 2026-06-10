@@ -23,6 +23,7 @@ import {
 import { DownloadOutlined, LockOutlined, ReloadOutlined, UnlockOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
+import { Link } from 'react-router-dom';
 import { financeApi } from '../../api/finance';
 import type { FinanceMonthCloseCheckItem } from '../../types/finance';
 import { downloadCSV } from '../../utils/csvExport';
@@ -42,6 +43,29 @@ const SUMMARY_TILE_STYLE: CSSProperties = {
 function formatMoney(value: number | string | null | undefined): string {
   const numeric = Number(value ?? 0);
   return Number.isFinite(numeric) ? numeric.toLocaleString('vi-VN') : '0';
+}
+
+function getFinanceOwnerNextStep({
+  blockerCount,
+  warningCount,
+  receivableOverdue,
+  payableOverdue,
+  isMonthLocked,
+  monthKey,
+}: {
+  blockerCount: number;
+  warningCount: number;
+  receivableOverdue: number;
+  payableOverdue: number;
+  isMonthLocked: boolean;
+  monthKey: string;
+}): string {
+  if (blockerCount > 0) return `Kỳ ${monthKey} còn blocker: xử lý danh sách chặn khóa kỳ trước khi khóa tháng.`;
+  if (receivableOverdue > 0) return `Có ${receivableOverdue} hồ sơ phải thu quá hạn: ưu tiên rà công nợ phải thu để kéo tiền về.`;
+  if (payableOverdue > 0) return `Có ${payableOverdue} hồ sơ phải trả quá hạn: rà lịch chi để tránh trễ cam kết với nhà cung cấp.`;
+  if (warningCount > 0) return `Kỳ ${monthKey} còn cảnh báo: kiểm tra nhanh trước khi bấm khóa tháng.`;
+  if (isMonthLocked) return `Kỳ ${monthKey} đã khóa: chỉ mở khóa khi có lý do điều chỉnh chứng từ rõ ràng.`;
+  return `Kỳ ${monthKey} đã sẵn sàng: có thể khóa tháng sau khi owner xác nhận số liệu.`;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -184,6 +208,14 @@ export default function FinanceSummary() {
   const payableSummary = payableSummaryQuery.data;
   const trendRows = trendQuery.data?.items ?? [];
   const isMonthLocked = lockedMonths.includes(monthKey);
+  const ownerNextStep = getFinanceOwnerNextStep({
+    blockerCount: preclose?.blockers.length ?? 0,
+    warningCount: preclose?.warnings.length ?? 0,
+    receivableOverdue: receivableSummary?.overdue_count ?? 0,
+    payableOverdue: payableSummary?.overdue_count ?? 0,
+    isMonthLocked,
+    monthKey,
+  });
 
   const executiveStatusAlert = useMemo(() => {
     if (preclose?.blockers?.length) {
@@ -387,6 +419,7 @@ export default function FinanceSummary() {
                 onClick={() => lockMonthMutation.mutate()}
                 loading={lockMonthMutation.isPending}
                 disabled={isMonthLocked}
+                title={isMonthLocked ? `Kỳ ${monthKey} đã khóa.` : ownerNextStep}
               >
                 Khóa tháng
               </Button>
@@ -394,6 +427,7 @@ export default function FinanceSummary() {
                 icon={<UnlockOutlined />}
                 onClick={() => setUnlockOpen(true)}
                 disabled={!isMonthLocked}
+                title={isMonthLocked ? 'Mở khóa kỳ khi cần điều chỉnh chứng từ có lý do rõ ràng.' : `Kỳ ${monthKey} chưa khóa.`}
               >
                 Mở khóa
               </Button>
@@ -401,6 +435,20 @@ export default function FinanceSummary() {
           </div>
 
           <Alert showIcon type={executiveStatusAlert.type} message={executiveStatusAlert.message} description={executiveStatusAlert.description} />
+          <Alert
+            showIcon
+            type="info"
+            message="Việc nên làm tiếp theo"
+            description={ownerNextStep}
+            action={(
+              <Space wrap>
+                <Link to="/receivables"><Button size="small">Phải thu</Button></Link>
+                <Link to="/payables"><Button size="small">Phải trả</Button></Link>
+                <Link to="/general-ledger"><Button size="small">Sổ cái</Button></Link>
+                <Link to="/trial-balance"><Button size="small">Cân đối</Button></Link>
+              </Space>
+            )}
+          />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
             {summaryCards.map((card) => (

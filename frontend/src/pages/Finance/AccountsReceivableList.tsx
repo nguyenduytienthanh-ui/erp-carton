@@ -115,6 +115,34 @@ function formatMoney(value: number | string | null | undefined): string {
   return Number.isFinite(numeric) ? numeric.toLocaleString('vi-VN') : '0';
 }
 
+function getReceivableOwnerStep(document: ReceivableDocument): { color: string; text: string } {
+  const outstanding = Number(document.outstanding_amount || 0);
+  const daysOverdue = Number(document.days_overdue || 0);
+  if (document.status === 'CANCELLED') {
+    return { color: 'default', text: 'Đã hủy: chỉ dùng để đối soát lịch sử, không ghi nhận thu thêm.' };
+  }
+  if (document.status === 'PAID' || outstanding <= 0) {
+    return { color: 'success', text: 'Đã thu đủ: kiểm tra giao dịch thu và sổ quỹ khi cần đối chiếu.' };
+  }
+  if (daysOverdue > 0 || document.status === 'OVERDUE') {
+    return { color: 'error', text: `Quá hạn ${daysOverdue || 1} ngày: ưu tiên liên hệ khách và ghi nhận thu tiền.` };
+  }
+  if (document.status === 'PARTIAL_PAID') {
+    return { color: 'gold', text: `Đã thu một phần, còn ${formatMoney(outstanding)} đ cần theo dõi.` };
+  }
+  return { color: 'blue', text: 'Chưa thu: theo dõi ngày đến hạn và ghi nhận thu khi tiền về.' };
+}
+
+function getReceivableActionDisabledReason(document: ReceivableDocument, canManage: boolean, action: 'collect' | 'cancel'): string | undefined {
+  if (!canManage) return 'Bạn không có quyền thao tác tài chính.';
+  if (document.status === 'CANCELLED') return 'Công nợ đã hủy.';
+  if (action === 'collect' && (document.status === 'PAID' || Number(document.outstanding_amount || 0) <= 0)) {
+    return 'Công nợ đã thu đủ.';
+  }
+  if (action === 'cancel' && document.status === 'PAID') return 'Công nợ đã thu đủ, không hủy từ màn này.';
+  return undefined;
+}
+
 function parseViewSnapshot(value: unknown): ReceivableViewSnapshot | null {
   if (!value || typeof value !== 'object') return null;
   const obj = value as Record<string, unknown>;
@@ -488,6 +516,20 @@ export default function AccountsReceivableList() {
       render: (value?: number) => (value ? <Tag color="red">{`${value} ngày`}</Tag> : <Text type="secondary">-</Text>),
     },
     {
+      title: 'Việc tiếp theo',
+      key: 'owner_next_step',
+      width: 300,
+      render: (_, row) => {
+        const ownerStep = getReceivableOwnerStep(row);
+        return (
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <Tag color={ownerStep.color}>Owner next step</Tag>
+            <Text type="secondary">{ownerStep.text}</Text>
+          </Space>
+        );
+      },
+    },
+    {
       title: 'Thao tác',
       key: 'actions',
       width: 220,
@@ -501,7 +543,8 @@ export default function AccountsReceivableList() {
             size="small"
             type="primary"
             icon={<DollarOutlined />}
-            disabled={!canManage || ['PAID', 'CANCELLED'].includes(row.status) || Number(row.outstanding_amount || 0) <= 0}
+            disabled={Boolean(getReceivableActionDisabledReason(row, canManage, 'collect'))}
+            title={getReceivableActionDisabledReason(row, canManage, 'collect') || 'Ghi nhận giao dịch thu tiền cho công nợ này'}
             onClick={() => {
               setPaymentDoc(row);
               paymentForm.setFieldsValue({
@@ -521,7 +564,8 @@ export default function AccountsReceivableList() {
             size="small"
             danger
             icon={<DeleteOutlined />}
-            disabled={!canManage || ['PAID', 'CANCELLED'].includes(row.status)}
+            disabled={Boolean(getReceivableActionDisabledReason(row, canManage, 'cancel'))}
+            title={getReceivableActionDisabledReason(row, canManage, 'cancel') || 'Hủy công nợ khi chứng từ phát sinh sai và chưa tất toán'}
             onClick={() => {
               setCancelDoc(row);
               cancelForm.setFieldsValue({ reason: '' });
@@ -723,7 +767,7 @@ export default function AccountsReceivableList() {
         loading={listQuery.isLoading}
         columns={columns}
         dataSource={rows}
-        scroll={{ x: 1680 }}
+        scroll={{ x: 1980 }}
         pagination={{
           current: page,
           pageSize,
@@ -774,7 +818,8 @@ export default function AccountsReceivableList() {
               <Button
                 type="primary"
                 icon={<DollarOutlined />}
-                disabled={!canManage || ['PAID', 'CANCELLED'].includes(detail.status) || Number(detail.outstanding_amount || 0) <= 0}
+                disabled={Boolean(getReceivableActionDisabledReason(detail, canManage, 'collect'))}
+                title={getReceivableActionDisabledReason(detail, canManage, 'collect') || 'Ghi nhận giao dịch thu tiền cho công nợ này'}
                 onClick={() => {
                   setPaymentDoc(detail);
                   paymentForm.setFieldsValue({
@@ -792,7 +837,8 @@ export default function AccountsReceivableList() {
               </Button>
               <Button
                 danger
-                disabled={!canManage || ['PAID', 'CANCELLED'].includes(detail.status)}
+                disabled={Boolean(getReceivableActionDisabledReason(detail, canManage, 'cancel'))}
+                title={getReceivableActionDisabledReason(detail, canManage, 'cancel') || 'Hủy công nợ khi chứng từ phát sinh sai và chưa tất toán'}
                 onClick={() => {
                   setCancelDoc(detail);
                   cancelForm.setFieldsValue({ reason: '' });
@@ -808,6 +854,7 @@ export default function AccountsReceivableList() {
           <Skeleton active paragraph={{ rows: 8 }} />
         ) : detail ? (
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Alert showIcon type={detail.status === 'OVERDUE' ? 'warning' : 'info'} message={getReceivableOwnerStep(detail).text} />
             <Card size="small">
               <Descriptions column={2} size="small">
                 <Descriptions.Item label="Khách hàng">{detail.customer_name || '-'}</Descriptions.Item>
