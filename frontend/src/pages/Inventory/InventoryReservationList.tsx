@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Alert, Button, Card, Form, Input, InputNumber, Modal, Select, Space, Statistic, Table, Tag, message } from 'antd';
+import { Alert, Button, Card, Empty, Form, Input, InputNumber, Modal, Select, Space, Statistic, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { inventoryApi } from '../../api/inventory';
@@ -43,6 +43,25 @@ const statusColor: Record<string, string> = {
   FULFILLED: 'green',
   CANCELLED: 'red',
 };
+
+const STATUS_LABELS: Record<string, string> = Object.fromEntries(STATUS_OPTIONS.map((item) => [item.value, item.label]));
+
+const STATUS_NEXT_STEPS: Record<string, string> = {
+  OPEN: 'Phiếu còn giữ tồn, có thể nhả một phần/toàn bộ hoặc hủy nếu nhu cầu không còn đúng.',
+  RELEASED: 'Tồn đã được giải phóng, kiểm tra lại đơn bán trước khi giữ chỗ lại.',
+  FULFILLED: 'Phiếu đã xuất đủ, chỉ cần đối chiếu nếu có sai lệch giao hàng.',
+  CANCELLED: 'Phiếu đã hủy, xem lý do hủy trước khi tạo giữ chỗ mới.',
+};
+
+function getReservationNextStep(row: InventoryReservation): string {
+  return STATUS_NEXT_STEPS[row.status] ?? 'Kiểm tra trạng thái giữ chỗ trước khi thao tác tiếp.';
+}
+
+function getReservationActionDisabledReason(row: InventoryReservation, canManage: boolean): string {
+  if (!canManage) return 'Bạn chưa có quyền thao tác giữ chỗ tồn kho.';
+  if (row.status !== 'OPEN') return 'Chỉ thao tác được trên phiếu đang giữ.';
+  return '';
+}
 
 const SUMMARY_TILE_STYLE = {
   border: '1px solid #e5e7eb',
@@ -216,31 +235,47 @@ export default function InventoryReservationList() {
     { title: 'Đã nhả', dataIndex: 'released_qty', width: 100 },
     { title: 'Đã xuất', dataIndex: 'fulfilled_qty', width: 100 },
     { title: 'Còn hiệu lực', dataIndex: 'active_qty', width: 100 },
-    { title: 'Trạng thái', width: 110, render: (_, row) => <Tag color={statusColor[row.status] || 'default'}>{STATUS_OPTIONS.find((item) => item.value === row.status)?.label ?? row.status}</Tag> },
+    {
+      title: 'Trạng thái',
+      width: 300,
+      render: (_, row) => (
+        <Space direction="vertical" size={4}>
+          <Tag color={statusColor[row.status] || 'default'}>{STATUS_LABELS[row.status] ?? row.status}</Tag>
+          <span data-testid={`inventory-reservation-next-step-${row.id}`} style={{ color: '#595959', fontSize: 12, lineHeight: 1.45 }}>
+            {getReservationNextStep(row)}
+          </span>
+        </Space>
+      ),
+    },
     {
       title: 'Thao tác',
       key: 'actions',
       width: 160,
       fixed: 'right',
-      render: (_, row) => (
-        <Space>
-          <Button
-            size="small"
-            disabled={!canManage || row.status !== 'OPEN'}
-            onClick={() => openActionModal('release', [row])}
-          >
-            Nhả giữ chỗ
-          </Button>
-          <Button
-            size="small"
-            danger
-            disabled={!canManage || row.status !== 'OPEN'}
-            onClick={() => openActionModal('cancel', [row])}
-          >
-            Hủy
-          </Button>
-        </Space>
-      ),
+      render: (_, row) => {
+        const disabledReason = getReservationActionDisabledReason(row, canManage);
+        return (
+          <Space>
+            <Button
+              size="small"
+              disabled={Boolean(disabledReason)}
+              title={disabledReason || 'Nhả một phần hoặc toàn bộ tồn đang giữ'}
+              onClick={() => openActionModal('release', [row])}
+            >
+              Nhả giữ chỗ
+            </Button>
+            <Button
+              size="small"
+              danger
+              disabled={Boolean(disabledReason)}
+              title={disabledReason || 'Hủy phiếu giữ chỗ với lý do rõ ràng'}
+              onClick={() => openActionModal('cancel', [row])}
+            >
+              Hủy
+            </Button>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -331,10 +366,19 @@ export default function InventoryReservationList() {
           }}
           options={STATUS_OPTIONS}
         />
-        <Button disabled={!canManage || selectedOpenRows.length === 0} onClick={() => openActionModal('release', selectedOpenRows)}>
+        <Button
+          disabled={!canManage || selectedOpenRows.length === 0}
+          title={!canManage ? 'Bạn chưa có quyền thao tác giữ chỗ tồn kho.' : selectedOpenRows.length === 0 ? 'Chọn ít nhất một phiếu đang giữ để nhả.' : 'Nhả tồn đang giữ trên các phiếu đã chọn'}
+          onClick={() => openActionModal('release', selectedOpenRows)}
+        >
           Nhả giữ chỗ đã chọn
         </Button>
-        <Button danger disabled={!canManage || selectedOpenRows.length === 0} onClick={() => openActionModal('cancel', selectedOpenRows)}>
+        <Button
+          danger
+          disabled={!canManage || selectedOpenRows.length === 0}
+          title={!canManage ? 'Bạn chưa có quyền thao tác giữ chỗ tồn kho.' : selectedOpenRows.length === 0 ? 'Chọn ít nhất một phiếu đang giữ để hủy.' : 'Hủy các phiếu giữ chỗ đã chọn với lý do bắt buộc'}
+          onClick={() => openActionModal('cancel', selectedOpenRows)}
+        >
           Hủy đã chọn
         </Button>
       </div>
@@ -371,6 +415,7 @@ export default function InventoryReservationList() {
             }
           },
         }}
+        locale={{ emptyText: <Empty description="Không có phiếu giữ chỗ phù hợp với bộ lọc hiện tại." /> }}
       />
 
       <Modal

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, message } from 'antd';
+import { Alert, Button, Empty, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { DownloadOutlined, InboxOutlined, SafetyCertificateOutlined, SwapOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -47,19 +47,19 @@ type InventoryStockNamedPreset = {
 };
 
 const quickMoveOptions = [
-  { label: 'Nhap nhanh', value: 'RECEIPT' },
-  { label: 'Xuat nhanh', value: 'ISSUE' },
-  { label: 'Dieu chinh tang', value: 'ADJUSTMENT_IN' },
-  { label: 'Dieu chinh giam', value: 'ADJUSTMENT_OUT' },
+  { label: 'Nhập nhanh', value: 'RECEIPT' },
+  { label: 'Xuất nhanh', value: 'ISSUE' },
+  { label: 'Điều chỉnh tăng', value: 'ADJUSTMENT_IN' },
+  { label: 'Điều chỉnh giảm', value: 'ADJUSTMENT_OUT' },
 ];
 
 const salesOrderStatusLabels: Record<string, string> = {
-  DRAFT: 'Nhap',
-  SUBMITTED: 'Cho duyet',
-  APPROVED: 'Da duyet',
-  REJECTED: 'Tu choi',
-  POSTED: 'Da ghi so',
-  VOID: 'Da huy',
+  DRAFT: 'Nháp',
+  SUBMITTED: 'Chờ duyệt',
+  APPROVED: 'Đã duyệt',
+  REJECTED: 'Từ chối',
+  POSTED: 'Đã ghi sổ',
+  VOID: 'Đã hủy',
 };
 
 function serializeFilters(filters: Filters): string { return JSON.stringify(filters); }
@@ -83,6 +83,43 @@ function getSuggestedReserveQty(row: InventoryStockRow | null, line?: InventoryS
 }
 function stockRiskScore(row: InventoryStockRow): number {
   return (row.is_below_min ? 100 : 0) + (toNumber(row.available) <= 0 ? 60 : 0) + (row.warehouse_is_active === false ? 30 : 0) + (row.location_is_active === false ? 30 : 0) + (row.location_type === 'RETURN' ? 15 : 0);
+}
+
+function getStockRowNextStep(row: InventoryStockRow): string {
+  if (row.warehouse_is_active === false || row.location_is_active === false) {
+    return 'Kho hoặc vị trí đang ngừng, cần kiểm tra master data trước khi điều phối.';
+  }
+  if (row.location_type === 'RETURN') {
+    return 'Hàng đang ở khu trả về, nên kiểm tra chất lượng/nguồn trả trước khi xuất hoặc giữ chỗ.';
+  }
+  if (toNumber(row.available) < 0) {
+    return 'Khả dụng đang âm, cần đối soát giao dịch kho và reservation trước khi thao tác tiếp.';
+  }
+  if (toNumber(row.available) === 0) {
+    return 'Không còn khả dụng; ưu tiên mua thêm, sản xuất thêm hoặc chuyển kho bổ sung.';
+  }
+  if (row.is_below_min) {
+    return 'Tồn đã dưới mức tối thiểu; ưu tiên bổ sung hoặc chuyển kho trước khi nhận thêm đơn giữ chỗ.';
+  }
+  if (toNumber(row.reserved) > 0) {
+    return 'Đang có lượng đã giữ chỗ; kiểm tra reservation trước khi xuất kho thủ công.';
+  }
+  return 'Tồn đang ổn, có thể xuất/giữ chỗ theo nhu cầu bán hàng.';
+}
+
+function getStockMovementDisabledReason(row: InventoryStockRow, canManage: boolean): string {
+  if (!canManage) return 'Bạn chưa có quyền thao tác tồn kho.';
+  if (row.warehouse_is_active === false) return 'Kho đang ngừng hoạt động.';
+  if (row.location_is_active === false) return 'Vị trí đang ngừng hoạt động.';
+  return '';
+}
+
+function getStockReservationDisabledReason(row: InventoryStockRow, canManage: boolean): string {
+  const moveReason = getStockMovementDisabledReason(row, canManage);
+  if (moveReason) return moveReason;
+  if (row.location_type === 'RETURN') return 'Không giữ chỗ trực tiếp trên khu hàng trả.';
+  if (toNumber(row.available) <= 0) return 'Không còn tồn khả dụng để giữ chỗ.';
+  return '';
 }
 
 export default function InventoryStockOverview() {
@@ -181,7 +218,7 @@ export default function InventoryStockOverview() {
   const stockRows = useMemo(() => stockQuery.data?.results ?? [], [stockQuery.data?.results]);
   const warehouseOptions = useMemo(() => (warehouseQuery.data?.results ?? []).map((item) => ({ label: `${item.code} - ${item.name}`, value: item.id })), [warehouseQuery.data?.results]);
   const selectedWarehouseLabel = useMemo(() => {
-    if (!intentFilters.warehouse) return 'Tat ca kho';
+    if (!intentFilters.warehouse) return 'Tất cả kho';
     const warehouse = (warehouseQuery.data?.results ?? []).find((item) => item.id === intentFilters.warehouse);
     return warehouse ? `${warehouse.code} - ${warehouse.name}` : `Kho #${intentFilters.warehouse}`;
   }, [intentFilters.warehouse, warehouseQuery.data?.results]);
@@ -200,21 +237,21 @@ export default function InventoryStockOverview() {
   const priorityRows = useMemo(() => [...stockRows].sort((left, right) => stockRiskScore(right) - stockRiskScore(left)).slice(0, 5), [stockRows]);
   const activeFilterTags = useMemo(() => {
     const tags: string[] = [];
-    if (intentSearch.trim()) tags.push(`Tu khoa: ${intentSearch.trim()}`);
+    if (intentSearch.trim()) tags.push(`Từ khóa: ${intentSearch.trim()}`);
     if (intentFilters.warehouse) tags.push(`Kho: ${selectedWarehouseLabel}`);
-    if (intentFilters.belowMinOnly) tags.push('Dang loc duoi ton toi thieu');
-    if (selectedViewPreset) tags.push(`Mau loc: ${selectedViewPreset.name}`);
+    if (intentFilters.belowMinOnly) tags.push('Đang lọc dưới tồn tối thiểu');
+    if (selectedViewPreset) tags.push(`Mẫu lọc: ${selectedViewPreset.name}`);
     return tags;
   }, [intentFilters.belowMinOnly, intentFilters.warehouse, intentSearch, selectedViewPreset, selectedWarehouseLabel]);
   const workspaceAlert = useMemo(() => {
     const belowMinCount = Number(summaryQuery.data?.below_min_count ?? 0);
     if (belowMinCount > 0) {
-      return { type: 'warning' as const, title: `Co ${belowMinCount} dong ton dang duoi muc toi thieu`, description: 'Nen uu tien bo sung truoc khi tiep tuc xuat kho hoac giu cho them.' };
+      return { type: 'warning' as const, title: `Có ${belowMinCount} dòng tồn đang dưới mức tối thiểu`, description: 'Nên ưu tiên bổ sung trước khi tiếp tục xuất kho hoặc giữ chỗ thêm.' };
     }
     if (stockCommandSummary.zeroAvailableRows > 0 || stockCommandSummary.inactiveRows > 0) {
-      return { type: 'info' as const, title: 'Kho van hanh co mot so diem can theo doi', description: `Co ${stockCommandSummary.zeroAvailableRows} dong het kha dung va ${stockCommandSummary.inactiveRows} dong nam o kho/vi tri tam ngung.` };
+      return { type: 'info' as const, title: 'Kho vận hành có một số điểm cần theo dõi', description: `Có ${stockCommandSummary.zeroAvailableRows} dòng hết khả dụng và ${stockCommandSummary.inactiveRows} dòng nằm ở kho/vị trí tạm ngừng.` };
     }
-    return { type: 'success' as const, title: 'Ton kho dang o trang thai on dinh', description: 'Ban co the dieu phoi nhap xuat nhanh va giu cho tren bo loc hien tai.' };
+    return { type: 'success' as const, title: 'Tồn kho đang ở trạng thái ổn định', description: 'Bạn có thể điều phối nhập xuất nhanh và giữ chỗ trên bộ lọc hiện tại.' };
   }, [stockCommandSummary.inactiveRows, stockCommandSummary.zeroAvailableRows, summaryQuery.data?.below_min_count]);
 
   const invalidate = async () => {
@@ -225,12 +262,12 @@ export default function InventoryStockOverview() {
   };
   const createMovementMutation = useMutation({
     mutationFn: inventoryApi.createTransaction,
-    onSuccess: async () => { await invalidate(); messageApi.success('Da ghi nhan giao dich kho'); },
+    onSuccess: async () => { await invalidate(); messageApi.success('Đã ghi nhận giao dịch kho'); },
     onError: (error) => { messageApi.error(getToastMessage(error)); },
   });
   const createReservationMutation = useMutation({
     mutationFn: inventoryApi.createReservation,
-    onSuccess: async () => { await invalidate(); messageApi.success('Da tao phieu giu cho'); },
+    onSuccess: async () => { await invalidate(); messageApi.success('Đã tạo phiếu giữ chỗ'); },
     onError: (error) => { messageApi.error(getToastMessage(error)); },
   });
 
@@ -340,46 +377,51 @@ export default function InventoryStockOverview() {
 
   const handleResetFilters = () => { setSearchInput(''); setFilters({ belowMinOnly: false }); setPage(1); };
   const handleExportCSV = () => {
-    if (stockRows.length === 0) { messageApi.warning('Khong co dong ton kho de xuat'); return; }
+    if (stockRows.length === 0) { messageApi.warning('Không có dòng tồn kho để xuất'); return; }
     downloadCSV(stockRows.map((row) => ({
-      product_code: row.product_code, product_name: row.product_name, warehouse_name: row.warehouse_name,
-      location_name: row.location_name || '', on_hand: row.on_hand, reserved: row.reserved,
-      available: row.available, min_stock: row.min_stock, below_min: row.is_below_min ? 'YES' : 'NO',
+      'Mã SP': row.product_code, 'Tên sản phẩm': row.product_name, Kho: row.warehouse_name,
+      'Vị trí': row.location_name || '', 'Tồn thực tế': row.on_hand, 'Đã giữ chỗ': row.reserved,
+      'Khả dụng': row.available, Min: row.min_stock, 'Dưới min': row.is_below_min ? 'Có' : 'Không',
     })), `inventory-stock-${dayjs().format('YYYYMMDD')}`);
   };
 
   const columns: ColumnsType<InventoryStockRow> = [
-    { title: 'Ma SP', dataIndex: 'product_code', width: 120 },
-    { title: 'Ten san pham', dataIndex: 'product_name', width: 240 },
+    { title: 'Mã SP', dataIndex: 'product_code', width: 120 },
+    { title: 'Tên sản phẩm', dataIndex: 'product_name', width: 240 },
     { title: 'Kho', dataIndex: 'warehouse_name', width: 160 },
-    { title: 'Vi tri', dataIndex: 'location_name', width: 140, render: (value) => value || '-' },
-    { title: 'DVT', dataIndex: 'unit_name', width: 80, render: (value) => value || '-' },
-    { title: 'Ton', dataIndex: 'on_hand', width: 100, align: 'right', render: (value) => formatQty(value) },
-    { title: 'Giu cho', dataIndex: 'reserved', width: 100, align: 'right', render: (value) => formatQty(value) },
-    { title: 'Kha dung', dataIndex: 'available', width: 100, align: 'right', render: (value, row) => <span style={{ color: toNumber(row.available) <= 0 ? '#cf1322' : undefined, fontWeight: toNumber(row.available) <= 0 ? 700 : undefined }}>{formatQty(value)}</span> },
+    { title: 'Vị trí', dataIndex: 'location_name', width: 140, render: (value) => value || '-' },
+    { title: 'ĐVT', dataIndex: 'unit_name', width: 80, render: (value) => value || '-' },
+    { title: 'Tồn', dataIndex: 'on_hand', width: 100, align: 'right', render: (value) => formatQty(value) },
+    { title: 'Giữ chỗ', dataIndex: 'reserved', width: 100, align: 'right', render: (value) => formatQty(value) },
+    { title: 'Khả dụng', dataIndex: 'available', width: 100, align: 'right', render: (value, row) => <span style={{ color: toNumber(row.available) <= 0 ? '#cf1322' : undefined, fontWeight: toNumber(row.available) <= 0 ? 700 : undefined }}>{formatQty(value)}</span> },
     { title: 'Min', dataIndex: 'min_stock', width: 100, align: 'right', render: (value) => formatQty(value) },
-    { title: 'Tinh trang', width: 240, render: (_, row) => (
-      <Space wrap>
-        {row.warehouse_is_active === false ? <Tag color="red">Kho ngung</Tag> : null}
-        {row.location_is_active === false ? <Tag color="red">Vi tri ngung</Tag> : null}
-        {row.location_type === 'RETURN' ? <Tag color="orange">Hang tra</Tag> : null}
-        {toNumber(row.available) <= 0 ? <Tag color="volcano">Het kha dung</Tag> : null}
-        <Tag color={row.is_below_min ? 'red' : 'green'}>{row.is_below_min ? 'Duoi min' : 'An toan'}</Tag>
+    { title: 'Tình trạng', width: 310, render: (_, row) => (
+      <Space direction="vertical" size={4}>
+        <Space wrap>
+          {row.warehouse_is_active === false ? <Tag color="red">Kho ngừng</Tag> : null}
+          {row.location_is_active === false ? <Tag color="red">Vị trí ngừng</Tag> : null}
+          {row.location_type === 'RETURN' ? <Tag color="orange">Hàng trả</Tag> : null}
+          {toNumber(row.available) <= 0 ? <Tag color="volcano">Hết khả dụng</Tag> : null}
+          <Tag color={row.is_below_min ? 'red' : 'green'}>{row.is_below_min ? 'Dưới min' : 'An toàn'}</Tag>
+        </Space>
+        <span data-testid={`inventory-stock-next-step-${row.product_id}-${row.warehouse_id}-${row.location_id ?? '0'}`} style={{ color: '#595959', fontSize: 12, lineHeight: 1.45 }}>
+          {getStockRowNextStep(row)}
+        </span>
       </Space>
     ) },
-    { title: 'Tac vu', width: 210, fixed: 'right', render: (_, row) => {
-      const moveDisabled = !canManage || row.warehouse_is_active === false || row.location_is_active === false;
-      const reserveDisabled = moveDisabled || row.location_type === 'RETURN' || toNumber(row.available) <= 0;
+    { title: 'Tác vụ', width: 230, fixed: 'right', render: (_, row) => {
+      const moveReason = getStockMovementDisabledReason(row, canManage);
+      const reserveReason = getStockReservationDisabledReason(row, canManage);
       return (
         <Space>
-          <Button size="small" disabled={moveDisabled} onClick={() => {
+          <Button size="small" disabled={Boolean(moveReason)} title={moveReason || 'Tạo giao dịch nhập/xuất/điều chỉnh nhanh từ dòng tồn này'} onClick={() => {
             setMovementRow(row);
             moveForm.setFieldsValue({ transaction_type: 'ISSUE', transaction_date: dayjs().format('YYYY-MM-DD'), quantity: Number(row.available || 0) > 0 ? 1 : 0.0001, unit_cost: 0, reference: '', reason: '', note: '' });
-          }}>Nhap/xuat nhanh</Button>
-          <Button size="small" type="primary" disabled={reserveDisabled} onClick={() => {
+          }}>Nhập/xuất nhanh</Button>
+          <Button size="small" type="primary" disabled={Boolean(reserveReason)} title={reserveReason || 'Giữ chỗ lượng khả dụng cho đơn bán'} onClick={() => {
             setReservationRow(row); setSelectedOrderId(undefined); setOrderSearch('');
             reservationForm.setFieldsValue({ reservation_date: dayjs().format('YYYY-MM-DD'), reserved_qty: getSuggestedReserveQty(row), sales_order: undefined, sales_order_line: undefined, reference: '', note: '' });
-          }}>Giu cho</Button>
+          }}>Giữ chỗ</Button>
         </Space>
       );
     } },
@@ -412,26 +454,26 @@ export default function InventoryStockOverview() {
       <section className="command-center-hero">
         <div className="command-center-hero-grid">
           <div>
-            <div className="command-center-eyebrow">Inventory command center · Allocation · Quick actions</div>
-            <div className="command-center-title">Trung tam dieu phoi ton kho</div>
-            <div className="command-center-description">Theo doi ton thuc te, muc giu cho, kha dung va thao tac nhanh ngay tren tung dong ton kho.</div>
+            <div className="command-center-eyebrow">Kho · Phân bổ · Tác vụ nhanh</div>
+            <div className="command-center-title">Trung tâm điều phối tồn kho</div>
+            <div className="command-center-description">Theo dõi tồn thực tế, mức giữ chỗ, khả dụng và thao tác nhanh ngay trên từng dòng tồn kho.</div>
             <div className="command-center-hero-badges">
               <div className="command-center-hero-badge"><InboxOutlined /><span>Kho</span><span className="command-center-hero-badge-value">{selectedWarehouseLabel}</span></div>
-              <div className="command-center-hero-badge"><SafetyCertificateOutlined /><span>Duoi min</span><span className="command-center-hero-badge-value">{summaryQuery.data?.below_min_count ?? 0}</span></div>
-              <div className="command-center-hero-badge"><SwapOutlined /><span>Dong rui ro</span><span className="command-center-hero-badge-value">{stockCommandSummary.riskyRows}</span></div>
+              <div className="command-center-hero-badge"><SafetyCertificateOutlined /><span>Dưới min</span><span className="command-center-hero-badge-value">{summaryQuery.data?.below_min_count ?? 0}</span></div>
+              <div className="command-center-hero-badge"><SwapOutlined /><span>Dòng rủi ro</span><span className="command-center-hero-badge-value">{stockCommandSummary.riskyRows}</span></div>
             </div>
             <div className="command-center-hero-actions" data-testid="inventory-stock-command-strip">
               <div data-testid="inventory-stock-command-search">
-                <Input value={searchInput} onChange={(event) => { setSearchInput(event.target.value); setPage(1); }} placeholder="Tim san pham, kho, vi tri..." style={{ minWidth: 280, flex: '1 1 320px' }} suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xoa tim kiem" /> : undefined} />
+                <Input value={searchInput} onChange={(event) => { setSearchInput(event.target.value); setPage(1); }} placeholder="Tìm sản phẩm, kho, vị trí..." style={{ minWidth: 280, flex: '1 1 320px' }} suffix={searchInput ? <QuickClearIcon onClear={() => { setSearchInput(''); setPage(1); }} title="Xóa tìm kiếm" /> : undefined} />
               </div>
-              <Select allowClear placeholder="Loc theo kho" style={{ width: 220 }} value={filters.warehouse} onChange={(value) => { setFilters((prev) => ({ ...prev, warehouse: value })); setPage(1); }} options={warehouseOptions} />
-              <Button icon={<DownloadOutlined />} onClick={handleExportCSV}>Xuat CSV</Button>
-              <Button onClick={handleResetFilters}>Xoa bo loc</Button>
+              <Select allowClear placeholder="Lọc theo kho" style={{ width: 220 }} value={filters.warehouse} onChange={(value) => { setFilters((prev) => ({ ...prev, warehouse: value })); setPage(1); }} options={warehouseOptions} />
+              <Button icon={<DownloadOutlined />} onClick={handleExportCSV}>Xuất CSV</Button>
+              <Button onClick={handleResetFilters}>Xóa bộ lọc</Button>
             </div>
           </div>
           <div className="command-center-hero-meta">
-            <div className="command-center-hero-card"><div className="command-center-hero-card-label">Ton kha dung</div><div className="command-center-hero-card-value">{formatQty(summaryQuery.data?.total_available_qty ?? 0)}</div><div className="command-center-hero-card-caption">Khoi luong co the phan bo ngay tren bo loc hien tai.</div></div>
-            <div className="command-center-hero-card"><div className="command-center-hero-card-label">Dong het kha dung</div><div className="command-center-hero-card-value">{stockCommandSummary.zeroAvailableRows}</div><div className="command-center-hero-card-caption">Nhom can canh bao truoc khi xuat them hoac giu cho.</div></div>
+            <div className="command-center-hero-card"><div className="command-center-hero-card-label">Tồn khả dụng</div><div className="command-center-hero-card-value">{formatQty(summaryQuery.data?.total_available_qty ?? 0)}</div><div className="command-center-hero-card-caption">Khối lượng có thể phân bổ ngay trên bộ lọc hiện tại.</div></div>
+            <div className="command-center-hero-card"><div className="command-center-hero-card-label">Dòng hết khả dụng</div><div className="command-center-hero-card-value">{stockCommandSummary.zeroAvailableRows}</div><div className="command-center-hero-card-caption">Nhóm cần cảnh báo trước khi xuất thêm hoặc giữ chỗ.</div></div>
           </div>
         </div>
       </section>
@@ -439,8 +481,8 @@ export default function InventoryStockOverview() {
       <div className={`command-center-finance-alert ${workspaceAlert.type === 'success' ? 'command-center-finance-alert--steady' : 'command-center-finance-alert--warning'}`}>
         <div><div className="command-center-finance-alert-title">{workspaceAlert.title}</div><div className="command-center-finance-alert-description">{workspaceAlert.description}</div></div>
         <Space wrap>
-          <Tag color={intentFilters.belowMinOnly ? 'gold' : 'default'}>{intentFilters.belowMinOnly ? 'Dang loc duoi ton toi thieu' : 'Dang xem toan bo ton kho'}</Tag>
-          <Tag color="cyan">{`Hien thi: ${stockRows.length}/${stockQuery.data?.count ?? 0} dong`}</Tag>
+          <Tag color={intentFilters.belowMinOnly ? 'gold' : 'default'}>{intentFilters.belowMinOnly ? 'Đang lọc dưới tồn tối thiểu' : 'Đang xem toàn bộ tồn kho'}</Tag>
+          <Tag color="cyan">{`Hiển thị: ${stockRows.length}/${stockQuery.data?.count ?? 0} dòng`}</Tag>
         </Space>
       </div>
 
@@ -478,48 +520,48 @@ export default function InventoryStockOverview() {
           </Button>
         </div>
         <div className="workspace-toolbar-group">
-          <Space><span style={{ color: '#475569', fontWeight: 700 }}>Chi hien thi duoi min</span><Switch checked={filters.belowMinOnly} onChange={(checked) => { setFilters((prev) => ({ ...prev, belowMinOnly: checked })); setPage(1); }} /></Space>
+          <Space><span style={{ color: '#475569', fontWeight: 700 }}>Chỉ hiển thị dưới min</span><Switch checked={filters.belowMinOnly} onChange={(checked) => { setFilters((prev) => ({ ...prev, belowMinOnly: checked })); setPage(1); }} /></Space>
         </div>
         <div className="workspace-toolbar-group">
-          {activeFilterTags.length > 0 ? activeFilterTags.map((item) => <Tag key={item}>{item}</Tag>) : <span className="workspace-inline-note">Khong co bo loc bo sung tren workspace hien tai.</span>}
+          {activeFilterTags.length > 0 ? activeFilterTags.map((item) => <Tag key={item}>{item}</Tag>) : <span className="workspace-inline-note">Không có bộ lọc bổ sung trên workspace hiện tại.</span>}
         </div>
       </div>
 
       <div className="workspace-metric-grid">
-        <div className="workspace-metric-card"><div className="workspace-metric-eyebrow">Dong ton</div><div className="workspace-metric-value">{summaryQuery.data?.stock_rows ?? 0}</div><div className="workspace-metric-caption">Toan bo dong ton dang duoc theo doi.</div></div>
-        <div className="workspace-metric-card workspace-metric-card--critical"><div className="workspace-metric-eyebrow">Duoi toi thieu</div><div className="workspace-metric-value">{summaryQuery.data?.below_min_count ?? 0}</div><div className="workspace-metric-caption">Nhom can bo sung de tranh hut hang.</div></div>
-        <div className="workspace-metric-card"><div className="workspace-metric-eyebrow">Ton thuc te</div><div className="workspace-metric-value">{formatQty(summaryQuery.data?.total_on_hand_qty ?? 0)}</div><div className="workspace-metric-caption">Tong so luong hien co trong kho.</div></div>
-        <div className="workspace-metric-card workspace-metric-card--warning"><div className="workspace-metric-eyebrow">Da giu cho</div><div className="workspace-metric-value">{formatQty(summaryQuery.data?.total_reserved_qty ?? 0)}</div><div className="workspace-metric-caption">Khoi luong da khoa cho don ban.</div></div>
-        <div className="workspace-metric-card workspace-metric-card--steady"><div className="workspace-metric-eyebrow">Kha dung</div><div className="workspace-metric-value">{formatQty(summaryQuery.data?.total_available_qty ?? 0)}</div><div className="workspace-metric-caption">Luong co the dieu phoi ngay.</div></div>
+        <div className="workspace-metric-card"><div className="workspace-metric-eyebrow">Dòng tồn</div><div className="workspace-metric-value">{summaryQuery.data?.stock_rows ?? 0}</div><div className="workspace-metric-caption">Toàn bộ dòng tồn đang được theo dõi.</div></div>
+        <div className="workspace-metric-card workspace-metric-card--critical"><div className="workspace-metric-eyebrow">Dưới tối thiểu</div><div className="workspace-metric-value">{summaryQuery.data?.below_min_count ?? 0}</div><div className="workspace-metric-caption">Nhóm cần bổ sung để tránh hụt hàng.</div></div>
+        <div className="workspace-metric-card"><div className="workspace-metric-eyebrow">Tồn thực tế</div><div className="workspace-metric-value">{formatQty(summaryQuery.data?.total_on_hand_qty ?? 0)}</div><div className="workspace-metric-caption">Tổng số lượng hiện có trong kho.</div></div>
+        <div className="workspace-metric-card workspace-metric-card--warning"><div className="workspace-metric-eyebrow">Đã giữ chỗ</div><div className="workspace-metric-value">{formatQty(summaryQuery.data?.total_reserved_qty ?? 0)}</div><div className="workspace-metric-caption">Khối lượng đã khóa cho đơn bán.</div></div>
+        <div className="workspace-metric-card workspace-metric-card--steady"><div className="workspace-metric-eyebrow">Khả dụng</div><div className="workspace-metric-value">{formatQty(summaryQuery.data?.total_available_qty ?? 0)}</div><div className="workspace-metric-caption">Lượng có thể điều phối ngay.</div></div>
         <div className="workspace-metric-card"><div className="workspace-metric-eyebrow">Return / inactive</div><div className="workspace-metric-value">{stockCommandSummary.returnRows + stockCommandSummary.inactiveRows}</div><div className="workspace-metric-caption">{`Return: ${stockCommandSummary.returnRows} · inactive: ${stockCommandSummary.inactiveRows}`}</div></div>
       </div>
 
       <div className="command-center-grid">
         <section className="command-center-panel">
-          <div className="command-center-panel-header"><div><div className="command-center-panel-kicker">Priority lane</div><div className="command-center-panel-title">Danh muc uu tien xu ly</div><div className="command-center-panel-subtitle">Nhung dong ton can duoc doi kho va planning xu ly truoc.</div></div></div>
+          <div className="command-center-panel-header"><div><div className="command-center-panel-kicker">Priority lane</div><div className="command-center-panel-title">Danh mục ưu tiên xử lý</div><div className="command-center-panel-subtitle">Những dòng tồn cần được đội kho và planning xử lý trước.</div></div></div>
           <div className="command-center-watchlist">
             {priorityRows.length > 0 ? priorityRows.map((row) => (
               <div key={`${row.product_id}-${row.warehouse_id}-${row.location_id ?? '0'}`} className={`command-center-watch-item command-center-watch-item--${row.is_below_min || toNumber(row.available) <= 0 ? 'critical' : 'warning'}`}>
                 <div className="command-center-watch-title">{`${row.product_code} · ${row.product_name}`}</div>
-                <div className="command-center-watch-detail">{`${row.warehouse_name}${row.location_name ? ` / ${row.location_name}` : ''} · kha dung ${formatQty(row.available)} · min ${formatQty(row.min_stock)}`}</div>
-                <div className="workspace-inline-note">{row.is_below_min ? 'Can bo sung som de khong tut duoi muc an toan.' : toNumber(row.available) <= 0 ? 'Khong con kha dung de giu cho hoac xuat them.' : 'Can theo doi sat do ton kho da sat nguong canh bao.'}</div>
+                <div className="command-center-watch-detail">{`${row.warehouse_name}${row.location_name ? ` / ${row.location_name}` : ''} · khả dụng ${formatQty(row.available)} · min ${formatQty(row.min_stock)}`}</div>
+                <div className="workspace-inline-note">{getStockRowNextStep(row)}</div>
               </div>
-            )) : <div className="command-center-empty">Chua co dong ton nao de dua vao lane uu tien.</div>}
+            )) : <div className="command-center-empty">Chưa có dòng tồn nào để đưa vào lane ưu tiên.</div>}
           </div>
         </section>
         <section className="command-center-panel">
-          <div className="command-center-panel-header"><div><div className="command-center-panel-kicker">Playbook</div><div className="command-center-panel-title">Khung dieu phoi nhanh</div><div className="command-center-panel-subtitle">Ba quy tac de doi kho thao tac nhanh ma van giu duoc do an toan.</div></div></div>
+          <div className="command-center-panel-header"><div><div className="command-center-panel-kicker">Playbook</div><div className="command-center-panel-title">Khung điều phối nhanh</div><div className="command-center-panel-subtitle">Ba quy tắc để đội kho thao tác nhanh mà vẫn giữ được độ an toàn.</div></div></div>
           <div className="command-center-playbook">
-            <div className="command-center-playbook-item"><div className="command-center-playbook-title">1. Xu ly dong duoi min truoc</div><div className="command-center-playbook-detail">Nhom nay tac dong truc tiep den kha nang giao hang va can duoc uu tien bo sung.</div></div>
-            <div className="command-center-playbook-item"><div className="command-center-playbook-title">2. Kiem tra kha dung truoc khi giu cho</div><div className="command-center-playbook-detail">Reservation chi nen mo khi dong ton van con kha dung va khong nam o khu return.</div></div>
-            <div className="command-center-playbook-item"><div className="command-center-playbook-title">3. Dung nhap/xuat nhanh cho phan ung ca</div><div className="command-center-playbook-detail">Workspace nay phu hop cho dieu chinh nhanh, giao dich phuc tap van nen di qua luong day du.</div></div>
+            <div className="command-center-playbook-item"><div className="command-center-playbook-title">1. Xử lý dòng dưới min trước</div><div className="command-center-playbook-detail">Nhóm này tác động trực tiếp đến khả năng giao hàng và cần được ưu tiên bổ sung.</div></div>
+            <div className="command-center-playbook-item"><div className="command-center-playbook-title">2. Kiểm tra khả dụng trước khi giữ chỗ</div><div className="command-center-playbook-detail">Reservation chỉ nên mở khi dòng tồn vẫn còn khả dụng và không nằm ở khu return.</div></div>
+            <div className="command-center-playbook-item"><div className="command-center-playbook-title">3. Dùng nhập/xuất nhanh cho phản ứng ca</div><div className="command-center-playbook-detail">Workspace này phù hợp cho điều chỉnh nhanh, giao dịch phức tạp vẫn nên đi qua luồng đầy đủ.</div></div>
           </div>
         </section>
       </div>
 
       <section className="command-center-panel">
-        <div className="command-center-panel-header"><div><div className="command-center-panel-kicker">Stock table</div><div className="command-center-panel-title">Bang ton kho thuc thi</div><div className="command-center-panel-subtitle">Loc, quan sat trang thai va mo tac vu nhanh tren tung dong ton kho.</div></div></div>
-        <Table rowKey={(row) => `${row.product_id}-${row.warehouse_id}-${row.location_id ?? '0'}`} loading={stockQuery.isLoading} columns={columns} dataSource={stockRows} scroll={{ x: 1500 }} pagination={{ current: page, pageSize, total: stockQuery.data?.count ?? 0, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], onChange: async (nextPage, nextPageSize) => { setPage(nextPage); if (nextPageSize !== pageSize) await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize }); } }} locale={{ emptyText: 'Khong co du lieu ton kho tren bo loc hien tai.' }} />
+        <div className="command-center-panel-header"><div><div className="command-center-panel-kicker">Stock table</div><div className="command-center-panel-title">Bảng tồn kho thực thi</div><div className="command-center-panel-subtitle">Lọc, quan sát trạng thái và mở tác vụ nhanh trên từng dòng tồn kho.</div></div></div>
+        <Table rowKey={(row) => `${row.product_id}-${row.warehouse_id}-${row.location_id ?? '0'}`} loading={stockQuery.isLoading} columns={columns} dataSource={stockRows} scroll={{ x: 1500 }} pagination={{ current: page, pageSize, total: stockQuery.data?.count ?? 0, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], onChange: async (nextPage, nextPageSize) => { setPage(nextPage); if (nextPageSize !== pageSize) await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize }); } }} locale={{ emptyText: <Empty description="Không có dữ liệu tồn kho trên bộ lọc hiện tại." /> }} />
       </section>
 
       <Modal
@@ -545,31 +587,44 @@ export default function InventoryStockOverview() {
         </Form>
       </Modal>
 
-      <Modal title={movementRow ? `Nhap/xuat nhanh: ${movementRow.product_code}` : 'Nhap/xuat nhanh'} open={Boolean(movementRow)} onCancel={() => setMovementRow(null)} onOk={onSubmitMovement} confirmLoading={createMovementMutation.isPending}>
+      <Modal title={movementRow ? `Nhập/xuất nhanh: ${movementRow.product_code}` : 'Nhập/xuất nhanh'} open={Boolean(movementRow)} onCancel={() => setMovementRow(null)} onOk={onSubmitMovement} confirmLoading={createMovementMutation.isPending}>
         <Form form={moveForm} layout="vertical">
-          <Form.Item name="transaction_type" label="Loai giao dich" rules={[{ required: true, message: 'Bat buoc' }]}><Select options={quickMoveOptions} /></Form.Item>
-          <Form.Item name="transaction_date" label="Ngay chung tu" rules={[{ required: true, message: 'Bat buoc' }]}><Input type="date" /></Form.Item>
-          <Form.Item name="quantity" label="So luong" rules={[{ required: true, message: 'Bat buoc' }]}><InputNumber style={{ width: '100%' }} min={0.0001} /></Form.Item>
-          <Form.Item name="unit_cost" label="Don gia von"><InputNumber style={{ width: '100%' }} min={0} /></Form.Item>
-          <Form.Item name="reference" label="Chung tu tham chieu"><Input /></Form.Item>
-          <Form.Item name="reason" label="Ly do"><Input /></Form.Item>
-          <Form.Item name="note" label="Ghi chu"><Input.TextArea rows={3} /></Form.Item>
+          <Alert
+            showIcon
+            type="info"
+            message={movementRow ? getStockRowNextStep(movementRow) : 'Kiểm tra dòng tồn trước khi ghi giao dịch'}
+            description="Giao dịch nhanh sẽ ghi vào sổ kho theo contract hiện có. Với nghiệp vụ phức tạp, nên đi qua luồng chứng từ đầy đủ."
+            style={{ marginBottom: 16 }}
+          />
+          <Form.Item name="transaction_type" label="Loại giao dịch" rules={[{ required: true, message: 'Bắt buộc' }]}><Select options={quickMoveOptions} /></Form.Item>
+          <Form.Item name="transaction_date" label="Ngày chứng từ" rules={[{ required: true, message: 'Bắt buộc' }]}><Input type="date" /></Form.Item>
+          <Form.Item name="quantity" label="Số lượng" rules={[{ required: true, message: 'Bắt buộc' }]}><InputNumber style={{ width: '100%' }} min={0.0001} /></Form.Item>
+          <Form.Item name="unit_cost" label="Đơn giá vốn"><InputNumber style={{ width: '100%' }} min={0} /></Form.Item>
+          <Form.Item name="reference" label="Chứng từ tham chiếu"><Input /></Form.Item>
+          <Form.Item name="reason" label="Lý do"><Input /></Form.Item>
+          <Form.Item name="note" label="Ghi chú"><Input.TextArea rows={3} /></Form.Item>
         </Form>
       </Modal>
 
-      <Modal title={reservationRow ? `Giu cho cho ${reservationRow.product_code}` : 'Tao phieu giu cho'} open={Boolean(reservationRow)} onCancel={() => setReservationRow(null)} onOk={onSubmitReservation} confirmLoading={createReservationMutation.isPending}>
+      <Modal title={reservationRow ? `Giữ chỗ cho ${reservationRow.product_code}` : 'Tạo phiếu giữ chỗ'} open={Boolean(reservationRow)} onCancel={() => setReservationRow(null)} onOk={onSubmitReservation} confirmLoading={createReservationMutation.isPending}>
         <Form form={reservationForm} layout="vertical">
-          <div style={{ marginBottom: 12, color: '#595959' }}>Kha dung tai vi tri hien tai: <strong>{reservationRow?.available || '0'}</strong></div>
-          <Form.Item name="reservation_date" label="Ngay giu cho" rules={[{ required: true, message: 'Bat buoc' }]}><Input type="date" /></Form.Item>
-          <Form.Item name="sales_order" label="Don ban">
+          <Alert
+            showIcon
+            type="info"
+            message={reservationRow ? `Khả dụng tại vị trí hiện tại: ${reservationRow.available || '0'}` : 'Tạo phiếu giữ chỗ'}
+            description={reservationRow ? getStockRowNextStep(reservationRow) : 'Chọn dòng tồn còn khả dụng để giữ cho đơn bán.'}
+            style={{ marginBottom: 16 }}
+          />
+          <Form.Item name="reservation_date" label="Ngày giữ chỗ" rules={[{ required: true, message: 'Bắt buộc' }]}><Input type="date" /></Form.Item>
+          <Form.Item name="sales_order" label="Đơn bán">
             <Select showSearch allowClear filterOption={false} onSearch={setOrderSearch} onChange={(value) => { setSelectedOrderId(value); reservationForm.setFieldValue('sales_order_line', undefined); if (!value) reservationForm.setFieldValue('reserved_qty', getSuggestedReserveQty(reservationRow)); }} options={(orderOptionsQuery.data?.results ?? []).map((item) => ({ label: `${item.code}${item.customer_name ? ` - ${item.customer_name}` : ''} [${salesOrderStatusLabels[item.status] || item.status}]`, value: item.id })).filter((item) => { const order = orderOptionsQuery.data?.results?.find((row) => row.id === item.value); return order ? ['APPROVED', 'POSTED'].includes(order.status) : true; })} />
           </Form.Item>
-          <Form.Item name="sales_order_line" label="Dong hang">
-            <Select allowClear onChange={(value) => { const selectedLine = matchingLines.find((line) => line.id === value); reservationForm.setFieldValue('reserved_qty', getSuggestedReserveQty(reservationRow, selectedLine)); }} options={matchingLines.map((line) => ({ label: `Dong ${line.line_number} - ${line.product_code || ''} ${line.product_name || ''} / SL ${line.qty} / da giu ${line.reserved_qty_total || '0'} / da xuat ${line.shipped_qty_total || '0'} / con can giu ${line.remaining_reservation_qty || line.qty}`, value: line.id }))} />
+          <Form.Item name="sales_order_line" label="Dòng hàng">
+            <Select allowClear onChange={(value) => { const selectedLine = matchingLines.find((line) => line.id === value); reservationForm.setFieldValue('reserved_qty', getSuggestedReserveQty(reservationRow, selectedLine)); }} options={matchingLines.map((line) => ({ label: `Dòng ${line.line_number} - ${line.product_code || ''} ${line.product_name || ''} / SL ${line.qty} / đã giữ ${line.reserved_qty_total || '0'} / đã xuất ${line.shipped_qty_total || '0'} / còn cần giữ ${line.remaining_reservation_qty || line.qty}`, value: line.id }))} />
           </Form.Item>
-          <Form.Item name="reserved_qty" label="So luong giu cho" rules={[{ required: true, message: 'Bat buoc' }]}><InputNumber style={{ width: '100%' }} min={0.0001} /></Form.Item>
-          <Form.Item name="reference" label="Tham chieu"><Input /></Form.Item>
-          <Form.Item name="note" label="Ghi chu"><Input.TextArea rows={3} /></Form.Item>
+          <Form.Item name="reserved_qty" label="Số lượng giữ chỗ" rules={[{ required: true, message: 'Bắt buộc' }]}><InputNumber style={{ width: '100%' }} min={0.0001} /></Form.Item>
+          <Form.Item name="reference" label="Tham chiếu"><Input /></Form.Item>
+          <Form.Item name="note" label="Ghi chú"><Input.TextArea rows={3} /></Form.Item>
         </Form>
       </Modal>
     </div>

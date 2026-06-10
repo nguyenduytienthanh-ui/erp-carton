@@ -74,6 +74,54 @@ function getStatusColor(status: WarehouseTransferStatus | string | null | undefi
   return STATUS_COLORS[status as WarehouseTransferStatus] ?? 'default';
 }
 
+const STATUS_NEXT_STEPS: Record<WarehouseTransferStatus, string> = {
+  DRAFT: 'Rà lại kho nguồn, kho đích và dòng hàng, sau đó gửi xác nhận.',
+  SUBMITTED: 'Phiếu đã sẵn sàng xuất kho nguồn để chuyển sang trạng thái đang vận chuyển.',
+  IN_TRANSIT: 'Hàng đang đi giữa hai kho, bước tiếp theo là xác nhận nhận tại kho đích.',
+  RECEIVED: 'Phiếu đã nhận xong; đối chiếu sổ kho nếu cần kiểm tra tồn sau chuyển.',
+  CANCELLED: 'Phiếu đã hủy, chỉ dùng để tra cứu lịch sử điều chuyển.',
+};
+
+const STATUS_HELP_TEXT: Record<WarehouseTransferStatus, string> = {
+  DRAFT: 'Nháp còn sửa hoặc xóa được trước khi gửi xác nhận.',
+  SUBMITTED: 'Chờ xuất kho nguồn, chưa ghi nhận nhập kho đích.',
+  IN_TRANSIT: 'Đã xuất khỏi kho nguồn, chưa nhận vào kho đích.',
+  RECEIVED: 'Vòng đời chuyển kho đã hoàn tất.',
+  CANCELLED: 'Không thao tác tiếp trên phiếu đã hủy.',
+};
+
+function getTransferNextStep(transfer?: WarehouseTransfer | null): string {
+  if (!transfer) return 'Chọn phiếu chuyển để xem bước xử lý tiếp theo.';
+  return STATUS_NEXT_STEPS[transfer.status] ?? 'Kiểm tra trạng thái hiện tại trước khi thao tác tiếp.';
+}
+
+function getTransferStatusHelp(transfer?: WarehouseTransfer | null): string {
+  if (!transfer) return '';
+  return STATUS_HELP_TEXT[transfer.status] ?? '';
+}
+
+function getTransferAlertType(transfer?: WarehouseTransfer | null): 'info' | 'success' | 'warning' | 'error' {
+  if (!transfer) return 'info';
+  if (transfer.status === 'IN_TRANSIT' || transfer.status === 'SUBMITTED') return 'warning';
+  if (transfer.status === 'RECEIVED') return 'success';
+  if (transfer.status === 'CANCELLED') return 'error';
+  return 'info';
+}
+
+function getTransferActionDisabledReason(
+  transfer: WarehouseTransfer,
+  action: 'edit' | 'delete' | 'submit' | 'post' | 'receive',
+  canManage: boolean,
+): string {
+  if (!canManage) return 'Bạn chưa có quyền thao tác chuyển kho.';
+  if (action === 'edit') return transfer.status === 'DRAFT' ? '' : 'Chỉ sửa được phiếu nháp.';
+  if (action === 'delete') return transfer.status === 'DRAFT' ? '' : 'Chỉ xóa được phiếu nháp.';
+  if (action === 'submit') return transfer.status === 'DRAFT' ? '' : 'Chỉ phiếu nháp mới gửi xác nhận được.';
+  if (action === 'post') return transfer.status === 'SUBMITTED' ? '' : 'Chỉ phiếu chờ xác nhận mới xuất kho được.';
+  if (action === 'receive') return transfer.status === 'IN_TRANSIT' ? '' : 'Chỉ phiếu đang vận chuyển mới nhận hàng được.';
+  return '';
+}
+
 function parseViewSnapshot(value: unknown): WarehouseTransferViewSnapshot | null {
   if (!value || typeof value !== 'object') return null;
   const obj = value as Record<string, unknown>;
@@ -390,71 +438,91 @@ export default function WarehouseTransferList() {
     {
       title: 'Trạng thái',
       dataIndex: 'status',
-      width: 150,
-      render: (status: WarehouseTransferStatus) => <Tag color={getStatusColor(status)}>{getStatusLabel(status)}</Tag>,
+      width: 285,
+      render: (_: WarehouseTransferStatus, row) => (
+        <Space direction="vertical" size={4}>
+          <Tag color={getStatusColor(row.status)}>{getStatusLabel(row.status)}</Tag>
+          <Text data-testid={`warehouse-transfer-next-step-${row.id}`} type="secondary" style={{ fontSize: 12 }}>
+            {getTransferNextStep(row)}
+          </Text>
+        </Space>
+      ),
     },
     {
       title: 'Thao tác',
       width: 360,
-      render: (_, row) => (
-        <Space wrap>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailTransfer(row)}>
-            Xem
-          </Button>
-          <Button
-            data-testid={`warehouse-transfer-edit-${row.id}`}
-            size="small"
-            disabled={!canManage || row.status !== 'DRAFT'}
-            onClick={() => {
-              setEditTransfer(row);
-              setFormOpen(true);
-            }}
-          >
-            Sửa
-          </Button>
-          <Button
-            data-testid={`warehouse-transfer-delete-${row.id}`}
-            size="small"
-            disabled={!canManage || row.status !== 'DRAFT'}
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() =>
-              Modal.confirm({
-                title: 'Xóa phiếu chuyển',
-                content: `Xóa ${row.code}?`,
-                okText: 'Xóa',
-                cancelText: 'Hủy',
-                onOk: () => deleteMutation.mutate(row.id),
-              })
-            }
-          />
-          <Button
-            data-testid={`warehouse-transfer-submit-${row.id}`}
-            size="small"
-            disabled={!canManage || row.status !== 'DRAFT'}
-            onClick={() => submitMutation.mutate(row.id)}
-          >
-            Gửi xác nhận
-          </Button>
-          <Button
-            data-testid={`warehouse-transfer-post-${row.id}`}
-            size="small"
-            disabled={!canManage || row.status !== 'SUBMITTED'}
-            onClick={() => postMutation.mutate(row.id)}
-          >
-            Xuất kho
-          </Button>
-          <Button
-            data-testid={`warehouse-transfer-receive-${row.id}`}
-            size="small"
-            disabled={!canManage || row.status !== 'IN_TRANSIT'}
-            type="primary"
-            onClick={() => receiveMutation.mutate(row.id)}
-          >
-            Nhận hàng
-          </Button>
-        </Space>
-      ),
+      render: (_, row) => {
+        const editReason = getTransferActionDisabledReason(row, 'edit', canManage);
+        const deleteReason = getTransferActionDisabledReason(row, 'delete', canManage);
+        const submitReason = getTransferActionDisabledReason(row, 'submit', canManage);
+        const postReason = getTransferActionDisabledReason(row, 'post', canManage);
+        const receiveReason = getTransferActionDisabledReason(row, 'receive', canManage);
+
+        return (
+          <Space wrap>
+            <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailTransfer(row)}>
+              Xem
+            </Button>
+            <Button
+              data-testid={`warehouse-transfer-edit-${row.id}`}
+              size="small"
+              disabled={Boolean(editReason)}
+              title={editReason || 'Sửa phiếu chuyển kho khi còn nháp'}
+              onClick={() => {
+                setEditTransfer(row);
+                setFormOpen(true);
+              }}
+            >
+              Sửa
+            </Button>
+            <Button
+              data-testid={`warehouse-transfer-delete-${row.id}`}
+              size="small"
+              disabled={Boolean(deleteReason)}
+              title={deleteReason || 'Xóa phiếu chuyển kho còn nháp'}
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() =>
+                Modal.confirm({
+                  title: 'Xóa phiếu chuyển',
+                  content: `Xóa ${row.code}?`,
+                  okText: 'Xóa',
+                  cancelText: 'Hủy',
+                  onOk: () => deleteMutation.mutate(row.id),
+                })
+              }
+            />
+            <Button
+              data-testid={`warehouse-transfer-submit-${row.id}`}
+              size="small"
+              disabled={Boolean(submitReason)}
+              title={submitReason || 'Gửi phiếu chuyển sang bước xuất kho nguồn'}
+              onClick={() => submitMutation.mutate(row.id)}
+            >
+              Gửi xác nhận
+            </Button>
+            <Button
+              data-testid={`warehouse-transfer-post-${row.id}`}
+              size="small"
+              disabled={Boolean(postReason)}
+              title={postReason || 'Xuất hàng khỏi kho nguồn'}
+              onClick={() => postMutation.mutate(row.id)}
+            >
+              Xuất kho
+            </Button>
+            <Button
+              data-testid={`warehouse-transfer-receive-${row.id}`}
+              size="small"
+              disabled={Boolean(receiveReason)}
+              title={receiveReason || 'Nhận hàng vào kho đích'}
+              type="primary"
+              onClick={() => receiveMutation.mutate(row.id)}
+            >
+              Nhận hàng
+            </Button>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -768,6 +836,14 @@ export default function WarehouseTransferList() {
                   </div>
                 )}
               </div>
+              <Alert
+                showIcon
+                data-testid="warehouse-transfer-detail-next-step"
+                type={getTransferAlertType(detailQuery.data)}
+                message={getTransferNextStep(detailQuery.data)}
+                description={getTransferStatusHelp(detailQuery.data)}
+                style={{ marginTop: 16 }}
+              />
               {detailQuery.data.lines && (
                 <Table
                   style={{ marginTop: 16 }}

@@ -99,6 +99,21 @@ const STATUS_COLORS: Record<InventoryTransaction['status'], string> = {
   CANCELLED: 'red',
 };
 
+const STATUS_NEXT_STEPS: Record<InventoryTransaction['status'], string> = {
+  POSTED: 'Chứng từ đã ghi vào sổ kho; chỉ hủy khi đã xác minh sai lệch.',
+  CANCELLED: 'Chứng từ đã hủy, kiểm tra lý do hủy khi đối soát tồn kho.',
+};
+
+function getTransactionNextStep(row: InventoryTransaction): string {
+  return STATUS_NEXT_STEPS[row.status] ?? 'Kiểm tra trạng thái chứng từ trước khi thao tác tiếp.';
+}
+
+function getCancelTransactionDisabledReason(row: InventoryTransaction, canManage: boolean): string {
+  if (!canManage) return 'Bạn chưa có quyền hủy chứng từ kho.';
+  if (row.status !== 'POSTED') return 'Chỉ hủy được chứng từ đã ghi sổ.';
+  return '';
+}
+
 const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({
   value,
   label,
@@ -842,30 +857,41 @@ export default function InventoryTransactionList() {
     },
     {
       title: 'Trạng thái',
-      width: 130,
-      render: (_, row) => <Tag color={STATUS_COLORS[row.status]}>{STATUS_LABELS[row.status]}</Tag>,
+      width: 280,
+      render: (_, row) => (
+        <Space direction="vertical" size={4}>
+          <Tag color={STATUS_COLORS[row.status]}>{STATUS_LABELS[row.status]}</Tag>
+          <Text data-testid={`inventory-transaction-next-step-${row.id}`} type="secondary" style={{ fontSize: 12 }}>
+            {getTransactionNextStep(row)}
+          </Text>
+        </Space>
+      ),
     },
     {
       title: 'Thao tác',
       key: 'actions',
       width: 150,
       fixed: 'right',
-      render: (_, row) => (
-        <Space>
-          <Button
-            size="small"
-            danger
-            icon={<StopOutlined />}
-            disabled={!canManage || row.status !== 'POSTED'}
-            onClick={() => {
-              cancelForm.setFieldsValue({ reason: '' });
-              setCancelTarget(row);
-            }}
-          >
-            Hủy chứng từ
-          </Button>
-        </Space>
-      ),
+      render: (_, row) => {
+        const disabledReason = getCancelTransactionDisabledReason(row, canManage);
+        return (
+          <Space>
+            <Button
+              size="small"
+              danger
+              icon={<StopOutlined />}
+              disabled={Boolean(disabledReason)}
+              title={disabledReason || 'Hủy chứng từ đã ghi sổ với lý do bắt buộc'}
+              onClick={() => {
+                cancelForm.setFieldsValue({ reason: '' });
+                setCancelTarget(row);
+              }}
+            >
+              Hủy chứng từ
+            </Button>
+          </Space>
+        );
+      },
     },
   ];
 

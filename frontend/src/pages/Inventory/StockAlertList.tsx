@@ -72,6 +72,25 @@ const STATUS_COLORS: Record<StockAlertStatus, string> = {
   RESOLVED: 'success',
 };
 
+const STATUS_NEXT_STEPS: Record<StockAlertStatus, string> = {
+  ACTIVE: 'Cần xác nhận và mở hướng bổ sung: mua thêm, sản xuất thêm hoặc chuyển kho.',
+  ACKNOWLEDGED: 'Đã ghi nhận cảnh báo, tiếp tục theo dõi tới khi tồn quay về mức an toàn.',
+  RESOLVED: 'Tồn đã về trạng thái an toàn, giữ lại để tra cứu lịch sử.',
+};
+
+function getAlertNextStep(alert: StockAlert): string {
+  if (alert.status === 'ACTIVE' && alert.alert_type === 'OUT_OF_STOCK') {
+    return 'Hết hàng, cần ưu tiên bổ sung hoặc điều chuyển trước khi nhận thêm nhu cầu xuất.';
+  }
+  return STATUS_NEXT_STEPS[alert.status] ?? 'Kiểm tra trạng thái cảnh báo trước khi thao tác tiếp.';
+}
+
+function getAcknowledgeDisabledReason(alert: StockAlert, canManage: boolean): string {
+  if (!canManage) return 'Bạn chưa có quyền xác nhận cảnh báo tồn kho.';
+  if (alert.status !== 'ACTIVE') return 'Chỉ xác nhận được cảnh báo đang hoạt động.';
+  return '';
+}
+
 const SUMMARY_TILE_STYLE = {
   border: '1px solid #e5e7eb',
   borderRadius: 18,
@@ -373,9 +392,14 @@ export default function StockAlertList() {
     {
       title: 'Trạng thái',
       dataIndex: 'status',
-      width: 150,
-      render: (value: StockAlertStatus) => (
-        <Tag color={STATUS_COLORS[value]}>{STATUS_LABELS[value]}</Tag>
+      width: 300,
+      render: (_: StockAlertStatus, row) => (
+        <Space direction="vertical" size={4}>
+          <Tag color={STATUS_COLORS[row.status]}>{STATUS_LABELS[row.status]}</Tag>
+          <Text data-testid={`stock-alert-next-step-${row.id}`} type="secondary" style={{ fontSize: 12 }}>
+            {getAlertNextStep(row)}
+          </Text>
+        </Space>
       ),
     },
     {
@@ -387,18 +411,22 @@ export default function StockAlertList() {
     {
       title: 'Thao tác',
       width: 190,
-      render: (_, row) => (
-        <Button
-          size="small"
-          type="primary"
-          icon={<CheckOutlined />}
-          disabled={!canManage || row.status !== 'ACTIVE'}
-          onClick={() => acknowledgeMutation.mutate(row.id)}
-          loading={acknowledgeMutation.isPending}
-        >
-          Xác nhận
-        </Button>
-      ),
+      render: (_, row) => {
+        const disabledReason = getAcknowledgeDisabledReason(row, canManage);
+        return (
+          <Button
+            size="small"
+            type="primary"
+            icon={<CheckOutlined />}
+            disabled={Boolean(disabledReason)}
+            title={disabledReason || 'Xác nhận đã thấy cảnh báo và đang xử lý bổ sung tồn'}
+            onClick={() => acknowledgeMutation.mutate(row.id)}
+            loading={acknowledgeMutation.isPending}
+          >
+            Xác nhận
+          </Button>
+        );
+      },
     },
   ];
 

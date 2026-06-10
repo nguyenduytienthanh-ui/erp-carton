@@ -45,6 +45,18 @@ const STATUS_COLORS: Record<StocktakeStatus, string> = {
   CANCELLED: 'default',
 };
 
+const STATUS_NEXT_STEPS: Record<StocktakeStatus, string> = {
+  DRAFT: 'Nhập đủ số kiểm kê, rà lại chênh lệch rồi hoàn tất kiểm kê.',
+  COMPLETED: 'Xem trước điều chỉnh tồn, xử lý dòng bị chặn rồi ghi điều chỉnh nếu có chênh lệch.',
+  CANCELLED: 'Phiếu đã hủy, chỉ dùng để tra cứu lịch sử kiểm kê.',
+};
+
+const STATUS_HELP_TEXT: Record<StocktakeStatus, string> = {
+  DRAFT: 'Phiếu nháp chưa khóa số đếm và chưa tạo giao dịch điều chỉnh.',
+  COMPLETED: 'Hoàn tất kiểm kê chỉ khóa số đếm; tồn kho chỉ đổi sau khi ghi điều chỉnh.',
+  CANCELLED: 'Không thao tác tiếp trên phiếu đã hủy.',
+};
+
 const ADJUSTMENT_TYPE_LABELS: Record<StocktakeAdjustmentType, string> = {
   ADJUSTMENT_IN: 'Điều chỉnh tăng',
   ADJUSTMENT_OUT: 'Điều chỉnh giảm',
@@ -115,6 +127,42 @@ function formatBlockedReason(value: unknown): string {
       .join('; ');
   }
   return String(value);
+}
+
+function getStocktakeNextStep(stocktake?: Stocktake | null, adjustmentPosted = false): string {
+  if (!stocktake) return 'Chọn một phiếu kiểm tồn để xem bước xử lý tiếp theo.';
+  if (stocktake.status === 'COMPLETED' && adjustmentPosted) {
+    return 'Phiếu đã ghi điều chỉnh tồn, đối chiếu sổ kho nếu cần kiểm tra sau kiểm kê.';
+  }
+  return STATUS_NEXT_STEPS[stocktake.status] ?? 'Kiểm tra trạng thái hiện tại trước khi thao tác tiếp.';
+}
+
+function getStocktakeStatusHelp(stocktake?: Stocktake | null): string {
+  if (!stocktake) return '';
+  return STATUS_HELP_TEXT[stocktake.status] ?? '';
+}
+
+function getStocktakeAlertType(stocktake?: Stocktake | null, adjustmentPosted = false): 'info' | 'success' | 'warning' {
+  if (!stocktake) return 'info';
+  if (adjustmentPosted) return 'success';
+  if (stocktake.status === 'COMPLETED') return 'warning';
+  if (stocktake.status === 'DRAFT') return 'info';
+  return 'info';
+}
+
+function getPostAdjustmentDisabledReason(
+  stocktake: Stocktake | null,
+  preview: StocktakeAdjustmentPreview | null,
+  adjustmentPosted: boolean,
+): string {
+  if (!stocktake) return 'Chưa chọn phiếu kiểm tồn.';
+  if (stocktake.status !== 'COMPLETED') return 'Chỉ phiếu đã hoàn tất kiểm kê mới ghi điều chỉnh tồn.';
+  if (adjustmentPosted) return 'Phiếu này đã ghi điều chỉnh tồn.';
+  if (!preview) return 'Cần xem trước điều chỉnh tồn trước khi ghi.';
+  if (!preview.can_post) return 'Preview hiện tại chưa cho phép ghi điều chỉnh.';
+  if (preview.blocked_lines > 0) return 'Còn dòng bị chặn, cần xử lý trước khi ghi.';
+  if (preview.transaction_count === 0) return 'Không có chênh lệch cần ghi điều chỉnh.';
+  return '';
 }
 
 export default function StocktakeList() {
@@ -304,6 +352,7 @@ export default function StocktakeList() {
   const canOpenPostAdjustment =
     Boolean(detail && previewForDetail?.can_post && previewForDetail.blocked_lines === 0 && previewForDetail.transaction_count > 0) &&
     !isAdjustmentPosted;
+  const postAdjustmentDisabledReason = getPostAdjustmentDisabledReason(detail, previewForDetail, isAdjustmentPosted);
 
   const handleOpenPostAdjustment = () => {
     if (!detail || !previewForDetail) {
@@ -467,8 +516,15 @@ export default function StocktakeList() {
     {
       title: 'Trạng thái',
       dataIndex: 'status',
-      width: 120,
-      render: (s: StocktakeStatus) => <Tag color={STATUS_COLORS[s]}>{STATUS_LABELS[s]}</Tag>,
+      width: 280,
+      render: (_: StocktakeStatus, row) => (
+        <Space direction="vertical" size={4}>
+          <Tag color={STATUS_COLORS[row.status]}>{STATUS_LABELS[row.status]}</Tag>
+          <span data-testid={`stocktake-next-step-${row.id}`} style={{ color: '#595959', fontSize: 12, lineHeight: 1.45 }}>
+            {getStocktakeNextStep(row)}
+          </span>
+        </Space>
+      ),
     },
     { title: 'Ghi chú', dataIndex: 'note', ellipsis: true },
   ];
@@ -796,6 +852,14 @@ export default function StocktakeList() {
               </Space>
               {detail.note && <div style={{ marginTop: 8, color: '#666' }}>{detail.note}</div>}
             </div>
+            <Alert
+              showIcon
+              data-testid="stocktake-detail-next-step"
+              type={getStocktakeAlertType(detail, isAdjustmentPosted)}
+              message={getStocktakeNextStep(detail, isAdjustmentPosted)}
+              description={getStocktakeStatusHelp(detail)}
+              style={{ marginBottom: 16 }}
+            />
             <Table<StocktakeLine>
               rowKey="id"
               size="small"
@@ -838,6 +902,7 @@ export default function StocktakeList() {
                     onClick={() => previewAdjustmentMutation.mutate(detail.id)}
                     loading={previewAdjustmentMutation.isPending}
                     disabled={isAdjustmentPosted}
+                    title={isAdjustmentPosted ? 'Phiếu đã ghi điều chỉnh tồn.' : 'Xem trước các dòng sẽ tạo giao dịch điều chỉnh'}
                   >
                     Xem trước điều chỉnh tồn
                   </Button>
@@ -845,6 +910,7 @@ export default function StocktakeList() {
                     data-testid="stocktake-post-adjustments"
                     type="primary"
                     disabled={!canOpenPostAdjustment}
+                    title={postAdjustmentDisabledReason || 'Ghi các giao dịch điều chỉnh tồn sau kiểm kê'}
                     onClick={handleOpenPostAdjustment}
                   >
                     Ghi điều chỉnh tồn
@@ -889,6 +955,7 @@ export default function StocktakeList() {
                 <Button
                   data-testid={`stocktake-complete-${detail.id}`}
                   type="primary"
+                  title="Khóa số kiểm kê để chuẩn bị xem trước điều chỉnh tồn"
                   onClick={() => completeMutation.mutate(detail.id)}
                   loading={completeMutation.isPending}
                 >
@@ -897,6 +964,7 @@ export default function StocktakeList() {
                 <Button
                   data-testid={`stocktake-delete-${detail.id}`}
                   danger
+                  title="Chỉ xóa phiếu kiểm tồn còn ở trạng thái nháp"
                   onClick={() => { if (window.confirm('Xóa phiếu này?')) deleteMutation.mutate(detail.id); }}
                   loading={deleteMutation.isPending}
                 >
