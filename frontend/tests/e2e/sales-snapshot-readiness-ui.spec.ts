@@ -206,6 +206,7 @@ test('sales order form shows snapshot readiness advisory without blocking edits'
 
   await page.goto('/sales-orders');
   await expect(page.getByText('SO-SNAPSHOT-001')).toBeVisible();
+  await expect(page.getByTestId('sales-order-next-step-9001')).toContainText('gửi duyệt');
   await page.getByTestId('sales-order-edit-9001').click();
 
   const panel = page.getByTestId('sales-snapshot-readiness-panel');
@@ -218,4 +219,13 @@ test('sales order form shows snapshot readiness advisory without blocking edits'
   await expect(panel).toContainText('Metadata in');
   await expect(panel).toContainText('không tự refresh snapshot');
   await expect(page.getByText('Dòng 1')).toBeVisible();
+});
+
+test('sales order detail shows owner next-step guidance', async ({ page }) => {
+  await setupMockApi(page);
+
+  await page.goto('/sales-orders');
+  await page.getByTestId('sales-order-view-9001').click();
+
+  await expect(page.getByTestId('sales-order-detail-next-step')).toContainText('gửi duyệt');
 });

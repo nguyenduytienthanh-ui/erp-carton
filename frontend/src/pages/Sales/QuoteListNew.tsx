@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import {
-  Table, Button, Space, Input, Select, Modal, Skeleton, message, Tag, Row, Col, Card, Statistic, Form, DatePicker,
+  Alert, Table, Button, Space, Input, Select, Modal, Skeleton, message, Tag, Row, Col, Card, Statistic, Form, DatePicker,
 } from 'antd';
 import { EyeOutlined, DeleteOutlined, DownloadOutlined, PlusOutlined, FileTextOutlined, SwapOutlined, StopOutlined, CheckOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 
 import { salesApi } from '../../api/sales';
@@ -28,6 +29,29 @@ const statusLabel: Record<QuoteStatus, string> = {
   EXPIRED: 'Hết hạn',
 };
 
+const quoteNextSteps: Record<QuoteStatus, string> = {
+  DRAFT: 'Kiểm tra thông tin khách hàng rồi gửi báo giá cho khách.',
+  SENT: 'Theo dõi phản hồi khách hàng: chấp nhận hoặc từ chối báo giá.',
+  ACCEPTED: 'Chuyển báo giá thành đơn hàng xuất để tiếp tục xử lý.',
+  REJECTED: 'Báo giá đã bị từ chối; tạo báo giá mới nếu khách đổi yêu cầu.',
+  EXPIRED: 'Báo giá đã hết hạn; tạo báo giá mới trước khi chuyển đơn.',
+};
+
+function getQuoteNextStep(quote?: Pick<Quote, 'status'> | null): string {
+  if (!quote) return 'Chọn một báo giá để xem bước xử lý tiếp theo.';
+  return quoteNextSteps[quote.status] ?? 'Kiểm tra trạng thái báo giá trước khi thao tác tiếp.';
+}
+
+function getQuoteActionDisabledReason(quote: Quote, action: 'edit' | 'send' | 'accept' | 'reject' | 'convert' | 'delete'): string {
+  if (action === 'edit') return quote.status === 'DRAFT' ? '' : 'Chỉ sửa được báo giá Nháp.';
+  if (action === 'send') return quote.status === 'DRAFT' ? '' : 'Chỉ báo giá Nháp mới gửi được.';
+  if (action === 'accept') return quote.status === 'SENT' ? '' : 'Chỉ báo giá Đã gửi mới chấp nhận được.';
+  if (action === 'reject') return quote.status === 'SENT' ? '' : 'Chỉ báo giá Đã gửi mới từ chối được.';
+  if (action === 'convert') return quote.status === 'ACCEPTED' ? '' : 'Chỉ báo giá Đã chấp nhận mới chuyển thành đơn hàng.';
+  if (action === 'delete') return quote.status === 'DRAFT' ? '' : 'Chỉ xóa được báo giá Nháp.';
+  return '';
+}
+
 const QuoteList: React.FC = () => {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<QuoteStatus | ''>('');
@@ -38,6 +62,7 @@ const QuoteList: React.FC = () => {
   const [detailQuote, setDetailQuote] = useState<Quote | null>(null);
   const [form] = Form.useForm();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const params = {
     search: search || undefined,
@@ -123,9 +148,10 @@ const QuoteList: React.FC = () => {
 
   const convertMutation = useMutation({
     mutationFn: (id: number) => salesApi.convertQuoteToOrder(id),
-    onSuccess: () => {
-      message.success('Đã chuyển báo giá thành đơn bán');
+    onSuccess: (result) => {
+      message.success(`Đã chuyển báo giá thành đơn bán ${result.order_code}`);
       refreshQuotes();
+      navigate(`/sales-orders?focus_id=${result.order_id}`);
     },
     onError: (error) => message.error(getToastMessage(error, 'Chuyển báo giá thất bại')),
   });
@@ -217,8 +243,18 @@ const QuoteList: React.FC = () => {
       title: 'Trạng thái',
       dataIndex: 'status',
       key: 'status',
-      width: 120,
-      render: (value: QuoteStatus) => <Tag color={statusColor[value]}>{statusLabel[value]}</Tag>,
+      width: 260,
+      render: (value: QuoteStatus, row: Quote) => (
+        <div>
+          <Tag color={statusColor[value]}>{statusLabel[value]}</Tag>
+          <div
+            data-testid={`quote-next-step-${row.id}`}
+            style={{ marginTop: 4, color: '#595959', fontSize: 12, lineHeight: 1.45 }}
+          >
+            {getQuoteNextStep(row)}
+          </div>
+        </div>
+      ),
     },
     {
       title: 'Tổng tiền',
@@ -232,14 +268,23 @@ const QuoteList: React.FC = () => {
       title: 'Thao tác',
       key: 'actions',
       width: 360,
-      render: (_: unknown, row: Quote) => (
+      render: (_: unknown, row: Quote) => {
+        const editReason = getQuoteActionDisabledReason(row, 'edit');
+        const sendReason = getQuoteActionDisabledReason(row, 'send');
+        const acceptReason = getQuoteActionDisabledReason(row, 'accept');
+        const rejectReason = getQuoteActionDisabledReason(row, 'reject');
+        const convertReason = getQuoteActionDisabledReason(row, 'convert');
+        const deleteReason = getQuoteActionDisabledReason(row, 'delete');
+
+        return (
         <Space wrap size="small">
           <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailQuote(row)}>
             Xem
           </Button>
           <Button
             size="small"
-            disabled={row.status !== 'DRAFT'}
+            disabled={Boolean(editReason)}
+            title={editReason || 'Sửa báo giá nháp'}
             onClick={() => {
               setEditQuote(row);
               form.setFieldsValue({
@@ -260,6 +305,8 @@ const QuoteList: React.FC = () => {
                 size="small"
                 danger
                 icon={<DeleteOutlined />}
+                disabled={Boolean(deleteReason)}
+                title={deleteReason || 'Xóa báo giá nháp'}
                 onClick={() => {
                   Modal.confirm({
                     title: 'Xóa báo giá',
@@ -270,20 +317,35 @@ const QuoteList: React.FC = () => {
               >
                 Xóa
               </Button>
-              <Button size="small" type="primary" onClick={() => sendMutation.mutate(row.id)}>
+              <Button
+                size="small"
+                type="primary"
+                disabled={Boolean(sendReason)}
+                title={sendReason || 'Gửi báo giá cho khách hàng'}
+                onClick={() => sendMutation.mutate(row.id)}
+              >
                 Gửi
               </Button>
             </>
           )}
           {row.status === 'SENT' && (
             <>
-              <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => acceptMutation.mutate(row.id)}>
+              <Button
+                size="small"
+                type="primary"
+                icon={<CheckOutlined />}
+                disabled={Boolean(acceptReason)}
+                title={acceptReason || 'Đánh dấu khách đã chấp nhận báo giá'}
+                onClick={() => acceptMutation.mutate(row.id)}
+              >
                 Chấp nhận
               </Button>
               <Button
                 size="small"
                 danger
                 icon={<StopOutlined />}
+                disabled={Boolean(rejectReason)}
+                title={rejectReason || 'Từ chối báo giá với lý do rõ ràng'}
                 onClick={() => {
                   Modal.confirm({
                     title: 'Từ chối báo giá',
@@ -297,7 +359,14 @@ const QuoteList: React.FC = () => {
             </>
           )}
           {row.status === 'ACCEPTED' && (
-            <Button size="small" type="primary" icon={<SwapOutlined />} onClick={() => convertMutation.mutate(row.id)}>
+            <Button
+              size="small"
+              type="primary"
+              icon={<SwapOutlined />}
+              disabled={Boolean(convertReason)}
+              title={convertReason || 'Tạo đơn hàng xuất từ báo giá đã chấp nhận'}
+              onClick={() => convertMutation.mutate(row.id)}
+            >
               Chuyển đơn
             </Button>
           )}
@@ -305,7 +374,8 @@ const QuoteList: React.FC = () => {
             PDF
           </Button>
         </Space>
-      ),
+        );
+      },
     },
   ];
 
@@ -373,6 +443,7 @@ const QuoteList: React.FC = () => {
         columns={columns}
         dataSource={rows}
         loading={isLoading}
+        locale={{ emptyText: 'Chưa có báo giá phù hợp. Kiểm tra bộ lọc hoặc tạo báo giá mới cho khách hàng.' }}
         pagination={{
           current: page,
           pageSize,
@@ -431,6 +502,13 @@ const QuoteList: React.FC = () => {
       <Modal title="Chi tiết báo giá" open={!!detailQuote} onCancel={() => setDetailQuote(null)} footer={null} width={700}>
         {detailQuote && (
           <div>
+            <Alert
+              showIcon
+              type={detailQuote.status === 'ACCEPTED' ? 'success' : detailQuote.status === 'REJECTED' ? 'warning' : 'info'}
+              style={{ marginBottom: 12 }}
+              message="Việc cần làm tiếp"
+              description={<span data-testid="quote-detail-next-step">{getQuoteNextStep(detailQuote)}</span>}
+            />
             <p><strong>Mã:</strong> {detailQuote.code}</p>
             <p><strong>Khách hàng:</strong> {detailQuote.customer_name ?? '-'}</p>
             <p><strong>Ngày báo giá:</strong> {dayjs(detailQuote.quote_date).format('DD/MM/YYYY')}</p>

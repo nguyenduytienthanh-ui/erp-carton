@@ -207,6 +207,88 @@ const STATUS_LABELS: Record<string, string> = {
   VOID: 'Đã hủy',
 };
 
+const STATUS_NEXT_STEPS: Record<string, string> = {
+  DRAFT: 'Kiểm tra khách hàng, dòng hàng và lịch giao, sau đó gửi duyệt.',
+  SUBMITTED: 'Chờ duyệt đơn. Nếu sai thông tin, người duyệt có thể từ chối kèm lý do.',
+  APPROVED: 'Ghi sổ chứng từ, giữ chỗ tồn kho hoặc chuyển sang xuất kho/giao hàng.',
+  REJECTED: 'Xem lý do từ chối, rồi tạo hoặc sửa lại đơn nháp khác nếu cần.',
+  POSTED: 'Theo dõi giữ chỗ, phiếu xuất, QR và xác nhận giao hàng.',
+  VOID: 'Đơn đã hủy, không tiếp tục xuất kho hoặc giao hàng từ đơn này.',
+};
+
+const STATUS_HELP_TEXT: Record<string, string> = {
+  DRAFT: 'Đơn còn sửa được trước khi gửi duyệt.',
+  SUBMITTED: 'Đơn đang khóa để chờ quyết định duyệt.',
+  APPROVED: 'Đơn đã được duyệt để xử lý kho, sản xuất và giao hàng.',
+  REJECTED: 'Đơn bị từ chối, không đi tiếp quy trình.',
+  POSTED: 'Chứng từ bán hàng đã được chốt; kho và giao hàng xử lý ở các phần bên dưới.',
+  VOID: 'Đơn đã hủy và chỉ dùng để tra cứu lịch sử.',
+};
+
+type SalesOrderActionKey = 'edit' | 'submit' | 'approve' | 'confirm' | 'reject' | 'post' | 'void';
+type SalesOrderActionPermissions = {
+  canSubmit: boolean;
+  canApprove: boolean;
+  canPost: boolean;
+  canVoid: boolean;
+};
+
+function getSalesOrderNextStep(order?: Pick<SalesOrder, 'status' | 'confirmed_at'> | null): string {
+  if (!order) return 'Chọn một đơn hàng để xem bước xử lý tiếp theo.';
+  const confirmedHint = order.confirmed_at ? ' Đơn đã được xác nhận với khách hàng.' : '';
+  return `${STATUS_NEXT_STEPS[order.status] ?? 'Kiểm tra trạng thái hiện tại trước khi thao tác tiếp.'}${confirmedHint}`;
+}
+
+function getSalesOrderStatusHelp(order?: Pick<SalesOrder, 'status'> | null): string {
+  if (!order) return '';
+  return STATUS_HELP_TEXT[order.status] ?? '';
+}
+
+function getSalesOrderAlertType(order?: Pick<SalesOrder, 'status'> | null): 'info' | 'success' | 'warning' | 'error' {
+  if (!order) return 'info';
+  if (order.status === 'APPROVED' || order.status === 'POSTED') return 'success';
+  if (order.status === 'SUBMITTED' || order.status === 'DRAFT') return 'info';
+  if (order.status === 'REJECTED') return 'warning';
+  if (order.status === 'VOID') return 'error';
+  return 'info';
+}
+
+function getSalesOrderActionDisabledReason(
+  order: SalesOrder,
+  action: SalesOrderActionKey,
+  permissions: SalesOrderActionPermissions
+): string {
+  if (action === 'edit') {
+    return order.status === 'DRAFT' ? '' : 'Chỉ sửa được đơn ở trạng thái Nháp.';
+  }
+  if (action === 'submit') {
+    if (!permissions.canSubmit) return 'Bạn chưa có quyền gửi duyệt đơn hàng.';
+    return order.status === 'DRAFT' ? '' : 'Chỉ đơn Nháp mới gửi duyệt được.';
+  }
+  if (action === 'approve') {
+    if (!permissions.canApprove) return 'Bạn chưa có quyền duyệt đơn hàng.';
+    return order.status === 'SUBMITTED' ? '' : 'Chỉ đơn Chờ duyệt mới duyệt được.';
+  }
+  if (action === 'confirm') {
+    if (!permissions.canSubmit) return 'Bạn chưa có quyền xác nhận đơn với khách hàng.';
+    if (order.confirmed_at) return 'Đơn đã được xác nhận với khách hàng.';
+    return ['DRAFT', 'SUBMITTED'].includes(order.status) ? '' : 'Chỉ xác nhận được khi đơn còn Nháp hoặc Chờ duyệt.';
+  }
+  if (action === 'reject') {
+    if (!permissions.canApprove) return 'Bạn chưa có quyền từ chối đơn hàng.';
+    return order.status === 'SUBMITTED' ? '' : 'Chỉ đơn Chờ duyệt mới từ chối được.';
+  }
+  if (action === 'post') {
+    if (!permissions.canPost) return 'Bạn chưa có quyền ghi sổ đơn hàng.';
+    return order.status === 'APPROVED' ? '' : 'Chỉ đơn Đã duyệt mới ghi sổ được.';
+  }
+  if (action === 'void') {
+    if (!permissions.canVoid) return 'Bạn chưa có quyền hủy đơn hàng.';
+    return ['APPROVED', 'POSTED'].includes(order.status) ? '' : 'Chỉ hủy được đơn Đã duyệt hoặc Đã vào sổ.';
+  }
+  return '';
+}
+
 const SHIPMENT_STATUS_LABELS: Record<string, string> = {
   POSTED: 'Đã xuất',
   CANCELLED: 'Đã hủy',
@@ -2180,15 +2262,36 @@ export default function SalesOrderList() {
     { title: 'Dòng hàng', width: 90, render: (_, row) => row.lines?.length ?? 0 },
     {
       title: 'Trạng thái',
-      width: 110,
-      render: (_, row) => <Tag color={STATUS_COLORS[row.status] || 'default'}>{STATUS_LABELS[row.status] || row.status}</Tag>,
+      width: 260,
+      render: (_, row) => (
+        <div>
+          <Tag color={STATUS_COLORS[row.status] || 'default'}>{STATUS_LABELS[row.status] || row.status}</Tag>
+          <div
+            data-testid={`sales-order-next-step-${row.id}`}
+            style={{ marginTop: 4, color: '#595959', fontSize: 12, lineHeight: 1.45 }}
+          >
+            {getSalesOrderNextStep(row)}
+          </div>
+        </div>
+      ),
     },
     {
       title: 'Thao tác',
       key: 'actions',
       width: 420,
       fixed: 'right',
-      render: (_, row) => (
+      render: (_, row) => {
+        const permissions = { canSubmit, canApprove, canPost, canVoid };
+        const editReason = getSalesOrderActionDisabledReason(row, 'edit', permissions);
+        const submitReason = getSalesOrderActionDisabledReason(row, 'submit', permissions);
+        const approveReason = getSalesOrderActionDisabledReason(row, 'approve', permissions);
+        const confirmReason = getSalesOrderActionDisabledReason(row, 'confirm', permissions);
+        const rejectReason = getSalesOrderActionDisabledReason(row, 'reject', permissions);
+        const postReason = getSalesOrderActionDisabledReason(row, 'post', permissions);
+        const voidReason = getSalesOrderActionDisabledReason(row, 'void', permissions);
+        const deleteReason = row.status === 'DRAFT' ? '' : 'Chỉ xóa được đơn ở trạng thái Nháp.';
+
+        return (
         <Space wrap>
           <Button
             size="small"
@@ -2201,7 +2304,8 @@ export default function SalesOrderList() {
           <Button
             size="small"
             data-testid={`sales-order-edit-${row.id}`}
-            disabled={row.status !== 'DRAFT'}
+            disabled={Boolean(editReason)}
+            title={editReason || 'Sửa thông tin đơn nháp'}
             onClick={() => {
               setEditingOrder(row);
               form.setFieldsValue(toOrderFormValues(row));
@@ -2213,7 +2317,8 @@ export default function SalesOrderList() {
           <Button
             size="small"
             data-testid={`sales-order-submit-${row.id}`}
-            disabled={!canSubmit || row.status !== 'DRAFT'}
+            disabled={Boolean(submitReason)}
+            title={submitReason || 'Gửi đơn sang bước duyệt'}
             onClick={() => void submitMutation.mutateAsync(row.id)}
           >
             Gửi duyệt
@@ -2221,7 +2326,8 @@ export default function SalesOrderList() {
           <Button
             size="small"
             data-testid={`sales-order-approve-${row.id}`}
-            disabled={!canApprove || row.status !== 'SUBMITTED'}
+            disabled={Boolean(approveReason)}
+            title={approveReason || 'Duyệt đơn để chuyển sang xử lý'}
             onClick={() => void approveMutation.mutateAsync(row.id)}
           >
             Duyệt
@@ -2230,7 +2336,8 @@ export default function SalesOrderList() {
             size="small"
             type="primary"
             data-testid={`sales-order-confirm-${row.id}`}
-            disabled={!canSubmit || !['DRAFT', 'SUBMITTED'].includes(row.status) || !!row.confirmed_at}
+            disabled={Boolean(confirmReason)}
+            title={confirmReason || 'Đánh dấu đã xác nhận đơn với khách hàng'}
             onClick={() => void confirmMutation.mutateAsync(row.id)}
           >
             {row.confirmed_at ? 'Đã xác nhận' : 'Xác nhận'}
@@ -2239,7 +2346,8 @@ export default function SalesOrderList() {
             size="small"
             danger
             data-testid={`sales-order-reject-${row.id}`}
-            disabled={!canApprove || row.status !== 'SUBMITTED'}
+            disabled={Boolean(rejectReason)}
+            title={rejectReason || 'Từ chối đơn và nhập lý do rõ ràng'}
             onClick={() => {
               setReasonModal({ type: 'reject', order: row });
               setReasonText('');
@@ -2250,7 +2358,8 @@ export default function SalesOrderList() {
           <Button
             size="small"
             data-testid={`sales-order-post-${row.id}`}
-            disabled={!canPost || row.status !== 'APPROVED'}
+            disabled={Boolean(postReason)}
+            title={postReason || 'Ghi sổ chứng từ bán hàng'}
             onClick={() => void postMutation.mutateAsync(row.id)}
           >
             Ghi sổ
@@ -2259,7 +2368,8 @@ export default function SalesOrderList() {
             size="small"
             danger
             data-testid={`sales-order-void-${row.id}`}
-            disabled={!canVoid || !['APPROVED', 'POSTED'].includes(row.status)}
+            disabled={Boolean(voidReason)}
+            title={voidReason || 'Hủy đơn với lý do bắt buộc'}
             onClick={() => {
               setReasonModal({ type: 'void', order: row });
               setReasonText('');
@@ -2272,7 +2382,8 @@ export default function SalesOrderList() {
             danger
             icon={<DeleteOutlined />}
             data-testid={`sales-order-delete-${row.id}`}
-            disabled={row.status !== 'DRAFT'}
+            disabled={Boolean(deleteReason)}
+            title={deleteReason || 'Xóa đơn nháp chưa gửi duyệt'}
             onClick={() =>
               Modal.confirm({
                 title: `Xóa đơn ${row.code}?`,
@@ -2283,7 +2394,8 @@ export default function SalesOrderList() {
             }
           />
         </Space>
-      ),
+        );
+      },
     },
   ];
 
@@ -2668,6 +2780,7 @@ export default function SalesOrderList() {
         loading={orderQuery.isLoading}
         columns={columns}
         dataSource={rows}
+        locale={{ emptyText: 'Chưa có đơn hàng xuất phù hợp. Kiểm tra bộ lọc hoặc tạo đơn mới khi đã có khách hàng và dòng hàng.' }}
         scroll={{ x: 1900 }}
         pagination={{
           current: page,
@@ -3826,6 +3939,20 @@ export default function SalesOrderList() {
           <Descriptions.Item label="Post #">{detailQuery.data?.post_number || detailOrder?.post_number || '-'}</Descriptions.Item>
           <Descriptions.Item label="Xác nhận">{detailQuery.data?.confirmed_at ? dayjs(detailQuery.data.confirmed_at).format('DD/MM/YYYY HH:mm') : detailOrder?.confirmed_at ? dayjs(detailOrder.confirmed_at).format('DD/MM/YYYY HH:mm') : '-'}</Descriptions.Item>
         </Descriptions>
+        {(detailQuery.data || detailOrder) ? (
+          <Alert
+            showIcon
+            type={getSalesOrderAlertType(detailQuery.data || detailOrder)}
+            style={{ marginTop: 12 }}
+            message="Việc cần làm tiếp"
+            description={
+              <div>
+                <div data-testid="sales-order-detail-next-step">{getSalesOrderNextStep(detailQuery.data || detailOrder)}</div>
+                <div style={{ marginTop: 4 }}>{getSalesOrderStatusHelp(detailQuery.data || detailOrder)}</div>
+              </div>
+            }
+          />
+        ) : null}
         <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button
             onClick={() => detailOrder && invoicePdfMutation.mutate(detailOrder.id)}
