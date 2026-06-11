@@ -33,7 +33,8 @@ import type { ColumnsType } from 'antd/es/table';
 import type { MenuProps } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { productsApi, type ActivityItem } from '../../api/products';
-import type { Product } from '../../types/product';
+import type { Product, ProductItemType } from '../../types/product';
+import { PRODUCT_ITEM_TYPE_LABELS, PRODUCT_ITEM_TYPE_OPTIONS } from '../../types/product';
 import { theme } from '../../styles/theme';
 import FormattedPrice from '../../components/FormattedPrice';
 import EmptyState from '../../components/EmptyState';
@@ -80,12 +81,8 @@ import BulkPriceAdjustModal from './BulkPriceAdjustModal';
 const PRODUCT_LIST_SIZE_SEPARATED = ['size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao'];
 const PRODUCT_LIST_SIZE_MERGED = ['size_po_merged', 'size_sx_merged'];
 const DEFAULT_PRODUCT_VISIBLE_COLUMNS: string[] = [
-  'code', 'name', 'category_name', 'cost_price', 'sale_price', 'commission_per_unit', 'commission_percent',
-  ...PRODUCT_LIST_SIZE_SEPARATED,
-  'wave_code', 'box_type_code', 'unit_name', 'delivery_tolerance',
-  'process_xa', 'process_in', 'film_code', 'color_count', 'waterproof', 'co_cm', 'process_can_mang',
-  'process_boi', 'process_be', 'mold_code', 'process_chap', 'process_dong', 'process_dan', 'process_khac',
-  'note_other', 'note', 'status', 'actions',
+  'code', 'name', 'item_type', 'category_name', 'unit_name', 'spec_summary',
+  'cost_price', 'sale_price', 'status', 'actions',
 ];
 
 /** Ô lọc số: input HTML thuần + QuickClearIcon khi có giá trị. Key cố định → tránh remount/focus mất khi re-render. */
@@ -194,6 +191,7 @@ function FilterTextInput(
 const FILTER_OPTIONS = [
   { key: 'code' as const, label: 'Mã hàng' },
   { key: 'name' as const, label: 'Tên hàng' },
+  { key: 'item_type' as const, label: 'Loại item' },
   { key: 'category' as const, label: 'Danh mục' },
   { key: 'unit' as const, label: 'Đơn vị' },
   { key: 'status' as const, label: 'Trạng thái' },
@@ -231,12 +229,22 @@ const getProductStatusTone = (status: string | null | undefined): 'ok' | 'warn' 
   return 'neutral';
 };
 
+const ITEM_TYPE_TAG_COLORS: Record<ProductItemType, string> = {
+  general: 'default',
+  finished_good: 'green',
+  semi_finished: 'cyan',
+  raw_material: 'blue',
+  accessory: 'purple',
+  service: 'gold',
+};
+
 // getHistoryActionCode & getHistoryActionLabelVi → dùng từ ../../utils/historyUtils (shared)
 
 const PRODUCT_HISTORY_FIELD_LABELS: Record<string, string> = {
   code: 'Mã hàng',
   name: 'Tên hàng',
   description: 'Mô tả',
+  item_type: 'Loại item',
   category: 'Danh mục',
   category_name: 'Danh mục',
   unit: 'Đơn vị',
@@ -433,10 +441,25 @@ function parseSizeDRC(s: string | undefined): [string, string, string] {
   return [parts[0] ?? '', parts[1] ?? '', parts[2] ?? ''];
 }
 
+function getSpecSummary(product: Product): string {
+  const parts = [
+    product.size_order?.trim(),
+    product.wave_code?.trim(),
+    product.box_type_code?.trim(),
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' / ') : '-';
+}
+
 function toNumberOrNull(v: string | number | null): number | null {
   if (v === null) return null;
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+function toItemTypeOrNull(v: string | number | null): ProductItemType | null {
+  if (v === null) return null;
+  const s = String(v);
+  return PRODUCT_ITEM_TYPE_OPTIONS.some((option) => option.value === s) ? (s as ProductItemType) : null;
 }
 
 function toStatusOrNull(v: string | number | null): ProductStatus | null {
@@ -459,13 +482,13 @@ const WATERPROOF_LABELS: Record<string, string> = {
 };
 
 const FILTER_KEYS: FilterKey[] = [
-  'code', 'name', 'category', 'unit', 'status', 'wave', 'box_type', 'cost_price', 'sale_price',
+  'code', 'name', 'item_type', 'category', 'unit', 'status', 'wave', 'box_type', 'cost_price', 'sale_price',
   'size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao',
   'waterproof', 'co_cm', 'note',
 ];
 
 const PRODUCT_LIST_ORDERED_URL_KEYS = [
-  'q', 'code', 'name', 'category', 'unit', 'status', 'wave', 'box_type',
+  'q', 'code', 'name', 'item_type', 'category', 'unit', 'status', 'wave', 'box_type',
   'min_cost_price', 'max_cost_price', 'min_sale_price', 'max_sale_price',
   'size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao',
   'waterproof', 'co_cm', 'note',
@@ -486,6 +509,7 @@ function parseProductListParams(searchParams: URLSearchParams): {
   exactSearch: boolean;
 } {
   const q = searchParams.get('q') ?? '';
+  const item_type = searchParams.get('item_type') as ProductItemType | null;
   const category = searchParams.get('category');
   const unit = searchParams.get('unit');
   const status = searchParams.get('status') as ProductStatus | null;
@@ -512,6 +536,7 @@ function parseProductListParams(searchParams: URLSearchParams): {
   const exactSearch = searchParams.get('exact_search') === '1' || searchParams.get('exact_search') === 'true';
 
   const filterValues: FilterValues = {
+    item_type: item_type && PRODUCT_ITEM_TYPE_OPTIONS.some((option) => option.value === item_type) ? item_type : null,
     category: category ? parseInt(category, 10) : null,
     unit: unit ? parseInt(unit, 10) : null,
     status: status && ['DRAFT', 'ACTIVE', 'DISCONTINUED'].includes(status) ? status : null,
@@ -569,6 +594,7 @@ function productListParamsToSearch(
   if (search.trim()) params.q = search.trim();
   if (filterValues.code?.trim()) params.code = filterValues.code.trim();
   if (filterValues.name?.trim()) params.name = filterValues.name.trim();
+  if (filterValues.item_type != null) params.item_type = filterValues.item_type;
   if (filterValues.category != null) params.category = String(filterValues.category);
   if (filterValues.unit != null) params.unit = String(filterValues.unit);
   if (filterValues.status != null) params.status = filterValues.status;
@@ -1049,6 +1075,7 @@ const ProductList = () => {
         exact_search: exactSearch ? '1' : undefined,
         code: intentFilters.code?.trim() || undefined,
         name: intentFilters.name?.trim() || undefined,
+        item_type: intentFilters.item_type ?? undefined,
         category: intentFilters.category ?? undefined,
         unit: intentFilters.unit ?? undefined,
         status: intentFilters.status ?? undefined,
@@ -1305,6 +1332,7 @@ const ProductList = () => {
     if (intentSearch) params.search = intentSearch;
     if (intentFilters.code?.trim()) params.code = intentFilters.code.trim();
     if (intentFilters.name?.trim()) params.name = intentFilters.name.trim();
+    if (intentFilters.item_type != null) params.item_type = intentFilters.item_type;
     if (intentFilters.category != null) params.category = intentFilters.category;
     if (intentFilters.unit != null) params.unit = intentFilters.unit;
     if (intentFilters.status != null) params.status = intentFilters.status;
@@ -1587,7 +1615,24 @@ const ProductList = () => {
         <div className={`ant-table-cell-ellipsis ${record.parent != null ? 'cell-text-child' : 'cell-text-primary'}`}>{n ?? '-'}</div>
       ),
     },
+    {
+      title: 'Loại item',
+      dataIndex: 'item_type',
+      key: 'item_type',
+      sortField: 'item_type',
+      width: 145,
+      render: (value: ProductItemType | null | undefined) => {
+        const itemType = value ?? 'general';
+        return (
+          <Tag color={ITEM_TYPE_TAG_COLORS[itemType]} style={{ marginInlineEnd: 0 }}>
+            {PRODUCT_ITEM_TYPE_LABELS[itemType] ?? PRODUCT_ITEM_TYPE_LABELS.general}
+          </Tag>
+        );
+      },
+    },
     { title: 'Danh mục', dataIndex: 'category_name', key: 'category_name', sortField: 'category__name', width: 140, render: (t: string) => <div className="ant-table-cell-ellipsis cell-text-secondary">{t ?? '-'}</div> },
+    { title: 'ĐVT', dataIndex: 'unit_name', key: 'unit_name', sortField: 'unit__code', width: 64, align: 'center' as const, render: (n: string) => (n && n.split(' - ')[0]) || '-' },
+    { title: 'Quy cách', key: 'spec_summary', width: 160, render: (_: unknown, record: Product) => <div className="ant-table-cell-ellipsis">{getSpecSummary(record)}</div> },
     {
       title: 'Giá vốn',
       dataIndex: 'cost_price',
@@ -1652,7 +1697,6 @@ const ProductList = () => {
         ]),
     { title: 'Sóng', dataIndex: 'wave_code', key: 'wave_code', sortField: 'wave__code', width: 56, align: 'center' as const, render: (t: string) => t ?? '-' },
     { title: 'Kiểu', dataIndex: 'box_type_code', key: 'box_type_code', sortField: 'box_type__code', width: 56, align: 'center' as const, render: (t: string) => t ?? '-' },
-    { title: 'ĐVT', dataIndex: 'unit_name', key: 'unit_name', sortField: 'unit__code', width: 56, align: 'center' as const, render: (n: string) => (n && n.split(' - ')[0]) || '-' },
     { title: '+/-', dataIndex: 'delivery_tolerance', key: 'delivery_tolerance', sortField: 'delivery_tolerance', width: 80, render: (t: string) => t ?? '-' },
     { title: 'Xả', dataIndex: 'process_xa', key: 'process_xa', sortField: 'process_xa', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
     { title: 'In', dataIndex: 'process_in', key: 'process_in', sortField: 'process_in', width: 56, align: 'right' as const, render: (v: number | null) => v != null ? v : '-' },
@@ -1808,6 +1852,20 @@ const ProductList = () => {
                   showClear={((localFilterInput.name ?? '').trim()) !== ''}
                   onClear={() => applyFilterChange((prev) => ({ ...prev, name: null }))}
                 />
+                </div>
+              )}
+              {opt.key === 'item_type' && (
+                <div data-quick-entry style={{ width: 220 }}>
+                  <FilterSelect
+                    placeholder="Chọn loại item"
+                    style={{ width: 220 }}
+                    value={localFilterInput.item_type ?? undefined}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, item_type: toItemTypeOrNull(v) }))}
+                    options={PRODUCT_ITEM_TYPE_OPTIONS.map((option) => ({ label: option.label, value: option.value }))}
+                    showClear
+                    hasValue={localFilterInput.item_type != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, item_type: null }))}
+                  />
                 </div>
               )}
               {opt.key === 'category' && (
@@ -2189,6 +2247,19 @@ const ProductList = () => {
                   />
                 </div>
               )}
+              {activeFilters.includes('item_type') && (
+                <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 170 }}>
+                  <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Loại item</span>
+                  <FilterSelect
+                    value={localFilterInput.item_type ?? undefined}
+                    onChange={(v) => applyFilterChange((prev) => ({ ...prev, item_type: toItemTypeOrNull(v) }))}
+                    options={PRODUCT_ITEM_TYPE_OPTIONS.map((option) => ({ label: option.label, value: option.value }))}
+                    showClear
+                    hasValue={localFilterInput.item_type != null}
+                    onClear={() => applyFilterChange((prev) => ({ ...prev, item_type: null }))}
+                  />
+                </div>
+              )}
               {activeFilters.includes('category') && (
                 <div data-quick-entry style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 150 }}>
                   <span style={{ fontSize: 13, color: '#8c8c8c', textAlign: 'left' }}>Danh mục</span>
@@ -2440,6 +2511,11 @@ const ProductList = () => {
                   <div>
                     <div style={{ fontWeight: 600, color: theme.colors.primary, fontSize: isCompactCards ? 13 : 14 }}>{record.code || '-'}</div>
                     <div style={{ fontWeight: 500, fontSize: isCompactCards ? 13 : 14 }}>{record.name || '-'}</div>
+                    <div style={{ marginTop: 4 }}>
+                      <Tag color={ITEM_TYPE_TAG_COLORS[record.item_type ?? 'general']} style={{ marginInlineEnd: 0 }}>
+                        {PRODUCT_ITEM_TYPE_LABELS[record.item_type ?? 'general'] ?? PRODUCT_ITEM_TYPE_LABELS.general}
+                      </Tag>
+                    </div>
                     <div style={{ color: '#595959', fontSize: isCompactCards ? 12 : 13 }}>
                       {(record.category_name as string) || '-'} • {(record.unit_name as string) || '-'}
                     </div>

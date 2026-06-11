@@ -189,6 +189,21 @@ export interface ProductBundleUpsertPayload {
 }
 
 export type ProductKind = 'SPECIFIC' | 'GENERIC';
+export type ProductItemType = 'general' | 'finished_good' | 'semi_finished' | 'raw_material' | 'accessory' | 'service';
+
+export const PRODUCT_ITEM_TYPE_OPTIONS: Array<{ value: ProductItemType; label: string }> = [
+  { value: 'general', label: 'Chưa phân loại' },
+  { value: 'finished_good', label: 'Thành phẩm carton' },
+  { value: 'semi_finished', label: 'Bán thành phẩm' },
+  { value: 'raw_material', label: 'Nguyên vật liệu' },
+  { value: 'accessory', label: 'Phụ liệu' },
+  { value: 'service', label: 'Dịch vụ' },
+];
+
+export const PRODUCT_ITEM_TYPE_LABELS: Record<ProductItemType, string> = PRODUCT_ITEM_TYPE_OPTIONS.reduce(
+  (acc, option) => ({ ...acc, [option.value]: option.label }),
+  {} as Record<ProductItemType, string>,
+);
 
 export interface Product {
   id: number;
@@ -201,6 +216,7 @@ export interface Product {
   unit: number;
   unit_name?: string;
   description?: string;
+  item_type: ProductItemType;
   product_kind: ProductKind;
   requires_order_spec: boolean;
   requires_order_operations_review: boolean;
@@ -315,6 +331,7 @@ export interface ProductFormData {
   category?: number;
   unit: number;
   description?: string;
+  item_type?: ProductItemType;
   product_kind?: ProductKind;
   requires_order_spec?: boolean;
   requires_order_operations_review?: boolean;
@@ -378,6 +395,7 @@ export interface ProductChildFormData {
   component_quantity: number; /* số lượng / bộ, bắt buộc */
   category?: number;
   unit: number; /* ĐVT bắt buộc */
+  item_type?: ProductItemType;
   cost_price?: number;
   sale_price?: number;
   commission_per_unit?: number;

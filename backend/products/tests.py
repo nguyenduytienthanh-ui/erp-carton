@@ -123,6 +123,15 @@ class ProductOperationApiTest(TestCase):
         self.assertFalse(product.requires_order_spec)
         self.assertFalse(product.requires_order_operations_review)
 
+    def test_product_defaults_to_general_item_type(self):
+        product = Product.objects.create(
+            code='ITEM-TYPE-DEFAULT',
+            name='Item Type Default',
+            unit=self.unit,
+        )
+
+        self.assertEqual(product.item_type, Product.ItemType.GENERAL)
+
     def test_product_api_returns_product_kind_fields(self):
         product = Product.objects.create(
             code='KIND-API-FIELDS',
@@ -138,6 +147,48 @@ class ProductOperationApiTest(TestCase):
         self.assertEqual(payload['product_kind'], 'SPECIFIC')
         self.assertTrue(payload['requires_order_spec'])
         self.assertFalse(payload['requires_order_operations_review'])
+
+    def test_product_api_exposes_and_updates_item_type(self):
+        create_response = self.client.post(
+            '/api/products/products/',
+            {
+                'code': 'ITEM-TYPE-RAW',
+                'name': 'Item Type Raw',
+                'unit': self.unit.id,
+                'item_type': Product.ItemType.RAW_MATERIAL,
+            },
+            format='json',
+        )
+
+        self.assertEqual(create_response.status_code, 201)
+        self.assertEqual(create_response.json()['item_type'], Product.ItemType.RAW_MATERIAL)
+
+        product = Product.objects.get(code='ITEM-TYPE-RAW')
+        update_response = self.client.patch(
+            f'/api/products/products/{product.id}/',
+            {'item_type': Product.ItemType.ACCESSORY},
+            format='json',
+        )
+
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(update_response.json()['item_type'], Product.ItemType.ACCESSORY)
+        product.refresh_from_db()
+        self.assertEqual(product.item_type, Product.ItemType.ACCESSORY)
+
+    def test_product_api_rejects_invalid_item_type(self):
+        response = self.client.post(
+            '/api/products/products/',
+            {
+                'code': 'ITEM-TYPE-BAD',
+                'name': 'Item Type Bad',
+                'unit': self.unit.id,
+                'item_type': 'bad-value',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('item_type', response.json())
 
     def test_product_create_generic_auto_sets_order_review_flags(self):
         response = self.client.post(

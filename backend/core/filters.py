@@ -113,6 +113,7 @@ class ProductFilter(django_filters.FilterSet):
     category = django_filters.NumberFilter(field_name='category__id')
     unit = django_filters.NumberFilter(field_name='unit__id')
     status = django_filters.ChoiceFilter(choices=Product._meta.get_field('status').choices)
+    item_type = django_filters.ChoiceFilter(choices=Product._meta.get_field('item_type').choices)
     wave = django_filters.NumberFilter(field_name='wave__id')
     box_type = django_filters.NumberFilter(field_name='box_type__id')
     min_cost_price = django_filters.NumberFilter(field_name='cost_price', lookup_expr='gte')
@@ -139,7 +140,7 @@ class ProductFilter(django_filters.FilterSet):
     class Meta:
         model = Product
         fields = [
-            'code', 'name', 'description', 'category', 'unit', 'status', 'wave', 'box_type',
+            'code', 'name', 'description', 'category', 'unit', 'status', 'item_type', 'wave', 'box_type',
             'min_cost_price', 'max_cost_price', 'min_sale_price', 'max_sale_price',
             'owner', 'team', 'is_active', 'parent__isnull', 'created_from', 'created_to',
             'size_po_dai', 'size_po_rong', 'size_po_cao', 'size_sx_dai', 'size_sx_rong', 'size_sx_cao',

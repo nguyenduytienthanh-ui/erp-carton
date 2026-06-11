@@ -1,9 +1,11 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import type { ProductItemType } from '../types/product';
 
 export type ProductStatus = 'DRAFT' | 'ACTIVE' | 'DISCONTINUED';
 
 export type FilterKey =
+  | 'item_type'
   | 'category'
   | 'unit'
   | 'status'
@@ -24,6 +26,7 @@ export type FilterKey =
   | 'note';
 
 export interface FilterValues {
+  item_type: ProductItemType | null;
   category: number | null;
   unit: number | null;
   status: ProductStatus | null;
@@ -47,6 +50,7 @@ export interface FilterValues {
 }
 
 export const EMPTY_FILTER_VALUES: FilterValues = {
+  item_type: null,
   category: null,
   unit: null,
   status: null,
@@ -89,6 +93,7 @@ function areArraysEqual<T>(a: T[], b: T[]) {
 function areFilterValuesEqual(a: FilterValues, b: FilterValues) {
   return (
     a.category === b.category &&
+    a.item_type === b.item_type &&
     a.unit === b.unit &&
     a.status === b.status &&
     a.wave === b.wave &&

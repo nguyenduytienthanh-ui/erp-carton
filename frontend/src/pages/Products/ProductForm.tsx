@@ -17,6 +17,7 @@ import type {
   ProductBundleUpsertPayload,
   ProductBundlePricingMode,
   ProductBundleDeliveryRule,
+  ProductItemType,
   ProductKind,
   ProductOperationCode,
   ProductOperationInput,
@@ -26,7 +27,7 @@ import type {
   ProductRoutingStep,
   ProductRoutingStepType,
 } from '../../types/product';
-import { WATERPROOF_OPTIONS } from '../../types/product';
+import { PRODUCT_ITEM_TYPE_OPTIONS, WATERPROOF_OPTIONS } from '../../types/product';
 import { useQuickEntryKeys } from '../../hooks/useQuickEntryKeys';
 import { parseApiError } from '../../shared/apiError';
 
@@ -65,6 +66,7 @@ const defaultMother = (firstUnitId: number | undefined): ProductFormData => ({
   name: '',
   category: undefined,
   unit: firstUnitId ?? (0 as number),
+  item_type: 'general',
   product_kind: 'SPECIFIC',
   requires_order_spec: false,
   requires_order_operations_review: false,
@@ -108,6 +110,7 @@ const defaultChild = (firstUnitId: number | undefined): ProductChildFormData => 
   component_quantity: 1,
   unit: firstUnitId ?? (0 as number),
   category: undefined,
+  item_type: 'general',
   cost_price: 0,
   sale_price: 0,
   commission_per_unit: undefined,
@@ -648,6 +651,19 @@ function validateOperationRates(data: OperationFormData, labelPrefix: string): s
 }
 
 /** Validate khi bấm Cập nhật; không validate khi đang gõ. */
+const CARTON_ITEM_TYPES: ProductItemType[] = ['finished_good', 'semi_finished'];
+
+function isCartonItemType(itemType?: ProductItemType): boolean {
+  return CARTON_ITEM_TYPES.includes(itemType ?? 'general');
+}
+
+function getItemTypeHelper(itemType?: ProductItemType): string {
+  if (isCartonItemType(itemType)) {
+    return 'Thành phẩm/bán thành phẩm carton: nên nhập quy cách D/R/C, sóng và kiểu thùng nếu đã có.';
+  }
+  return 'NVL, phụ liệu, dịch vụ: quy cách carton là tùy chọn, chỉ nhập khi thực sự cần theo nghiệp vụ.';
+}
+
 function validateMother(m: ProductFormData): string | null {
   if (!(m.code ?? '').trim()) return 'Vui lòng nhập Mã hàng (Mẹ).';
   if (!(m.name ?? '').trim()) return 'Vui lòng nhập Tên hàng (Mẹ).';
@@ -656,8 +672,8 @@ function validateMother(m: ProductFormData): string | null {
   if (Number.isNaN(cost) || cost < 0) return 'Giá vốn không hợp lệ.';
   if (Number.isNaN(sale) || sale < 0) return 'Đơn giá không hợp lệ.';
   if (!m.unit) return 'Vui lòng chọn ĐVT (bắt buộc).';
-  if (!m.wave) return 'Vui lòng chọn Sóng (bắt buộc).';
-  if (!m.box_type) return 'Vui lòng chọn Kiểu (bắt buộc).';
+  if (isCartonItemType(m.item_type) && !m.wave) return 'Vui lòng chọn Sóng (bắt buộc).';
+  if (isCartonItemType(m.item_type) && !m.box_type) return 'Vui lòng chọn Kiểu (bắt buộc).';
   return null;
 }
 
@@ -670,8 +686,8 @@ function validateChild(c: ProductChildFormData): string | null {
   if (Number.isNaN(cost) || cost < 0) return 'Giá vốn hàng con không hợp lệ.';
   if (Number.isNaN(sale) || sale < 0) return 'Đơn giá hàng con không hợp lệ.';
   if (!c.unit) return 'Vui lòng chọn ĐVT (bắt buộc).';
-  if (!c.wave) return 'Vui lòng chọn Sóng (bắt buộc).';
-  if (!c.box_type) return 'Vui lòng chọn Kiểu (bắt buộc).';
+  if (isCartonItemType(c.item_type) && !c.wave) return 'Vui lòng chọn Sóng (bắt buộc).';
+  if (isCartonItemType(c.item_type) && !c.box_type) return 'Vui lòng chọn Kiểu (bắt buộc).';
   return null;
 }
 
@@ -706,6 +722,7 @@ function buildMotherPayload(m: ProductFormData, isSet: boolean): ProductFormData
     requires_order_operations_review: productKind === 'GENERIC' ? true : Boolean(m.requires_order_operations_review),
     code: (m.code ?? '').trim(),
     name: (m.name ?? '').trim(),
+    item_type: m.item_type ?? 'general',
     cost_price: Number(m.cost_price) || 0,
     sale_price: Number(m.sale_price) || 0,
     min_stock: Number(m.min_stock) || 0,
@@ -734,6 +751,7 @@ function buildChildPayload(
     ...buildPrintColorPayload(c),
     code,
     name: (c.name ?? '').trim(),
+    item_type: c.item_type ?? 'general',
     component_quantity: Number(c.component_quantity) || 1,
     unit: c.unit,
     category: c.category,
@@ -1243,6 +1261,32 @@ function ChildBlock({
         )}
       </div>
       <div className="pf-row">
+        <Field label="Loại item" span={2}>
+          <select
+            className="pf-select"
+            data-testid={`product-child-item-type-select-${index}`}
+            value={child.item_type ?? 'general'}
+            onChange={(e) => onChange('item_type', e.target.value as ProductItemType)}
+          >
+            {PRODUCT_ITEM_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </Field>
+        <div
+          style={{
+            gridColumn: 'span 8',
+            alignSelf: 'end',
+            color: 'var(--app-text-secondary)',
+            fontSize: 12,
+            lineHeight: 1.4,
+            paddingBottom: 3,
+          }}
+        >
+          {getItemTypeHelper(child.item_type)}
+        </div>
+      </div>
+      <div className="pf-row">
         <Field label="Giá vốn" span={1}>
           <FormInputWithClear
             type="number"
@@ -1324,13 +1368,13 @@ function ChildBlock({
         <Field label="Cao SX" span={1}>
           <input type="text" placeholder="Sản xuất" className="pf-input" value={(child.size_production ?? '').split(/x/)[2]?.trim() ?? ''} onChange={(e) => { const p = (child.size_production ?? '').split(/x/); p[2] = e.target.value; onChange('size_production', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
         </Field>
-        <Field label="Sóng" required span={1}>
+        <Field label="Sóng" required={isCartonItemType(child.item_type)} span={1}>
           <select className="pf-select" value={child.wave ?? ''} onChange={(e) => onChange('wave', e.target.value ? Number(e.target.value) : undefined)}>
             <option value="">Chọn</option>
             {waves.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}
           </select>
         </Field>
-        <Field label="Kiểu" required span={1}>
+        <Field label="Kiểu" required={isCartonItemType(child.item_type)} span={1}>
           <select className="pf-select" value={child.box_type ?? ''} onChange={(e) => onChange('box_type', e.target.value ? Number(e.target.value) : undefined)}>
             <option value="">Chọn</option>
             {boxTypes.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
@@ -1417,6 +1461,7 @@ function componentToChildFormData(c: Product, firstUnitId: number | undefined): 
     component_quantity: Number(c.component_quantity) || 1,
     unit: c.unit ?? firstUnitId ?? (0 as number),
     category: c.category ?? undefined,
+    item_type: c.item_type ?? 'general',
     cost_price: c.cost_price != null ? Number(c.cost_price) : 0,
     sale_price: c.sale_price != null ? Number(c.sale_price) : 0,
     commission_per_unit: c.commission_per_unit != null ? Number(c.commission_per_unit) : undefined,
@@ -1453,6 +1498,7 @@ function productToMother(p: Product): ProductFormData {
     category: p.category ?? undefined,
     description: p.description ?? '',
     unit: p.unit ?? 0,
+    item_type: p.item_type ?? 'general',
     product_kind: p.product_kind ?? 'SPECIFIC',
     requires_order_spec: p.product_kind === 'GENERIC' ? true : Boolean(p.requires_order_spec),
     requires_order_operations_review: p.product_kind === 'GENERIC' ? true : Boolean(p.requires_order_operations_review),
@@ -2140,6 +2186,32 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
             </Field>
           </div>
           <div className="pf-row">
+            <Field label="Loại item" span={2}>
+              <select
+                className="pf-select"
+                data-testid="product-item-type-select"
+                value={mother.item_type ?? 'general'}
+                onChange={(e) => setMotherField('item_type', e.target.value as ProductItemType)}
+              >
+                {PRODUCT_ITEM_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </Field>
+            <div
+              style={{
+                gridColumn: 'span 8',
+                alignSelf: 'end',
+                color: 'var(--app-text-secondary)',
+                fontSize: 12,
+                lineHeight: 1.4,
+                paddingBottom: 3,
+              }}
+            >
+              {getItemTypeHelper(mother.item_type)}
+            </div>
+          </div>
+          <div className="pf-row">
             <Field label="Loại mã hàng" span={2}>
               <select
                 className="pf-select"
@@ -2302,13 +2374,13 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
             <Field label="Cao SX" span={1}>
               <input type="text" placeholder="Sản xuất" className="pf-input" value={(mother.size_production ?? '').split(/x/)[2]?.trim() ?? ''} onChange={(e) => { const p = (mother.size_production ?? '').split(/x/); p[2] = e.target.value; setMotherField('size_production', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
             </Field>
-            <Field label="Sóng" required span={1}>
+            <Field label="Sóng" required={isCartonItemType(mother.item_type)} span={1}>
               <select className="pf-select" value={mother.wave ?? ''} onChange={(e) => setMotherField('wave', e.target.value ? Number(e.target.value) : undefined)}>
                 <option value="">Chọn</option>
                 {waves.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}
               </select>
             </Field>
-            <Field label="Kiểu" required span={1}>
+            <Field label="Kiểu" required={isCartonItemType(mother.item_type)} span={1}>
               <select className="pf-select" value={mother.box_type ?? ''} onChange={(e) => setMotherField('box_type', e.target.value ? Number(e.target.value) : undefined)}>
                 <option value="">Chọn</option>
                 {boxTypes.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}

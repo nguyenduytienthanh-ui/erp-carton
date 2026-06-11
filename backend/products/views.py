@@ -459,7 +459,7 @@ class ProductViewSet(ExportExcelMixin, viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = ProductFilter
     ordering_fields = [
-        'code', 'name', 'category__name', 'cost_price', 'sale_price', 'commission_per_unit', 'commission_percent',
+        'code', 'name', 'item_type', 'category__name', 'cost_price', 'sale_price', 'commission_per_unit', 'commission_percent',
         'size_order', 'size_production', 'wave__code', 'box_type__code', 'unit__code', 'min_stock', 'delivery_tolerance',
         'process_xa', 'process_in', 'film_code', 'color_count', 'waterproof', 'process_can_mang', 'process_boi', 'process_be',
         'mold_code', 'process_chap', 'process_dong', 'process_dan', 'process_khac', 'note_other', 'note', 'created_at',

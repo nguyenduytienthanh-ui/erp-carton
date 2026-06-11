@@ -10,6 +10,7 @@ type ProductRow = {
   category_name: string;
   unit: number;
   unit_name: string;
+  item_type: 'general' | 'finished_good' | 'semi_finished' | 'raw_material' | 'accessory' | 'service';
   product_kind: 'SPECIFIC' | 'GENERIC';
   cost_price: string;
   sale_price: string;
@@ -41,6 +42,7 @@ const baseProduct = (patch: Partial<ProductRow> = {}): ProductRow => ({
   category_name: 'Carton',
   unit: 1,
   unit_name: 'Cai',
+  item_type: 'finished_good',
   product_kind: 'SPECIFIC',
   cost_price: '1000',
   sale_price: '1500',
@@ -124,9 +126,13 @@ async function setupProductModuleMock(page: Page, seedProducts: ProductRow[] = [
     if (path === '/api/products/products/' && method === 'GET') {
       log.productListUrls.push(request.url());
       const search = (currentUrl.searchParams.get('search') || currentUrl.searchParams.get('q') || '').toLowerCase();
-      const rows = search
+      const itemType = currentUrl.searchParams.get('item_type');
+      const searchedRows = search
         ? products.filter((product) => `${product.code} ${product.name}`.toLowerCase().includes(search))
         : products;
+      const rows = itemType
+        ? searchedRows.filter((product) => product.item_type === itemType)
+        : searchedRows;
       return json(route, paginated(rows));
     }
 
@@ -139,6 +145,7 @@ async function setupProductModuleMock(page: Page, seedProducts: ProductRow[] = [
         name: String(payload.name || 'Owner UAT new'),
         unit: Number(payload.unit || 1),
         category: typeof payload.category === 'number' ? payload.category : null,
+        item_type: typeof payload.item_type === 'string' ? (payload.item_type as ProductRow['item_type']) : 'general',
         cost_price: String(payload.cost_price ?? '0'),
         sale_price: String(payload.sale_price ?? '0'),
         product_kind: payload.product_kind === 'GENERIC' ? 'GENERIC' : 'SPECIFIC',
@@ -174,6 +181,8 @@ test('product material owner path covers empty state create validation and save 
   await priceRowInputs.nth(1).fill('Owner UAT carton');
   await priceRowInputs.nth(2).fill('1000');
   await priceRowInputs.nth(3).fill('1500');
+  await modal.getByTestId('product-item-type-select').selectOption('finished_good');
+  await expect(modal.getByText(/nên nhập quy cách/i)).toBeVisible();
 
   const sizeRowSelects = modal.locator('.pf-section-mother .pf-row-size select.pf-select');
   await sizeRowSelects.nth(0).selectOption('1');
@@ -187,19 +196,27 @@ test('product material owner path covers empty state create validation and save 
     code: 'P-UAT-001',
     name: 'Owner UAT carton',
     unit: 1,
+    item_type: 'finished_good',
     wave: 1,
     box_type: 1,
     product_kind: 'SPECIFIC',
     status: 'ACTIVE',
   });
   await expect(page.getByText('P-UAT-001').first()).toBeVisible();
+  await expect(page.getByText('Thành phẩm carton').first()).toBeVisible();
 });
 
 test('product material list search sends the backend query contract', async ({ page }) => {
   const apiLog = await setupProductModuleMock(page, [baseProduct()]);
 
-  await page.goto('/products');
+  await page.goto('/products?item_type=finished_good&activeFilters=item_type');
   await expect(page.getByText('P-UAT-001').first()).toBeVisible();
+
+  await expect.poll(() => {
+    return apiLog.productListUrls
+      .map((rawUrl) => new URL(rawUrl))
+      .some((url) => url.searchParams.get('item_type') === 'finished_good');
+  }).toBe(true);
 
   await page.locator('.list-page-toolbar input[type="text"]').first().fill('P-UAT-001');
 

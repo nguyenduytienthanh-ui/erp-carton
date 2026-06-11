@@ -318,6 +318,14 @@ class Product(models.Model):
         SPECIFIC = 'SPECIFIC', 'Mã riêng'
         GENERIC = 'GENERIC', 'Mã chung'
 
+    class ItemType(models.TextChoices):
+        GENERAL = 'general', 'Chưa phân loại'
+        FINISHED_GOOD = 'finished_good', 'Thành phẩm carton'
+        SEMI_FINISHED = 'semi_finished', 'Bán thành phẩm'
+        RAW_MATERIAL = 'raw_material', 'Nguyên vật liệu'
+        ACCESSORY = 'accessory', 'Phụ liệu'
+        SERVICE = 'service', 'Dịch vụ'
+
     PRINT_COLOR_FIELDS = (
         'print_color_1',
         'print_color_2',
@@ -344,6 +352,13 @@ class Product(models.Model):
         verbose_name="Đơn vị tính",
     )
     description = models.TextField(blank=True, verbose_name="Mô tả")
+    item_type = models.CharField(
+        max_length=32,
+        choices=ItemType.choices,
+        default=ItemType.GENERAL,
+        db_index=True,
+        verbose_name="Loại item",
+    )
     product_kind = models.CharField(
         max_length=20,
         choices=ProductKind.choices,
@@ -639,6 +654,13 @@ class Product(models.Model):
             parts.append(wp)
         for choice_val, label in self.WATERPROOF_CHOICES:
             if choice_val == wp and label:
+                parts.append(label)
+        # Loại item nghiệp vụ: thành phẩm, NVL, phụ liệu...
+        item_type = getattr(self, 'item_type', None) or ''
+        if item_type:
+            parts.append(item_type)
+        for choice_val, label in self.ItemType.choices:
+            if choice_val == item_type and label:
                 parts.append(label)
         # Trạng thái: giá trị + nhãn
         st = getattr(self, 'status', None) or ''
