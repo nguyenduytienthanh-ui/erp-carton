@@ -174,6 +174,7 @@ test('product material owner path covers empty state create validation and save 
 
   await modal.locator('.pf-footer .ant-btn-primary').click();
   await expect(modal.locator('.ant-alert-error')).toBeVisible();
+  await expect(modal.locator('.ant-alert-error')).toContainText('Mã');
   expect(apiLog.createPayloads).toHaveLength(0);
 
   const priceRowInputs = modal.locator('.pf-section-mother .pf-row-price input.pf-input');
@@ -187,7 +188,6 @@ test('product material owner path covers empty state create validation and save 
   const sizeRowSelects = modal.locator('.pf-section-mother .pf-row-size select.pf-select');
   await sizeRowSelects.nth(0).selectOption('1');
   await sizeRowSelects.nth(1).selectOption('1');
-  await sizeRowSelects.nth(2).selectOption('1');
 
   await modal.locator('.pf-footer .ant-btn-primary').click();
   await expect(modal).toBeHidden();

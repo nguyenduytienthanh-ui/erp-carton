@@ -27,7 +27,7 @@ import type {
   ProductRoutingStep,
   ProductRoutingStepType,
 } from '../../types/product';
-import { PRODUCT_ITEM_TYPE_OPTIONS, WATERPROOF_OPTIONS } from '../../types/product';
+import { PRODUCT_ITEM_TYPE_FORM_CONFIG, PRODUCT_ITEM_TYPE_OPTIONS, WATERPROOF_OPTIONS } from '../../types/product';
 import { useQuickEntryKeys } from '../../hooks/useQuickEntryKeys';
 import { parseApiError } from '../../shared/apiError';
 
@@ -44,20 +44,98 @@ function Field({
   required,
   children,
   span,
+  helper,
+  quickEntry = true,
 }: {
   label: string;
   required?: boolean;
   children: React.ReactNode;
   span: 1 | 2 | 3 | 4 | 5 | 9 | 10;
+  helper?: React.ReactNode;
+  quickEntry?: boolean;
 }) {
   return (
-    <div className="pf-field" style={{ gridColumn: `span ${span}` }} data-quick-entry>
+    <div className="pf-field" style={{ gridColumn: `span ${span}` }} {...(quickEntry ? { 'data-quick-entry': true } : {})}>
       <label className="pf-label">
         {label}
         {required && <span className="pf-required">*</span>}
       </label>
       {children}
+      {helper && (
+        <div style={{ color: 'var(--app-text-secondary)', fontSize: 11, lineHeight: 1.35, marginTop: 4 }}>
+          {helper}
+        </div>
+      )}
     </div>
+  );
+}
+
+function FormSection({
+  title,
+  description,
+  children,
+  subtle = false,
+}: {
+  title: string;
+  description?: React.ReactNode;
+  children: React.ReactNode;
+  subtle?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        border: '1px solid var(--app-border)',
+        borderRadius: 8,
+        background: subtle ? 'var(--app-surface-subtle)' : 'var(--app-surface)',
+        padding: 12,
+        marginBottom: 12,
+      }}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginBottom: 10 }}>
+        <div style={{ fontWeight: 700, color: 'var(--app-text-primary)', fontSize: 14 }}>{title}</div>
+        {description && (
+          <div style={{ color: 'var(--app-text-secondary)', fontSize: 12, lineHeight: 1.45 }}>
+            {description}
+          </div>
+        )}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function AdvancedSection({
+  title,
+  description,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  return (
+    <details
+      open={defaultOpen || undefined}
+      style={{
+        border: '1px solid var(--app-border)',
+        borderRadius: 8,
+        background: 'var(--app-surface)',
+        padding: 12,
+        marginBottom: 12,
+      }}
+    >
+      <summary style={{ cursor: 'pointer', fontWeight: 700, color: 'var(--app-text-primary)', fontSize: 14 }}>
+        {title}
+        {description && (
+          <span style={{ display: 'block', color: 'var(--app-text-secondary)', fontWeight: 400, fontSize: 12, lineHeight: 1.45, marginTop: 3 }}>
+            {description}
+          </span>
+        )}
+      </summary>
+      <div style={{ marginTop: 12 }}>{children}</div>
+    </details>
   );
 }
 
@@ -651,43 +729,42 @@ function validateOperationRates(data: OperationFormData, labelPrefix: string): s
 }
 
 /** Validate khi bấm Cập nhật; không validate khi đang gõ. */
-const CARTON_ITEM_TYPES: ProductItemType[] = ['finished_good', 'semi_finished'];
+function getItemTypeFormConfig(itemType?: ProductItemType) {
+  return PRODUCT_ITEM_TYPE_FORM_CONFIG[itemType ?? 'general'];
+}
 
 function isCartonItemType(itemType?: ProductItemType): boolean {
-  return CARTON_ITEM_TYPES.includes(itemType ?? 'general');
+  return getItemTypeFormConfig(itemType).cartonMode === 'required';
 }
 
 function getItemTypeHelper(itemType?: ProductItemType): string {
-  if (isCartonItemType(itemType)) {
-    return 'Thành phẩm/bán thành phẩm carton: nên nhập quy cách D/R/C, sóng và kiểu thùng nếu đã có.';
-  }
-  return 'NVL, phụ liệu, dịch vụ: quy cách carton là tùy chọn, chỉ nhập khi thực sự cần theo nghiệp vụ.';
+  return getItemTypeFormConfig(itemType).guidance;
 }
 
 function validateMother(m: ProductFormData): string | null {
-  if (!(m.code ?? '').trim()) return 'Vui lòng nhập Mã hàng (Mẹ).';
-  if (!(m.name ?? '').trim()) return 'Vui lòng nhập Tên hàng (Mẹ).';
+  if (!(m.code ?? '').trim()) return 'Vui lòng nhập Mã sản phẩm/vật tư. Trường bắt buộc chính: Mã, Tên và ĐVT.';
+  if (!(m.name ?? '').trim()) return 'Vui lòng nhập Tên sản phẩm/vật tư. Trường bắt buộc chính: Mã, Tên và ĐVT.';
   const cost = Number(m.cost_price);
   const sale = Number(m.sale_price);
   if (Number.isNaN(cost) || cost < 0) return 'Giá vốn không hợp lệ.';
   if (Number.isNaN(sale) || sale < 0) return 'Đơn giá không hợp lệ.';
-  if (!m.unit) return 'Vui lòng chọn ĐVT (bắt buộc).';
-  if (isCartonItemType(m.item_type) && !m.wave) return 'Vui lòng chọn Sóng (bắt buộc).';
-  if (isCartonItemType(m.item_type) && !m.box_type) return 'Vui lòng chọn Kiểu (bắt buộc).';
+  if (!m.unit) return 'Vui lòng chọn ĐVT. Trường bắt buộc chính: Mã, Tên và ĐVT.';
+  if (isCartonItemType(m.item_type) && !m.wave) return 'Vui lòng chọn Sóng cho thành phẩm/bán thành phẩm carton.';
+  if (isCartonItemType(m.item_type) && !m.box_type) return 'Vui lòng chọn Kiểu cho thành phẩm/bán thành phẩm carton.';
   return null;
 }
 
 function validateChild(c: ProductChildFormData): string | null {
-  if (!(c.name ?? '').trim()) return 'Vui lòng nhập Tên hàng (Con).';
+  if (!(c.name ?? '').trim()) return 'Vui lòng nhập Tên thành phần con.';
   const q = Number(c.component_quantity);
   if (Number.isNaN(q) || q < 1) return 'Số lượng / bộ phải lớn hơn 0.';
   const cost = Number(c.cost_price ?? 0);
   const sale = Number(c.sale_price ?? 0);
   if (Number.isNaN(cost) || cost < 0) return 'Giá vốn hàng con không hợp lệ.';
   if (Number.isNaN(sale) || sale < 0) return 'Đơn giá hàng con không hợp lệ.';
-  if (!c.unit) return 'Vui lòng chọn ĐVT (bắt buộc).';
-  if (isCartonItemType(c.item_type) && !c.wave) return 'Vui lòng chọn Sóng (bắt buộc).';
-  if (isCartonItemType(c.item_type) && !c.box_type) return 'Vui lòng chọn Kiểu (bắt buộc).';
+  if (!c.unit) return 'Vui lòng chọn ĐVT cho thành phần con.';
+  if (isCartonItemType(c.item_type) && !c.wave) return 'Vui lòng chọn Sóng cho thành phần carton.';
+  if (isCartonItemType(c.item_type) && !c.box_type) return 'Vui lòng chọn Kiểu cho thành phần carton.';
   return null;
 }
 
@@ -1711,6 +1788,8 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
     : defaultRoutingRows.length > 0
       ? defaultRoutingRows
       : routingRows;
+  const motherItemTypeConfig = getItemTypeFormConfig(mother.item_type);
+  const isCartonMother = motherItemTypeConfig.cartonMode === 'required';
 
   const markRoutingCustom = (nextRows?: RoutingFormRow[]) => {
     if (nextRows) {
@@ -2109,8 +2188,17 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
           ))}
         </datalist>
         <section className="pf-section pf-section-mother">
+          <FormSection
+            title="Thông tin cơ bản và giá"
+            description={`Đang tạo ${motherItemTypeConfig.summary}. Trường bắt buộc chính: Mã, Tên và ĐVT; giá có thể nhập ngay nếu đã biết.`}
+          >
           <div className="pf-row pf-row-price">
-            <Field label="Mã hàng (Mẹ)" required span={2}>
+            <Field
+              label="Mã sản phẩm/vật tư"
+              required
+              span={2}
+              helper="Mã chính/mã mẹ nếu công ty đang dùng phân cấp mã."
+            >
               <FormInputWithClear
                 type="text"
                 className="pf-input"
@@ -2119,7 +2207,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 onClear={() => setMotherField('code', '')}
               />
             </Field>
-            <Field label="Tên hàng" required span={2}>
+            <Field label="Tên sản phẩm/vật tư" required span={2}>
               <FormInputWithClear
                 type="text"
                 className="pf-input"
@@ -2198,9 +2286,15 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 ))}
               </select>
             </Field>
+            <Field label="ĐVT" required span={2}>
+              <select className="pf-select" value={mother.unit || ''} onChange={(e) => setMotherField('unit', e.target.value ? Number(e.target.value) : 0)}>
+                <option value="">Chọn</option>
+                {units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+            </Field>
             <div
               style={{
-                gridColumn: 'span 8',
+                gridColumn: 'span 6',
                 alignSelf: 'end',
                 color: 'var(--app-text-secondary)',
                 fontSize: 12,
@@ -2208,9 +2302,15 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 paddingBottom: 3,
               }}
             >
-              {getItemTypeHelper(mother.item_type)}
+              {motherItemTypeConfig.guidance}
             </div>
           </div>
+          </FormSection>
+          <AdvancedSection
+            title="Thông tin nâng cao"
+            description="Mã chung, quy tắc khi lên đơn, giá bộ và lý do đổi giá. Mở khi nghiệp vụ cần."
+            defaultOpen={motherItemTypeConfig.advancedDefaultOpen}
+          >
           <div className="pf-row">
             <Field label="Loại mã hàng" span={2}>
               <select
@@ -2355,6 +2455,12 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
               />
             </Field>
           </div>
+          </AdvancedSection>
+          <FormSection
+            title={motherItemTypeConfig.cartonSectionTitle}
+            description={motherItemTypeConfig.cartonSectionDescription}
+            subtle={!isCartonMother}
+          >
           <div className="pf-row pf-row-size">
             <Field label="Dài PO" span={1}>
               <input type="text" placeholder="Khách" className="pf-input" value={(mother.size_order ?? '').split(/x/)[0]?.trim() ?? ''} onChange={(e) => { const p = (mother.size_order ?? '').split(/x/); p[0] = e.target.value; setMotherField('size_order', (p[0] ?? '') + 'x' + (p[1] ?? '') + 'x' + (p[2] ?? '')); }} />
@@ -2386,16 +2492,15 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
                 {boxTypes.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
               </select>
             </Field>
-            <Field label="ĐVT" required span={1}>
-              <select className="pf-select" value={mother.unit || ''} onChange={(e) => setMotherField('unit', e.target.value ? Number(e.target.value) : 0)}>
-                <option value="">Chọn</option>
-                {units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-              </select>
-            </Field>
             <Field label="+/-" span={1}>
               <FormInputWithClear type="text" className="pf-input" value={mother.delivery_tolerance ?? ''} onChange={(e) => setMotherField('delivery_tolerance', e.target.value)} onClear={() => setMotherField('delivery_tolerance', '')} />
             </Field>
           </div>
+          </FormSection>
+          <AdvancedSection
+            title="Thông tin sản xuất nâng cao"
+            description="Mã phim/khuôn, màu in, chống thấm, công đoạn và routing. Mở khi cần quản lý sản xuất chi tiết."
+          >
           <div className="pf-row">
             <Field label="Mã phim" span={2}>
               <FormInputWithClear type="text" placeholder="Tải file" className="pf-input" value={mother.film_code ?? ''} onChange={(e) => setMotherField('film_code', e.target.value)} onClear={() => setMotherField('film_code', '')} />
@@ -2450,6 +2555,8 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
               onSortRows={sortRoutingRows}
             />
           )}
+          </AdvancedSection>
+          <FormSection title="Trạng thái và ghi chú" description="Giữ trạng thái Đang bán nếu mã đã sẵn sàng dùng.">
           <div className="pf-row pf-row-note">
         <Field label="Ghi chú mã hàng" span={9}>
               <FormInputWithClear type="text" className="pf-input" value={mother.note ?? ''} onChange={(e) => setMotherField('note', e.target.value)} onClear={() => setMotherField('note', '')} />
@@ -2478,6 +2585,7 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
               </select>
             </Field>
           </div>
+          </FormSection>
         </section>
 
         <section className="pf-section pf-section-children">

@@ -205,6 +205,75 @@ export const PRODUCT_ITEM_TYPE_LABELS: Record<ProductItemType, string> = PRODUCT
   {} as Record<ProductItemType, string>,
 );
 
+export type ProductItemTypeCartonMode = 'required' | 'optional' | 'neutral';
+
+export interface ProductItemTypeFormConfig {
+  label: string;
+  summary: string;
+  guidance: string;
+  cartonMode: ProductItemTypeCartonMode;
+  cartonSectionTitle: string;
+  cartonSectionDescription: string;
+  advancedDefaultOpen: boolean;
+}
+
+export const PRODUCT_ITEM_TYPE_FORM_CONFIG: Record<ProductItemType, ProductItemTypeFormConfig> = {
+  general: {
+    label: PRODUCT_ITEM_TYPE_LABELS.general,
+    summary: 'Chưa phân loại',
+    guidance: 'Nên chọn Loại item trước khi nhập sâu để form gợi ý đúng trường cần nhập.',
+    cartonMode: 'neutral',
+    cartonSectionTitle: 'Quy cách carton',
+    cartonSectionDescription: 'Chưa phân loại: chỉ nhập quy cách nếu đã chắc nghiệp vụ cần dùng.',
+    advancedDefaultOpen: false,
+  },
+  finished_good: {
+    label: PRODUCT_ITEM_TYPE_LABELS.finished_good,
+    summary: 'Thành phẩm carton',
+    guidance: 'Thành phẩm carton: nên nhập quy cách D/R/C, sóng và kiểu thùng nếu đã có.',
+    cartonMode: 'required',
+    cartonSectionTitle: 'Quy cách carton',
+    cartonSectionDescription: 'Dùng cho thành phẩm carton. Sóng và Kiểu đang được đánh dấu bắt buộc theo logic hiện tại.',
+    advancedDefaultOpen: true,
+  },
+  semi_finished: {
+    label: PRODUCT_ITEM_TYPE_LABELS.semi_finished,
+    summary: 'Bán thành phẩm',
+    guidance: 'Bán thành phẩm carton: nên nhập quy cách D/R/C, sóng và kiểu nếu đã có.',
+    cartonMode: 'required',
+    cartonSectionTitle: 'Quy cách carton',
+    cartonSectionDescription: 'Dùng cho bán thành phẩm carton. Sóng và Kiểu đang được đánh dấu bắt buộc theo logic hiện tại.',
+    advancedDefaultOpen: true,
+  },
+  raw_material: {
+    label: PRODUCT_ITEM_TYPE_LABELS.raw_material,
+    summary: 'Nguyên vật liệu',
+    guidance: 'NVL không bắt buộc quy cách carton. Chỉ nhập sóng/kiểu/size khi công ty thật sự cần theo nghiệp vụ.',
+    cartonMode: 'optional',
+    cartonSectionTitle: 'Quy cách carton tùy chọn',
+    cartonSectionDescription: 'Nguyên vật liệu không bắt buộc Sóng/Kiểu. Có thể bỏ qua nhóm này.',
+    advancedDefaultOpen: false,
+  },
+  accessory: {
+    label: PRODUCT_ITEM_TYPE_LABELS.accessory,
+    summary: 'Phụ liệu',
+    guidance: 'Phụ liệu không bắt buộc quy cách carton. Chỉ nhập thêm khi cần theo nghiệp vụ.',
+    cartonMode: 'optional',
+    cartonSectionTitle: 'Quy cách carton tùy chọn',
+    cartonSectionDescription: 'Phụ liệu không bắt buộc Sóng/Kiểu. Có thể bỏ qua nhóm này.',
+    advancedDefaultOpen: false,
+  },
+  service: {
+    label: PRODUCT_ITEM_TYPE_LABELS.service,
+    summary: 'Dịch vụ',
+    guidance: 'Dịch vụ không bắt buộc quy cách carton. Thường chỉ cần mã, tên, ĐVT, giá và trạng thái.',
+    cartonMode: 'optional',
+    cartonSectionTitle: 'Quy cách carton tùy chọn',
+    cartonSectionDescription: 'Dịch vụ không bắt buộc Sóng/Kiểu. Có thể bỏ qua nhóm này.',
+    advancedDefaultOpen: false,
+  },
+};
+
 export interface Product {
   id: number;
   code: string;
