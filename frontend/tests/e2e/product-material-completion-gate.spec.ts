@@ -123,6 +123,48 @@ async function setupProductModuleMock(page: Page, seedProducts: ProductRow[] = [
       return json(route, paginated([{ id: 1, code: 'A1', name: 'A1', is_active: true }]));
     }
 
+    const readinessMatch = path.match(/^\/api\/products\/products\/(\d+)\/readiness\/$/);
+    if (readinessMatch && method === 'GET') {
+      const productId = Number(readinessMatch[1]);
+      const product = products.find((item) => item.id === productId);
+      return json(route, {
+        product_id: productId,
+        product_code: product?.code ?? '',
+        product_name: product?.name ?? '',
+        status: 'BLOCKER',
+        is_ready: false,
+        workflow_blocking: false,
+        summary: {
+          blocker_count: 1,
+          warning_count: 1,
+          issue_count: 2,
+          operation_count: 0,
+          routing_step_count: 0,
+          active_work_center_count: 0,
+          active_machine_count: 0,
+          print_color_count: 0,
+        },
+        issues: [
+          {
+            code: 'ROUTING_MISSING',
+            severity: 'BLOCKER',
+            category: 'routing',
+            message: 'Missing routing for production readiness.',
+            workflow_blocking: false,
+            details: {},
+          },
+        ],
+        rules: { workflow_enforced: false },
+      });
+    }
+
+    const detailMatch = path.match(/^\/api\/products\/products\/(\d+)\/$/);
+    if (detailMatch && method === 'GET') {
+      const productId = Number(detailMatch[1]);
+      const product = products.find((item) => item.id === productId);
+      return product ? json(route, product) : json(route, { detail: 'Not found' }, 404);
+    }
+
     if (path === '/api/products/products/' && method === 'GET') {
       log.productListUrls.push(request.url());
       const search = (currentUrl.searchParams.get('search') || currentUrl.searchParams.get('q') || '').toLowerCase();
@@ -226,4 +268,50 @@ test('product material list search sends the backend query contract', async ({ p
       .find((url) => url.searchParams.get('search') === 'P-UAT-001');
     return searchedRequest?.searchParams.get('q') ?? null;
   }).toBe('P-UAT-001');
+});
+
+test('product material item type filter and raw material form readiness stay visually scoped', async ({ page }) => {
+  const apiLog = await setupProductModuleMock(page, [
+    baseProduct({
+      id: 3001,
+      code: 'UAT-FG-001',
+      name: 'UAT finished carton',
+      item_type: 'finished_good',
+    }),
+    baseProduct({
+      id: 3002,
+      code: 'UAT-RM-001',
+      name: 'UAT raw material',
+      item_type: 'raw_material',
+    }),
+  ]);
+
+  await page.goto('/products?q=UAT&item_type=finished_good&activeFilters=item_type&pageSize=50');
+  const table = page.locator('.ant-table-tbody');
+  await expect.poll(() => new URL(page.url()).searchParams.get('item_type')).toBe('finished_good');
+  await expect(table.getByText('UAT-FG-001')).toBeVisible();
+  await expect(table.getByText('UAT-RM-001')).toHaveCount(0);
+
+  await expect.poll(() => {
+    return apiLog.productListUrls
+      .map((rawUrl) => new URL(rawUrl))
+      .some((url) => url.searchParams.get('item_type') === 'finished_good');
+  }).toBe(true);
+
+  await page.goto('/products?q=UAT&item_type=raw_material&activeFilters=item_type&pageSize=50');
+  await expect.poll(() => new URL(page.url()).searchParams.get('item_type')).toBe('raw_material');
+  await expect(table.getByText('UAT-RM-001')).toBeVisible();
+  await expect(table.getByText('UAT-FG-001')).toHaveCount(0);
+
+  await expect.poll(() => {
+    return apiLog.productListUrls
+      .map((rawUrl) => new URL(rawUrl))
+      .some((url) => url.searchParams.get('item_type') === 'raw_material');
+  }).toBe(true);
+
+  await table.getByText('UAT-RM-001', { exact: true }).click();
+  const modal = page.locator('.ant-modal').filter({ has: page.locator('.pf-container') }).first();
+  await expect(modal).toBeVisible();
+  await expect(modal.getByTestId('product-non-production-readiness-note')).toBeVisible();
+  await expect(modal.getByTestId('product-readiness-panel')).toHaveCount(0);
 });

@@ -34,7 +34,7 @@ import { parseApiError } from '../../shared/apiError';
 interface ProductFormProps {
   visible: boolean;
   onClose: () => void;
-  editingProduct?: { id: number } | null;
+  editingProduct?: Product | null;
   mode?: 'create' | 'edit' | 'view';
 }
 
@@ -334,6 +334,8 @@ const READINESS_STATUS_HELP: Record<ProductRoutingReadiness['status'], string> =
   BLOCKER: 'Thiếu routing/công đoạn hoặc dữ liệu chính cần xử lý trước khi đưa xuống sản xuất.',
 };
 
+const NON_PRODUCTION_READINESS_ITEM_TYPES = new Set<ProductItemType>(['raw_material', 'accessory', 'service']);
+
 const READINESS_SUMMARY_ITEMS: Array<{ key: keyof ProductRoutingReadiness['summary']; label: string }> = [
   { key: 'operation_count', label: 'Công đoạn' },
   { key: 'routing_step_count', label: 'Routing' },
@@ -464,6 +466,21 @@ function ProductReadinessPanel({
           <div style={{ color: '#64748b' }}>Chỉ cảnh báo/đánh giá, chưa chặn workflow.</div>
         </div>
       )}
+      style={{ marginBottom: 16 }}
+    />
+  );
+}
+
+function ProductNonProductionReadinessNote({ itemType }: { itemType?: ProductItemType }) {
+  const itemLabel = getItemTypeFormConfig(itemType).label.toLowerCase();
+
+  return (
+    <Alert
+      data-testid="product-non-production-readiness-note"
+      type="info"
+      showIcon
+      message={`Readiness sản xuất không bắt buộc cho ${itemLabel}.`}
+      description="NVL/phụ liệu/dịch vụ không bắt buộc cấu hình routing, công đoạn hoặc máy trước khi sử dụng trong danh mục sản phẩm/vật tư."
       style={{ marginBottom: 16 }}
     />
   );
@@ -1789,6 +1806,8 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
       ? defaultRoutingRows
       : routingRows;
   const motherItemTypeConfig = getItemTypeFormConfig(mother.item_type);
+  const currentItemType = productDetail?.item_type ?? editingProduct?.item_type ?? mother.item_type ?? 'general';
+  const showProductionReadiness = !NON_PRODUCTION_READINESS_ITEM_TYPES.has(currentItemType);
   const isCartonMother = motherItemTypeConfig.cartonMode === 'required';
 
   const markRoutingCustom = (nextRows?: RoutingFormRow[]) => {
@@ -2169,11 +2188,15 @@ const ProductForm = ({ visible, onClose, editingProduct, mode = 'create' }: Prod
           />
         )}
         {editingProduct?.id && (
-          <ProductReadinessPanel
-            readiness={productReadiness}
-            loading={productReadinessLoading}
-            error={productReadinessError}
-          />
+          showProductionReadiness ? (
+            <ProductReadinessPanel
+              readiness={productReadiness}
+              loading={productReadinessLoading}
+              error={productReadinessError}
+            />
+          ) : (
+            <ProductNonProductionReadinessNote itemType={currentItemType} />
+          )
         )}
         <div
           aria-disabled={isViewMode}

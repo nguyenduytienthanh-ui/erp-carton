@@ -499,6 +499,10 @@ const PRODUCT_LIST_ORDERED_URL_KEYS = [
 let persistedLocalFilterInput: LocalFilterInput = { ...EMPTY_LOCAL_FILTER_INPUT };
 
 /** Đọc bộ lọc + tìm kiếm + phân trang từ URL */
+function hasProductListUrlParams(searchParams: URLSearchParams): boolean {
+  return PRODUCT_LIST_ORDERED_URL_KEYS.some((key) => searchParams.get(key) != null);
+}
+
 function parseProductListParams(searchParams: URLSearchParams): {
   searchInput: string;
   search: string;
@@ -854,7 +858,8 @@ const ProductList = () => {
   const INITIAL_APPLY_WINDOW_MS = 800;
   const applyPreferencesBootstrap = useCallback((nextConfig: PreferencesConfig) => {
     const withinWindow = Date.now() - mountedAt <= INITIAL_APPLY_WINDOW_MS;
-    if (withinWindow && !hasUserInteractedWithFilters) {
+    const urlHasParams = hasProductListUrlParams(searchParams);
+    if (withinWindow && !hasUserInteractedWithFilters && !urlHasParams) {
       if (nextConfig.filters && typeof nextConfig.filters === 'object') {
         const parsedFilters = nextConfig.filters as { filterValues?: FilterValues; activeFilters?: FilterKey[] };
         if (parsedFilters.filterValues && typeof parsedFilters.filterValues === 'object') {
@@ -890,7 +895,7 @@ const ProductList = () => {
     if (savedDesktopDensity === 'comfortable' || savedDesktopDensity === 'compact') {
       setDesktopTableDensity(savedDesktopDensity);
     }
-  }, [hasUserInteractedWithFilters, mountedAt, searchInput, setActiveFilters, setFilterValues, setIntentImmediate, setPagination]);
+  }, [hasUserInteractedWithFilters, mountedAt, searchInput, searchParams, setActiveFilters, setFilterValues, setIntentImmediate, setPagination]);
 
   // Áp dụng filters từ preferences: chỉ một lần, khi user chưa tương tác và config load sớm (trong 800ms).
   const appliedInitialPreferencesRef = useRef(false);
@@ -969,6 +974,7 @@ const ProductList = () => {
   const hasWrittenUrlOnce = useRef(false);
   /** Tránh effect ghi URL chạy với giá trị cũ khi vừa áp từ URL. */
   const skipNextUrlWrite = useRef(false);
+  const applyingUrlStateRef = useRef(false);
   /** Thứ tự key cố định để chuẩn hóa URL khi so sánh — tránh nhảy chữ khi gõ nhanh (phải trùng với params ghi ra). */
   const [exactSearch, setExactSearch] = useState(false);
   const applyUrlState = useCallback((parsed: ReturnType<typeof parseProductListParams>) => {
@@ -991,8 +997,9 @@ const ProductList = () => {
     const currentUrlStr = normalizeSearchParamsToOrderedString(searchParams, PRODUCT_LIST_ORDERED_URL_KEYS);
     if (currentUrlStr === lastWrittenParams.current) return;
 
-    const hasUrlParams = PRODUCT_LIST_ORDERED_URL_KEYS.some((key) => searchParams.get(key) != null);
+    const hasUrlParams = hasProductListUrlParams(searchParams);
     if (!hasUrlParams) return;
+    applyingUrlStateRef.current = true;
     isFirstMount.current = false;
     const parsed = parseProductListParams(searchParams);
     const writtenParams = productListParamsToSearch(parsed.search, parsed.filterValues, parsed.activeFilters, parsed.page, parsed.pageSize, parsed.exactSearch);
@@ -1000,11 +1007,18 @@ const ProductList = () => {
     skipNextUrlWrite.current = true;
     queueMicrotask(() => {
       applyUrlState(parsed);
+      window.setTimeout(() => {
+        applyingUrlStateRef.current = false;
+        skipNextUrlWrite.current = false;
+      }, 0);
     });
   }, [applyUrlState, searchParams]);
 
   // Query layer: chỉ intent (đã debounce) ghi ra URL + localStorage; không đụng input.
   useEffect(() => {
+    if (applyingUrlStateRef.current) {
+      return;
+    }
     if (skipNextUrlWrite.current) {
       skipNextUrlWrite.current = false;
       return;
