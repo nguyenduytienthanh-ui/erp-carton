@@ -412,7 +412,7 @@ const CustomerList = () => {
 
   const {
     intentSearch,
-    intentFilters,
+    intentFilterStableString,
     setIntentImmediate,
   } = useSearchFilterIntent({
     searchInput,
@@ -422,6 +422,10 @@ const CustomerList = () => {
     serializeFilters: filterValuesToStableString,
     parseFilters: parseStableFilterString,
   });
+  const intentFilters = useMemo(
+    () => parseStableFilterString(intentFilterStableString),
+    [intentFilterStableString],
+  );
 
   const currentPage = pagination.current;
   const currentPageSize = pagination.pageSize;
@@ -550,10 +554,14 @@ const CustomerList = () => {
       ),
     [activeFilters, currentPage, currentPageSize, exactSearch, intentFilters, intentSearch],
   );
+  const currentSearchString = searchParams.toString();
+  const nextSearchString = useMemo(() => new URLSearchParams(urlParams).toString(), [urlParams]);
 
   useEffect(() => {
-    setSearchParams(urlParams, { replace: true });
-  }, [setSearchParams, urlParams]);
+    if (currentSearchString !== nextSearchString) {
+      setSearchParams(urlParams, { replace: true });
+    }
+  }, [currentSearchString, nextSearchString, setSearchParams, urlParams]);
 
   const handleAdd = () => {
     setFormMode('create');
