@@ -41,6 +41,8 @@ export function parseApiError(err: unknown): ApiErrorMap {
   const d = data as Record<string, unknown>;
   const fieldOrder = [
     'code', 'unit', 'wave', 'box_type', 'sale_price', 'cost_price', 'name',
+    'company_name', 'tax_code', 'phone', 'email', 'address', 'contact_person',
+    'contact_phone', 'payment_terms', 'credit_limit', 'is_active', 'status',
     'price_change_reason', 'price_effective_at', 'reason', 'effective_at',
     'new_cost_price', 'new_sale_price', 'reject_reason',
   ];

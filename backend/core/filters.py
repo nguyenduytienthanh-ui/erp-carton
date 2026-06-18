@@ -68,6 +68,8 @@ class CustomerFilter(django_filters.FilterSet):
     # Text filters
     name = django_filters.CharFilter(lookup_expr='icontains')
     company_name = django_filters.CharFilter(lookup_expr='icontains')
+    tax_code = django_filters.CharFilter(lookup_expr='icontains')
+    tax_code_exact = django_filters.CharFilter(method='filter_tax_code_exact')
     phone = django_filters.CharFilter(lookup_expr='icontains')
     email = django_filters.CharFilter(lookup_expr='icontains')
     
@@ -83,7 +85,7 @@ class CustomerFilter(django_filters.FilterSet):
 
     class Meta:
         model = Customer
-        fields = ['is_active', 'status']
+        fields = ['is_active', 'status', 'tax_code', 'tax_code_exact']
     
     def filter_search(self, queryset, name, value):
         from django.db.models import Q
@@ -91,9 +93,16 @@ class CustomerFilter(django_filters.FilterSet):
             Q(code__icontains=value) |
             Q(name__icontains=value) |
             Q(company_name__icontains=value) |
+            Q(tax_code__icontains=value) |
             Q(phone__icontains=value) |
             Q(email__icontains=value)
         )
+
+    def filter_tax_code_exact(self, queryset, name, value):
+        normalized = str(value or '').strip()
+        if not normalized:
+            return queryset
+        return queryset.filter(tax_code__iexact=normalized)
 
 
 def _size_dim_pattern(position, value_str):

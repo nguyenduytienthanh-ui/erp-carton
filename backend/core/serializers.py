@@ -1,5 +1,7 @@
-from django.contrib.auth.password_validation import validate_password
 import uuid
+from decimal import Decimal, InvalidOperation
+
+from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -1210,6 +1212,54 @@ class CustomerSerializer(serializers.ModelSerializer):
         model = Customer
         fields = '__all__'
         read_only_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']
+
+    def validate_code(self, value):
+        normalized = str(value or '').strip()
+        if not normalized:
+            return ''
+        queryset = Customer.objects.filter(code__iexact=normalized)
+        instance = getattr(self, 'instance', None)
+        if instance is not None:
+            queryset = queryset.exclude(id=instance.id)
+        if queryset.exists():
+            raise serializers.ValidationError('Mã khách hàng đã tồn tại.')
+        return normalized
+
+    def validate_tax_code(self, value):
+        normalized = str(value or '').strip()
+        if not normalized:
+            return ''
+        queryset = Customer.objects.filter(tax_code__iexact=normalized)
+        instance = getattr(self, 'instance', None)
+        if instance is not None:
+            queryset = queryset.exclude(id=instance.id)
+        if queryset.exists():
+            raise serializers.ValidationError('Mã số thuế đã tồn tại.')
+        return normalized
+
+    def validate_phone(self, value):
+        return str(value or '').strip()
+
+    def validate_contact_phone(self, value):
+        return str(value or '').strip()
+
+    def validate_payment_terms(self, value):
+        if value is None:
+            return value
+        if int(value) < 0:
+            raise serializers.ValidationError('Số ngày thanh toán không được âm.')
+        return value
+
+    def validate_credit_limit(self, value):
+        if value is None:
+            return value
+        try:
+            normalized = Decimal(value)
+        except (InvalidOperation, TypeError, ValueError):
+            raise serializers.ValidationError('Hạn mức công nợ không hợp lệ.')
+        if normalized < 0:
+            raise serializers.ValidationError('Hạn mức công nợ không được âm.')
+        return normalized
 
     def create(self, validated_data):
         # Auto-generate customer code if not provided

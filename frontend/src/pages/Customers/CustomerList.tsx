@@ -55,7 +55,6 @@ import CustomerForm from './CustomerForm';
 import { useColumnSettings } from '../../hooks/useColumnSettings';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
-import { useBulkDelete } from '../../hooks/useBulkDelete';
 import { useRowSelection } from '../../hooks/useRowSelection';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
@@ -67,18 +66,14 @@ import {
   getHistoryActionLabelVi,
   filterHistoryItems,
 } from '../../utils/historyUtils';
+import { CUSTOMER_COLUMN_LABELS, DEFAULT_CUSTOMER_VISIBLE_COLUMNS } from './customerConfig';
 
-const DEFAULT_CUSTOMER_VISIBLE_COLUMNS: string[] = [
-  'code', 'name', 'company_name', 'phone', 'email', 'tax_code',
-  'contact_person', 'contact_phone', 'payment_terms', 'credit_limit',
-  'status', 'is_active', 'actions',
-];
-
-type FilterKey = 'code' | 'name' | 'company_name' | 'status' | 'is_active' | 'phone' | 'email';
+type FilterKey = 'code' | 'name' | 'company_name' | 'tax_code' | 'status' | 'is_active' | 'phone' | 'email';
 const FILTER_OPTIONS: { key: FilterKey; label: string }[] = [
   { key: 'code', label: 'Mã KH' },
   { key: 'name', label: 'Tên KH' },
   { key: 'company_name', label: 'Công ty' },
+  { key: 'tax_code', label: 'Mã số thuế' },
   { key: 'phone', label: 'Điện thoại' },
   { key: 'email', label: 'Email' },
   { key: 'status', label: 'Trạng thái' },
@@ -89,6 +84,8 @@ type FilterValues = {
   code: string | null;
   name: string | null;
   company_name: string | null;
+  tax_code: string | null;
+  tax_code_exact: boolean;
   phone: string | null;
   email: string | null;
   status: CustomerStatus | null;
@@ -99,6 +96,8 @@ const EMPTY_FILTER_VALUES: FilterValues = {
   code: null,
   name: null,
   company_name: null,
+  tax_code: null,
+  tax_code_exact: false,
   phone: null,
   email: null,
   status: null,
@@ -268,6 +267,8 @@ function parseCustomerListParams(searchParams: URLSearchParams): {
   const code = searchParams.get('code') ?? '';
   const name = searchParams.get('name') ?? '';
   const company_name = searchParams.get('company_name') ?? '';
+  const tax_code = searchParams.get('tax_code') ?? '';
+  const tax_code_exact = searchParams.get('tax_code_exact') === '1' || searchParams.get('tax_code_exact') === 'true';
   const phone = searchParams.get('phone') ?? '';
   const email = searchParams.get('email') ?? '';
   const status = searchParams.get('status') as CustomerStatus | null;
@@ -282,6 +283,8 @@ function parseCustomerListParams(searchParams: URLSearchParams): {
     code: code.trim() || null,
     name: name.trim() || null,
     company_name: company_name.trim() || null,
+    tax_code: tax_code.trim() || null,
+    tax_code_exact,
     phone: phone.trim() || null,
     email: email.trim() || null,
     status: status && ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'].includes(status) ? status : null,
@@ -310,6 +313,8 @@ function customerListParamsToSearch(
   if (filterValues.code?.trim()) params.code = filterValues.code.trim();
   if (filterValues.name?.trim()) params.name = filterValues.name.trim();
   if (filterValues.company_name?.trim()) params.company_name = filterValues.company_name.trim();
+  if (filterValues.tax_code?.trim()) params.tax_code = filterValues.tax_code.trim();
+  if (filterValues.tax_code?.trim() && filterValues.tax_code_exact) params.tax_code_exact = '1';
   if (filterValues.phone?.trim()) params.phone = filterValues.phone.trim();
   if (filterValues.email?.trim()) params.email = filterValues.email.trim();
   if (filterValues.status != null) params.status = filterValues.status;
@@ -442,6 +447,10 @@ const CustomerList = () => {
     if (intentFilters.code?.trim()) p.code = intentFilters.code.trim();
     if (intentFilters.name?.trim()) p.name = intentFilters.name.trim();
     if (intentFilters.company_name?.trim()) p.company_name = intentFilters.company_name.trim();
+    if (intentFilters.tax_code?.trim()) {
+      p.tax_code = intentFilters.tax_code.trim();
+      if (intentFilters.tax_code_exact) p.tax_code_exact = intentFilters.tax_code.trim();
+    }
     if (intentFilters.phone?.trim()) p.phone = intentFilters.phone.trim();
     if (intentFilters.email?.trim()) p.email = intentFilters.email.trim();
     if (intentFilters.status != null) p.status = intentFilters.status;
@@ -515,14 +524,12 @@ const CustomerList = () => {
 
   const results = data?.results ?? [];
   const total = data?.count ?? 0;
+  const activePageCount = results.filter((row) => row.is_active).length;
+  const inactivePageCount = results.filter((row) => !row.is_active).length;
+  const missingTaxCodePageCount = results.filter((row) => !(row.tax_code ?? '').trim()).length;
 
   const { selectedIds, selectedCount, rowSelection, clearSelection } = useRowSelection<Customer>();
-  const { confirmDeleteOne, confirmBulkDelete } = useConfirmDelete();
-  const { bulkDeleteMutation } = useBulkDelete({
-    queryKey: ['customers'],
-    deleteFn: (id) => customersApi.deleteCustomer(id),
-    onClearSelection: clearSelection,
-  });
+  const { confirmDeleteOne } = useConfirmDelete();
 
   const applyFilterChange = useCallback((updater: (prev: FilterValues) => FilterValues) => {
     setFilterValues(updater);
@@ -582,6 +589,31 @@ const CustomerList = () => {
       queryClient.invalidateQueries({ queryKey: ['customers'] });
     } catch (err: unknown) {
       message.error((err as Error)?.message ?? 'Xóa thất bại');
+    }
+  };
+
+  const handleSetActive = async (record: Customer, isActive: boolean) => {
+    try {
+      await customersApi.updateCustomer(record.id, { is_active: isActive });
+      message.success(isActive ? 'Đã kích hoạt lại khách hàng.' : 'Đã ngừng sử dụng khách hàng.');
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+    } catch (err: unknown) {
+      message.error((err as Error)?.message ?? 'Cập nhật trạng thái thất bại');
+    }
+  };
+
+  const handleBulkSetActive = async (isActive: boolean) => {
+    if (selectedIds.length === 0) {
+      message.warning(TOAST.SELECT_AT_LEAST_ONE);
+      return;
+    }
+    try {
+      await customersApi.bulkActivate(selectedIds, isActive);
+      message.success(isActive ? 'Đã kích hoạt lại các khách hàng đã chọn.' : 'Đã ngừng sử dụng các khách hàng đã chọn.');
+      clearSelection();
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+    } catch (err: unknown) {
+      message.error((err as Error)?.message ?? 'Cập nhật trạng thái thất bại');
     }
   };
 
@@ -667,6 +699,14 @@ const CustomerList = () => {
       openRejectModal(record);
       return;
     }
+    if (action === 'activate') {
+      void handleSetActive(record, true);
+      return;
+    }
+    if (action === 'deactivate') {
+      void handleSetActive(record, false);
+      return;
+    }
     if (action === 'delete') {
       confirmDeleteOne(record.name || record.code || String(record.id), () => handleDelete(record.id));
     }
@@ -687,8 +727,11 @@ const CustomerList = () => {
               : []),
             { key: 'history', icon: <HistoryOutlined />, label: 'Lịch sử hoạt động' },
             { key: 'copy', icon: <CopyOutlined />, label: 'Nhân bản' },
+            record.is_active
+              ? { key: 'deactivate', icon: <CloseOutlined />, label: 'Ngừng sử dụng' }
+              : { key: 'activate', icon: <CheckOutlined />, label: 'Kích hoạt lại' },
             { type: 'divider' as const },
-            { key: 'delete', icon: <DeleteOutlined />, label: 'Xóa', danger: true },
+            { key: 'delete', icon: <DeleteOutlined />, label: 'Xóa khỏi hệ thống', danger: true },
           ] as MenuProps['items'],
           onClick: ({ key, domEvent }) => {
             domEvent.stopPropagation();
@@ -795,14 +838,25 @@ const CustomerList = () => {
     } as T;
   };
 
+  const formatCurrency = (value: number | string | null | undefined) => {
+    if (value === null || value === undefined || value === '') return '-';
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric.toLocaleString('vi-VN') : '-';
+  };
+
+  const formatDateTime = (value: string | null | undefined) => {
+    if (!value) return '-';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('vi-VN');
+  };
+
   const allColumnsBase: (ColumnsType<Customer>[number] & { sortField?: string })[] = [
     {
-      title: 'Mã KH',
+      title: CUSTOMER_COLUMN_LABELS.code,
       dataIndex: 'code',
       key: 'code',
       sortField: 'code',
-      width: 100,
-      fixed: 'left' as const,
+      width: 120,
       render: (code: string, record: Customer) => (
         <span
           role="button"
@@ -815,28 +869,42 @@ const CustomerList = () => {
         </span>
       ),
     },
-    { title: 'Tên KH', dataIndex: 'name', key: 'name', sortField: 'name', width: 180, render: (n: string) => <div className="ant-table-cell-ellipsis cell-text-primary">{n ?? '-'}</div> },
-    { title: 'Công ty', dataIndex: 'company_name', key: 'company_name', sortField: 'company_name', width: 160, render: (t: string) => <div className="ant-table-cell-ellipsis cell-text-secondary">{t ?? '-'}</div> },
-    { title: 'Điện thoại', dataIndex: 'phone', key: 'phone', sortField: 'phone', width: 110, render: (t: string) => t ?? '-' },
-    { title: 'Email', dataIndex: 'email', key: 'email', sortField: 'email', width: 160, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
-    { title: 'Mã số thuế', dataIndex: 'tax_code', key: 'tax_code', sortField: 'tax_code', width: 100, render: (t: string) => t ?? '-' },
-    { title: 'Người liên hệ', dataIndex: 'contact_person', key: 'contact_person', sortField: 'contact_person', width: 120, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
-    { title: 'SĐT liên hệ', dataIndex: 'contact_phone', key: 'contact_phone', sortField: 'contact_phone', width: 110, render: (t: string) => t ?? '-' },
+    { title: CUSTOMER_COLUMN_LABELS.name, dataIndex: 'name', key: 'name', sortField: 'name', width: 220, render: (n: string) => <div className="ant-table-cell-ellipsis cell-text-primary">{n ?? '-'}</div> },
+    { title: CUSTOMER_COLUMN_LABELS.company_name, dataIndex: 'company_name', key: 'company_name', sortField: 'company_name', width: 200, render: (t: string) => <div className="ant-table-cell-ellipsis cell-text-secondary">{t ?? '-'}</div> },
+    { title: CUSTOMER_COLUMN_LABELS.tax_code, dataIndex: 'tax_code', key: 'tax_code', sortField: 'tax_code', width: 130, render: (t: string) => t ?? '-' },
+    { title: CUSTOMER_COLUMN_LABELS.contact_person, dataIndex: 'contact_person', key: 'contact_person', sortField: 'contact_person', width: 160, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
+    { title: CUSTOMER_COLUMN_LABELS.phone, dataIndex: 'phone', key: 'phone', sortField: 'phone', width: 130, render: (t: string) => t ?? '-' },
+    { title: CUSTOMER_COLUMN_LABELS.email, dataIndex: 'email', key: 'email', sortField: 'email', width: 180, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
+    { title: CUSTOMER_COLUMN_LABELS.address, dataIndex: 'address', key: 'address', width: 240, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
+    { title: CUSTOMER_COLUMN_LABELS.contact_phone, dataIndex: 'contact_phone', key: 'contact_phone', sortField: 'contact_phone', width: 130, render: (t: string) => t ?? '-' },
     {
-      title: 'Hạn TT (ngày)',
+      title: CUSTOMER_COLUMN_LABELS.payment_terms,
       dataIndex: 'payment_terms',
       key: 'payment_terms',
       sortField: 'payment_terms',
-      width: 90,
+      width: 100,
       align: 'right' as const,
       render: (v: number) => {
         if (v == null) return '-';
-        return <span className={v >= 45 ? 'cell-warning-soft' : undefined}>{v}</span>;
+        return <span className={v >= 45 ? 'cell-warning-soft' : undefined}>{v} ngày</span>;
       },
     },
-    { title: 'Hạn mức', dataIndex: 'credit_limit', key: 'credit_limit', sortField: 'credit_limit', width: 100, align: 'right' as const, render: (v: number) => v != null ? v.toLocaleString('vi-VN') : '-' },
+    { title: CUSTOMER_COLUMN_LABELS.credit_limit, dataIndex: 'credit_limit', key: 'credit_limit', sortField: 'credit_limit', width: 130, align: 'right' as const, render: (v: number | string) => formatCurrency(v) },
     {
-      title: 'Trạng thái',
+      title: CUSTOMER_COLUMN_LABELS.is_active,
+      dataIndex: 'is_active',
+      key: 'is_active',
+      sortField: 'is_active',
+      width: 120,
+      align: 'center' as const,
+      render: (v: boolean) => (
+        <span className={`status-pill ${v ? 'status-pill-ok' : 'status-pill-warn'}`}>
+          {v ? 'Đang dùng' : 'Ngưng dùng'}
+        </span>
+      ),
+    },
+    {
+      title: CUSTOMER_COLUMN_LABELS.status,
       dataIndex: 'status',
       key: 'status',
       sortField: 'status',
@@ -851,23 +919,13 @@ const CustomerList = () => {
         );
       },
     },
+    { title: CUSTOMER_COLUMN_LABELS.owner_name, dataIndex: 'owner_name', key: 'owner_name', width: 140, render: (v: string) => v || '-' },
+    { title: CUSTOMER_COLUMN_LABELS.team_name, dataIndex: 'team_name', key: 'team_name', width: 140, render: (v: string) => v || '-' },
+    { title: CUSTOMER_COLUMN_LABELS.created_at, dataIndex: 'created_at', key: 'created_at', sortField: 'created_at', width: 170, render: (v: string) => formatDateTime(v) },
+    { title: CUSTOMER_COLUMN_LABELS.updated_at, dataIndex: 'updated_at', key: 'updated_at', sortField: 'updated_at', width: 170, render: (v: string) => formatDateTime(v) },
     {
-      title: 'Hoạt động',
-      dataIndex: 'is_active',
-      key: 'is_active',
-      sortField: 'is_active',
-      width: 80,
-      align: 'center' as const,
-      render: (v: boolean) => (
-        <span className={`status-pill ${v ? 'status-pill-ok' : 'status-pill-warn'}`}>
-          {v ? 'Có' : 'Không'}
-        </span>
-      ),
-    },
-    {
-      title: 'Thao tác',
+      title: CUSTOMER_COLUMN_LABELS.actions,
       key: 'actions',
-      fixed: 'right' as const,
       width: 72,
       align: 'center' as const,
       render: (_: unknown, record: Customer) => renderRowActions(record),
@@ -883,7 +941,7 @@ const CustomerList = () => {
   const columnChooserList = allColumnsBase.map((col) => ({
     key: col.key as string,
     title: columnKeyToTitle[col.key as string] ?? (col.key as string),
-    required: col.key === 'code' || col.key === 'name',
+    required: col.key === 'code' || col.key === 'name' || col.key === 'actions',
   }));
 
   const displayColumns = allColumns.filter((col) => (visibleColumns ?? []).includes(col.key as string));
@@ -923,6 +981,28 @@ const CustomerList = () => {
               )}
               {opt.key === 'company_name' && (
                 <FilterTextInput value={filterValues.company_name ?? ''} onChange={(v) => applyFilterChange((p) => ({ ...p, company_name: v === '' ? null : v }))} placeholder="Công ty chứa..." style={{ width: 220 }} data-field="company_filter" onClear={() => applyFilterChange((p) => ({ ...p, company_name: null }))} showClear={(filterValues.company_name ?? '').trim() !== ''} />
+              )}
+              {opt.key === 'tax_code' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <FilterTextInput
+                    value={filterValues.tax_code ?? ''}
+                    onChange={(v) => applyFilterChange((p) => ({ ...p, tax_code: v === '' ? null : v }))}
+                    placeholder="MST chứa..."
+                    style={{ width: 180 }}
+                    data-field="tax_code_filter"
+                    onClear={() => applyFilterChange((p) => ({ ...p, tax_code: null }))}
+                    showClear={(filterValues.tax_code ?? '').trim() !== ''}
+                  />
+                  <Segmented
+                    size="small"
+                    value={filterValues.tax_code_exact ? 'exact' : 'partial'}
+                    onChange={(value) => applyFilterChange((p) => ({ ...p, tax_code_exact: value === 'exact' }))}
+                    options={[
+                      { label: 'Chứa', value: 'partial' },
+                      { label: 'Đúng MST', value: 'exact' },
+                    ]}
+                  />
+                </div>
               )}
               {opt.key === 'phone' && (
                 <FilterTextInput value={filterValues.phone ?? ''} onChange={(v) => applyFilterChange((p) => ({ ...p, phone: v === '' ? null : v }))} placeholder="Điện thoại chứa..." style={{ width: 180 }} data-field="phone_filter" onClear={() => applyFilterChange((p) => ({ ...p, phone: null }))} showClear={(filterValues.phone ?? '').trim() !== ''} />
@@ -976,11 +1056,43 @@ const CustomerList = () => {
     <>
       <Card className="list-page-card" variant="borderless" style={{ margin: 0, background: 'transparent', padding: 0 }}>
         <div className="list-page-head" style={{ background: 'white', padding: isMobile ? '12px' : '16px 24px', borderRadius: '8px 8px 0 0', marginBottom: 0 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div>
-              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>👥 Quản lý khách hàng</h2>
+              <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, lineHeight: 1.25 }}>Khách hàng</h2>
+              <div style={{ marginTop: 4, color: '#6b7280', fontSize: 13 }}>
+                Quản lý thông tin pháp lý, liên hệ và điều khoản thương mại của khách hàng.
+              </div>
             </div>
+            {total > 0 && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {[
+                  `Tổng ${total}`,
+                  `Trang này ${results.length}`,
+                  `Đang dùng ${activePageCount}`,
+                  `Ngưng dùng ${inactivePageCount}`,
+                  `Thiếu MST ${missingTaxCodePageCount}`,
+                ].map((item) => (
+                  <span
+                    key={item}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      minHeight: 24,
+                      padding: '2px 8px',
+                      borderRadius: 6,
+                      background: '#f6f8fb',
+                      color: '#374151',
+                      fontSize: 12,
+                      border: '1px solid #e5e7eb',
+                    }}
+                  >
+                    {item}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="list-page-toolbar" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', flex: '1 1 420px', justifyContent: isMobile ? 'flex-start' : 'flex-end', position: isMobile ? 'sticky' : 'static', top: isMobile ? 64 : 'auto', zIndex: isMobile ? 3 : 'auto', background: isMobile ? '#fff' : 'transparent', paddingBottom: isMobile ? 4 : 0 }}>
+              {!isMobile && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới">Thêm mới</Button>}
               <Checkbox
                 checked={exactSearch}
                 onChange={(e) => setExactSearch(e.target.checked)}
@@ -989,7 +1101,7 @@ const CustomerList = () => {
                 Tìm chính xác
               </Checkbox>
               <ListSearchInput
-                placeholder="Tìm theo mã, tên, công ty, SĐT, email..."
+                placeholder="Tìm mã, tên, công ty, MST, SĐT, email..."
                 value={searchInput}
                 onChange={(v) => setSearchInput(v)}
                 onClear={() => { setSearchInput(''); setPagination((p) => ({ ...p, current: 1 })); }}
@@ -1035,18 +1147,15 @@ const CustomerList = () => {
               {!isMobile && <Button icon={<UploadOutlined />} onClick={() => setImportModalVisible(true)} title="Nhập Excel">Nhập Excel</Button>}
               {!isMobile && <Button icon={<ExportOutlined />} onClick={() => handleExport('excel')} title="Xuất Excel">Xuất Excel</Button>}
               {!isMobile && <Button icon={<ExportOutlined />} onClick={() => handleExport('pdf')} title="Xuất PDF">Xuất PDF</Button>}
-              {!isMobile && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới">Thêm mới</Button>}
               {(!isMobile || resolvedViewMode === 'table') && selectedCount > 0 && (
-                <Button
-                  danger
-                  icon={<DeleteOutlined />}
-                  onClick={() => {
-                    if (selectedIds.length === 0) { message.warning(TOAST.SELECT_AT_LEAST_ONE); return; }
-                    confirmBulkDelete(selectedCount, () => bulkDeleteMutation.mutateAsync(selectedIds));
-                  }}
-                >
-                  Xóa ({selectedCount})
-                </Button>
+                <>
+                  <Button icon={<CloseOutlined />} onClick={() => void handleBulkSetActive(false)}>
+                    Ngừng dùng ({selectedCount})
+                  </Button>
+                  <Button icon={<CheckOutlined />} onClick={() => void handleBulkSetActive(true)}>
+                    Kích hoạt ({selectedCount})
+                  </Button>
+                </>
               )}
             </div>
           </div>
@@ -1084,9 +1193,10 @@ const CustomerList = () => {
                     {renderRowActions(record)}
                   </div>
                   <div style={{ marginTop: isCompactCards ? 6 : 8, fontSize: isCompactCards ? 12 : 13, color: '#595959' }}>
+                    <div>MST: {record.tax_code || '-'}</div>
                     <div>Điện thoại: {record.phone || '-'}</div>
-                    <div>Email: {record.email || '-'}</div>
-                    <div>Trạng thái: {(CUSTOMER_STATUS_LABELS as Record<string, string>)[record.status] ?? record.status ?? '-'}</div>
+                    <div>Hạn TT: {record.payment_terms ?? '-'} ngày · Hạn mức: {formatCurrency(record.credit_limit)}</div>
+                    <div>Trạng thái: {record.is_active ? 'Đang dùng' : 'Ngưng dùng'} · Duyệt: {(CUSTOMER_STATUS_LABELS as Record<string, string>)[record.status] ?? record.status ?? '-'}</div>
         </div>
       </Card>
               ))}

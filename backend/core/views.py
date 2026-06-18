@@ -16107,7 +16107,11 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
     queryset = Customer.objects.select_related('owner', 'team', 'created_by', 'updated_by').all()
     serializer_class = CustomerSerializer
     filterset_class = CustomerFilter
-    ordering_fields = ['code', 'name', 'created_at', 'updated_at', 'credit_limit']
+    ordering_fields = [
+        'code', 'name', 'company_name', 'tax_code', 'phone', 'email',
+        'contact_person', 'payment_terms', 'credit_limit', 'status',
+        'is_active', 'created_at', 'updated_at',
+    ]
     ordering = ['-created_at']
 
     def get_queryset(self):
@@ -16140,7 +16144,7 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         search = (self.request.query_params.get('search') or self.request.query_params.get('q') or '').strip()
         exact_search = self.request.query_params.get('exact_search') in ('1', 'true', 'True')
         if search:
-            search_fields = ['code', 'name', 'company_name', 'email', 'phone', 'address']
+            search_fields = ['code', 'name', 'company_name', 'tax_code', 'email', 'phone', 'address']
             if exact_search:
                 from core.utils import get_search_query
                 q = get_search_query(search, search_fields)
