@@ -203,6 +203,69 @@ async function setupProductModuleMock(page: Page, seedProducts: ProductRow[] = [
   return log;
 }
 
+const productTableHeaderLabels = [
+  'M\u00e3 h\u00e0ng',
+  'T\u00ean h\u00e0ng',
+  'Lo\u1ea1i item',
+  'Danh m\u1ee5c',
+  '\u0110VT',
+  'Quy c\u00e1ch',
+  'Gi\u00e1 v\u1ed1n',
+  '\u0110\u01a1n gi\u00e1',
+  'Tr\u1ea1ng th\u00e1i',
+  'Thao t\u00e1c',
+];
+
+async function expectProductTableHeadersReadable(page: Page) {
+  const header = page.locator('.enterprise-data-table .ant-table-thead').first();
+  await expect(header).toBeVisible();
+  for (const label of productTableHeaderLabels) {
+    await expect(header).toContainText(label);
+  }
+
+  const unreadableLabels = await page.evaluate((labels) => {
+    const normalize = (value: string | null | undefined) => String(value || '').replace(/\s+/g, ' ').trim();
+    const visible = (element: Element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+    const cells = Array.from(document.querySelectorAll('.enterprise-data-table .ant-table-thead th'));
+
+    return labels.flatMap((label) => {
+      const candidates = cells.filter((cell) => normalize(cell.textContent).includes(label));
+      if (candidates.length === 0) return [`${label}: missing`];
+
+      const readable = candidates.some((cell) => {
+        const title = cell.querySelector('.ant-table-column-title') || cell;
+        const cellRect = cell.getBoundingClientRect();
+        const titleRect = title.getBoundingClientRect();
+        const minWidth = label === '\u0110VT' ? 16 : 24;
+        const x = titleRect.left + titleRect.width / 2;
+        const y = titleRect.top + titleRect.height / 2;
+        const centerInViewport = x >= 0 && x < window.innerWidth && y >= 0 && y < window.innerHeight;
+        const topElement = centerInViewport ? document.elementFromPoint(x, y) : null;
+        const covered = topElement
+          ? !(cell === topElement || cell.contains(topElement) || topElement.contains(cell))
+          : false;
+        return (
+          visible(cell) &&
+          visible(title) &&
+          cellRect.width >= minWidth &&
+          cellRect.height >= 24 &&
+          titleRect.width >= minWidth &&
+          titleRect.height >= 12 &&
+          !covered
+        );
+      });
+
+      return readable ? [] : [`${label}: unreadable`];
+    });
+  }, productTableHeaderLabels);
+
+  expect(unreadableLabels).toEqual([]);
+}
+
 test('product material owner path covers empty state create validation and save payload', async ({ page }) => {
   const apiLog = await setupProductModuleMock(page);
 
@@ -285,6 +348,9 @@ test('product material item type filter and raw material form readiness stay vis
       item_type: 'raw_material',
     }),
   ]);
+
+  await page.goto('/products?q=UAT&pageSize=50');
+  await expectProductTableHeadersReadable(page);
 
   await page.goto('/products?q=UAT&item_type=finished_good&activeFilters=item_type&pageSize=50');
   const table = page.locator('.ant-table-tbody');

@@ -1575,7 +1575,7 @@ const ProductList = () => {
       dataIndex: 'code',
       key: 'code',
       sortField: 'code',
-      width: 130,
+      width: 120,
       fixed: 'left' as const,
       render: (code: string, record: Product) => {
         const isChild = record.parent != null;
@@ -1624,7 +1624,7 @@ const ProductList = () => {
       dataIndex: 'name',
       key: 'name',
       sortField: 'name',
-      width: 200,
+      width: 180,
       render: (n: string, record: Product) => (
         <div className={`ant-table-cell-ellipsis ${record.parent != null ? 'cell-text-child' : 'cell-text-primary'}`}>{n ?? '-'}</div>
       ),
@@ -1634,7 +1634,7 @@ const ProductList = () => {
       dataIndex: 'item_type',
       key: 'item_type',
       sortField: 'item_type',
-      width: 145,
+      width: 128,
       render: (value: ProductItemType | null | undefined) => {
         const itemType = value ?? 'general';
         return (
@@ -1644,15 +1644,15 @@ const ProductList = () => {
         );
       },
     },
-    { title: 'Danh mục', dataIndex: 'category_name', key: 'category_name', sortField: 'category__name', width: 140, render: (t: string) => <div className="ant-table-cell-ellipsis cell-text-secondary">{t ?? '-'}</div> },
-    { title: 'ĐVT', dataIndex: 'unit_name', key: 'unit_name', sortField: 'unit__code', width: 64, align: 'center' as const, render: (n: string) => (n && n.split(' - ')[0]) || '-' },
-    { title: 'Quy cách', key: 'spec_summary', width: 160, render: (_: unknown, record: Product) => <div className="ant-table-cell-ellipsis">{getSpecSummary(record)}</div> },
+    { title: 'Danh mục', dataIndex: 'category_name', key: 'category_name', sortField: 'category__name', width: 128, render: (t: string) => <div className="ant-table-cell-ellipsis cell-text-secondary">{t ?? '-'}</div> },
+    { title: 'ĐVT', dataIndex: 'unit_name', key: 'unit_name', sortField: 'unit__code', width: 56, align: 'center' as const, render: (n: string) => (n && n.split(' - ')[0]) || '-' },
+    { title: 'Quy cách', key: 'spec_summary', width: 128, render: (_: unknown, record: Product) => <div className="ant-table-cell-ellipsis">{getSpecSummary(record)}</div> },
     {
       title: 'Giá vốn',
       dataIndex: 'cost_price',
       key: 'cost_price',
       sortField: 'cost_price',
-      width: 95,
+      width: 82,
       align: 'right' as const,
       render: (p: string) => <FormattedPrice value={p} color="#6b7280" bold={false} />,
     },
@@ -1661,7 +1661,7 @@ const ProductList = () => {
       dataIndex: 'sale_price',
       key: 'sale_price',
       sortField: 'sale_price',
-      width: 95,
+      width: 82,
       align: 'right' as const,
       render: (p: string, record: Product) => {
         const sale = Number(p);
@@ -1733,7 +1733,7 @@ const ProductList = () => {
       dataIndex: 'status',
       key: 'status',
       sortField: 'status',
-      width: 100,
+      width: 90,
       align: 'center' as const,
       render: (v: string, record: Product) => {
         const label = (PRODUCT_STATUS_LABELS as Record<string, string>)[v] ?? v ?? '-';
@@ -1759,8 +1759,7 @@ const ProductList = () => {
     {
       title: 'Thao tác',
       key: 'actions',
-      fixed: 'right' as const,
-      width: 72,
+      width: 76,
       align: 'center' as const,
       render: (_: unknown, record: Product) => renderRowActions(record),
     },
@@ -1778,6 +1777,18 @@ const ProductList = () => {
     (visibleColumns ?? []).includes(col.key as string)
   );
   const columns = displayColumns;
+  const productTableScrollX = Math.max(
+    960,
+    columns.reduce((total, col) => {
+      const width = col.width;
+      if (typeof width === 'number') return total + width;
+      if (typeof width === 'string') {
+        const parsed = Number.parseInt(width, 10);
+        return total + (Number.isFinite(parsed) ? parsed : 120);
+      }
+      return total + 120;
+    }, 48)
+  );
 
   // Bản đồ key → tên cột tiếng Việt (đúng với tiêu đề bảng)
   const columnKeyToTitle: Record<string, string> = {};
@@ -2068,7 +2079,7 @@ const ProductList = () => {
       <Card className="list-page-card" variant="borderless" style={{ margin: 0, background: 'transparent', padding: 0 }}>
         {/* HEADER: Row 1 = Title (trái) + Nút chính (phải); Row 2 = Bộ lọc đang bật (trái) */}
         <div
-          className="list-page-head"
+          className="list-page-head product-list-page-head"
           style={{
             background: 'white',
             padding: isMobile ? '12px' : '16px 24px',
@@ -2482,7 +2493,7 @@ const ProductList = () => {
         {/* TABLE - liền kề (ẩn khi đang lỗi để tránh nhầm "0 sản phẩm") */}
         {!isError && showTable && (
         <Table<Product>
-          className={`enterprise-data-table ${desktopTableDensity === 'compact' ? 'table-density-compact' : 'table-density-comfortable'}`}
+          className={`enterprise-data-table product-material-table ${desktopTableDensity === 'compact' ? 'table-density-compact' : 'table-density-comfortable'}`}
           rowKey="id"
           columns={columns}
           dataSource={products}
@@ -2490,10 +2501,11 @@ const ProductList = () => {
           size="middle"
           bordered
           rowSelection={productRowSelection}
-          scroll={{ x: 'max-content' }}
+          scroll={{ x: productTableScrollX }}
+          tableLayout="fixed"
           style={{
             background: 'white',
-            marginTop: 0,
+            marginTop: 12,
             borderRadius: '0 0 8px 8px',
             overflow: 'hidden',
           }}

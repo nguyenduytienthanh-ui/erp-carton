@@ -423,6 +423,17 @@ body {
   vertical-align: middle;
 }
 
+.product-list-page-head {
+  position: relative !important;
+  top: auto !important;
+  z-index: 2;
+}
+
+.product-material-table.ant-table-wrapper {
+  position: relative;
+  z-index: 1;
+}
+
 .enterprise-data-table .cell-text-primary {
   font-weight: 500;
   color: #111827;
