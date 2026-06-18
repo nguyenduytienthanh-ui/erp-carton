@@ -429,6 +429,10 @@ body {
   z-index: 2;
 }
 
+.product-summary-chips .ant-tag {
+  margin-inline-end: 0;
+}
+
 .product-material-table.ant-table-wrapper {
   position: relative;
   z-index: 1;

@@ -266,6 +266,52 @@ async function expectProductTableHeadersReadable(page: Page) {
   expect(unreadableLabels).toEqual([]);
 }
 
+async function expectSingleProductPageComposition(page: Page) {
+  await expect(page.getByRole('heading', { name: 'Qu\u1ea3n l\u00fd s\u1ea3n ph\u1ea9m' })).toHaveCount(0);
+  await expect(page.getByText('\u0110i\u1ec1u ph\u1ed1i danh m\u1ee5c s\u1ea3n ph\u1ea9m')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Th\u00eam m\u1edbi/ })).toBeVisible();
+
+  const composition = await page.evaluate(() => {
+    const normalize = (value: string | null | undefined) => String(value || '').replace(/\s+/g, ' ').trim();
+    const visible = (element: Element | null) => {
+      if (!element) return false;
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0 && rect.right > 190;
+    };
+    const countTextNodes = (predicate: (text: string, element: HTMLElement) => boolean) => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const matches = new Set<HTMLElement>();
+      let node = walker.nextNode();
+      while (node) {
+        const text = normalize(node.textContent);
+        const parent = node.parentElement;
+        if (text && parent && visible(parent) && parent.getBoundingClientRect().left >= 190 && predicate(text, parent)) {
+          matches.add(parent);
+        }
+        node = walker.nextNode();
+      }
+      return matches.size;
+    };
+
+    return {
+      duplicateHeadingCount: countTextNodes((text, element) => {
+        const fontSize = Number(window.getComputedStyle(element).fontSize.replace('px', ''));
+        return text === 'Qu\u1ea3n l\u00fd s\u1ea3n ph\u1ea9m' && fontSize >= 15;
+      }),
+      duplicateProductSubtitleCount: countTextNodes((text, element) => {
+        const fontSize = Number(window.getComputedStyle(element).fontSize.replace('px', ''));
+        return text.includes('\u0110i\u1ec1u ph\u1ed1i danh m\u1ee5c s\u1ea3n ph\u1ea9m') && fontSize >= 11 && fontSize <= 16;
+      }),
+    };
+  });
+
+  expect(composition).toMatchObject({
+    duplicateHeadingCount: 0,
+    duplicateProductSubtitleCount: 0,
+  });
+}
+
 test('product material owner path covers empty state create validation and save payload', async ({ page }) => {
   const apiLog = await setupProductModuleMock(page);
 
@@ -350,6 +396,7 @@ test('product material item type filter and raw material form readiness stay vis
   ]);
 
   await page.goto('/products?q=UAT&pageSize=50');
+  await expectSingleProductPageComposition(page);
   await expectProductTableHeadersReadable(page);
 
   await page.goto('/products?q=UAT&item_type=finished_good&activeFilters=item_type&pageSize=50');

@@ -2073,11 +2073,26 @@ const ProductList = () => {
   const showCards = isMobile && viewMode === 'cards';
   const showTable = !isMobile || viewMode === 'table';
   const isCompactCards = cardDensity === 'compact';
+  const productSummaryChips = (
+    <div className="product-summary-chips" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      <Tag color="blue">{`Tổng sản phẩm: ${productCommandSummary.total}`}</Tag>
+      <Tag color="green">{`Đang hoạt động: ${productCommandSummary.activeCount}`}</Tag>
+      <Tag color={productCommandSummary.discontinuedCount > 0 ? 'default' : 'green'}>
+        {`Ngừng kinh doanh: ${productCommandSummary.discontinuedCount}`}
+      </Tag>
+      <Tag color={productCommandSummary.pendingPriceCount > 0 ? 'gold' : 'default'}>
+        {`Chờ duyệt/chờ hiệu lực giá: ${productCommandSummary.pendingPriceCount}`}
+      </Tag>
+      <Tag color={productCommandSummary.marginRiskCount > 0 ? 'volcano' : 'green'}>
+        {`Cảnh báo biên: ${productCommandSummary.marginRiskCount}`}
+      </Tag>
+    </div>
+  );
 
   return (
     <>
       <Card className="list-page-card" variant="borderless" style={{ margin: 0, background: 'transparent', padding: 0 }}>
-        {/* HEADER: Row 1 = Title (trái) + Nút chính (phải); Row 2 = Bộ lọc đang bật (trái) */}
+        {/* HEADER: Row 1 = summary chips + toolbar; Row 2 = Bộ lọc đang bật */}
         <div
           className="list-page-head product-list-page-head"
           style={{
@@ -2087,7 +2102,7 @@ const ProductList = () => {
             marginBottom: 0,
           }}
         >
-          {/* Row 1: Title bên trái, Tìm kiếm + Lọc + Cột + Nhập/Xuất + Thêm mới bên phải */}
+          {/* Row 1: chips bên trái, Tìm kiếm + Lọc + Cột + Nhập/Xuất + Thêm mới bên phải */}
           <div
             style={{
               display: 'flex',
@@ -2097,13 +2112,8 @@ const ProductList = () => {
               gap: 12,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div>
-                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Quản lý sản phẩm</h2>
-                <div style={{ color: '#8c8c8c', fontSize: 13 }}>
-                  Điều phối danh mục sản phẩm, biến động giá và tín hiệu biên lợi nhuận trong cùng một màn vận hành.
-                </div>
-              </div>
+            <div style={{ minWidth: 0, flex: isMobile ? '1 1 100%' : '0 1 auto' }}>
+              {productSummaryChips}
             </div>
 
             <div className="list-page-toolbar" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', flex: '1 1 420px', justifyContent: isMobile ? 'flex-start' : 'flex-end', position: isMobile ? 'sticky' : 'static', top: isMobile ? 64 : 'auto', zIndex: isMobile ? 3 : 'auto', background: isMobile ? '#fff' : 'transparent', paddingBottom: isMobile ? 4 : 0 }}>
@@ -2217,20 +2227,6 @@ const ProductList = () => {
               </Button>
             )}
             </div>
-          </div>
-
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-            <Tag color="blue">{`Tổng sản phẩm: ${productCommandSummary.total}`}</Tag>
-            <Tag color="green">{`Đang hoạt động: ${productCommandSummary.activeCount}`}</Tag>
-            <Tag color={productCommandSummary.discontinuedCount > 0 ? 'default' : 'green'}>
-              {`Ngừng kinh doanh: ${productCommandSummary.discontinuedCount}`}
-            </Tag>
-            <Tag color={productCommandSummary.pendingPriceCount > 0 ? 'gold' : 'default'}>
-              {`Chờ duyệt/chờ hiệu lực giá: ${productCommandSummary.pendingPriceCount}`}
-            </Tag>
-            <Tag color={productCommandSummary.marginRiskCount > 0 ? 'volcano' : 'green'}>
-              {`Cảnh báo biên: ${productCommandSummary.marginRiskCount}`}
-            </Tag>
           </div>
 
           {/* Row 2: Bộ lọc đang bật — nhãn trên phải, ô dưới (gọn) */}
