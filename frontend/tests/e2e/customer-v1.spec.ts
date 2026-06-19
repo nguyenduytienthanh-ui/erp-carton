@@ -128,7 +128,9 @@ test('Customer v1 list exposes approved default columns, optional columns and MS
 
   await page.goto('/customers');
 
-  await expect(page.getByRole('heading', { name: 'Khách hàng' })).toBeVisible();
+  await expect(page.locator('.workspace-header-title')).toContainText('Khách hàng');
+  await expect(page.locator('.customer-list-shell h2', { hasText: 'Khách hàng' })).toHaveCount(0);
+  await expect(page.locator('.customer-page-heading-sr')).toHaveText('Khách hàng');
   await expect(page.getByText('Quản lý thông tin pháp lý, liên hệ và điều khoản thương mại của khách hàng.')).toBeVisible();
   const tableHeader = page.locator('.ant-table-thead');
   await expect(tableHeader.getByText('Mã KH')).toBeVisible();
@@ -168,10 +170,10 @@ test('Customer v1 form validates and sends trimmed commercial fields', async ({ 
 
   const dialog = page.getByRole('dialog', { name: 'Thêm khách hàng' });
   await expect(dialog.getByText('Thông tin cơ bản')).toBeVisible();
-  await expect(dialog.getByText('Thông tin pháp lý')).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Pháp lý' })).toBeVisible();
   await expect(dialog.getByText('Điều khoản thương mại')).toBeVisible();
   await expect(dialog.getByText('Có thể để trống để hệ thống tự sinh hoặc nhập mã theo quy tắc công ty.')).toBeVisible();
-  await expect(dialog.getByText('Hạn mức tham chiếu/cảnh báo v1; chưa tự chặn báo giá hoặc đơn bán hàng.')).toBeVisible();
+  await expect(dialog.getByText('Dùng để cảnh báo/tham chiếu trong v1, chưa tự chặn đơn hàng.')).toBeVisible();
 
   await dialog.getByRole('button', { name: 'Thêm mới' }).click();
   await expect(dialog.getByText('Vui lòng nhập tên khách hàng.')).toBeVisible();
@@ -199,4 +201,43 @@ test('Customer v1 form validates and sends trimmed commercial fields', async ({ 
     is_active: true,
   });
   expect((writes[0] as Record<string, unknown>).code).toBeUndefined();
+});
+
+test('Customer final UX keeps mobile list compact and form near fullscreen', async ({ page }) => {
+  const writes: unknown[] = [];
+  await page.setViewportSize({ width: 430, height: 932 });
+  await setupCustomerV1MockApi(page, writes);
+
+  await page.goto('/customers');
+
+  await expect(page.locator('.workspace-header-title')).toContainText('Khách hàng');
+  await expect(page.locator('.customer-list-shell h2', { hasText: 'Khách hàng' })).toHaveCount(0);
+  await expect(page.locator('.mobile-list-search-compact')).toBeVisible();
+  await expect(page.locator('.customer-toolbar-mobile-row')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Lọc/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cột' })).toBeVisible();
+  await expect(page.locator('button[title="Thêm mới"]')).toBeVisible();
+
+  const mobileCard = page.locator('.customer-mobile-card').first();
+  await expect(mobileCard).toBeVisible();
+  await expect(mobileCard.getByText('Công ty Bao bì Demo')).toBeVisible();
+  await expect(mobileCard.getByText('CUS-001')).toBeVisible();
+  await expect(mobileCard.getByText('MST')).toBeVisible();
+  await expect(mobileCard.getByText('Liên hệ')).toBeVisible();
+  await expect(mobileCard.getByText('Thanh toán')).toBeVisible();
+  await expect(mobileCard.getByText('Hạn mức')).toBeVisible();
+
+  await page.locator('button[title="Thêm mới"]').click();
+  const dialog = page.getByRole('dialog', { name: 'Thêm khách hàng' });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('.customer-form-modal')).toBeVisible();
+  await expect(dialog.getByText('Thông tin cơ bản')).toBeVisible();
+  await expect(dialog.getByText('Điều khoản thương mại')).toBeVisible();
+
+  const dialogWidth = await dialog.evaluate((node) => {
+    const element = node as HTMLElement;
+    return element.parentElement?.getBoundingClientRect().width ?? element.getBoundingClientRect().width;
+  });
+  expect(dialogWidth).toBeGreaterThan(390);
+  expect(writes).toEqual([]);
 });

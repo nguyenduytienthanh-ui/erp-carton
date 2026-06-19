@@ -11,8 +11,9 @@ import FormTextAreaWithClear from '../../components/FormTextAreaWithClear';
 import { useQuickEntryKeys } from '../../hooks/useQuickEntryKeys';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import type { Customer, CustomerFormData } from '../../types/customer';
-import { CUSTOMER_PAYMENT_TERM_PRESETS } from './customerConfig';
+import { CUSTOMER_FORM_SECTION_CONFIG, CUSTOMER_PAYMENT_TERM_PRESETS } from './customerConfig';
 import { mapApiErrorsToFields, scrollToFirstError } from '../../utils/formErrorMapper';
+import './customer.css';
 
 const defaultForm: CustomerFormData = {
   name: '',
@@ -50,26 +51,6 @@ const toNumber = (value: unknown, fallback = 0) => {
 };
 
 const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-
-const modalSectionStyle: CSSProperties = {
-  border: '1px solid #e5e7eb',
-  borderRadius: 8,
-  padding: 12,
-  background: '#fff',
-};
-
-const sectionTitleStyle: CSSProperties = {
-  margin: '0 0 10px',
-  fontSize: 14,
-  fontWeight: 700,
-  color: '#1f2937',
-};
-
-const fieldGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-  gap: 12,
-};
 
 const labelStyle: CSSProperties = {
   display: 'block',
@@ -284,6 +265,7 @@ const CustomerForm = ({ visible, onClose, editingCustomer, mode = 'create' }: Cu
       title={isViewMode ? 'Chi tiết khách hàng' : isEditMode ? 'Chỉnh sửa khách hàng' : 'Thêm khách hàng'}
       open={visible}
       onCancel={onClose}
+      className="customer-form-modal"
       footer={[
         <Button key="cancel" onClick={onClose}>{isViewMode ? 'Đóng' : 'Huỷ'}</Button>,
         ...(!isViewMode ? [
@@ -292,17 +274,12 @@ const CustomerForm = ({ visible, onClose, editingCustomer, mode = 'create' }: Cu
           </Button>,
         ] : []),
       ]}
-      width={760}
+      width={940}
     >
       <div
         ref={formContainerRef}
+        className="customer-form-scroll"
         style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-          maxHeight: '72vh',
-          overflowY: 'auto',
-          paddingRight: 4,
           pointerEvents: isViewMode ? 'none' : 'auto',
           userSelect: isViewMode ? 'none' : 'auto',
         }}
@@ -314,9 +291,9 @@ const CustomerForm = ({ visible, onClose, editingCustomer, mode = 'create' }: Cu
           <Alert type="warning" showIcon message={duplicateWarnings.join(' ')} />
         )}
 
-        <section style={modalSectionStyle}>
-          <h3 style={sectionTitleStyle}>Thông tin cơ bản</h3>
-          <div style={fieldGridStyle}>
+        <section className="customer-form-section">
+          <h3 className="customer-form-section-title">{CUSTOMER_FORM_SECTION_CONFIG.basic}</h3>
+          <div className="customer-form-grid customer-form-grid-three">
             <FieldBlock
               label="Mã khách hàng"
               error={fieldErrors.code}
@@ -360,9 +337,9 @@ const CustomerForm = ({ visible, onClose, editingCustomer, mode = 'create' }: Cu
           </div>
         </section>
 
-        <section style={modalSectionStyle}>
-          <h3 style={sectionTitleStyle}>Thông tin pháp lý</h3>
-          <div style={fieldGridStyle}>
+        <section className="customer-form-section">
+          <h3 className="customer-form-section-title">{CUSTOMER_FORM_SECTION_CONFIG.legal}</h3>
+          <div className="customer-form-grid">
             <FieldBlock label="Mã số thuế" error={fieldErrors.tax_code} helper="Không bắt buộc; nếu nhập thì mã số thuế không được trùng.">
               <FormInputWithClear
                 className="pf-input"
@@ -378,9 +355,9 @@ const CustomerForm = ({ visible, onClose, editingCustomer, mode = 'create' }: Cu
           </div>
         </section>
 
-        <section style={modalSectionStyle}>
-          <h3 style={sectionTitleStyle}>Liên hệ chính</h3>
-          <div style={fieldGridStyle}>
+        <section className="customer-form-section">
+          <h3 className="customer-form-section-title">{CUSTOMER_FORM_SECTION_CONFIG.contact}</h3>
+          <div className="customer-form-grid">
             <FieldBlock label="Người liên hệ" error={fieldErrors.contact_person}>
               <FormInputWithClear
                 className="pf-input"
@@ -433,8 +410,8 @@ const CustomerForm = ({ visible, onClose, editingCustomer, mode = 'create' }: Cu
           </div>
         </section>
 
-        <section style={modalSectionStyle}>
-          <h3 style={sectionTitleStyle}>Địa chỉ</h3>
+        <section className="customer-form-section">
+          <h3 className="customer-form-section-title">{CUSTOMER_FORM_SECTION_CONFIG.address}</h3>
           <FieldBlock label="Địa chỉ chính" error={fieldErrors.address}>
             <FormTextAreaWithClear
               className="pf-input pf-textarea"
@@ -450,12 +427,14 @@ const CustomerForm = ({ visible, onClose, editingCustomer, mode = 'create' }: Cu
           </FieldBlock>
         </section>
 
-        <section style={modalSectionStyle}>
-          <h3 style={sectionTitleStyle}>Điều khoản thương mại</h3>
-          <div style={fieldGridStyle}>
+        <section className="customer-form-section">
+          <h3 className="customer-form-section-title">{CUSTOMER_FORM_SECTION_CONFIG.commercial}</h3>
+          <div className="customer-form-grid">
             <FieldBlock label="Số ngày thanh toán" error={fieldErrors.payment_terms} helper="Chọn nhanh bằng preset hoặc nhập số ngày tùy chỉnh.">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <Segmented
+                  className="customer-payment-segmented"
+                  size="small"
                   value={selectedPreset}
                   onChange={(value) => setField('payment_terms', Number(value))}
                   options={CUSTOMER_PAYMENT_TERM_PRESETS.map((days) => ({ label: `${days} ngày`, value: days }))}
@@ -476,7 +455,7 @@ const CustomerForm = ({ visible, onClose, editingCustomer, mode = 'create' }: Cu
             <FieldBlock
               label="Hạn mức công nợ"
               error={fieldErrors.credit_limit}
-              helper="Hạn mức tham chiếu/cảnh báo v1; chưa tự chặn báo giá hoặc đơn bán hàng."
+              helper="Dùng để cảnh báo/tham chiếu trong v1, chưa tự chặn đơn hàng."
             >
               <InputNumber
                 aria-label="Hạn mức công nợ"
@@ -495,9 +474,9 @@ const CustomerForm = ({ visible, onClose, editingCustomer, mode = 'create' }: Cu
         </section>
 
         {hasAssignmentInfo && (
-          <section style={modalSectionStyle}>
-            <h3 style={sectionTitleStyle}>Phân công</h3>
-            <div style={fieldGridStyle}>
+          <section className="customer-form-section">
+            <h3 className="customer-form-section-title">{CUSTOMER_FORM_SECTION_CONFIG.assignment}</h3>
+            <div className="customer-form-grid">
               <FieldBlock label="Owner">
                 <div style={helperStyle}>{customerDetail?.owner_name || '-'}</div>
               </FieldBlock>
@@ -508,8 +487,8 @@ const CustomerForm = ({ visible, onClose, editingCustomer, mode = 'create' }: Cu
           </section>
         )}
 
-        <section style={modalSectionStyle}>
-          <h3 style={sectionTitleStyle}>Trạng thái</h3>
+        <section className="customer-form-section">
+          <h3 className="customer-form-section-title">{CUSTOMER_FORM_SECTION_CONFIG.status}</h3>
           <FieldBlock label="Đang sử dụng" error={fieldErrors.is_active}>
             <Switch
               checked={form.is_active}

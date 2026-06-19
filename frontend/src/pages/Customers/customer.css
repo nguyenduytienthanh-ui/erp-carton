@@ -1,0 +1,354 @@
+.customer-list-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.customer-panel-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.customer-page-heading-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.customer-panel-subtitle {
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.customer-summary-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.customer-summary-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #344054;
+  font-size: 12px;
+  border: 1px solid #e4e7ec;
+  white-space: nowrap;
+}
+
+.customer-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+}
+
+.customer-toolbar-desktop {
+  justify-content: flex-end;
+}
+
+.customer-toolbar-mobile {
+  flex-direction: column;
+  align-items: stretch;
+  position: sticky;
+  top: 56px;
+  z-index: 4;
+  background: #fff;
+  padding-top: 4px;
+  padding-bottom: 6px;
+}
+
+.customer-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.customer-toolbar-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.customer-toolbar-search .ant-input-affix-wrapper {
+  width: 100%;
+}
+
+.customer-toolbar-actions {
+  justify-content: flex-end;
+}
+
+.customer-toolbar-mobile-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.customer-toolbar-mobile .customer-toolbar-search {
+  display: block;
+}
+
+.customer-toolbar-mobile > .mobile-list-search-compact {
+  order: 1;
+  width: 100% !important;
+}
+
+.customer-toolbar-mobile .ant-checkbox-wrapper {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.customer-toolbar-mobile-row {
+  order: 2;
+}
+
+.customer-toolbar-mobile > .customer-exact-search-toggle {
+  display: none !important;
+}
+
+.customer-table-wrap {
+  background: #fff;
+  border-radius: 0 0 8px 8px;
+}
+
+.customer-mobile-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.customer-mobile-card.ant-card {
+  margin-bottom: 0 !important;
+  border-radius: 10px;
+}
+
+.customer-mobile-card .ant-card-body {
+  padding: 12px !important;
+}
+
+.customer-mobile-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.customer-mobile-card-title {
+  margin: 0;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.customer-mobile-card-code {
+  margin-top: 2px;
+  color: #1677ff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.customer-mobile-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.customer-mobile-card .status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 68px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.customer-mobile-card .status-pill-ok {
+  color: #166534;
+  background: #ecfdf3;
+  border-color: #bbf7d0;
+}
+
+.customer-mobile-card .status-pill-pending {
+  color: #92400e;
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.customer-mobile-card .status-pill-warn {
+  color: #b42318;
+  background: #fef3f2;
+  border-color: #fecaca;
+}
+
+.customer-mobile-card .status-pill-neutral {
+  color: #475467;
+  background: #f8fafc;
+  border-color: #e4e7ec;
+}
+
+.customer-mobile-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+
+.customer-mobile-card-field {
+  min-width: 0;
+}
+
+.customer-mobile-card-label {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.customer-mobile-card-value {
+  margin-top: 2px;
+  color: #1f2937;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.customer-form-modal .ant-modal-content {
+  overflow: hidden;
+}
+
+.customer-form-modal .ant-modal-body {
+  padding-top: 12px;
+  padding-bottom: 0;
+}
+
+.customer-form-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(72vh, 720px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.customer-form-section {
+  border: 1px solid #e4e7ec;
+  border-radius: 10px;
+  padding: 14px;
+  background: #fff;
+}
+
+.customer-form-section-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.customer-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+}
+
+.customer-form-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.customer-form-field-full {
+  grid-column: 1 / -1;
+}
+
+.customer-payment-segmented {
+  max-width: 100%;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.customer-payment-segmented .ant-segmented-group {
+  white-space: nowrap;
+}
+
+.customer-form-modal .ant-modal-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: 12px;
+  background: #fff;
+  border-top: 1px solid #f0f0f0;
+}
+
+@media (max-width: 768px) {
+  .customer-panel-intro {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .customer-summary-chips {
+    justify-content: flex-start;
+  }
+
+  .customer-mobile-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .customer-form-modal.ant-modal {
+    max-width: 100vw !important;
+    width: 100vw !important;
+    margin: 0 !important;
+    top: 0;
+    padding-bottom: 0;
+  }
+
+  .customer-form-modal .ant-modal-content {
+    min-height: 100vh;
+    border-radius: 0 !important;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .customer-form-modal .ant-modal-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .customer-form-scroll {
+    max-height: calc(100vh - 132px);
+    padding-right: 0;
+  }
+
+  .customer-form-grid,
+  .customer-form-grid-three {
+    grid-template-columns: 1fr;
+  }
+
+  .customer-form-section {
+    padding: 12px;
+  }
+}

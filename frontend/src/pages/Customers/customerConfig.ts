@@ -32,3 +32,20 @@ export const CUSTOMER_COLUMN_LABELS: Record<string, string> = {
   updated_at: 'Ngày cập nhật',
   actions: 'Thao tác',
 };
+
+export const CUSTOMER_FORM_SECTION_CONFIG = {
+  basic: 'Thông tin cơ bản',
+  legal: 'Pháp lý',
+  contact: 'Liên hệ',
+  address: 'Địa chỉ',
+  commercial: 'Điều khoản thương mại',
+  assignment: 'Phân công',
+  status: 'Trạng thái',
+} as const;
+
+export const CUSTOMER_MOBILE_CARD_FIELDS = [
+  'tax_code',
+  'contact',
+  'payment_terms',
+  'credit_limit',
+] as const;

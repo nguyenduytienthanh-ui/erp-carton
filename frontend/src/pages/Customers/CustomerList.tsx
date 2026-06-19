@@ -22,6 +22,7 @@ import {
   Select,
   Segmented,
   Drawer,
+  Tooltip,
 } from 'antd';
 import {
   PlusOutlined,
@@ -66,7 +67,12 @@ import {
   getHistoryActionLabelVi,
   filterHistoryItems,
 } from '../../utils/historyUtils';
-import { CUSTOMER_COLUMN_LABELS, DEFAULT_CUSTOMER_VISIBLE_COLUMNS } from './customerConfig';
+import {
+  CUSTOMER_COLUMN_LABELS,
+  CUSTOMER_MOBILE_CARD_FIELDS,
+  DEFAULT_CUSTOMER_VISIBLE_COLUMNS,
+} from './customerConfig';
+import './customer.css';
 
 type FilterKey = 'code' | 'name' | 'company_name' | 'tax_code' | 'status' | 'is_active' | 'phone' | 'email';
 const FILTER_OPTIONS: { key: FilterKey; label: string }[] = [
@@ -850,52 +856,83 @@ const CustomerList = () => {
     return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('vi-VN');
   };
 
+  const renderEllipsisCell = (value: string | null | undefined, className?: string) => {
+    const text = value?.trim() || '-';
+    return (
+      <Tooltip title={text === '-' ? undefined : text}>
+        <div className={`ant-table-cell-ellipsis ${className ?? ''}`.trim()}>{text}</div>
+      </Tooltip>
+    );
+  };
+
+  const renderMobileFieldValue = (record: Customer, key: (typeof CUSTOMER_MOBILE_CARD_FIELDS)[number]) => {
+    if (key === 'tax_code') return record.tax_code || '-';
+    if (key === 'contact') {
+      const contact = record.contact_person || '-';
+      const phone = record.phone || '-';
+      return `${contact} · ${phone}`;
+    }
+    if (key === 'payment_terms') return `${record.payment_terms ?? '-'} ngày`;
+    if (key === 'credit_limit') return formatCurrency(record.credit_limit);
+    return '-';
+  };
+
+  const renderMobileFieldLabel = (key: (typeof CUSTOMER_MOBILE_CARD_FIELDS)[number]) => {
+    if (key === 'tax_code') return 'MST';
+    if (key === 'contact') return 'Liên hệ';
+    if (key === 'payment_terms') return 'Thanh toán';
+    if (key === 'credit_limit') return 'Hạn mức';
+    return key;
+  };
+
   const allColumnsBase: (ColumnsType<Customer>[number] & { sortField?: string })[] = [
     {
       title: CUSTOMER_COLUMN_LABELS.code,
       dataIndex: 'code',
       key: 'code',
       sortField: 'code',
-      width: 120,
+      width: 116,
       render: (code: string, record: Customer) => (
-        <span
-          role="button"
-          tabIndex={0}
-          onClick={() => handleEdit(record)}
-          onKeyDown={(e) => e.key === 'Enter' && handleEdit(record)}
-          style={{ fontWeight: 500, color: theme.colors.primary, cursor: 'pointer' }}
-        >
-          {code ?? '-'}
-        </span>
+        <Tooltip title={code || '-'}>
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={() => handleEdit(record)}
+            onKeyDown={(e) => e.key === 'Enter' && handleEdit(record)}
+            style={{ display: 'inline-block', maxWidth: 104, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600, color: theme.colors.primary, cursor: 'pointer' }}
+          >
+            {code ?? '-'}
+          </span>
+        </Tooltip>
       ),
     },
-    { title: CUSTOMER_COLUMN_LABELS.name, dataIndex: 'name', key: 'name', sortField: 'name', width: 220, render: (n: string) => <div className="ant-table-cell-ellipsis cell-text-primary">{n ?? '-'}</div> },
-    { title: CUSTOMER_COLUMN_LABELS.company_name, dataIndex: 'company_name', key: 'company_name', sortField: 'company_name', width: 200, render: (t: string) => <div className="ant-table-cell-ellipsis cell-text-secondary">{t ?? '-'}</div> },
-    { title: CUSTOMER_COLUMN_LABELS.tax_code, dataIndex: 'tax_code', key: 'tax_code', sortField: 'tax_code', width: 130, render: (t: string) => t ?? '-' },
-    { title: CUSTOMER_COLUMN_LABELS.contact_person, dataIndex: 'contact_person', key: 'contact_person', sortField: 'contact_person', width: 160, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
-    { title: CUSTOMER_COLUMN_LABELS.phone, dataIndex: 'phone', key: 'phone', sortField: 'phone', width: 130, render: (t: string) => t ?? '-' },
-    { title: CUSTOMER_COLUMN_LABELS.email, dataIndex: 'email', key: 'email', sortField: 'email', width: 180, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
-    { title: CUSTOMER_COLUMN_LABELS.address, dataIndex: 'address', key: 'address', width: 240, render: (t: string) => <div className="ant-table-cell-ellipsis">{t ?? '-'}</div> },
-    { title: CUSTOMER_COLUMN_LABELS.contact_phone, dataIndex: 'contact_phone', key: 'contact_phone', sortField: 'contact_phone', width: 130, render: (t: string) => t ?? '-' },
+    { title: CUSTOMER_COLUMN_LABELS.name, dataIndex: 'name', key: 'name', sortField: 'name', width: 210, render: (n: string) => renderEllipsisCell(n, 'cell-text-primary') },
+    { title: CUSTOMER_COLUMN_LABELS.company_name, dataIndex: 'company_name', key: 'company_name', sortField: 'company_name', width: 190, render: (t: string) => renderEllipsisCell(t, 'cell-text-secondary') },
+    { title: CUSTOMER_COLUMN_LABELS.tax_code, dataIndex: 'tax_code', key: 'tax_code', sortField: 'tax_code', width: 124, render: (t: string) => renderEllipsisCell(t) },
+    { title: CUSTOMER_COLUMN_LABELS.contact_person, dataIndex: 'contact_person', key: 'contact_person', sortField: 'contact_person', width: 144, render: (t: string) => renderEllipsisCell(t) },
+    { title: CUSTOMER_COLUMN_LABELS.phone, dataIndex: 'phone', key: 'phone', sortField: 'phone', width: 126, render: (t: string) => renderEllipsisCell(t) },
+    { title: CUSTOMER_COLUMN_LABELS.email, dataIndex: 'email', key: 'email', sortField: 'email', width: 180, render: (t: string) => renderEllipsisCell(t) },
+    { title: CUSTOMER_COLUMN_LABELS.address, dataIndex: 'address', key: 'address', width: 240, render: (t: string) => renderEllipsisCell(t) },
+    { title: CUSTOMER_COLUMN_LABELS.contact_phone, dataIndex: 'contact_phone', key: 'contact_phone', sortField: 'contact_phone', width: 126, render: (t: string) => renderEllipsisCell(t) },
     {
       title: CUSTOMER_COLUMN_LABELS.payment_terms,
       dataIndex: 'payment_terms',
       key: 'payment_terms',
       sortField: 'payment_terms',
-      width: 100,
+      width: 96,
       align: 'right' as const,
       render: (v: number) => {
         if (v == null) return '-';
         return <span className={v >= 45 ? 'cell-warning-soft' : undefined}>{v} ngày</span>;
       },
     },
-    { title: CUSTOMER_COLUMN_LABELS.credit_limit, dataIndex: 'credit_limit', key: 'credit_limit', sortField: 'credit_limit', width: 130, align: 'right' as const, render: (v: number | string) => formatCurrency(v) },
+    { title: CUSTOMER_COLUMN_LABELS.credit_limit, dataIndex: 'credit_limit', key: 'credit_limit', sortField: 'credit_limit', width: 124, align: 'right' as const, render: (v: number | string) => formatCurrency(v) },
     {
       title: CUSTOMER_COLUMN_LABELS.is_active,
       dataIndex: 'is_active',
       key: 'is_active',
       sortField: 'is_active',
-      width: 120,
+      width: 112,
       align: 'center' as const,
       render: (v: boolean) => (
         <span className={`status-pill ${v ? 'status-pill-ok' : 'status-pill-warn'}`}>
@@ -908,7 +945,7 @@ const CustomerList = () => {
       dataIndex: 'status',
       key: 'status',
       sortField: 'status',
-      width: 110,
+      width: 104,
       align: 'center' as const,
       render: (v: string) => {
         const label = (CUSTOMER_STATUS_LABELS as Record<string, string>)[v] ?? v ?? '-';
@@ -919,8 +956,8 @@ const CustomerList = () => {
         );
       },
     },
-    { title: CUSTOMER_COLUMN_LABELS.owner_name, dataIndex: 'owner_name', key: 'owner_name', width: 140, render: (v: string) => v || '-' },
-    { title: CUSTOMER_COLUMN_LABELS.team_name, dataIndex: 'team_name', key: 'team_name', width: 140, render: (v: string) => v || '-' },
+    { title: CUSTOMER_COLUMN_LABELS.owner_name, dataIndex: 'owner_name', key: 'owner_name', width: 132, render: (v: string) => renderEllipsisCell(v) },
+    { title: CUSTOMER_COLUMN_LABELS.team_name, dataIndex: 'team_name', key: 'team_name', width: 132, render: (v: string) => renderEllipsisCell(v) },
     { title: CUSTOMER_COLUMN_LABELS.created_at, dataIndex: 'created_at', key: 'created_at', sortField: 'created_at', width: 170, render: (v: string) => formatDateTime(v) },
     { title: CUSTOMER_COLUMN_LABELS.updated_at, dataIndex: 'updated_at', key: 'updated_at', sortField: 'updated_at', width: 170, render: (v: string) => formatDateTime(v) },
     {
@@ -1054,17 +1091,17 @@ const CustomerList = () => {
 
   return (
     <>
-      <Card className="list-page-card" variant="borderless" style={{ margin: 0, background: 'transparent', padding: 0 }}>
-        <div className="list-page-head" style={{ background: 'white', padding: isMobile ? '12px' : '16px 24px', borderRadius: '8px 8px 0 0', marginBottom: 0 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div>
-              <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, lineHeight: 1.25 }}>Khách hàng</h2>
-              <div style={{ marginTop: 4, color: '#6b7280', fontSize: 13 }}>
+      <Card className="list-page-card customer-list-shell" variant="borderless" style={{ margin: 0, background: 'transparent', padding: 0 }}>
+        <h1 className="customer-page-heading-sr">Khách hàng</h1>
+        <div className="list-page-head" style={{ background: 'white', padding: isMobile ? '10px 12px' : '14px 24px', borderRadius: '8px 8px 0 0', marginBottom: 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="customer-panel-intro">
+              <div className="customer-panel-subtitle">
                 Quản lý thông tin pháp lý, liên hệ và điều khoản thương mại của khách hàng.
               </div>
             </div>
             {total > 0 && (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div className="customer-summary-chips">
                 {[
                   `Tổng ${total}`,
                   `Trang này ${results.length}`,
@@ -1072,34 +1109,14 @@ const CustomerList = () => {
                   `Ngưng dùng ${inactivePageCount}`,
                   `Thiếu MST ${missingTaxCodePageCount}`,
                 ].map((item) => (
-                  <span
-                    key={item}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      minHeight: 24,
-                      padding: '2px 8px',
-                      borderRadius: 6,
-                      background: '#f6f8fb',
-                      color: '#374151',
-                      fontSize: 12,
-                      border: '1px solid #e5e7eb',
-                    }}
-                  >
+                  <span key={item} className="customer-summary-chip">
                     {item}
                   </span>
                 ))}
               </div>
             )}
-            <div className="list-page-toolbar" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', flex: '1 1 420px', justifyContent: isMobile ? 'flex-start' : 'flex-end', position: isMobile ? 'sticky' : 'static', top: isMobile ? 64 : 'auto', zIndex: isMobile ? 3 : 'auto', background: isMobile ? '#fff' : 'transparent', paddingBottom: isMobile ? 4 : 0 }}>
+            <div className={`list-page-toolbar customer-toolbar ${isMobile ? 'customer-toolbar-mobile' : 'customer-toolbar-desktop'}`}>
               {!isMobile && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới">Thêm mới</Button>}
-              <Checkbox
-                checked={exactSearch}
-                onChange={(e) => setExactSearch(e.target.checked)}
-                style={{ whiteSpace: 'nowrap' }}
-              >
-                Tìm chính xác
-              </Checkbox>
               <ListSearchInput
                 placeholder="Tìm mã, tên, công ty, MST, SĐT, email..."
                 value={searchInput}
@@ -1107,8 +1124,37 @@ const CustomerList = () => {
                 onClear={() => { setSearchInput(''); setPagination((p) => ({ ...p, current: 1 })); }}
                 size={isMobile ? 'small' : 'middle'}
                 className={isMobile ? 'mobile-list-search-compact' : undefined}
-                style={isMobile ? { width: '100%' } : undefined}
+                style={isMobile ? { width: '100%' } : { width: 360 }}
               />
+              <Checkbox
+                className="customer-exact-search-toggle"
+                checked={exactSearch}
+                onChange={(e) => setExactSearch(e.target.checked)}
+                style={{ whiteSpace: 'nowrap' }}
+              >
+                Tìm chính xác
+              </Checkbox>
+              {isMobile && (
+                <div className="customer-toolbar-mobile-row">
+                  <Checkbox
+                    checked={exactSearch}
+                    onChange={(e) => setExactSearch(e.target.checked)}
+                    style={{ whiteSpace: 'nowrap' }}
+                  >
+                    Tìm chính xác
+                  </Checkbox>
+                  <Button size="small" icon={<FilterOutlined />} onClick={() => setFilterModalOpen(true)} title="Lọc">
+                    {activeFilters.length > 0 ? `Lọc (${activeFilters.length})` : 'Lọc'}
+                  </Button>
+                  <ColumnChooser
+                    columns={columnChooserList}
+                    visibleColumns={visibleColumns ?? []}
+                    onChange={handleVisibleColumnsChange}
+                  />
+                  <Button size="small" icon={<MoreOutlined />} onClick={() => setMobileActionsOpen(true)} title="Tác vụ" />
+                  <Button size="small" type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới" />
+                </div>
+              )}
               {!isMobile && (
                 <Segmented
                   size="small"
@@ -1161,7 +1207,7 @@ const CustomerList = () => {
           </div>
         </div>
 
-        <div className="list-page-table-wrap" style={{ background: 'white', padding: isMobile ? '0 12px 76px' : '0 24px 24px', borderRadius: '0 0 8px 8px' }}>
+        <div className="list-page-table-wrap customer-table-wrap" style={{ padding: isMobile ? '0 12px 76px' : '0 24px 20px' }}>
           {showTable && (
           <Table
             className={`enterprise-data-table ${resolvedDesktopTableDensity === 'compact' ? 'table-density-compact' : 'table-density-comfortable'}`}
@@ -1178,27 +1224,38 @@ const CustomerList = () => {
           />
           )}
           {showCards && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="customer-mobile-card-list">
               {results.length === 0 && !isLoading && (
                 <EmptyState description="Chưa có khách hàng. Nhấn Thêm mới để tạo." />
               )}
               {results.map((record) => (
-                <Card key={record.id} size="small" style={{ borderRadius: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                    <div>
-                      <div style={{ fontWeight: 600, color: theme.colors.primary, fontSize: isCompactCards ? 13 : 14 }}>{record.code || '-'}</div>
-                      <div style={{ fontWeight: 500, fontSize: isCompactCards ? 13 : 14 }}>{record.name || '-'}</div>
-                      <div style={{ color: '#595959', fontSize: isCompactCards ? 12 : 13 }}>{record.company_name || 'Không có công ty'}</div>
+                <Card key={record.id} size="small" className="customer-mobile-card">
+                  <div className="customer-mobile-card-head">
+                    <div style={{ minWidth: 0 }}>
+                      <div className="customer-mobile-card-title">{record.name || '-'}</div>
+                      <div className="customer-mobile-card-code">{record.code || '-'}</div>
                     </div>
                     {renderRowActions(record)}
                   </div>
-                  <div style={{ marginTop: isCompactCards ? 6 : 8, fontSize: isCompactCards ? 12 : 13, color: '#595959' }}>
-                    <div>MST: {record.tax_code || '-'}</div>
-                    <div>Điện thoại: {record.phone || '-'}</div>
-                    <div>Hạn TT: {record.payment_terms ?? '-'} ngày · Hạn mức: {formatCurrency(record.credit_limit)}</div>
-                    <div>Trạng thái: {record.is_active ? 'Đang dùng' : 'Ngưng dùng'} · Duyệt: {(CUSTOMER_STATUS_LABELS as Record<string, string>)[record.status] ?? record.status ?? '-'}</div>
-        </div>
-      </Card>
+                  <div className="customer-mobile-card-badges">
+                    <span className={`status-pill ${record.is_active ? 'status-pill-ok' : 'status-pill-warn'}`}>
+                      {record.is_active ? 'Đang dùng' : 'Ngưng dùng'}
+                    </span>
+                    <span className={`status-pill status-pill-${getCustomerStatusTone(record.status)}`}>
+                      {(CUSTOMER_STATUS_LABELS as Record<string, string>)[record.status] ?? record.status ?? '-'}
+                    </span>
+                  </div>
+                  <div className="customer-mobile-card-grid" style={{ gridTemplateColumns: isCompactCards ? '1fr' : undefined }}>
+                    {CUSTOMER_MOBILE_CARD_FIELDS.map((fieldKey) => (
+                      <div className="customer-mobile-card-field" key={fieldKey}>
+                        <div className="customer-mobile-card-label">{renderMobileFieldLabel(fieldKey)}</div>
+                        <div className="customer-mobile-card-value" title={renderMobileFieldValue(record, fieldKey)}>
+                          {renderMobileFieldValue(record, fieldKey)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
               ))}
             </div>
           )}
@@ -1278,10 +1335,9 @@ const CustomerList = () => {
               onChange={(page) => setPagination((p) => ({ ...p, current: page }))}
             />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Button size="small" icon={<MoreOutlined />} onClick={() => setMobileActionsOpen(true)} title="Tác vụ" />
-            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới" />
-          </div>
+          <span style={{ minWidth: 64, textAlign: 'right', fontSize: 12, color: '#667085' }}>
+            {total} dòng
+          </span>
         </div>
       )}
 
@@ -1314,11 +1370,6 @@ const CustomerList = () => {
           <Button icon={<FilterOutlined />} onClick={() => { setFilterModalOpen(true); setMobileActionsOpen(false); }}>
             Lọc {activeFilters.length > 0 ? `(${activeFilters.length})` : ''}
           </Button>
-          <ColumnChooser
-            columns={columnChooserList}
-            visibleColumns={visibleColumns ?? []}
-            onChange={handleVisibleColumnsChange}
-          />
           <Button icon={<UploadOutlined />} onClick={() => { setImportModalVisible(true); setMobileActionsOpen(false); }}>
             Nhập Excel
           </Button>

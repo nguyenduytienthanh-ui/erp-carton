@@ -80,7 +80,8 @@ test('Customer list renders empty baseline without render loop or write requests
 
   await page.goto('/customers');
 
-  await expect(page.getByRole('heading', { name: 'Khách hàng' })).toBeVisible();
+  await expect(page.locator('.workspace-header-title')).toContainText('Khách hàng');
+  await expect(page.locator('.customer-list-shell h2', { hasText: 'Khách hàng' })).toHaveCount(0);
   await expect(page.getByText(/Chưa có khách hàng/i)).toBeVisible();
   await expect(page.getByRole('button', { name: /Lọc/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /Thêm mới/i })).toBeVisible();
