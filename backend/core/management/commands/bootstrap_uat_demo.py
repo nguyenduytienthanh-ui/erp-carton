@@ -7,6 +7,7 @@ from django.core.management import call_command
 from django.utils import timezone
 
 from core.models import Permission, Role, Team
+from core.permissions import CUSTOMER_PERMISSION_DEFINITIONS
 
 
 PERMISSIONS = [
@@ -43,6 +44,10 @@ PERMISSIONS = [
     ('SALESORDER', 'REJECT', 'SALESORDER_REJECT', 'Reject sales orders'),
     ('SALESORDER', 'POST', 'SALESORDER_POST', 'Post sales orders'),
     ('SALESORDER', 'VOID', 'SALESORDER_VOID', 'Void sales orders'),
+    *[
+        (row['resource'], row['action'], row['code'], row['name'])
+        for row in CUSTOMER_PERMISSION_DEFINITIONS
+    ],
 ]
 
 ROLE_MATRIX = [
@@ -64,6 +69,8 @@ ROLE_MATRIX = [
             'CORE:VIEW_OPERATIONS_LOG', 'CORE:VIEW_RBAC_AUDIT',
             'PRODUCTCATEGORY:EDIT', 'PRODUCTUNIT:EDIT', 'PRODUCT:EDIT', 'PRODUCT:IMPORT',
             'SALESORDER:SUBMIT', 'SALESORDER:APPROVE', 'SALESORDER:REJECT', 'SALESORDER:POST', 'SALESORDER:VOID',
+            'CUSTOMER:VIEW', 'CUSTOMER:CREATE', 'CUSTOMER:EDIT', 'CUSTOMER:SUBMIT',
+            'CUSTOMER:APPROVE', 'CUSTOMER:REJECT', 'CUSTOMER:IMPORT', 'CUSTOMER:EXPORT', 'CUSTOMER:ASSIGN',
         ],
     },
     {
@@ -116,13 +123,18 @@ ROLE_MATRIX = [
         'code': 'SALES',
         'name': 'Sales Executive',
         'sort_order': 90,
-        'permissions': ['SALESORDER:SUBMIT'],
+        'permissions': ['SALESORDER:SUBMIT', 'CUSTOMER:VIEW', 'CUSTOMER:CREATE', 'CUSTOMER:EDIT', 'CUSTOMER:SUBMIT'],
     },
     {
         'code': 'SALES_MANAGER',
         'name': 'Sales Manager',
         'sort_order': 100,
-        'permissions': ['SALESORDER:SUBMIT', 'SALESORDER:APPROVE', 'SALESORDER:REJECT', 'SALESORDER:VOID', 'INVENTORY:MANAGE', 'CORE:VIEW_REPORTS'],
+        'permissions': [
+            'SALESORDER:SUBMIT', 'SALESORDER:APPROVE', 'SALESORDER:REJECT', 'SALESORDER:VOID',
+            'INVENTORY:MANAGE', 'CORE:VIEW_REPORTS',
+            'CUSTOMER:VIEW', 'CUSTOMER:CREATE', 'CUSTOMER:EDIT', 'CUSTOMER:SUBMIT',
+            'CUSTOMER:APPROVE', 'CUSTOMER:REJECT', 'CUSTOMER:EXPORT', 'CUSTOMER:ASSIGN',
+        ],
     },
     {
         'code': 'PRODUCT_MANAGER',

@@ -22,6 +22,16 @@ type PermissionFieldKey =
   | 'production_manage'
   | 'ops_view'
   | 'reports_view'
+  | 'customer_view'
+  | 'customer_create'
+  | 'customer_edit'
+  | 'customer_submit'
+  | 'customer_approve'
+  | 'customer_reject'
+  | 'customer_import'
+  | 'customer_export'
+  | 'customer_assign'
+  | 'customer_delete'
   | 'workflow_view'
   | 'workflow_manage'
   | 'operations_log_view'
@@ -35,6 +45,16 @@ const DEFAULT_PERMISSION_FIELDS: Array<{ field: PermissionFieldKey; label: strin
   { field: 'production_manage', label: 'Sản xuất' },
   { field: 'ops_view', label: 'Điều hành' },
   { field: 'reports_view', label: 'Trung tâm báo cáo' },
+  { field: 'customer_view', label: 'Khách hàng - xem' },
+  { field: 'customer_create', label: 'Khách hàng - thêm mới' },
+  { field: 'customer_edit', label: 'Khách hàng - sửa/trạng thái' },
+  { field: 'customer_submit', label: 'Khách hàng - trình duyệt' },
+  { field: 'customer_approve', label: 'Khách hàng - duyệt' },
+  { field: 'customer_reject', label: 'Khách hàng - từ chối' },
+  { field: 'customer_import', label: 'Khách hàng - nhập Excel' },
+  { field: 'customer_export', label: 'Khách hàng - xuất dữ liệu' },
+  { field: 'customer_assign', label: 'Khách hàng - phân công owner/team' },
+  { field: 'customer_delete', label: 'Khách hàng - xóa cứng' },
   { field: 'workflow_view', label: 'Quy trình xem' },
   { field: 'workflow_manage', label: 'Quy trình quản lý' },
   { field: 'operations_log_view', label: 'Nhật ký vận hành' },
@@ -271,6 +291,16 @@ export default function ModulePermissionSettings() {
         production_manage: Boolean(item.production_manage),
         ops_view: Boolean(item.ops_view),
         reports_view: Boolean(item.reports_view),
+        customer_view: Boolean(item.customer_view),
+        customer_create: Boolean(item.customer_create),
+        customer_edit: Boolean(item.customer_edit),
+        customer_submit: Boolean(item.customer_submit),
+        customer_approve: Boolean(item.customer_approve),
+        customer_reject: Boolean(item.customer_reject),
+        customer_import: Boolean(item.customer_import),
+        customer_export: Boolean(item.customer_export),
+        customer_assign: Boolean(item.customer_assign),
+        customer_delete: Boolean(item.customer_delete),
         workflow_view: Boolean(item.workflow_view),
         workflow_manage: Boolean(item.workflow_manage),
         operations_log_view: Boolean(item.operations_log_view),

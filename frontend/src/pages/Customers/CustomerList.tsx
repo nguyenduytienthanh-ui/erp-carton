@@ -61,6 +61,16 @@ import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { TOAST } from '../../shared/toast';
 import { PAGES } from '../../utils/constants';
+import {
+  canApproveCustomers,
+  canCreateCustomers,
+  canDeleteCustomers,
+  canEditCustomers,
+  canExportCustomers,
+  canImportCustomers,
+  canRejectCustomers,
+  canSubmitCustomers,
+} from '../../utils/authz';
 import type { PreferencesConfig } from '../../types/preferences';
 import {
   getHistoryActionCode,
@@ -336,6 +346,14 @@ function customerListParamsToSearch(
 const CustomerList = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const canCreateCustomer = canCreateCustomers();
+  const canEditCustomer = canEditCustomers();
+  const canSubmitCustomer = canSubmitCustomers();
+  const canApproveCustomer = canApproveCustomers();
+  const canRejectCustomer = canRejectCustomers();
+  const canImportCustomer = canImportCustomers();
+  const canExportCustomer = canExportCustomers();
+  const canDeleteCustomer = canDeleteCustomers();
   const parsed = useMemo(() => parseCustomerListParams(searchParams), [searchParams]);
 
   const [searchInput, setSearchInput] = useState(parsed.searchInput);
@@ -577,18 +595,36 @@ const CustomerList = () => {
   }, [currentSearchString, nextSearchString, setSearchParams, urlParams]);
 
   const handleAdd = () => {
+    if (!canCreateCustomer) {
+      message.error('Bạn không có quyền thêm khách hàng.');
+      return;
+    }
     setFormMode('create');
     setEditingCustomer(null);
     setFormVisible(true);
   };
 
+  const handleView = (record: Customer) => {
+    setFormMode('view');
+    setEditingCustomer(record);
+    setFormVisible(true);
+  };
+
   const handleEdit = (record: Customer) => {
+    if (!canEditCustomer) {
+      handleView(record);
+      return;
+    }
     setFormMode('edit');
     setEditingCustomer(record);
     setFormVisible(true);
   };
 
   const handleDelete = async (id: number) => {
+    if (!canDeleteCustomer) {
+      message.error('Bạn không có quyền xóa cứng khách hàng.');
+      return;
+    }
     try {
       await customersApi.deleteCustomer(id);
       message.success('Đã xóa khách hàng.');
@@ -599,6 +635,10 @@ const CustomerList = () => {
   };
 
   const handleSetActive = async (record: Customer, isActive: boolean) => {
+    if (!canEditCustomer) {
+      message.error('Bạn không có quyền chỉnh sửa khách hàng.');
+      return;
+    }
     try {
       await customersApi.updateCustomer(record.id, { is_active: isActive });
       message.success(isActive ? 'Đã kích hoạt lại khách hàng.' : 'Đã ngừng sử dụng khách hàng.');
@@ -609,6 +649,10 @@ const CustomerList = () => {
   };
 
   const handleBulkSetActive = async (isActive: boolean) => {
+    if (!canEditCustomer) {
+      message.error('Bạn không có quyền chỉnh sửa khách hàng.');
+      return;
+    }
     if (selectedIds.length === 0) {
       message.warning(TOAST.SELECT_AT_LEAST_ONE);
       return;
@@ -624,6 +668,10 @@ const CustomerList = () => {
   };
 
   const handleSubmitForApproval = async (record: Customer) => {
+    if (!canSubmitCustomer) {
+      message.error('Bạn không có quyền trình duyệt khách hàng.');
+      return;
+    }
     try {
       await customersApi.submitForApproval(record.id);
       message.success('Đã gửi duyệt.');
@@ -634,6 +682,10 @@ const CustomerList = () => {
   };
 
   const handleApprove = async (record: Customer) => {
+    if (!canApproveCustomer) {
+      message.error('Bạn không có quyền duyệt khách hàng.');
+      return;
+    }
     try {
       await customersApi.approve(record.id);
       message.success('Đã duyệt khách hàng.');
@@ -644,6 +696,10 @@ const CustomerList = () => {
   };
 
   const openRejectModal = (record: Customer) => {
+    if (!canRejectCustomer) {
+      message.error('Bạn không có quyền từ chối khách hàng.');
+      return;
+    }
     setRejectCustomer(record);
     setRejectReason('');
     setRejectModalOpen(true);
@@ -651,6 +707,10 @@ const CustomerList = () => {
 
   const handleRejectConfirm = async () => {
     if (!rejectCustomer) return;
+    if (!canRejectCustomer) {
+      message.error('Bạn không có quyền từ chối khách hàng.');
+      return;
+    }
     if (!rejectReason.trim()) {
       message.warning('Vui lòng nhập lý do từ chối.');
       return;
@@ -675,6 +735,10 @@ const CustomerList = () => {
   };
 
   const handleClone = (record: Customer) => {
+    if (!canCreateCustomer) {
+      message.error('Bạn không có quyền thêm khách hàng.');
+      return;
+    }
     const cloned = { ...record };
     delete (cloned as Record<string, unknown>).id;
     delete (cloned as Record<string, unknown>).code;
@@ -724,20 +788,22 @@ const CustomerList = () => {
         trigger={['click']}
         menu={{
           items: [
-            ...(record.status === 'DRAFT' ? [{ key: 'submit', icon: <SendOutlined />, label: 'Trình duyệt' }] : []),
+            ...(canSubmitCustomer && record.status === 'DRAFT' ? [{ key: 'submit', icon: <SendOutlined />, label: 'Trình duyệt' }] : []),
             ...(record.status === 'PENDING_APPROVAL'
               ? [
-                { key: 'approve', icon: <CheckOutlined />, label: 'Duyệt' },
-                { key: 'reject', icon: <CloseOutlined />, label: 'Từ chối', danger: true },
+                ...(canApproveCustomer ? [{ key: 'approve', icon: <CheckOutlined />, label: 'Duyệt' }] : []),
+                ...(canRejectCustomer ? [{ key: 'reject', icon: <CloseOutlined />, label: 'Từ chối', danger: true }] : []),
               ]
               : []),
             { key: 'history', icon: <HistoryOutlined />, label: 'Lịch sử hoạt động' },
-            { key: 'copy', icon: <CopyOutlined />, label: 'Nhân bản' },
-            record.is_active
+            ...(canCreateCustomer ? [{ key: 'copy', icon: <CopyOutlined />, label: 'Nhân bản' }] : []),
+            ...(canEditCustomer ? [record.is_active
               ? { key: 'deactivate', icon: <CloseOutlined />, label: 'Ngừng sử dụng' }
-              : { key: 'activate', icon: <CheckOutlined />, label: 'Kích hoạt lại' },
-            { type: 'divider' as const },
-            { key: 'delete', icon: <DeleteOutlined />, label: 'Xóa khỏi hệ thống', danger: true },
+              : { key: 'activate', icon: <CheckOutlined />, label: 'Kích hoạt lại' }] : []),
+            ...(canDeleteCustomer ? [
+              { type: 'divider' as const },
+              { key: 'delete', icon: <DeleteOutlined />, label: 'Xóa khỏi hệ thống', danger: true },
+            ] : []),
           ] as MenuProps['items'],
           onClick: ({ key, domEvent }) => {
             domEvent.stopPropagation();
@@ -751,6 +817,10 @@ const CustomerList = () => {
   );
 
   const handleExport = async (format: 'excel' | 'pdf') => {
+    if (!canExportCustomer) {
+      message.error('Bạn không có quyền xuất dữ liệu khách hàng.');
+      return;
+    }
     try {
       const blob = await customersApi.exportCustomers(format, apiParams as Record<string, string>);
       const url = URL.createObjectURL(blob);
@@ -768,6 +838,14 @@ const CustomerList = () => {
   const handleImportSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ['customers'] });
     setImportModalVisible(false);
+  };
+
+  const openImportModal = () => {
+    if (!canImportCustomer) {
+      message.error('Bạn không có quyền nhập dữ liệu khách hàng.');
+      return;
+    }
+    setImportModalVisible(true);
   };
 
   const handleViewModeChange = useCallback((mode: ListViewMode) => {
@@ -1116,7 +1194,7 @@ const CustomerList = () => {
               </div>
             )}
             <div className={`list-page-toolbar customer-toolbar ${isMobile ? 'customer-toolbar-mobile' : 'customer-toolbar-desktop'}`}>
-              {!isMobile && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới">Thêm mới</Button>}
+              {!isMobile && canCreateCustomer && <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới">Thêm mới</Button>}
               <ListSearchInput
                 placeholder="Tìm mã, tên, công ty, MST, SĐT, email..."
                 value={searchInput}
@@ -1152,7 +1230,7 @@ const CustomerList = () => {
                     onChange={handleVisibleColumnsChange}
                   />
                   <Button size="small" icon={<MoreOutlined />} onClick={() => setMobileActionsOpen(true)} title="Tác vụ" />
-                  <Button size="small" type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới" />
+                  {canCreateCustomer && <Button size="small" type="primary" icon={<PlusOutlined />} onClick={handleAdd} title="Thêm mới" />}
                 </div>
               )}
               {!isMobile && (
@@ -1190,10 +1268,10 @@ const CustomerList = () => {
                 onChange={handleVisibleColumnsChange}
               />
               )}
-              {!isMobile && <Button icon={<UploadOutlined />} onClick={() => setImportModalVisible(true)} title="Nhập Excel">Nhập Excel</Button>}
-              {!isMobile && <Button icon={<ExportOutlined />} onClick={() => handleExport('excel')} title="Xuất Excel">Xuất Excel</Button>}
-              {!isMobile && <Button icon={<ExportOutlined />} onClick={() => handleExport('pdf')} title="Xuất PDF">Xuất PDF</Button>}
-              {(!isMobile || resolvedViewMode === 'table') && selectedCount > 0 && (
+              {!isMobile && canImportCustomer && <Button icon={<UploadOutlined />} onClick={openImportModal} title="Nhập Excel">Nhập Excel</Button>}
+              {!isMobile && canExportCustomer && <Button icon={<ExportOutlined />} onClick={() => handleExport('excel')} title="Xuất Excel">Xuất Excel</Button>}
+              {!isMobile && canExportCustomer && <Button icon={<ExportOutlined />} onClick={() => handleExport('pdf')} title="Xuất PDF">Xuất PDF</Button>}
+              {canEditCustomer && (!isMobile || resolvedViewMode === 'table') && selectedCount > 0 && (
                 <>
                   <Button icon={<CloseOutlined />} onClick={() => void handleBulkSetActive(false)}>
                     Ngừng dùng ({selectedCount})
@@ -1216,17 +1294,17 @@ const CustomerList = () => {
             dataSource={results}
             loading={isLoading}
             pagination={false}
-            rowSelection={rowSelection}
+            rowSelection={canEditCustomer ? rowSelection : undefined}
             scroll={{ x: 'max-content' }}
             size="middle"
             bordered
-            locale={{ emptyText: <EmptyState description="Chưa có khách hàng. Nhấn Thêm mới để tạo." /> }}
+            locale={{ emptyText: <EmptyState description={canCreateCustomer ? 'Chưa có khách hàng. Nhấn Thêm mới để tạo.' : 'Chưa có khách hàng.'} /> }}
           />
           )}
           {showCards && (
             <div className="customer-mobile-card-list">
               {results.length === 0 && !isLoading && (
-                <EmptyState description="Chưa có khách hàng. Nhấn Thêm mới để tạo." />
+                <EmptyState description={canCreateCustomer ? 'Chưa có khách hàng. Nhấn Thêm mới để tạo.' : 'Chưa có khách hàng.'} />
               )}
               {results.map((record) => (
                 <Card key={record.id} size="small" className="customer-mobile-card">
@@ -1370,15 +1448,21 @@ const CustomerList = () => {
           <Button icon={<FilterOutlined />} onClick={() => { setFilterModalOpen(true); setMobileActionsOpen(false); }}>
             Lọc {activeFilters.length > 0 ? `(${activeFilters.length})` : ''}
           </Button>
-          <Button icon={<UploadOutlined />} onClick={() => { setImportModalVisible(true); setMobileActionsOpen(false); }}>
-            Nhập Excel
-          </Button>
-          <Button icon={<ExportOutlined />} onClick={() => { void handleExport('excel'); setMobileActionsOpen(false); }}>
-            Xuất Excel
-          </Button>
-          <Button icon={<ExportOutlined />} onClick={() => { void handleExport('pdf'); setMobileActionsOpen(false); }}>
-            Xuất PDF
-          </Button>
+          {canImportCustomer && (
+            <Button icon={<UploadOutlined />} onClick={() => { openImportModal(); setMobileActionsOpen(false); }}>
+              Nhập Excel
+            </Button>
+          )}
+          {canExportCustomer && (
+            <Button icon={<ExportOutlined />} onClick={() => { void handleExport('excel'); setMobileActionsOpen(false); }}>
+              Xuất Excel
+            </Button>
+          )}
+          {canExportCustomer && (
+            <Button icon={<ExportOutlined />} onClick={() => { void handleExport('pdf'); setMobileActionsOpen(false); }}>
+              Xuất PDF
+            </Button>
+          )}
           <Button danger onClick={() => { handleClearAllFilters(); setMobileActionsOpen(false); }}>
             Xóa toàn bộ bộ lọc
           </Button>
@@ -1521,7 +1605,7 @@ const CustomerList = () => {
         )}
 
         {/* ── Ô nhập bình luận ── */}
-        {historyCustomer && (
+        {historyCustomer && canEditCustomer && (
           <CommentBox
             entityType="Customer"
             entityId={historyCustomer.id}
@@ -1555,21 +1639,23 @@ const CustomerList = () => {
         />
       </Modal>
 
-      <ImportModal
-        visible={importModalVisible}
-        onClose={() => setImportModalVisible(false)}
-        onSuccess={handleImportSuccess}
-        onDownloadTemplate={() => customersApi.downloadTemplate().then((blob) => {
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = 'template_khach_hang.xlsx';
-          a.click();
-          URL.revokeObjectURL(url);
-        })}
-        onImport={(file, opts) => customersApi.importCustomers(file, opts)}
-        entityName="khách hàng"
-      />
+      {canImportCustomer && (
+        <ImportModal
+          visible={importModalVisible}
+          onClose={() => setImportModalVisible(false)}
+          onSuccess={handleImportSuccess}
+          onDownloadTemplate={() => customersApi.downloadTemplate().then((blob) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'template_khach_hang.xlsx';
+            a.click();
+            URL.revokeObjectURL(url);
+          })}
+          onImport={(file, opts) => customersApi.importCustomers(file, opts)}
+          entityName="khách hàng"
+        />
+      )}
     </>
   );
 };

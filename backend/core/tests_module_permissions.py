@@ -2,6 +2,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from core.models import AuditLog, Notification, Permission, Role, User
+from core.permissions import CUSTOMER_PERMISSION_DEFINITIONS
 
 
 class RoleModulePermissionsApiTest(TestCase):
@@ -31,6 +32,10 @@ class RoleModulePermissionsApiTest(TestCase):
             ('CORE', 'VIEW_OPERATIONS_LOG', 'CORE_VIEW_OPERATIONS_LOG', 'View operations log'),
             ('CORE', 'VIEW_RBAC_AUDIT', 'CORE_VIEW_RBAC_AUDIT', 'View RBAC audit history'),
             ('CORE', 'MANAGE_RBAC', 'CORE_MANAGE_RBAC', 'Manage RBAC settings'),
+            *[
+                (row['resource'], row['action'], row['code'], row['name'])
+                for row in CUSTOMER_PERMISSION_DEFINITIONS
+            ],
         ]:
             Permission.objects.update_or_create(
                 resource=resource,

@@ -10,6 +10,99 @@ from rest_framework.permissions import BasePermission
 # Strict mode: không cấu hình permission = từ chối (default-allow = False)
 PERMISSION_STRICT_DEFAULT = getattr(settings, 'PERMISSION_STRICT_DEFAULT', False)
 
+CUSTOMER_PERMISSION_DEFINITIONS = (
+    {
+        'field': 'customer_view',
+        'label': 'Khách hàng - xem',
+        'resource': 'CUSTOMER',
+        'action': 'VIEW',
+        'changed_type': 'customer_view',
+        'code': 'CUSTOMER_VIEW',
+        'name': 'View customers',
+    },
+    {
+        'field': 'customer_create',
+        'label': 'Khách hàng - thêm mới',
+        'resource': 'CUSTOMER',
+        'action': 'CREATE',
+        'changed_type': 'customer_create',
+        'code': 'CUSTOMER_CREATE',
+        'name': 'Create customers',
+    },
+    {
+        'field': 'customer_edit',
+        'label': 'Khách hàng - sửa/trạng thái',
+        'resource': 'CUSTOMER',
+        'action': 'EDIT',
+        'changed_type': 'customer_edit',
+        'code': 'CUSTOMER_EDIT',
+        'name': 'Edit customers',
+    },
+    {
+        'field': 'customer_submit',
+        'label': 'Khách hàng - trình duyệt',
+        'resource': 'CUSTOMER',
+        'action': 'SUBMIT',
+        'changed_type': 'customer_submit',
+        'code': 'CUSTOMER_SUBMIT',
+        'name': 'Submit customers for approval',
+    },
+    {
+        'field': 'customer_approve',
+        'label': 'Khách hàng - duyệt',
+        'resource': 'CUSTOMER',
+        'action': 'APPROVE',
+        'changed_type': 'customer_approve',
+        'code': 'CUSTOMER_APPROVE',
+        'name': 'Approve customers',
+    },
+    {
+        'field': 'customer_reject',
+        'label': 'Khách hàng - từ chối',
+        'resource': 'CUSTOMER',
+        'action': 'REJECT',
+        'changed_type': 'customer_reject',
+        'code': 'CUSTOMER_REJECT',
+        'name': 'Reject customers',
+    },
+    {
+        'field': 'customer_import',
+        'label': 'Khách hàng - nhập Excel',
+        'resource': 'CUSTOMER',
+        'action': 'IMPORT',
+        'changed_type': 'customer_import',
+        'code': 'CUSTOMER_IMPORT',
+        'name': 'Import customers',
+    },
+    {
+        'field': 'customer_export',
+        'label': 'Khách hàng - xuất dữ liệu',
+        'resource': 'CUSTOMER',
+        'action': 'EXPORT',
+        'changed_type': 'customer_export',
+        'code': 'CUSTOMER_EXPORT',
+        'name': 'Export customers',
+    },
+    {
+        'field': 'customer_assign',
+        'label': 'Khách hàng - phân công owner/team',
+        'resource': 'CUSTOMER',
+        'action': 'ASSIGN',
+        'changed_type': 'customer_assign',
+        'code': 'CUSTOMER_ASSIGN',
+        'name': 'Assign customer owner or team',
+    },
+    {
+        'field': 'customer_delete',
+        'label': 'Khách hàng - xóa cứng',
+        'resource': 'CUSTOMER',
+        'action': 'DELETE',
+        'changed_type': 'customer_delete',
+        'code': 'CUSTOMER_DELETE',
+        'name': 'Hard delete customers',
+    },
+)
+
 
 class ResourceActionPermission(BasePermission):
     """
@@ -53,3 +146,11 @@ def check_action_permission(user, resource, action, strict=None):
     strict=True: mode strict (không cấu hình permission = từ chối).
     """
     return _user_has_perm(user, resource, action, strict=strict)
+
+
+def user_has_customer_permission(user, action, *, strict=True):
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    return check_action_permission(user, 'CUSTOMER', action, strict=strict)

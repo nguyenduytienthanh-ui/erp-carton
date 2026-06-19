@@ -6,6 +6,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, UserSession, UserPreferences, ColumnPermission, Task, WorkflowTaskTemplate, TaskWatcher, DocumentType, TaxRate, Shift, ExpenseCategory, NumberSequence
+from .permissions import CUSTOMER_PERMISSION_DEFINITIONS, user_has_customer_permission
 
 
 ROLE_MODULE_PERMISSION_LOOKUP = {
@@ -21,6 +22,10 @@ ROLE_MODULE_PERMISSION_LOOKUP = {
     ('CORE', 'VIEW_RBAC_AUDIT'): 'rbac-audit',
     ('CORE', 'MANAGE_RBAC'): 'rbac-manage',
 }
+ROLE_MODULE_PERMISSION_LOOKUP.update({
+    (row['resource'], row['action']): row['field'].replace('_', '-')
+    for row in CUSTOMER_PERMISSION_DEFINITIONS
+})
 
 
 class PermissionSerializer(serializers.ModelSerializer):
@@ -1260,6 +1265,20 @@ class CustomerSerializer(serializers.ModelSerializer):
         if normalized < 0:
             raise serializers.ValidationError('Hạn mức công nợ không được âm.')
         return normalized
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        assignment_fields = {'owner', 'team'} & set(attrs.keys())
+        if not assignment_fields:
+            return attrs
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user_has_customer_permission(user, 'ASSIGN', strict=True):
+            raise serializers.ValidationError({
+                field: 'Bạn không có quyền phân công owner/team cho khách hàng.'
+                for field in assignment_fields
+            })
+        return attrs
 
     def create(self, validated_data):
         # Auto-generate customer code if not provided

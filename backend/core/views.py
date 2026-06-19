@@ -3,7 +3,7 @@ import csv
 from io import StringIO
 
 from rest_framework import viewsets, status, filters
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
@@ -19,6 +19,8 @@ import secrets
 import string
 import time
 import unicodedata
+from django.apps import apps
+from django.core.exceptions import FieldError
 from django.http import HttpResponse
 from django.conf import settings
 from django.db import models, transaction
@@ -61,9 +63,9 @@ from .serializers import (
 )
 from django.utils import timezone as django_timezone
 from .filters import CustomerFilter, TeamFilter, RoleFilter
-from .utils import export_to_excel
+from .utils import export_to_excel, export_to_pdf
 from .mixins import AuditLogMixin, ExportExcelMixin
-from .permissions import check_action_permission
+from .permissions import CUSTOMER_PERMISSION_DEFINITIONS, check_action_permission, user_has_customer_permission
 
 
 WORKFLOW_SCHEDULER_JOB_NAME = 'workflow-automation-global-scheduler'
@@ -111,6 +113,7 @@ MODULE_PERMISSION_FIELDS = [
         'action': 'VIEW_REPORTS',
         'changed_type': 'reports',
     },
+    *CUSTOMER_PERMISSION_DEFINITIONS,
     {
         'field': 'workflow_view',
         'label': 'Quy trình xem',
@@ -794,6 +797,10 @@ def _can_access_sales_orders(user):
     return _has_any_role_name(user, {'admin', 'manager', 'sales', 'sales-manager', 'accountant', 'finance', 'finance-manager', 'ops-manager', 'quan-ly', 'quanly'})
 
 
+def _can_view_customers(user):
+    return user_has_customer_permission(user, 'VIEW', strict=True)
+
+
 def _can_manage_module_permissions(user):
     if not user or not user.is_authenticated:
         return False
@@ -842,6 +849,7 @@ ACCESS_SURFACE_ROUTE_DEFINITIONS = [
     {'key': 'sales_orders', 'label': 'Đơn hàng xuất', 'path': '/sales-orders', 'capability': 'sales_orders', 'group': 'sales'},
     {'key': 'shipments', 'label': 'Phiếu xuất', 'path': '/shipments', 'capability': 'sales_orders', 'group': 'sales'},
     {'key': 'quotes', 'label': 'Quotes', 'path': '/quotes', 'capability': 'sales_orders', 'group': 'sales'},
+    {'key': 'customers', 'label': 'Khách hàng', 'path': '/customers', 'capability': 'customers', 'group': 'sales'},
     {'key': 'purchase_orders', 'label': 'Purchase orders', 'path': '/purchase-orders', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_receipts', 'label': 'Purchase receipts', 'path': '/purchase-receipts', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_requests', 'label': 'Purchase requests', 'path': '/purchase-requests', 'capability': 'purchasing', 'group': 'purchasing'},
@@ -892,6 +900,7 @@ ACCESS_SURFACE_ROUTE_DEFINITIONS = [
 ACCESS_SURFACE_API_DEFINITIONS = [
     {'key': 'sales_orders_api', 'label': 'Sales order API', 'path_prefix': '/api/sales/orders/', 'capability': 'sales_orders', 'group': 'sales'},
     {'key': 'shipments_api', 'label': 'Shipment API', 'path_prefix': '/api/sales/shipments/', 'capability': 'sales_orders', 'group': 'sales'},
+    {'key': 'customers_api', 'label': 'Customer API', 'path_prefix': '/api/customers/', 'capability': 'customers', 'group': 'sales'},
     {'key': 'purchase_orders_api', 'label': 'Purchase order API', 'path_prefix': '/api/purchasing/orders/', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_requests_api', 'label': 'Purchase request API', 'path_prefix': '/api/purchasing/requests/', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_receipts_api', 'label': 'Purchase receipt API', 'path_prefix': '/api/purchasing/receipts/', 'capability': 'purchasing', 'group': 'purchasing'},
@@ -937,6 +946,15 @@ ACCESS_SURFACE_CRITICAL_ACTION_DEFINITIONS = [
     {'key': 'sales_order_reject', 'label': 'Reject sales order', 'permission_key': 'SALESORDER:REJECT', 'group': 'sales'},
     {'key': 'sales_order_post', 'label': 'Post sales order', 'permission_key': 'SALESORDER:POST', 'group': 'sales'},
     {'key': 'sales_order_void', 'label': 'Void sales order', 'permission_key': 'SALESORDER:VOID', 'group': 'sales'},
+    {'key': 'customer_create', 'label': 'Create customer', 'permission_key': 'CUSTOMER:CREATE', 'group': 'sales'},
+    {'key': 'customer_edit', 'label': 'Edit customer', 'permission_key': 'CUSTOMER:EDIT', 'group': 'sales'},
+    {'key': 'customer_submit', 'label': 'Submit customer', 'permission_key': 'CUSTOMER:SUBMIT', 'group': 'sales'},
+    {'key': 'customer_approve', 'label': 'Approve customer', 'permission_key': 'CUSTOMER:APPROVE', 'group': 'sales'},
+    {'key': 'customer_reject', 'label': 'Reject customer', 'permission_key': 'CUSTOMER:REJECT', 'group': 'sales'},
+    {'key': 'customer_import', 'label': 'Import customer data', 'permission_key': 'CUSTOMER:IMPORT', 'group': 'sales'},
+    {'key': 'customer_export', 'label': 'Export customer data', 'permission_key': 'CUSTOMER:EXPORT', 'group': 'sales'},
+    {'key': 'customer_assign', 'label': 'Assign customer owner/team', 'permission_key': 'CUSTOMER:ASSIGN', 'group': 'sales'},
+    {'key': 'customer_delete', 'label': 'Hard delete customer', 'permission_key': 'CUSTOMER:DELETE', 'group': 'sales'},
 ]
 
 
@@ -958,6 +976,7 @@ def _get_user_permission_keys(user):
 def _build_access_capability_map(user):
     return {
         'sales_orders': _can_access_sales_orders(user),
+        'customers': _can_view_customers(user),
         'purchasing': _can_manage_purchasing_data(user),
         'production': _can_access_production_center(user),
         'production_planning': _can_manage_production_data(user),
@@ -16101,11 +16120,99 @@ class SettingViewSet(viewsets.ModelViewSet):
     serializer_class = SettingSerializer
 
 
+CUSTOMER_ACTION_PERMISSION_MAP = {
+    'list': 'VIEW',
+    'retrieve': 'VIEW',
+    'metadata': 'VIEW',
+    'create': 'CREATE',
+    'update': 'EDIT',
+    'partial_update': 'EDIT',
+    'bulk_activate': 'EDIT',
+    'upload_attachment': 'EDIT',
+    'add_comment': 'EDIT',
+    'destroy': 'DELETE',
+    'bulk_delete': 'DELETE',
+    'submit_for_approval': 'SUBMIT',
+    'approve': 'APPROVE',
+    'reject': 'REJECT',
+    'assign_owner': 'ASSIGN',
+    'assign_team': 'ASSIGN',
+    'export_data': 'EXPORT',
+    'bulk_export': 'EXPORT',
+    'export_pdf': 'EXPORT',
+    'export_async': 'EXPORT',
+    'export': 'EXPORT',
+    'import_excel': 'IMPORT',
+    'download_import_template': 'IMPORT',
+    'list_attachments': 'VIEW',
+    'list_comments': 'VIEW',
+    'approval_history': 'VIEW',
+}
+
+CUSTOMER_PERMISSION_MESSAGES = {
+    'VIEW': 'Bạn không có quyền xem khách hàng.',
+    'CREATE': 'Bạn không có quyền thêm khách hàng.',
+    'EDIT': 'Bạn không có quyền chỉnh sửa khách hàng.',
+    'DELETE': 'Bạn không có quyền xóa cứng khách hàng.',
+    'SUBMIT': 'Bạn không có quyền trình duyệt khách hàng.',
+    'APPROVE': 'Bạn không có quyền duyệt khách hàng.',
+    'REJECT': 'Bạn không có quyền từ chối khách hàng.',
+    'ASSIGN': 'Bạn không có quyền phân công owner/team cho khách hàng.',
+    'EXPORT': 'Bạn không có quyền xuất dữ liệu khách hàng.',
+    'IMPORT': 'Bạn không có quyền nhập dữ liệu khách hàng.',
+}
+
+CUSTOMER_DELETE_RELATION_CHECKS = (
+    ('sales', 'SalesOrder', 'Đơn hàng bán', {'customer_id': 'id'}),
+    ('sales', 'Quote', 'Báo giá', {'customer_id': 'id'}),
+    ('sales', 'OutboundShipment', 'Phiếu xuất/giao hàng', {'customer_id': 'id'}),
+    ('finance', 'ReceivableDocument', 'Chứng từ phải thu', {'customer_id': 'id'}),
+    ('products', 'ProductPricing', 'Bảng giá sản phẩm', {'customer_id': 'id'}),
+    ('production', 'ProductionDemand', 'Nhu cầu sản xuất', {'customer_id_snapshot': 'id'}),
+    ('core', 'ApprovalHistory', 'Lịch sử phê duyệt', {'entity_type': 'literal:Customer', 'entity_id': 'id'}),
+    ('core', 'Task', 'Công việc liên quan', {'entity_type': 'literal:Customer', 'entity_id': 'id'}),
+)
+
+CUSTOMER_DELETE_BLOCKED_MESSAGE = 'Không thể xóa khách hàng đã phát sinh chứng từ. Hãy chuyển sang Ngừng sử dụng.'
+
+
+def _customer_delete_blockers(customer):
+    blockers = []
+    for app_label, model_name, label, filter_map in CUSTOMER_DELETE_RELATION_CHECKS:
+        try:
+            model = apps.get_model(app_label, model_name)
+        except LookupError:
+            continue
+        filters = {}
+        for field_name, source in filter_map.items():
+            if isinstance(source, str) and source.startswith('literal:'):
+                filters[field_name] = source.removeprefix('literal:')
+            else:
+                filters[field_name] = getattr(customer, source)
+        try:
+            if model.objects.filter(**filters).exists():
+                blockers.append(label)
+        except FieldError:
+            continue
+    return blockers
+
+
+def _customer_delete_blocked_response(blockers):
+    return Response(
+        {
+            'error': CUSTOMER_DELETE_BLOCKED_MESSAGE,
+            'related_records': blockers,
+        },
+        status=400,
+    )
+
+
 class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
     """CRUD Customer với ExportExcelMixin (export_data), Data Scope, Search tiếng Việt không dấu."""
     export_template_entity_type = 'Customer'
     queryset = Customer.objects.select_related('owner', 'team', 'created_by', 'updated_by').all()
     serializer_class = CustomerSerializer
+    permission_classes = [IsAuthenticated]
     filterset_class = CustomerFilter
     ordering_fields = [
         'code', 'name', 'company_name', 'tax_code', 'phone', 'email',
@@ -16114,31 +16221,28 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
     ]
     ordering = ['-created_at']
 
+    def check_permissions(self, request):
+        super().check_permissions(request)
+        required_action = CUSTOMER_ACTION_PERMISSION_MAP.get(getattr(self, 'action', None), 'VIEW')
+        if not user_has_customer_permission(request.user, required_action, strict=True):
+            message = CUSTOMER_PERMISSION_MESSAGES.get(required_action, 'Bạn không có quyền thao tác khách hàng.')
+            raise PermissionDenied(message)
+
     def get_queryset(self):
         """Apply data scope filtering and custom search (unaccent via unidecode)"""
-        queryset = Customer.objects.all()
+        queryset = Customer.objects.select_related('owner', 'team', 'created_by', 'updated_by').all()
         user = self.request.user
 
         if not user.is_authenticated:
             return queryset.none()
 
-        # Admin sees everything
-        if user.is_superuser:
-            pass
-        else:
-            user_roles = list(user.roles.values_list('name', flat=True))
-            if 'Admin' in user_roles or 'Manager' in user_roles:
-                user_teams = user.teams.all()
-                queryset = queryset.filter(
-                    models.Q(owner=user) |
-                    models.Q(team__in=user_teams) |
-                    models.Q(owner__isnull=True, team__isnull=True)
-                )
-            else:
-                queryset = queryset.filter(
-                    models.Q(owner=user) |
-                    models.Q(owner__isnull=True, team__isnull=True)
-                )
+        if not (getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False)):
+            user_teams = user.teams.all()
+            queryset = queryset.filter(
+                models.Q(owner=user) |
+                models.Q(team__in=user_teams) |
+                models.Q(owner__isnull=True, team__isnull=True)
+            )
 
         # Search: exact_search=1 dùng get_search_query (icontains, không trigram); ngược lại fuzzy
         search = (self.request.query_params.get('search') or self.request.query_params.get('q') or '').strip()
@@ -16190,6 +16294,17 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
     def get_export_pdf_fields(self):
         return ['code', 'name', 'company_name', 'tax_code', 'phone', 'email', 'address', 'status', 'owner__username', 'team__name']
 
+    @action(detail=False, methods=['get'], url_path='export_data')
+    def export_data(self, request):
+        return super().export_data(request)
+
+    def destroy(self, request, *args, **kwargs):
+        customer = self.get_object()
+        blockers = _customer_delete_blockers(customer)
+        if blockers:
+            return _customer_delete_blocked_response(blockers)
+        return super().destroy(request, *args, **kwargs)
+
     @action(detail=False, methods=['post'])
     def bulk_delete(self, request):
         """Bulk delete customers"""
@@ -16197,8 +16312,24 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         if not ids:
             return Response({"error": "No IDs provided"}, status=400)
         
-        count = Customer.objects.filter(id__in=ids).delete()[0]
-        return Response({"success": True, "count": count})
+        customers = list(self.get_queryset().filter(id__in=ids))
+        blockers_by_customer = {}
+        for customer in customers:
+            blockers = _customer_delete_blockers(customer)
+            if blockers:
+                blockers_by_customer[customer.code or str(customer.id)] = blockers
+        if blockers_by_customer:
+            return Response(
+                {
+                    "error": CUSTOMER_DELETE_BLOCKED_MESSAGE,
+                    "blocked_customers": blockers_by_customer,
+                },
+                status=400,
+            )
+
+        for customer in customers:
+            self.perform_destroy(customer)
+        return Response({"success": True, "count": len(customers)})
 
     @action(detail=False, methods=['post'])
     def bulk_activate(self, request):
@@ -16209,7 +16340,7 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         if not ids:
             return Response({"error": "No IDs provided"}, status=400)
         
-        count = Customer.objects.filter(id__in=ids).update(is_active=is_active)
+        count = self.get_queryset().filter(id__in=ids).update(is_active=is_active, updated_by=request.user)
         return Response({"success": True, "count": count})
 
     @action(detail=False, methods=['post'])
@@ -16237,12 +16368,12 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
             return Response({"error": "No template found"}, status=404)
         
         # Get selected customers
-        customers = Customer.objects.filter(id__in=ids)
+        customers = self.get_queryset().filter(id__in=ids)
         filename = f'customers_selected_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
         
         return export_to_excel(customers, template.columns, template.headers, filename)
     
-    @action(detail=False, methods=['get'], permission_classes=[AllowAny])
+    @action(detail=False, methods=['get'])
     def export_pdf(self, request):
         """Export customers to PDF"""
         from .models import ExportTemplate
@@ -16268,7 +16399,7 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         filename = f'customers_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf'
         return export_to_pdf(queryset, template.columns, template.headers, filename, title='Customer List')
 
-    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    @action(detail=False, methods=['post'])
     def export_async(self, request):
         """Queue async export task"""
         from django_q.tasks import async_task
@@ -16280,7 +16411,7 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         # Queue task
         task_id = async_task(
             'core.tasks.async_export_customers',
-            request.user.id if request.user.is_authenticated else 1,
+            request.user.id,
             template_id
         )
 
@@ -16290,7 +16421,7 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
             "task_id": task_id
         })
     
-    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    @action(detail=False, methods=['post'])
     def import_excel(self, request):
         """Import customers from Excel"""
         from .utils import import_from_excel
@@ -16325,7 +16456,7 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
                 file,
                 Customer,
                 field_mapping,
-                user=request.user if request.user.is_authenticated else None
+                user=request.user
             )
             
             return Response({
@@ -16340,7 +16471,7 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         except Exception as e:
             return Response({"error": str(e)}, status=500)
     
-    @action(detail=False, methods=['get'], permission_classes=[AllowAny])
+    @action(detail=False, methods=['get'])
     def download_import_template(self, request):
         """Download Excel template for import"""
         from openpyxl import Workbook
@@ -16407,7 +16538,7 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         
         return response
     
-    @action(detail=True, methods=['post'], permission_classes=[AllowAny])
+    @action(detail=True, methods=['post'])
     def upload_attachment(self, request, pk=None):
         """Upload file attachment to customer"""
         customer = self.get_object()
@@ -16427,13 +16558,13 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
             file_size=file.size,
             file_type=getattr(file, 'content_type', ''),
             description=description,
-            uploaded_by=request.user if request.user.is_authenticated else None
+            uploaded_by=request.user,
         )
         
         serializer = AttachmentSerializer(attachment, context={'request': request})
         return Response(serializer.data, status=201)
     
-    @action(detail=True, methods=['get'], permission_classes=[AllowAny])
+    @action(detail=True, methods=['get'])
     def list_attachments(self, request, pk=None):
         """List all attachments for this customer"""
         customer = self.get_object()
@@ -16446,7 +16577,7 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         serializer = AttachmentSerializer(attachments, many=True, context={'request': request})
         return Response(serializer.data)
     
-    @action(detail=True, methods=['post'], permission_classes=[AllowAny])
+    @action(detail=True, methods=['post'])
     def add_comment(self, request, pk=None):
         """Add comment to customer"""
         customer = self.get_object()
@@ -16461,13 +16592,13 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
             entity_id=customer.id,
             content=content,
             parent_id=parent_id,
-            created_by=request.user if request.user.is_authenticated else None
+            created_by=request.user
         )
         
         serializer = CommentSerializer(comment)
         return Response(serializer.data, status=201)
     
-    @action(detail=True, methods=['get'], permission_classes=[AllowAny])
+    @action(detail=True, methods=['get'])
     def list_comments(self, request, pk=None):
         """List all comments for this customer"""
         customer = self.get_object()
@@ -16491,10 +16622,10 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
             return Response({"error": "Only draft customers can be submitted"}, status=400)
         
         customer.status = 'PENDING_APPROVAL'
+        customer.updated_by = request.user
         customer.save()
         
         # Log approval history
-        from .models import ApprovalHistory
         ApprovalHistory.objects.create(
             entity_type='Customer',
             entity_id=customer.id,
@@ -16505,10 +16636,9 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         )
         
         # Create audit log
-        from .models import AuditLog
         AuditLog.objects.create(
             user=request.user,
-            action='APPROVE',
+            action='SUBMIT',
             entity_type='Customer',
             entity_id=customer.id,
             entity_code=customer.code,
@@ -16525,15 +16655,13 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         if customer.status != 'PENDING_APPROVAL':
             return Response({"error": "Only pending customers can be approved"}, status=400)
         
-        from django.utils import timezone
-        from .models import AuditLog
         customer.status = 'APPROVED'
         customer.approved_by = request.user
-        customer.approved_at = timezone.now()
+        customer.approved_at = django_timezone.now()
+        customer.updated_by = request.user
         customer.save()
         
         # Log approval history
-        from .models import ApprovalHistory
         ApprovalHistory.objects.create(
             entity_type='Customer',
             entity_id=customer.id,
@@ -16565,16 +16693,14 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         
         reason = request.data.get('reason', '')
         
-        from django.utils import timezone
-        from .models import AuditLog
         customer.status = 'REJECTED'
         customer.rejected_by = request.user
-        customer.rejected_at = timezone.now()
+        customer.rejected_at = django_timezone.now()
         customer.rejection_reason = reason
+        customer.updated_by = request.user
         customer.save()
         
         # Log approval history
-        from .models import ApprovalHistory
         ApprovalHistory.objects.create(
             entity_type='Customer',
             entity_id=customer.id,
@@ -16597,12 +16723,11 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         
         return Response({"success": True, "status": customer.status})
 
-    @action(detail=True, methods=['get'], permission_classes=[AllowAny])
+    @action(detail=True, methods=['get'])
     def approval_history(self, request, pk=None):
         """Get approval history for this customer"""
         customer = self.get_object()
         
-        from .models import ApprovalHistory
         history = ApprovalHistory.objects.filter(
             entity_type='Customer',
             entity_id=customer.id
@@ -16630,11 +16755,10 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
             return Response({"error": "user_id required"}, status=400)
 
         try:
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
             owner = User.objects.get(id=user_id)
 
             customer.owner = owner
+            customer.updated_by = request.user
             customer.save()
 
             # Log
@@ -16664,6 +16788,7 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
             team = Team.objects.get(id=team_id)
 
             customer.team = team
+            customer.updated_by = request.user
             customer.save()
 
             # Log
@@ -16680,7 +16805,7 @@ class CustomerViewSet(ExportExcelMixin, AuditLogMixin, viewsets.ModelViewSet):
         except Team.DoesNotExist:
             return Response({"error": "Team not found"}, status=404)
     
-    @action(detail=False, methods=['get'], permission_classes=[AllowAny])
+    @action(detail=False, methods=['get'])
     def export(self, request):
         """Export customers to Excel/CSV/PDF using template"""
         from .models import ExportTemplate
@@ -17564,19 +17689,13 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 _register_user_session(request, serializer.user, session_id)
 
         return Response(data, status=status.HTTP_200_OK)
-from django.http import HttpResponse
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
-import csv
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def customer_export_view(request):
     """Direct export view - CSV, Excel, or PDF"""
-    from .models import ExportTemplate, Customer
-    from datetime import datetime
-    import csv
-    from .utils import export_to_excel
+    if not user_has_customer_permission(request.user, 'EXPORT', strict=True):
+        raise PermissionDenied(CUSTOMER_PERMISSION_MESSAGES['EXPORT'])
     
     # Get format (csv or excel)
     format_type = request.GET.get('format', 'excel')
@@ -17594,7 +17713,13 @@ def customer_export_view(request):
             return HttpResponse('{"error": "No default template"}', status=404, content_type='application/json')
     
     # Get data
-    customers = Customer.objects.all()
+    customers = Customer.objects.select_related('owner', 'team', 'created_by', 'updated_by').all()
+    if not (getattr(request.user, 'is_superuser', False) or getattr(request.user, 'is_staff', False)):
+        customers = customers.filter(
+            models.Q(owner=request.user) |
+            models.Q(team__in=request.user.teams.all()) |
+            models.Q(owner__isnull=True, team__isnull=True)
+        )
     
     # Export based on format
     if format_type == 'csv':
@@ -17612,7 +17737,6 @@ def customer_export_view(request):
         return response
     elif format_type == 'pdf':
         # PDF Export
-        from .utils import export_to_pdf
         filename = f'customers_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf'
         return export_to_pdf(customers, template.columns, template.headers, filename, title='Customer List')
     else:

@@ -76,6 +76,7 @@ import {
   canViewReportsCenter,
   canViewWorkflowData,
   canManageWorkflowData,
+  canViewCustomers,
 } from '../../utils/authz';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
@@ -222,6 +223,7 @@ const MainLayout = () => {
   const canViewOps = canViewOpsHub();
   const canViewReports = canViewReportsCenter();
   const canViewSalesOrders = canAccessSalesOrders();
+  const canViewCustomerCatalog = canViewCustomers();
   const canViewWorkflow = canViewWorkflowData();
   const canManageWorkflow = canManageWorkflowData();
   const canViewOpsLog = canViewOperationsLog();
@@ -377,6 +379,7 @@ const MainLayout = () => {
   const commandPaletteCommands = useMemo(() => buildCommandPaletteCatalog({
     canViewReports,
     canViewSalesOrders,
+    canViewCustomers: canViewCustomerCatalog,
     canViewSalesFulfillmentCenter,
     canManagePurchasing,
     canAccessProductionCenter: canAccessProduction,
@@ -439,6 +442,7 @@ const MainLayout = () => {
     canViewRbacAudit,
     canViewReports,
     canViewSalesOrders,
+    canViewCustomerCatalog,
     canViewSalesFulfillmentCenter,
     canViewWorkflow,
     operationsFailedCount,
@@ -785,16 +789,16 @@ const MainLayout = () => {
       icon: <ToolOutlined />,
       label: renderMenuLabel('/units', 'Đơn vị tính'),
     },
-    {
+    canViewCustomerCatalog ? {
       key: '/customers',
       icon: <TeamOutlined />,
       label: renderMenuLabel('/customers', 'Khách hàng'),
-    },
-    {
+    } : null,
+    canViewCustomerCatalog ? {
       key: '/customer-portal',
       icon: <UserOutlined />,
       label: renderMenuLabel('/customer-portal', 'Cổng khách hàng'),
-    },
+    } : null,
     canManagePurchasing ? {
       key: 'purchasing-group',
       icon: <ShoppingCartOutlined />,

@@ -431,6 +431,52 @@ export function canAccessSalesOrders(): boolean {
   ]);
 }
 
+function hasCustomerPermission(action: string): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  return hasPermission(authz.permissions, 'CUSTOMER', action);
+}
+
+export function canViewCustomers(): boolean {
+  return hasCustomerPermission('VIEW');
+}
+
+export function canCreateCustomers(): boolean {
+  return hasCustomerPermission('CREATE');
+}
+
+export function canEditCustomers(): boolean {
+  return hasCustomerPermission('EDIT');
+}
+
+export function canSubmitCustomers(): boolean {
+  return hasCustomerPermission('SUBMIT');
+}
+
+export function canApproveCustomers(): boolean {
+  return hasCustomerPermission('APPROVE');
+}
+
+export function canRejectCustomers(): boolean {
+  return hasCustomerPermission('REJECT');
+}
+
+export function canImportCustomers(): boolean {
+  return hasCustomerPermission('IMPORT');
+}
+
+export function canExportCustomers(): boolean {
+  return hasCustomerPermission('EXPORT');
+}
+
+export function canAssignCustomers(): boolean {
+  return hasCustomerPermission('ASSIGN');
+}
+
+export function canDeleteCustomers(): boolean {
+  return hasCustomerPermission('DELETE');
+}
+
 export function canManageDeliveryCarriers(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;

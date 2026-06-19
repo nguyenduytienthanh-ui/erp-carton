@@ -12,6 +12,7 @@ export type CommandPaletteCommand = {
 type BuildCommandPaletteCatalogOptions = {
   canViewReports: boolean;
   canViewSalesOrders: boolean;
+  canViewCustomers: boolean;
   canViewSalesFulfillmentCenter: boolean;
   canManagePurchasing: boolean;
   canAccessProductionCenter: boolean;
@@ -240,7 +241,7 @@ export function buildCommandPaletteCatalog(
       group: 'Dữ liệu nền',
       description: 'Theo dõi hồ sơ khách hàng, công nợ và các chỉ số giao dịch liên quan.',
       keywords: ['khach hang', 'customer', 'crm'],
-      enabled: true,
+      enabled: options.canViewCustomers,
     },
     {
       key: 'customer-portal',
@@ -249,7 +250,7 @@ export function buildCommandPaletteCatalog(
       group: 'Bán hàng',
       description: 'Tra cứu đơn hàng, hóa đơn, thanh toán và tài liệu khách hàng theo dữ liệu thực.',
       keywords: ['cong khach hang', 'portal', 'customer self service'],
-      enabled: true,
+      enabled: options.canViewCustomers,
     },
     {
       key: 'sales-orders',
