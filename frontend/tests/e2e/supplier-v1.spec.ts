@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 const supplierA = {
   id: 1,
@@ -50,6 +50,23 @@ function json(route: Route, body: unknown, status = 200) {
 
 function paginated(results: typeof supplierA[]) {
   return { count: results.length, next: null, previous: null, results };
+}
+
+async function expectWithinViewport(page: Page, locator: Locator) {
+  const box = await locator.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(-1);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width + 1);
+}
+
+async function expectAboveFooter(drawer: Locator, locator: Locator) {
+  const box = await locator.boundingBox();
+  const footerBox = await drawer.locator('.ant-drawer-footer').boundingBox();
+  expect(box).not.toBeNull();
+  expect(footerBox).not.toBeNull();
+  expect(box!.y + box!.height).toBeLessThanOrEqual(footerBox!.y + 1);
 }
 
 async function setupSupplierMockApi(page: Page) {
@@ -176,6 +193,41 @@ test('Supplier v1 desktop list exposes filters, columns and sectioned create for
   await expect.poll(() => api.getLastCreatePayload()?.code).toBe('SUP-NEW-001');
   expect(api.getLastCreatePayload()?.email).toBe('new@supplier.vn');
   expect(api.getLastCreatePayload()?.payment_terms_days).toBe(45);
+});
+
+test('Supplier v1 mobile create form is full width and scrollable', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const api = await setupSupplierMockApi(page);
+
+  await page.goto('/suppliers');
+  await expect(page.getByTestId('supplier-mobile-card-list')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Thêm mới' }).click();
+  const supplierDrawer = page.getByTestId('supplier-form-drawer');
+  await expect(supplierDrawer).toBeVisible();
+  await page.waitForTimeout(400);
+  await expectWithinViewport(page, supplierDrawer);
+  await expect(supplierDrawer.getByText('Thêm nhà cung cấp')).toBeVisible();
+  await expect(supplierDrawer.getByRole('textbox', { name: /Mã NCC/ })).toBeVisible();
+  await expect(supplierDrawer.getByRole('textbox', { name: /Tên NCC/ })).toBeVisible();
+
+  await supplierDrawer.getByText('Thanh toán', { exact: true }).scrollIntoViewIfNeeded();
+  await expect(supplierDrawer.getByRole('spinbutton', { name: /Hạn thanh toán/ })).toBeVisible();
+  await expectWithinViewport(page, supplierDrawer);
+
+  await supplierDrawer.getByText('Đánh giá & ghi chú').scrollIntoViewIfNeeded();
+  await expect(supplierDrawer.getByText('Đánh giá thủ công')).toBeVisible();
+  const noteField = supplierDrawer.getByRole('textbox', { name: /Ghi chú/ });
+  await noteField.scrollIntoViewIfNeeded();
+  await expect(noteField).toBeVisible();
+  await expectAboveFooter(supplierDrawer, noteField);
+  await expect(supplierDrawer.getByRole('button', { name: 'Hủy' })).toBeVisible();
+  await expect(supplierDrawer.getByRole('button', { name: 'Lưu' })).toBeVisible();
+
+  await supplierDrawer.getByRole('button', { name: 'Hủy' }).click();
+  await expect(supplierDrawer).toBeHidden();
+  await expect(page.getByTestId('supplier-mobile-card-list')).toBeVisible();
+  expect(api.getLastCreatePayload()).toBeNull();
 });
 
 test('Supplier v1 mobile uses cards and primary deactivate action instead of hard delete', async ({ page }) => {

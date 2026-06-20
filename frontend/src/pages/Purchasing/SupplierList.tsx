@@ -889,8 +889,9 @@ export default function SupplierList() {
         title={drawerMode === 'create' ? 'Thêm nhà cung cấp' : drawerMode === 'edit' ? `Sửa ${selectedSupplier?.code ?? ''}` : `Chi tiết ${selectedSupplier?.code ?? ''}`}
         open={drawerOpen}
         onClose={closeDrawer}
-        width={820}
+        width={isMobile ? '100vw' : 820}
         destroyOnHidden={false}
+        rootClassName="supplier-form-drawer-root"
         className="supplier-form-drawer"
         data-testid="supplier-form-drawer"
         footer={
