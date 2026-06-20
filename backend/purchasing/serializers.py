@@ -14,6 +14,8 @@ from purchasing.models import (
     PurchaseRequest,
     PurchaseRequestLine,
     PurchaseRequestStatus,
+    PurchaseReturn,
+    PurchaseReturnLine,
     Supplier,
 )
 from purchasing.services import (
@@ -45,6 +47,69 @@ class SupplierSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = ['created_at', 'updated_at']
+
+    def validate_code(self, value):
+        normalized = str(value or '').strip().upper()
+        if not normalized:
+            raise serializers.ValidationError('Vui lòng nhập mã nhà cung cấp.')
+        queryset = Supplier.objects.filter(code__iexact=normalized)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError('Mã NCC đã tồn tại.')
+        return normalized
+
+    def validate_name(self, value):
+        normalized = str(value or '').strip()
+        if not normalized:
+            raise serializers.ValidationError('Vui lòng nhập tên nhà cung cấp.')
+        return normalized
+
+    def validate_company_name(self, value):
+        return str(value or '').strip()
+
+    def validate_tax_code(self, value):
+        normalized = str(value or '').strip()
+        if not normalized:
+            return ''
+        queryset = Supplier.objects.filter(tax_code__iexact=normalized)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError('Mã số thuế đã tồn tại trên nhà cung cấp khác.')
+        return normalized
+
+    def validate_email(self, value):
+        return str(value or '').strip().lower()
+
+    def validate_phone(self, value):
+        return str(value or '').strip()
+
+    def validate_contact_phone(self, value):
+        return str(value or '').strip()
+
+    def validate_address(self, value):
+        return str(value or '').strip()
+
+    def validate_contact_person(self, value):
+        return str(value or '').strip()
+
+    def validate_note(self, value):
+        return str(value or '').strip()
+
+    def validate_payment_terms_days(self, value):
+        if value is None:
+            return 30
+        if value < 0:
+            raise serializers.ValidationError('Hạn thanh toán không được âm.')
+        return value
+
+    def validate_rating(self, value):
+        if value is None:
+            return 3
+        if value < 1 or value > 5:
+            raise serializers.ValidationError('Đánh giá phải nằm trong khoảng 1-5.')
+        return value
 
 
 class PurchaseOrderLineSerializer(serializers.ModelSerializer):
@@ -473,11 +538,6 @@ class PurchaseRequestSerializer(serializers.ModelSerializer):
                     line_data['purchase_request'] = instance
                     PurchaseRequestLine.objects.create(**line_data)
         return instance
-
-
-# Purchase Return Serializers
-from purchasing.models import PurchaseReturn, PurchaseReturnLine
-
 
 class PurchaseReturnLineSerializer(serializers.ModelSerializer):
     product_code = serializers.SerializerMethodField()

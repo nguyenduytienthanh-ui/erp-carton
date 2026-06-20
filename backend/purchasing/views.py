@@ -189,7 +189,7 @@ class SupplierViewSet(SearchTextMixin, viewsets.ModelViewSet):
     serializer_class = SupplierSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.OrderingFilter]
-    ordering_fields = ['code', 'name', 'payment_terms_days', 'rating', 'created_at']
+    ordering_fields = ['code', 'name', 'company_name', 'payment_terms_days', 'rating', 'created_at', 'updated_at']
     ordering = ['code']
 
     def get_queryset(self):
@@ -197,7 +197,60 @@ class SupplierViewSet(SearchTextMixin, viewsets.ModelViewSet):
         is_active = self.request.query_params.get('is_active')
         if is_active in ('true', 'false'):
             queryset = queryset.filter(is_active=(is_active == 'true'))
+        is_preferred = self.request.query_params.get('is_preferred')
+        if is_preferred in ('true', 'false'):
+            queryset = queryset.filter(is_preferred=(is_preferred == 'true'))
+        has_contact = self.request.query_params.get('has_contact')
+        if has_contact in ('true', 'false'):
+            contact_filter = Q(contact_person__gt='') | Q(phone__gt='') | Q(email__gt='') | Q(contact_phone__gt='')
+            queryset = queryset.filter(contact_filter if has_contact == 'true' else ~contact_filter)
+        missing_profile = self.request.query_params.get('missing_profile')
+        if str(missing_profile or '').lower() in {'1', 'true', 'yes'}:
+            queryset = queryset.filter(
+                Q(tax_code='') |
+                (Q(contact_person='') & Q(phone='') & Q(email='') & Q(contact_phone=''))
+            )
+        for field in ('code', 'name', 'company_name', 'phone', 'email', 'contact_person'):
+            value = (self.request.query_params.get(field) or '').strip()
+            if value:
+                queryset = queryset.filter(**{f'{field}__icontains': value})
+        tax_code = (self.request.query_params.get('tax_code') or '').strip()
+        if tax_code:
+            lookup = 'tax_code__iexact' if str(self.request.query_params.get('tax_code_exact') or '').lower() in {'1', 'true', 'yes'} else 'tax_code__icontains'
+            queryset = queryset.filter(**{lookup: tax_code})
+        rating_min = self.request.query_params.get('rating_min')
+        if rating_min not in (None, ''):
+            try:
+                queryset = queryset.filter(rating__gte=int(rating_min))
+            except (TypeError, ValueError):
+                pass
+        rating_max = self.request.query_params.get('rating_max')
+        if rating_max not in (None, ''):
+            try:
+                queryset = queryset.filter(rating__lte=int(rating_max))
+            except (TypeError, ValueError):
+                pass
+        payment_terms_days = self.request.query_params.get('payment_terms_days')
+        if payment_terms_days not in (None, ''):
+            try:
+                queryset = queryset.filter(payment_terms_days=int(payment_terms_days))
+            except (TypeError, ValueError):
+                pass
         return self.apply_search(queryset)
+
+    def _get_delete_blockers(self, supplier):
+        blockers = []
+        relation_checks = [
+            ('purchase_orders', 'đơn mua'),
+            ('material_purchase_prices', 'bảng giá mua'),
+            ('purchase_returns', 'phiếu trả hàng'),
+            ('payable_documents', 'chứng từ phải trả'),
+        ]
+        for related_name, label in relation_checks:
+            related_manager = getattr(supplier, related_name, None)
+            if related_manager is not None and related_manager.exists():
+                blockers.append(label)
+        return blockers
 
     def perform_create(self, serializer):
         if not can_manage_supplier(self.request.user):
@@ -243,8 +296,15 @@ class SupplierViewSet(SearchTextMixin, viewsets.ModelViewSet):
         if not can_manage_supplier(request.user):
             return Response({'error': 'Bạn không có quyền xóa nhà cung cấp.'}, status=status.HTTP_403_FORBIDDEN)
         supplier = self.get_object()
-        if supplier.purchase_orders.exists():
-            return Response({'error': 'Nhà cung cấp đã phát sinh đơn mua, không thể xóa.'}, status=status.HTTP_400_BAD_REQUEST)
+        blockers = self._get_delete_blockers(supplier)
+        if blockers:
+            return Response(
+                {
+                    'error': 'Không thể xóa nhà cung cấp đã phát sinh chứng từ. Hãy chuyển sang Ngưng sử dụng.',
+                    'blockers': blockers,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         old_values = {'code': supplier.code, 'name': supplier.name}
         response = super().destroy(request, *args, **kwargs)
         _log_procurement_audit(

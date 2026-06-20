@@ -35,7 +35,7 @@ test('admin user can access new business modules and reports center', async ({ p
 
   const pagesToCheck = [
     { path: '/reports', kind: 'testid', value: 'reports-center-command-strip' },
-    { path: '/suppliers', kind: 'text', value: 'Trung tâm nhà cung cấp' },
+    { path: '/suppliers', kind: 'text', value: 'Nhà cung cấp' },
     { path: '/purchase-orders', kind: 'text', value: 'Trung tâm đơn mua' },
     { path: '/purchase-receipts', kind: 'text', value: 'Trung tâm phiếu nhập mua' },
     { path: '/production-orders', kind: 'text', value: 'Trung tâm lệnh sản xuất' },

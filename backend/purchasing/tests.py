@@ -5,6 +5,7 @@ from rest_framework.test import APITestCase
 from django.utils import timezone
 
 from core.models import ApprovalHistory, AuditLog, User
+from finance.models import PayableDocument
 from inventory.models import InventoryTransaction, Warehouse, WarehouseLocation
 from products.models import Product, ProductUnit
 from purchasing.models import (
@@ -14,8 +15,183 @@ from purchasing.models import (
     PurchaseReceipt,
     PurchaseRequest,
     PurchaseReturn,
+    Supplier,
 )
 from sales.models import SalesOrder, SalesOrderLine
+
+
+class SupplierApiTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='supplier_admin',
+            password='Demo123!',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_authenticate(user=self.user)
+        self.unit = ProductUnit.objects.create(code='SUP-UOM', name='Đơn vị NCC')
+        self.product = Product.objects.create(
+            code='SUP-PRODUCT-001',
+            name='Vật tư test NCC',
+            unit=self.unit,
+            cost_price=10000,
+            sale_price=15000,
+            min_stock=5,
+            status='ACTIVE',
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+
+    def _create_supplier(self, code='SUP-001', **overrides):
+        payload = {
+            'code': code,
+            'name': f'Nhà cung cấp {code}',
+            'company_name': f'Công ty {code}',
+            'tax_code': '',
+            'phone': '0900000000',
+            'email': 'supplier@example.com',
+            'contact_person': 'Người liên hệ',
+            'contact_phone': '0911111111',
+            'payment_terms_days': 30,
+            'rating': 3,
+            'is_preferred': False,
+            'is_active': True,
+        }
+        payload.update(overrides)
+        return Supplier.objects.create(**payload)
+
+    def test_supplier_create_normalizes_and_validates_existing_fields(self):
+        response = self.client.post('/api/purchasing/suppliers/', {
+            'code': ' sup-trim-001 ',
+            'name': '  Nhà cung cấp Trim  ',
+            'company_name': ' Công ty Trim ',
+            'tax_code': ' MST-TRIM-001 ',
+            'email': 'BUYER@EXAMPLE.COM ',
+            'payment_terms_days': 45,
+            'rating': 4,
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['code'], 'SUP-TRIM-001')
+        self.assertEqual(response.data['name'], 'Nhà cung cấp Trim')
+        self.assertEqual(response.data['company_name'], 'Công ty Trim')
+        self.assertEqual(response.data['tax_code'], 'MST-TRIM-001')
+        self.assertEqual(response.data['email'], 'buyer@example.com')
+
+        invalid_response = self.client.post('/api/purchasing/suppliers/', {
+            'code': 'SUP-INVALID-001',
+            'name': 'Nhà cung cấp lỗi',
+            'email': 'not-an-email',
+            'payment_terms_days': -1,
+            'rating': 6,
+        }, format='json')
+        self.assertEqual(invalid_response.status_code, 400, invalid_response.data)
+        self.assertIn('email', invalid_response.data)
+        self.assertIn('payment_terms_days', invalid_response.data)
+        self.assertIn('rating', invalid_response.data)
+
+    def test_supplier_duplicate_tax_code_is_rejected_without_db_unique_constraint(self):
+        self._create_supplier(code='SUP-TAX-001', tax_code='MST-DUP-001')
+
+        response = self.client.post('/api/purchasing/suppliers/', {
+            'code': 'SUP-TAX-002',
+            'name': 'Nhà cung cấp trùng MST',
+            'tax_code': ' mst-dup-001 ',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('tax_code', response.data)
+
+    def test_supplier_list_filters_search_and_soft_status_fields(self):
+        active = self._create_supplier(code='SUP-FILTER-001', tax_code='MST-FILTER-001', is_preferred=True, rating=5)
+        self._create_supplier(
+            code='SUP-FILTER-002',
+            name='Nhà cung cấp ngưng dùng',
+            tax_code='',
+            phone='',
+            email='',
+            contact_person='',
+            contact_phone='',
+            is_active=False,
+            is_preferred=False,
+            rating=2,
+        )
+
+        preferred_response = self.client.get('/api/purchasing/suppliers/?is_preferred=true')
+        self.assertEqual(preferred_response.status_code, 200, preferred_response.data)
+        self.assertEqual(preferred_response.data['count'], 1)
+        self.assertEqual(preferred_response.data['results'][0]['id'], active.id)
+
+        inactive_response = self.client.get('/api/purchasing/suppliers/?is_active=false')
+        self.assertEqual(inactive_response.status_code, 200, inactive_response.data)
+        self.assertEqual(inactive_response.data['count'], 1)
+        self.assertFalse(inactive_response.data['results'][0]['is_active'])
+
+        missing_profile_response = self.client.get('/api/purchasing/suppliers/?missing_profile=true')
+        self.assertEqual(missing_profile_response.status_code, 200, missing_profile_response.data)
+        self.assertEqual(missing_profile_response.data['count'], 1)
+        self.assertEqual(missing_profile_response.data['results'][0]['code'], 'SUP-FILTER-002')
+
+        search_response = self.client.get('/api/purchasing/suppliers/?q=MST-FILTER-001')
+        self.assertEqual(search_response.status_code, 200, search_response.data)
+        self.assertEqual(search_response.data['count'], 1)
+        self.assertEqual(search_response.data['results'][0]['code'], 'SUP-FILTER-001')
+
+    def test_supplier_delete_is_blocked_when_related_records_exist(self):
+        supplier = self._create_supplier(code='SUP-REL-001')
+        PurchaseOrder.objects.create(
+            code='PO-SUP-REL-001',
+            order_date=timezone.localdate(),
+            supplier=supplier,
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        MaterialPurchasePrice.objects.create(
+            product=self.product,
+            supplier=supplier,
+            unit_price=Decimal('12000'),
+            currency='VND',
+            uom='SUP-UOM',
+            effective_from=timezone.localdate(),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        PurchaseReturn.objects.create(
+            code='RET-SUP-REL-001',
+            return_date=timezone.localdate(),
+            supplier=supplier,
+            return_reason='OTHER',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        PayableDocument.objects.create(
+            code='AP-SUP-REL-001',
+            supplier=supplier,
+            document_date=timezone.localdate(),
+            due_date=timezone.localdate(),
+            total_amount=Decimal('100000'),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.delete(f'/api/purchasing/suppliers/{supplier.id}/')
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('Không thể xóa nhà cung cấp đã phát sinh chứng từ', response.data['error'])
+        self.assertIn('đơn mua', response.data['blockers'])
+        self.assertIn('bảng giá mua', response.data['blockers'])
+        self.assertIn('phiếu trả hàng', response.data['blockers'])
+        self.assertIn('chứng từ phải trả', response.data['blockers'])
+        self.assertTrue(Supplier.objects.filter(pk=supplier.id).exists())
+
+    def test_supplier_delete_still_allows_unreferenced_supplier_in_disposable_test_db(self):
+        supplier = self._create_supplier(code='SUP-FREE-001')
+
+        response = self.client.delete(f'/api/purchasing/suppliers/{supplier.id}/')
+
+        self.assertEqual(response.status_code, 204, response.data)
+        self.assertFalse(Supplier.objects.filter(pk=supplier.id).exists())
 
 
 class PurchasingWorkflowTests(APITestCase):
