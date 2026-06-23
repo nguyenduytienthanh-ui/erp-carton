@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 
 from django.db import transaction
@@ -21,6 +22,7 @@ from purchasing.models import (
 from purchasing.services import (
     build_purchase_order_line_product_snapshot,
     build_supplier_snapshot,
+    get_next_pr_code,
 )
 
 
@@ -262,6 +264,14 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
         attrs = super().validate(attrs)
         warehouse = attrs.get('warehouse', getattr(self.instance, 'warehouse', None))
         location = attrs.get('location', getattr(self.instance, 'location', None))
+        supplier = attrs.get('supplier', getattr(self.instance, 'supplier', None))
+        supplier_changed = (
+            self.instance is not None
+            and 'supplier' in attrs
+            and attrs['supplier'].pk != self.instance.supplier_id
+        )
+        if supplier and not supplier.is_active and (self.instance is None or supplier_changed):
+            raise serializers.ValidationError({'supplier': 'Nhà cung cấp đã ngừng sử dụng, không thể tạo đơn mua mới.'})
         if location and warehouse and location.warehouse_id != warehouse.id:
             raise serializers.ValidationError({'location': 'Vị trí nhập mặc định phải thuộc kho đã chọn.'})
 
@@ -510,7 +520,6 @@ class PurchaseRequestSerializer(serializers.ModelSerializer):
         return getattr(user, 'full_name', None) or getattr(user, 'username', None)
 
     def create(self, validated_data, **kwargs):
-        from purchasing.services import get_next_pr_code
         lines_data = validated_data.pop('lines', [])
         request_date = validated_data.get('request_date')
         if not request_date:
@@ -580,7 +589,6 @@ class PurchaseReturnSerializer(serializers.ModelSerializer):
         return getattr(obj.purchase_order, 'code', None) if obj.purchase_order else None
 
     def create(self, validated_data):
-        from datetime import date
         lines_data = validated_data.pop('lines', [])
         return_date = validated_data.get('return_date')
         if not return_date:

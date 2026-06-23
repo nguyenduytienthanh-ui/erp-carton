@@ -958,3 +958,118 @@ class PurchasingWorkflowTests(APITestCase):
 
         audit_rows = AuditLog.objects.filter(entity_type='PurchaseReturn', entity_id=return_id)
         self.assertEqual(audit_rows.count(), 4)
+
+    def test_procurement_endpoints_require_authentication_and_manage_permission(self):
+        self.client.force_authenticate(user=None)
+        anonymous_response = self.client.get('/api/purchasing/orders/')
+        self.assertIn(anonymous_response.status_code, (401, 403), anonymous_response.data)
+
+        plain_user = User.objects.create_user(username='purchasing_plain_user', password='Demo123!')
+        self.client.force_authenticate(user=plain_user)
+
+        price_response = self.client.post('/api/purchasing/material-prices/', {
+            'product': self.product.id,
+            'supplier': self.supplier_id,
+            'unit_price': '11000',
+            'currency': 'VND',
+            'uom': 'CAI',
+            'effective_from': timezone.localdate().isoformat(),
+        }, format='json')
+        request_response = self.client.post('/api/purchasing/requests/', {
+            'request_date': timezone.localdate().isoformat(),
+            'reference': 'PR-NO-PERM',
+            'notes': 'No permission',
+            'lines': [
+                {
+                    'line_number': 1,
+                    'product': self.product.id,
+                    'qty': '1',
+                    'note': 'No permission',
+                }
+            ],
+        }, format='json')
+        return_list_response = self.client.get('/api/purchasing/returns/')
+        return_create_response = self.client.post('/api/purchasing/returns/', {
+            'return_date': timezone.localdate().isoformat(),
+            'supplier': self.supplier_id,
+            'reference': 'RET-NO-PERM',
+            'return_reason': 'OTHER',
+            'return_notes': 'No permission',
+            'lines': [
+                {
+                    'line_number': 1,
+                    'product': self.product.id,
+                    'qty': '1',
+                    'unit_price': '10000',
+                    'tax_pct': '0',
+                }
+            ],
+        }, format='json')
+
+        self.assertEqual(price_response.status_code, 403, price_response.data)
+        self.assertEqual(request_response.status_code, 403, request_response.data)
+        self.assertEqual(return_list_response.status_code, 403, return_list_response.data)
+        self.assertEqual(return_create_response.status_code, 403, return_create_response.data)
+
+    def test_purchase_order_blocks_inactive_supplier_for_new_order(self):
+        inactive_supplier = Supplier.objects.create(
+            code='NCC-INACTIVE-PO',
+            name='NCC ngung dung PO',
+            company_name='NCC ngung dung PO',
+            payment_terms_days=30,
+            rating=3,
+            is_active=False,
+        )
+
+        response = self.client.post('/api/purchasing/orders/', {
+            'order_date': timezone.localdate().isoformat(),
+            'expected_receipt_date': (timezone.localdate() + timedelta(days=3)).isoformat(),
+            'supplier': inactive_supplier.id,
+            'warehouse': self.warehouse.id,
+            'location': self.location.id,
+            'reference': 'PO-INACTIVE-SUP',
+            'lines': [
+                {
+                    'line_number': 1,
+                    'product': self.product.id,
+                    'qty': '1',
+                    'unit_price': '10000',
+                    'discount_pct': '0',
+                    'tax_pct': '8',
+                }
+            ],
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('supplier', response.data)
+
+    def test_purchase_order_submit_and_approve_require_lines(self):
+        draft_order = PurchaseOrder.objects.create(
+            code='PO-NO-LINES-SUBMIT',
+            order_date=timezone.localdate(),
+            supplier_id=self.supplier_id,
+            warehouse=self.warehouse,
+            location=self.location,
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+        submitted_order = PurchaseOrder.objects.create(
+            code='PO-NO-LINES-APPROVE',
+            order_date=timezone.localdate(),
+            supplier_id=self.supplier_id,
+            warehouse=self.warehouse,
+            location=self.location,
+            status='SUBMITTED',
+            submitted_by=self.user,
+            submitted_at=timezone.now(),
+            created_by=self.user,
+            updated_by=self.user,
+            owner=self.user,
+        )
+
+        submit_response = self.client.post(f'/api/purchasing/orders/{draft_order.id}/submit/', format='json')
+        approve_response = self.client.post(f'/api/purchasing/orders/{submitted_order.id}/approve/', format='json')
+
+        self.assertEqual(submit_response.status_code, 400, submit_response.data)
+        self.assertEqual(approve_response.status_code, 400, approve_response.data)

@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   Alert,
   Button,
   Card,
+  Checkbox,
   DatePicker,
   Descriptions,
   Drawer,
+  Dropdown,
+  Empty,
   Form,
+  Grid,
   Input,
   InputNumber,
   Modal,
@@ -19,8 +24,21 @@ import {
   Typography,
   message,
 } from 'antd';
+import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined } from '@ant-design/icons';
+import {
+  CheckOutlined,
+  CloseOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  EyeOutlined,
+  InboxOutlined,
+  MoreOutlined,
+  PlusOutlined,
+  SendOutlined,
+  SettingOutlined,
+  StopOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { useSearchParams } from 'react-router-dom';
@@ -115,6 +133,7 @@ const STATUS_HELP_TEXT: Record<PurchaseOrderStatus, string> = {
 };
 
 type PurchaseOrderActionKey = 'edit' | 'submit' | 'approve' | 'reject' | 'receive' | 'cancel' | 'delete';
+type PurchaseOrderMenuActionKey = 'view' | PurchaseOrderActionKey;
 type PurchaseOrderActionPermissions = {
   canManage: boolean;
   canSubmit: boolean;
@@ -122,6 +141,80 @@ type PurchaseOrderActionPermissions = {
   canReceive: boolean;
   canCancel: boolean;
 };
+type PurchaseOrderColumnKey =
+  | 'code'
+  | 'supplier'
+  | 'order_date'
+  | 'expected_receipt_date'
+  | 'status'
+  | 'receiving'
+  | 'warehouse'
+  | 'line_count'
+  | 'payment_terms_days'
+  | 'currency'
+  | 'reference'
+  | 'updated_at'
+  | 'total'
+  | 'actions';
+
+const PURCHASE_ORDER_ACTION_LABELS: Record<PurchaseOrderMenuActionKey, string> = {
+  view: 'Xem chi tiết',
+  edit: 'Sửa',
+  submit: 'Gửi duyệt',
+  approve: 'Duyệt',
+  reject: 'Từ chối',
+  receive: 'Nhập kho',
+  cancel: 'Hủy',
+  delete: 'Xóa',
+};
+
+const PURCHASE_ORDER_ACTION_MENU: Array<{ key: PurchaseOrderMenuActionKey; danger?: boolean }> = [
+  { key: 'view' },
+  { key: 'edit' },
+  { key: 'submit' },
+  { key: 'approve' },
+  { key: 'reject', danger: true },
+  { key: 'receive' },
+  { key: 'cancel', danger: true },
+  { key: 'delete', danger: true },
+];
+
+const PURCHASE_ORDER_ACTION_ICONS: Record<PurchaseOrderMenuActionKey, ReactNode> = {
+  view: <EyeOutlined />,
+  edit: <EditOutlined />,
+  submit: <SendOutlined />,
+  approve: <CheckOutlined />,
+  reject: <CloseOutlined />,
+  receive: <InboxOutlined />,
+  cancel: <StopOutlined />,
+  delete: <DeleteOutlined />,
+};
+
+const REQUIRED_PO_COLUMN_KEYS: PurchaseOrderColumnKey[] = ['code', 'status', 'actions'];
+const DEFAULT_PO_COLUMN_KEYS: PurchaseOrderColumnKey[] = [
+  'code',
+  'supplier',
+  'order_date',
+  'expected_receipt_date',
+  'status',
+  'receiving',
+  'warehouse',
+  'total',
+  'actions',
+];
+const PO_COLUMN_OPTIONS: Array<{ value: PurchaseOrderColumnKey; label: string }> = [
+  { value: 'supplier', label: 'Nhà cung cấp' },
+  { value: 'order_date', label: 'Ngày đơn' },
+  { value: 'expected_receipt_date', label: 'Dự kiến nhận' },
+  { value: 'receiving', label: 'Tiến độ nhận' },
+  { value: 'warehouse', label: 'Kho nhập' },
+  { value: 'line_count', label: 'Số dòng' },
+  { value: 'payment_terms_days', label: 'Thanh toán' },
+  { value: 'currency', label: 'Tiền tệ' },
+  { value: 'reference', label: 'Tham chiếu' },
+  { value: 'updated_at', label: 'Cập nhật' },
+  { value: 'total', label: 'Tổng tiền' },
+];
 
 function getPurchaseOrderRemainingQty(order: Pick<PurchaseOrder, 'lines'>): number {
   return (order.lines ?? []).reduce((sum, line) => sum + Number(line.remaining_qty ?? 0), 0);
@@ -197,6 +290,13 @@ function getPurchaseOrderActionDisabledReason(
   return '';
 }
 
+function getPurchaseOrderQuickActions(order: PurchaseOrder): PurchaseOrderMenuActionKey[] {
+  if (order.status === 'DRAFT' || order.status === 'REJECTED') return ['view', 'edit', 'submit'];
+  if (order.status === 'SUBMITTED') return ['view', 'approve', 'reject'];
+  if (order.status === 'APPROVED' || order.status === 'PARTIAL_RECEIVED') return ['view', 'receive'];
+  return ['view'];
+}
+
 function serializeFilters(filters: Filters): string {
   return JSON.stringify(filters);
 }
@@ -239,6 +339,8 @@ export default function PurchaseOrderList() {
   const canApprove = canApprovePurchaseOrders();
   const canReceive = canReceivePurchaseOrders();
   const canCancel = canCancelPurchaseOrders();
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const [searchInput, setSearchInput] = useState(initialSearch);
   const [filters, setFilters] = useState<Filters>(initialStatus ? { status: initialStatus } : {});
   const [page, setPage] = useState(1);
@@ -251,6 +353,7 @@ export default function PurchaseOrderList() {
   const [receiveModalState, setReceiveModalState] = useState<ReceiveModalState>(null);
   const [selectedViewPresetId, setSelectedViewPresetId] = useState('NONE');
   const [isViewPresetModalOpen, setIsViewPresetModalOpen] = useState(false);
+  const [isColumnModalOpen, setIsColumnModalOpen] = useState(false);
   const [viewPresetName, setViewPresetName] = useState('');
   const [reasonForm] = Form.useForm<{ reason: string }>();
   const [receiveForm] = Form.useForm<{
@@ -302,6 +405,15 @@ export default function PurchaseOrderList() {
     () => namedPresets.find((item) => item.id === selectedViewPresetId) ?? null,
     [namedPresets, selectedViewPresetId],
   );
+  const visibleColumnKeys = useMemo<PurchaseOrderColumnKey[]>(() => {
+    const raw = configRecord?.visible_columns;
+    if (!Array.isArray(raw)) return DEFAULT_PO_COLUMN_KEYS;
+    const allowedValues = new Set(PO_COLUMN_OPTIONS.map((item) => item.value));
+    const savedKeys = raw.filter((item): item is PurchaseOrderColumnKey => (
+      typeof item === 'string' && (allowedValues.has(item as PurchaseOrderColumnKey) || REQUIRED_PO_COLUMN_KEYS.includes(item as PurchaseOrderColumnKey))
+    ));
+    return Array.from(new Set([...REQUIRED_PO_COLUMN_KEYS, ...savedKeys, 'actions'])) as PurchaseOrderColumnKey[];
+  }, [configRecord]);
 
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
@@ -529,6 +641,17 @@ export default function PurchaseOrderList() {
     }
   };
 
+  const saveVisibleColumnKeys = async (nextKeys: PurchaseOrderColumnKey[]) => {
+    const safeKeys = Array.from(new Set([...REQUIRED_PO_COLUMN_KEYS, ...nextKeys, 'actions']));
+    await saveConfig({
+      ...configRecord,
+      pageSize,
+      ...buildCurrentSnapshot(),
+      saved_views: namedPresets,
+      visible_columns: safeKeys,
+    });
+  };
+
   const applySavedView = () => {
     const rawStatus = typeof configRecord?.status === 'string' ? configRecord.status : '';
     const snapshot: PurchaseOrderViewSnapshot = {
@@ -673,15 +796,119 @@ export default function PurchaseOrderList() {
     setReceiveModalState(null);
   };
 
-  const columns: ColumnsType<PurchaseOrder> = [
-    { title: 'Mã đơn mua', dataIndex: 'code', width: 140 },
-    { title: 'Nhà cung cấp', dataIndex: 'supplier_name', width: 220, render: (value) => value || '-' },
-    { title: 'Ngày đơn', dataIndex: 'order_date', width: 110, render: (value) => dayjs(value).format('DD/MM/YYYY') },
-    { title: 'Dự kiến nhận', dataIndex: 'expected_receipt_date', width: 120, render: (value) => (value ? dayjs(value).format('DD/MM/YYYY') : '-') },
+  const actionPermissions = { canManage, canSubmit, canApprove, canReceive, canCancel };
+
+  const handleOrderAction = (row: PurchaseOrder, action: PurchaseOrderMenuActionKey) => {
+    if (action === 'view') {
+      setDrawerOrderId(row.id);
+      setDismissedFocusKey(focusKey);
+      return;
+    }
+    const disabledReason = getPurchaseOrderActionDisabledReason(row, action, actionPermissions);
+    if (disabledReason) {
+      messageApi.warning(disabledReason);
+      return;
+    }
+    if (action === 'edit') {
+      setEditingOrder(row);
+      setOpenForm(true);
+      return;
+    }
+    if (action === 'submit') {
+      void submitMutation.mutateAsync(row.id);
+      return;
+    }
+    if (action === 'approve') {
+      void approveMutation.mutateAsync(row.id);
+      return;
+    }
+    if (action === 'reject') {
+      openReasonModal({ type: 'reject', order: row });
+      return;
+    }
+    if (action === 'receive') {
+      setReceiveModalState({ order: row });
+      return;
+    }
+    if (action === 'cancel') {
+      openReasonModal({ type: 'cancel', order: row });
+      return;
+    }
+    Modal.confirm({
+      title: `Xóa đơn mua ${row.code}?`,
+      okText: 'Xóa',
+      cancelText: 'Hủy',
+      onOk: () => deleteMutation.mutateAsync(row.id),
+    });
+  };
+
+  const renderOrderActions = (row: PurchaseOrder, compact = false) => {
+    const quickActions = getPurchaseOrderQuickActions(row);
+    const menuItems: MenuProps['items'] = PURCHASE_ORDER_ACTION_MENU.map((item) => ({
+      key: item.key,
+      danger: item.danger,
+      disabled: item.key !== 'view' && Boolean(getPurchaseOrderActionDisabledReason(row, item.key, actionPermissions)),
+      icon: PURCHASE_ORDER_ACTION_ICONS[item.key],
+      label: PURCHASE_ORDER_ACTION_LABELS[item.key],
+    }));
+    return (
+      <Space size={compact ? 8 : 6} wrap>
+        {quickActions.map((action) => {
+          const disabledReason = action === 'view' ? '' : getPurchaseOrderActionDisabledReason(row, action, actionPermissions);
+          return (
+            <Button
+              key={action}
+              size="small"
+              type={action === 'approve' || action === 'receive' || action === 'submit' ? 'primary' : 'default'}
+              danger={action === 'reject'}
+              disabled={Boolean(disabledReason)}
+              title={disabledReason || PURCHASE_ORDER_ACTION_LABELS[action]}
+              icon={PURCHASE_ORDER_ACTION_ICONS[action]}
+              data-testid={`purchase-order-${action}-${row.id}`}
+              onClick={() => handleOrderAction(row, action)}
+            >
+              {compact && action !== 'view' ? '' : PURCHASE_ORDER_ACTION_LABELS[action]}
+            </Button>
+          );
+        })}
+        <Dropdown
+          trigger={['click']}
+          menu={{
+            items: menuItems,
+            onClick: ({ key }) => handleOrderAction(row, key as PurchaseOrderMenuActionKey),
+          }}
+        >
+          <Button
+            size="small"
+            icon={<MoreOutlined />}
+            aria-label={`Thao tác khác cho ${row.code}`}
+            data-testid={`purchase-order-actions-menu-${row.id}`}
+          />
+        </Dropdown>
+      </Space>
+    );
+  };
+
+  const loadMaterialPrice = async ({ product, supplier }: { product: number; supplier?: number | null }) => {
+    const baseParams = { product, page_size: 1, ordering: '-effective_from' };
+    if (supplier) {
+      const supplierPrices = await purchasingApi.getMaterialPrices({ ...baseParams, supplier });
+      if (supplierPrices.results[0]) return supplierPrices.results[0];
+    }
+    const productPrices = await purchasingApi.getMaterialPrices(baseParams);
+    return productPrices.results[0] ?? null;
+  };
+
+  const allColumns: ColumnsType<PurchaseOrder> = [
+    { key: 'code', title: 'Mã đơn mua', dataIndex: 'code', width: 150, fixed: 'left' },
+    { key: 'supplier', title: 'Nhà cung cấp', dataIndex: 'supplier_name', width: 220, render: (value) => value || '-' },
+    { key: 'order_date', title: 'Ngày đơn', dataIndex: 'order_date', width: 110, render: (value) => dayjs(value).format('DD/MM/YYYY') },
+    { key: 'expected_receipt_date', title: 'Dự kiến nhận', dataIndex: 'expected_receipt_date', width: 120, render: (value) => (value ? dayjs(value).format('DD/MM/YYYY') : '-') },
     {
+      key: 'status',
       title: 'Trạng thái',
       dataIndex: 'status',
-      width: 290,
+      width: 260,
       render: (_, row) => (
         <div>
           <Tag color={STATUS_COLORS[row.status] || 'default'}>{STATUS_LABELS[row.status] || row.status}</Tag>
@@ -694,112 +921,42 @@ export default function PurchaseOrderList() {
         </div>
       ),
     },
-    { title: 'Kho nhập', dataIndex: 'warehouse_name', width: 160, render: (value) => value || '-' },
-    { title: 'Số dòng', key: 'line_count', width: 80, render: (_, row) => row.lines?.length ?? 0 },
-    { title: 'Thanh toán', dataIndex: 'payment_terms_days', width: 100, render: (value) => `${value} ngày` },
-    { title: 'Tổng tiền', dataIndex: 'total', width: 140, render: (value) => formatMoney(value) },
     {
-      title: 'Thao tác',
-      key: 'actions',
-      width: 420,
-      fixed: 'right',
+      key: 'receiving',
+      title: 'Tiến độ nhận',
+      width: 140,
       render: (_, row) => {
-        const permissions = { canManage, canSubmit, canApprove, canReceive, canCancel };
-        const editReason = getPurchaseOrderActionDisabledReason(row, 'edit', permissions);
-        const submitReason = getPurchaseOrderActionDisabledReason(row, 'submit', permissions);
-        const approveReason = getPurchaseOrderActionDisabledReason(row, 'approve', permissions);
-        const rejectReason = getPurchaseOrderActionDisabledReason(row, 'reject', permissions);
-        const receiveReason = getPurchaseOrderActionDisabledReason(row, 'receive', permissions);
-        const cancelReason = getPurchaseOrderActionDisabledReason(row, 'cancel', permissions);
-        const deleteReason = getPurchaseOrderActionDisabledReason(row, 'delete', permissions);
-
+        const remainingQty = getPurchaseOrderRemainingQty(row);
+        const receivedQty = (row.lines ?? []).reduce((sum, line) => sum + Number(line.received_qty ?? 0), 0);
+        const color = remainingQty <= 0 && receivedQty > 0 ? 'success' : remainingQty > 0 ? 'warning' : 'default';
         return (
-          <Space wrap>
-            <Button size="small" data-testid={`purchase-order-view-${row.id}`} onClick={() => { setDrawerOrderId(row.id); setDismissedFocusKey(focusKey); }}>
-              Xem
-            </Button>
-            <Button
-              size="small"
-              data-testid={`purchase-order-edit-${row.id}`}
-              disabled={Boolean(editReason)}
-              title={editReason || 'Sửa đơn mua trước khi gửi duyệt'}
-              onClick={() => {
-                setEditingOrder(row);
-                setOpenForm(true);
-              }}
-            >
-              Sửa
-            </Button>
-            <Button
-              size="small"
-              data-testid={`purchase-order-submit-${row.id}`}
-              disabled={Boolean(submitReason)}
-              title={submitReason || 'Gửi đơn mua sang bước duyệt'}
-              onClick={() => void submitMutation.mutateAsync(row.id)}
-            >
-              Gửi duyệt
-            </Button>
-            <Button
-              size="small"
-              type="primary"
-              data-testid={`purchase-order-approve-${row.id}`}
-              disabled={Boolean(approveReason)}
-              title={approveReason || 'Duyệt đơn mua để chuyển sang nhận hàng'}
-              onClick={() => void approveMutation.mutateAsync(row.id)}
-            >
-              Duyệt
-            </Button>
-            <Button
-              size="small"
-              danger
-              data-testid={`purchase-order-reject-${row.id}`}
-              disabled={Boolean(rejectReason)}
-              title={rejectReason || 'Từ chối đơn mua và nhập lý do rõ ràng'}
-              onClick={() => openReasonModal({ type: 'reject', order: row })}
-            >
-              Từ chối
-            </Button>
-            <Button
-              size="small"
-              data-testid={`purchase-order-receive-${row.id}`}
-              disabled={Boolean(receiveReason)}
-              title={receiveReason || 'Tạo phiếu nhập kho từ đơn mua'}
-              onClick={() => setReceiveModalState({ order: row })}
-            >
-              Nhập kho
-            </Button>
-            <Button
-              size="small"
-              danger
-              data-testid={`purchase-order-cancel-${row.id}`}
-              disabled={Boolean(cancelReason)}
-              title={cancelReason || 'Hủy đơn mua với lý do bắt buộc'}
-              onClick={() => openReasonModal({ type: 'cancel', order: row })}
-            >
-              Hủy
-            </Button>
-            <Button
-              size="small"
-              danger
-              data-testid={`purchase-order-delete-${row.id}`}
-              disabled={Boolean(deleteReason)}
-              title={deleteReason || 'Xóa đơn mua chưa đi tiếp quy trình'}
-              onClick={() =>
-                Modal.confirm({
-                  title: `Xóa đơn mua ${row.code}?`,
-                  okText: 'Xóa',
-                  cancelText: 'Hủy',
-                  onOk: () => deleteMutation.mutateAsync(row.id),
-                })
-              }
-            >
-              Xóa
-            </Button>
-          </Space>
+          <Tag color={color}>
+            {remainingQty > 0 ? `Còn ${remainingQty.toLocaleString('vi-VN')}` : 'Không còn'}
+          </Tag>
         );
       },
     },
+    { key: 'warehouse', title: 'Kho nhập', dataIndex: 'warehouse_name', width: 160, render: (value) => value || '-' },
+    { title: 'Số dòng', key: 'line_count', width: 80, render: (_, row) => row.lines?.length ?? 0 },
+    { key: 'payment_terms_days', title: 'Thanh toán', dataIndex: 'payment_terms_days', width: 100, render: (value) => `${value} ngày` },
+    { key: 'currency', title: 'Tiền tệ', dataIndex: 'currency', width: 90, render: (value) => value || 'VND' },
+    { key: 'reference', title: 'Tham chiếu', dataIndex: 'reference', width: 160, render: (value) => value || '-' },
+    { key: 'updated_at', title: 'Cập nhật', dataIndex: 'updated_at', width: 150, render: (value) => (value ? dayjs(value).format('DD/MM/YYYY HH:mm') : '-') },
+    { key: 'total', title: 'Tổng tiền', dataIndex: 'total', width: 140, render: (value) => formatMoney(value) },
+    {
+      title: 'Thao tác',
+      key: 'actions',
+      width: 210,
+      fixed: 'right',
+      render: (_, row) => renderOrderActions(row),
+    },
   ];
+
+  const activeColumnKeySet = new Set(visibleColumnKeys);
+  const columns: ColumnsType<PurchaseOrder> = allColumns.filter((column) => {
+    const dataIndex = 'dataIndex' in column ? column.dataIndex : undefined;
+    return activeColumnKeySet.has(String(column.key ?? dataIndex) as PurchaseOrderColumnKey);
+  });
 
   const drawerLineColumns: ColumnsType<PurchaseOrder['lines'][number]> = [
     { title: '#', dataIndex: 'line_number', width: 60 },
@@ -919,6 +1076,13 @@ export default function PurchaseOrderList() {
               Khôi phục
             </Button>
             <Button
+              icon={<SettingOutlined />}
+              data-testid="purchase-orders-column-settings"
+              onClick={() => setIsColumnModalOpen(true)}
+            >
+              Cột
+            </Button>
+            <Button
               data-testid="purchase-orders-open-preset-modal"
               onClick={() => setIsViewPresetModalOpen(true)}
             >
@@ -964,47 +1128,112 @@ export default function PurchaseOrderList() {
         </Space>
       </Card>
 
-      <Table
-        rowKey="id"
-        loading={ordersQuery.isLoading}
-        columns={columns}
-        dataSource={rows}
-        scroll={{ x: 1900 }}
-        pagination={{
-          current: page,
-          pageSize,
-          total: ordersQuery.data?.count ?? 0,
-          showSizeChanger: true,
-          pageSizeOptions: [10, 20, 50, 100],
-          onChange: async (nextPage, nextPageSize) => {
-            setPage(nextPage);
-            if (nextPageSize !== pageSize) {
-              await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
-            }
-          },
-        }}
-        locale={{
-          emptyText: rows.length === 0 && !ordersQuery.isLoading ? (
-            <div style={{ padding: 40, color: '#8c8c8c' }}>
-              {(intentSearch || filters.status || filters.supplier) ? (
-                <div>
-                  <div style={{ marginBottom: 12 }}>Không tìm thấy đơn mua phù hợp.</div>
-                  <Button
-                    type="link"
-                    onClick={() => {
-                      setSearchInput('');
-                      setFilters({});
-                      setPage(1);
-                    }}
-                  >
-                    Xóa bộ lọc
-                  </Button>
-                </div>
-              ) : 'Chưa có đơn mua. Nhấn Tạo đơn mua để thêm mới.'}
-            </div>
-          ) : undefined,
-        }}
-      />
+      {isMobile ? (
+        <div data-testid="purchase-order-mobile-list" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {ordersQuery.isLoading ? (
+            <Card loading />
+          ) : rows.length === 0 ? (
+            <Card>
+              <Empty
+                description={(intentSearch || filters.status || filters.supplier) ? 'Không tìm thấy đơn mua phù hợp.' : 'Chưa có đơn mua.'}
+              />
+            </Card>
+          ) : rows.map((row) => {
+            const remainingQty = getPurchaseOrderRemainingQty(row);
+            return (
+              <Card key={row.id} size="small" data-testid={`purchase-order-mobile-card-${row.id}`}>
+                <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <Text strong>{row.code}</Text>
+                      <div style={{ color: '#667085', fontSize: 12, marginTop: 2 }}>{row.supplier_name || '-'}</div>
+                    </div>
+                    <Tag color={STATUS_COLORS[row.status] || 'default'} style={{ marginInlineEnd: 0 }}>
+                      {STATUS_LABELS[row.status] || row.status}
+                    </Tag>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 12 }}>
+                    <div>
+                      <Text type="secondary">Ngày đơn</Text>
+                      <div>{dayjs(row.order_date).format('DD/MM/YYYY')}</div>
+                    </div>
+                    <div>
+                      <Text type="secondary">Dự kiến nhận</Text>
+                      <div>{row.expected_receipt_date ? dayjs(row.expected_receipt_date).format('DD/MM/YYYY') : '-'}</div>
+                    </div>
+                    <div>
+                      <Text type="secondary">Tiến độ nhận</Text>
+                      <div>{remainingQty > 0 ? `Còn ${remainingQty.toLocaleString('vi-VN')}` : 'Không còn'}</div>
+                    </div>
+                    <div>
+                      <Text type="secondary">Tổng tiền</Text>
+                      <div>{formatMoney(row.total)}</div>
+                    </div>
+                  </div>
+                  <div style={{ color: '#595959', fontSize: 12, lineHeight: 1.45 }}>
+                    {getPurchaseOrderNextStep(row)}
+                  </div>
+                  {renderOrderActions(row, true)}
+                </Space>
+              </Card>
+            );
+          })}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <Button disabled={page <= 1 || ordersQuery.isLoading} onClick={() => setPage((prev) => Math.max(1, prev - 1))}>
+              Trước
+            </Button>
+            <Text type="secondary">{`Trang ${page} / ${Math.max(1, Math.ceil((ordersQuery.data?.count ?? 0) / pageSize))}`}</Text>
+            <Button
+              disabled={ordersQuery.isLoading || page >= Math.max(1, Math.ceil((ordersQuery.data?.count ?? 0) / pageSize))}
+              onClick={() => setPage((prev) => prev + 1)}
+            >
+              Sau
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Table
+          rowKey="id"
+          loading={ordersQuery.isLoading}
+          columns={columns}
+          dataSource={rows}
+          scroll={{ x: 1280 }}
+          pagination={{
+            current: page,
+            pageSize,
+            total: ordersQuery.data?.count ?? 0,
+            showSizeChanger: true,
+            pageSizeOptions: [10, 20, 50, 100],
+            onChange: async (nextPage, nextPageSize) => {
+              setPage(nextPage);
+              if (nextPageSize !== pageSize) {
+                await saveConfig({ ...(config as Record<string, unknown>), pageSize: nextPageSize });
+              }
+            },
+          }}
+          locale={{
+            emptyText: rows.length === 0 && !ordersQuery.isLoading ? (
+              <div style={{ padding: 40, color: '#8c8c8c' }}>
+                {(intentSearch || filters.status || filters.supplier) ? (
+                  <div>
+                    <div style={{ marginBottom: 12 }}>Không tìm thấy đơn mua phù hợp.</div>
+                    <Button
+                      type="link"
+                      onClick={() => {
+                        setSearchInput('');
+                        setFilters({});
+                        setPage(1);
+                      }}
+                    >
+                      Xóa bộ lọc
+                    </Button>
+                  </div>
+                ) : 'Chưa có đơn mua. Nhấn Tạo đơn mua để thêm mới.'}
+              </div>
+            ) : undefined,
+          }}
+        />
+      )}
 
       <Modal
         open={isViewPresetModalOpen}
@@ -1030,6 +1259,30 @@ export default function PurchaseOrderList() {
         </Form>
       </Modal>
 
+      <Modal
+        open={isColumnModalOpen}
+        title="Cột hiển thị"
+        onCancel={() => setIsColumnModalOpen(false)}
+        footer={[
+          <Button key="reset" onClick={() => void saveVisibleColumnKeys(DEFAULT_PO_COLUMN_KEYS)}>
+            Khôi phục mặc định
+          </Button>,
+          <Button key="done" type="primary" onClick={() => setIsColumnModalOpen(false)}>
+            Đóng
+          </Button>,
+        ]}
+      >
+        <Checkbox.Group
+          value={visibleColumnKeys.filter((key) => !REQUIRED_PO_COLUMN_KEYS.includes(key))}
+          options={PO_COLUMN_OPTIONS}
+          style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: 10 }}
+          onChange={(checkedValues) => void saveVisibleColumnKeys(checkedValues as PurchaseOrderColumnKey[])}
+        />
+        <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
+          Mã đơn mua, trạng thái và thao tác luôn hiển thị để tránh mất điểm xử lý chính.
+        </Text>
+      </Modal>
+
       <PurchaseOrderForm
         open={openForm}
         editing={editingOrder}
@@ -1038,6 +1291,7 @@ export default function PurchaseOrderList() {
         warehouses={warehouseOptions}
         locations={locationOptions}
         submitting={createMutation.isPending || updateMutation.isPending}
+        loadMaterialPrice={loadMaterialPrice}
         onCancel={() => setOpenForm(false)}
         onSubmit={handleOrderSave}
       />

@@ -50,6 +50,7 @@ from purchasing.serializers import (
     PurchaseOrderSerializer,
     PurchaseReceiptSerializer,
     PurchaseRequestSerializer,
+    PurchaseReturnSerializer,
     SupplierSerializer,
 )
 from purchasing.services import (
@@ -96,6 +97,11 @@ def _can_manage_procurement(user):
         }
         for role in _user_role_names(user)
     )
+
+
+def _require_manage_procurement(user, message='Bạn không có quyền quản lý mua hàng.'):
+    if not _can_manage_procurement(user):
+        raise PermissionDenied(message)
 
 
 def _log_procurement_audit(request, *, action, entity_type, entity_id, entity_code, old_values, new_values):
@@ -397,8 +403,7 @@ class MaterialPurchasePriceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        if not _can_manage_procurement(self.request.user):
-            raise PermissionDenied('Bạn không có quyền xem bảng giá nguyên vật liệu.')
+        _require_manage_procurement(self.request.user, 'Bạn không có quyền xem bảng giá nguyên vật liệu.')
         product = self.request.query_params.get('product')
         if product:
             qs = qs.filter(product_id=product)
@@ -408,10 +413,16 @@ class MaterialPurchasePriceViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        _require_manage_procurement(self.request.user, 'Bạn không có quyền tạo bảng giá nguyên vật liệu.')
         serializer.save(created_by=self.request.user, updated_by=self.request.user)
 
     def perform_update(self, serializer):
+        _require_manage_procurement(self.request.user, 'Bạn không có quyền sửa bảng giá nguyên vật liệu.')
         serializer.save(updated_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        _require_manage_procurement(self.request.user, 'Bạn không có quyền xóa bảng giá nguyên vật liệu.')
+        instance.delete()
 
 
 class PurchaseOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
@@ -542,6 +553,8 @@ class PurchaseOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         order = self.get_object()
         if not can_submit_purchase_order(request.user, order):
             return Response({'error': 'Không có quyền hoặc trạng thái không hợp lệ.'}, status=status.HTTP_403_FORBIDDEN)
+        if not order.lines.exists():
+            return Response({'error': 'Đơn mua phải có ít nhất một dòng hàng trước khi gửi duyệt.'}, status=status.HTTP_400_BAD_REQUEST)
         old_status = order.status
         order.status = PurchaseOrderStatus.SUBMITTED
         order.submitted_by = request.user
@@ -587,6 +600,8 @@ class PurchaseOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         order = self.get_object()
         if not can_approve_purchase_order(request.user, order):
             return Response({'error': 'Không có quyền hoặc trạng thái không hợp lệ.'}, status=status.HTTP_403_FORBIDDEN)
+        if not order.lines.exists():
+            return Response({'error': 'Đơn mua phải có ít nhất một dòng hàng trước khi duyệt.'}, status=status.HTTP_400_BAD_REQUEST)
         old_status = order.status
         order.status = PurchaseOrderStatus.APPROVED
         order.approved_by = request.user
@@ -1035,8 +1050,7 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         qs = PurchaseRequest.objects.select_related(
             'requested_by', 'approved_by', 'rejected_by', 'created_by', 'updated_by',
         ).prefetch_related('lines', 'lines__product')
-        if not _can_manage_procurement(self.request.user):
-            raise PermissionDenied('Bạn không có quyền quản lý mua hàng.')
+        _require_manage_procurement(self.request.user)
         status = self.request.query_params.get('status')
         if status:
             qs = qs.filter(status=status)
@@ -1049,6 +1063,7 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        _require_manage_procurement(self.request.user, 'Bạn không có quyền tạo yêu cầu mua.')
         serializer.save(created_by=self.request.user, updated_by=self.request.user)
 
     def perform_update(self, serializer):
@@ -1169,9 +1184,6 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
 
 
 # Purchase Return ViewSet
-from purchasing.serializers import PurchaseReturnSerializer
-
-
 class PurchaseReturnViewSet(viewsets.ModelViewSet):
     """Purchase Returns to Supplier."""
     queryset = PurchaseReturn.objects.select_related('supplier', 'purchase_order')
@@ -1183,6 +1195,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
     ordering = ['-return_date']
 
     def get_queryset(self):
+        _require_manage_procurement(self.request.user, 'Bạn không có quyền quản lý phiếu trả hàng mua.')
         qs = super().get_queryset()
         status_filter = self.request.query_params.get('status')
         if status_filter:
@@ -1190,9 +1203,11 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        _require_manage_procurement(self.request.user, 'Bạn không có quyền tạo phiếu trả hàng mua.')
         serializer.save(created_by=self.request.user, updated_by=self.request.user)
 
     def perform_update(self, serializer):
+        _require_manage_procurement(self.request.user, 'Bạn không có quyền sửa phiếu trả hàng mua.')
         serializer.save(updated_by=self.request.user)
 
     @action(detail=True, methods=['post'])
