@@ -1,8 +1,14 @@
+from io import StringIO
+
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
+from django.test.utils import override_settings
 from rest_framework.test import APIClient
 
-from core.models import AuditLog, Notification, Permission, Role, User
-from core.permissions import CUSTOMER_PERMISSION_DEFINITIONS
+from core.models import AuditLog, Notification, Permission, Role, Team, User
+from core.permissions import CUSTOMER_PERMISSION_DEFINITIONS, SUPPLIER_PERMISSION_DEFINITIONS
+from purchasing.models import Supplier
 
 
 class RoleModulePermissionsApiTest(TestCase):
@@ -35,6 +41,10 @@ class RoleModulePermissionsApiTest(TestCase):
             *[
                 (row['resource'], row['action'], row['code'], row['name'])
                 for row in CUSTOMER_PERMISSION_DEFINITIONS
+            ],
+            *[
+                (row['resource'], row['action'], row['code'], row['name'])
+                for row in SUPPLIER_PERMISSION_DEFINITIONS
             ],
         ]:
             Permission.objects.update_or_create(
@@ -300,3 +310,76 @@ class RoleModulePermissionsApiTest(TestCase):
         body = history.json()
         self.assertGreaterEqual(body.get('count', 0), 1)
         self.assertTrue(body.get('results'))
+
+
+class SeedSupplierPermissionsCommandTest(TestCase):
+    def test_seed_supplier_permissions_creates_rows_without_demo_data(self):
+        Permission.objects.filter(resource='SUPPLIER').delete()
+        out = StringIO()
+
+        call_command('seed_supplier_permissions', stdout=out)
+
+        permission_keys = set(
+            Permission.objects.filter(resource='SUPPLIER').values_list('resource', 'action')
+        )
+        expected_keys = {
+            (row['resource'], row['action'])
+            for row in SUPPLIER_PERMISSION_DEFINITIONS
+        }
+        self.assertEqual(permission_keys, expected_keys)
+        self.assertFalse(Role.objects.exists())
+        self.assertIn('Supplier permissions synced', out.getvalue())
+
+    def test_seed_supplier_permissions_can_grant_existing_uat_roles(self):
+        for code in ('ADMIN', 'MANAGER', 'FINANCE_MANAGER', 'OPS_MANAGER', 'PRODUCT_MANAGER'):
+            Role.objects.create(code=code, name=code.replace('_', ' ').title())
+        out = StringIO()
+
+        call_command('seed_supplier_permissions', grant_uat_roles=True, stdout=out)
+
+        all_supplier_actions = {
+            row['action']
+            for row in SUPPLIER_PERMISSION_DEFINITIONS
+        }
+        admin_actions = set(
+            Permission.objects.filter(roles__code='ADMIN', resource='SUPPLIER')
+            .values_list('action', flat=True)
+        )
+        ops_actions = set(
+            Permission.objects.filter(roles__code='OPS_MANAGER', resource='SUPPLIER')
+            .values_list('action', flat=True)
+        )
+        self.assertEqual(admin_actions, all_supplier_actions)
+        self.assertEqual(ops_actions, {'VIEW', 'CREATE', 'EDIT'})
+        self.assertIn('Supplier UAT role grants synced', out.getvalue())
+
+
+class SeedUatRolesOnlyCommandTest(TestCase):
+    expected_codes = {'ADMIN', 'MANAGER', 'FINANCE_MANAGER', 'OPS_MANAGER', 'PRODUCT_MANAGER'}
+
+    def test_seed_uat_roles_only_creates_missing_roles_without_demo_data(self):
+        out = StringIO()
+
+        call_command('seed_uat_roles_only', stdout=out)
+
+        roles = Role.objects.filter(code__in=self.expected_codes, deleted_at__isnull=True)
+        self.assertEqual(set(roles.values_list('code', flat=True)), self.expected_codes)
+        self.assertEqual(User.objects.count(), 0)
+        self.assertEqual(Team.objects.count(), 0)
+        self.assertEqual(Supplier.objects.count(), 0)
+        self.assertFalse(Permission.objects.filter(roles__code__in=self.expected_codes).exists())
+        self.assertIn('UAT roles synced: 5 created, 0 existing', out.getvalue())
+
+    def test_seed_uat_roles_only_is_idempotent(self):
+        call_command('seed_uat_roles_only', stdout=StringIO())
+        out = StringIO()
+
+        call_command('seed_uat_roles_only', stdout=out)
+
+        self.assertEqual(Role.objects.filter(code__in=self.expected_codes).count(), 5)
+        self.assertIn('UAT roles synced: 0 created, 5 existing', out.getvalue())
+
+    @override_settings(APP_ENV='production')
+    def test_seed_uat_roles_only_refuses_production(self):
+        with self.assertRaises(CommandError):
+            call_command('seed_uat_roles_only', stdout=StringIO())

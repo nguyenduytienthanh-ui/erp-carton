@@ -1,8 +1,32 @@
-from core.permissions import check_action_permission
+from core.permissions import check_action_permission, user_has_supplier_permission
+
+
+def can_view_supplier(user):
+    return user_has_supplier_permission(user, 'VIEW', strict=True)
+
+
+def can_create_supplier(user):
+    return user_has_supplier_permission(user, 'CREATE', strict=True)
+
+
+def can_edit_supplier(user):
+    return user_has_supplier_permission(user, 'EDIT', strict=True)
+
+
+def can_import_supplier(user):
+    return user_has_supplier_permission(user, 'IMPORT', strict=True)
+
+
+def can_export_supplier(user):
+    return user_has_supplier_permission(user, 'EXPORT', strict=True)
+
+
+def can_delete_supplier(user):
+    return user_has_supplier_permission(user, 'DELETE', strict=True)
 
 
 def can_manage_supplier(user):
-    return check_action_permission(user, 'PURCHASING', 'MANAGE', strict=True)
+    return can_create_supplier(user) or can_edit_supplier(user)
 
 
 def can_edit_purchase_order(user, order):

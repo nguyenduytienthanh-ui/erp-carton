@@ -103,6 +103,63 @@ CUSTOMER_PERMISSION_DEFINITIONS = (
     },
 )
 
+SUPPLIER_PERMISSION_DEFINITIONS = (
+    {
+        'field': 'supplier_view',
+        'label': 'Nhà cung cấp - xem',
+        'resource': 'SUPPLIER',
+        'action': 'VIEW',
+        'changed_type': 'supplier_view',
+        'code': 'SUPPLIER_VIEW',
+        'name': 'View suppliers',
+    },
+    {
+        'field': 'supplier_create',
+        'label': 'Nhà cung cấp - thêm mới',
+        'resource': 'SUPPLIER',
+        'action': 'CREATE',
+        'changed_type': 'supplier_create',
+        'code': 'SUPPLIER_CREATE',
+        'name': 'Create suppliers',
+    },
+    {
+        'field': 'supplier_edit',
+        'label': 'Nhà cung cấp - sửa/trạng thái',
+        'resource': 'SUPPLIER',
+        'action': 'EDIT',
+        'changed_type': 'supplier_edit',
+        'code': 'SUPPLIER_EDIT',
+        'name': 'Edit suppliers',
+    },
+    {
+        'field': 'supplier_import',
+        'label': 'Nhà cung cấp - nhập Excel',
+        'resource': 'SUPPLIER',
+        'action': 'IMPORT',
+        'changed_type': 'supplier_import',
+        'code': 'SUPPLIER_IMPORT',
+        'name': 'Import suppliers',
+    },
+    {
+        'field': 'supplier_export',
+        'label': 'Nhà cung cấp - xuất dữ liệu',
+        'resource': 'SUPPLIER',
+        'action': 'EXPORT',
+        'changed_type': 'supplier_export',
+        'code': 'SUPPLIER_EXPORT',
+        'name': 'Export suppliers',
+    },
+    {
+        'field': 'supplier_delete',
+        'label': 'Nhà cung cấp - xóa cứng',
+        'resource': 'SUPPLIER',
+        'action': 'DELETE',
+        'changed_type': 'supplier_delete',
+        'code': 'SUPPLIER_DELETE',
+        'name': 'Hard delete suppliers',
+    },
+)
+
 
 class ResourceActionPermission(BasePermission):
     """
@@ -154,3 +211,11 @@ def user_has_customer_permission(user, action, *, strict=True):
     if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
         return True
     return check_action_permission(user, 'CUSTOMER', action, strict=strict)
+
+
+def user_has_supplier_permission(user, action, *, strict=True):
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    return check_action_permission(user, 'SUPPLIER', action, strict=strict)

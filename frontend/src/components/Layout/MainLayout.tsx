@@ -77,6 +77,7 @@ import {
   canViewWorkflowData,
   canManageWorkflowData,
   canViewCustomers,
+  canViewSuppliers,
 } from '../../utils/authz';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
 
@@ -224,6 +225,7 @@ const MainLayout = () => {
   const canViewReports = canViewReportsCenter();
   const canViewSalesOrders = canAccessSalesOrders();
   const canViewCustomerCatalog = canViewCustomers();
+  const canViewSupplierCatalog = canViewSuppliers();
   const canViewWorkflow = canViewWorkflowData();
   const canManageWorkflow = canManageWorkflowData();
   const canViewOpsLog = canViewOperationsLog();
@@ -380,6 +382,7 @@ const MainLayout = () => {
     canViewReports,
     canViewSalesOrders,
     canViewCustomers: canViewCustomerCatalog,
+    canViewSuppliers: canViewSupplierCatalog,
     canViewSalesFulfillmentCenter,
     canManagePurchasing,
     canAccessProductionCenter: canAccessProduction,
@@ -443,6 +446,7 @@ const MainLayout = () => {
     canViewReports,
     canViewSalesOrders,
     canViewCustomerCatalog,
+    canViewSupplierCatalog,
     canViewSalesFulfillmentCenter,
     canViewWorkflow,
     operationsFailedCount,
@@ -799,15 +803,18 @@ const MainLayout = () => {
       icon: <UserOutlined />,
       label: renderMenuLabel('/customer-portal', 'Cổng khách hàng'),
     } : null,
-    canManagePurchasing ? {
+    (canViewSupplierCatalog || canManagePurchasing) ? {
       key: 'purchasing-group',
       icon: <ShoppingCartOutlined />,
       label: 'Mua hàng',
       children: [
+        ...(canViewSupplierCatalog ? [
         {
           key: '/suppliers',
           label: renderMenuLabel('/suppliers', 'Nhà cung cấp'),
         },
+        ] : []),
+        ...(canManagePurchasing ? [
         {
           key: '/purchase-orders',
           label: renderMenuLabel('/purchase-orders', 'Đơn mua'),
@@ -836,6 +843,7 @@ const MainLayout = () => {
           key: '/material-prices',
           label: renderMenuLabel('/material-prices', 'Bảng giá NVL'),
         },
+        ] : []),
       ],
     } : null,
     (canAccessProduction || canAccessMaterialIssueRoute || canAccessProductionReceiptRoute || canManageProduction) ? {

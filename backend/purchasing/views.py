@@ -1,6 +1,8 @@
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from django.apps import apps
+from django.core.exceptions import FieldError
 from django.db import transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
@@ -34,11 +36,14 @@ from purchasing.permissions import (
     can_approve_purchase_order,
     can_cancel_purchase_order,
     can_cancel_purchase_receipt,
+    can_create_supplier,
+    can_delete_supplier,
+    can_edit_supplier,
     can_edit_purchase_order,
-    can_manage_supplier,
     can_receive_purchase_order,
     can_reject_purchase_order,
     can_submit_purchase_order,
+    can_view_supplier,
 )
 from purchasing.serializers import (
     MaterialPurchasePriceSerializer,
@@ -184,6 +189,66 @@ class SearchTextMixin:
         return queryset.filter(query).distinct()
 
 
+SUPPLIER_ACTION_PERMISSION_MAP = {
+    'list': 'VIEW',
+    'retrieve': 'VIEW',
+    'metadata': 'VIEW',
+    'create': 'CREATE',
+    'update': 'EDIT',
+    'partial_update': 'EDIT',
+    'destroy': 'DELETE',
+}
+
+SUPPLIER_PERMISSION_MESSAGES = {
+    'VIEW': 'Bạn không có quyền xem nhà cung cấp.',
+    'CREATE': 'Bạn không có quyền tạo nhà cung cấp.',
+    'EDIT': 'Bạn không có quyền cập nhật nhà cung cấp.',
+    'DELETE': 'Bạn không có quyền xóa cứng nhà cung cấp.',
+    'IMPORT': 'Bạn không có quyền nhập dữ liệu nhà cung cấp.',
+    'EXPORT': 'Bạn không có quyền xuất dữ liệu nhà cung cấp.',
+}
+
+SUPPLIER_PERMISSION_CHECKERS = {
+    'VIEW': can_view_supplier,
+    'CREATE': can_create_supplier,
+    'EDIT': can_edit_supplier,
+    'DELETE': can_delete_supplier,
+}
+
+SUPPLIER_DELETE_RELATION_CHECKS = (
+    ('purchasing', 'PurchaseOrder', 'đơn mua', {'supplier_id': 'id'}),
+    ('purchasing', 'PurchaseReceipt', 'phiếu nhập mua', {'purchase_order__supplier_id': 'id'}),
+    ('purchasing', 'MaterialPurchasePrice', 'bảng giá mua', {'supplier_id': 'id'}),
+    ('purchasing', 'PurchaseReturn', 'phiếu trả hàng', {'supplier_id': 'id'}),
+    ('finance', 'PayableDocument', 'chứng từ phải trả', {'supplier_id': 'id'}),
+    ('core', 'ApprovalHistory', 'lịch sử phê duyệt', {'entity_type': 'literal:Supplier', 'entity_id': 'id'}),
+    ('core', 'Task', 'công việc liên quan', {'entity_type': 'literal:Supplier', 'entity_id': 'id'}),
+)
+
+SUPPLIER_DELETE_BLOCKED_MESSAGE = 'Không thể xóa nhà cung cấp đã phát sinh chứng từ. Hãy chuyển sang Ngừng sử dụng.'
+
+
+def _supplier_delete_blockers(supplier):
+    blockers = []
+    for app_label, model_name, label, filter_map in SUPPLIER_DELETE_RELATION_CHECKS:
+        try:
+            model = apps.get_model(app_label, model_name)
+        except LookupError:
+            continue
+        filters = {}
+        for field_name, source in filter_map.items():
+            if isinstance(source, str) and source.startswith('literal:'):
+                filters[field_name] = source.removeprefix('literal:')
+            else:
+                filters[field_name] = getattr(supplier, source)
+        try:
+            if model.objects.filter(**filters).exists() and label not in blockers:
+                blockers.append(label)
+        except FieldError:
+            continue
+    return blockers
+
+
 class SupplierViewSet(SearchTextMixin, viewsets.ModelViewSet):
     queryset = Supplier.objects.all()
     serializer_class = SupplierSerializer
@@ -191,6 +256,18 @@ class SupplierViewSet(SearchTextMixin, viewsets.ModelViewSet):
     filter_backends = [filters.OrderingFilter]
     ordering_fields = ['code', 'name', 'company_name', 'payment_terms_days', 'rating', 'created_at', 'updated_at']
     ordering = ['code']
+
+    def check_permissions(self, request):
+        super().check_permissions(request)
+        required_action = SUPPLIER_ACTION_PERMISSION_MAP.get(getattr(self, 'action', None), 'VIEW')
+        checker = SUPPLIER_PERMISSION_CHECKERS.get(required_action, can_view_supplier)
+        if not checker(request.user):
+            message = SUPPLIER_PERMISSION_MESSAGES.get(required_action, 'Bạn không có quyền thao tác nhà cung cấp.')
+            raise PermissionDenied(message)
+
+    def check_module_read_permission(self):
+        if not can_view_supplier(self.request.user):
+            raise PermissionDenied(SUPPLIER_PERMISSION_MESSAGES['VIEW'])
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -239,22 +316,11 @@ class SupplierViewSet(SearchTextMixin, viewsets.ModelViewSet):
         return self.apply_search(queryset)
 
     def _get_delete_blockers(self, supplier):
-        blockers = []
-        relation_checks = [
-            ('purchase_orders', 'đơn mua'),
-            ('material_purchase_prices', 'bảng giá mua'),
-            ('purchase_returns', 'phiếu trả hàng'),
-            ('payable_documents', 'chứng từ phải trả'),
-        ]
-        for related_name, label in relation_checks:
-            related_manager = getattr(supplier, related_name, None)
-            if related_manager is not None and related_manager.exists():
-                blockers.append(label)
-        return blockers
+        return _supplier_delete_blockers(supplier)
 
     def perform_create(self, serializer):
-        if not can_manage_supplier(self.request.user):
-            raise PermissionDenied('Bạn không có quyền tạo nhà cung cấp.')
+        if not can_create_supplier(self.request.user):
+            raise PermissionDenied(SUPPLIER_PERMISSION_MESSAGES['CREATE'])
         supplier = serializer.save(created_by=self.request.user, updated_by=self.request.user)
         _log_procurement_audit(
             self.request,
@@ -267,8 +333,8 @@ class SupplierViewSet(SearchTextMixin, viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        if not can_manage_supplier(self.request.user):
-            raise PermissionDenied('Bạn không có quyền cập nhật nhà cung cấp.')
+        if not can_edit_supplier(self.request.user):
+            raise PermissionDenied(SUPPLIER_PERMISSION_MESSAGES['EDIT'])
         previous = serializer.instance
         old_values = {
             'code': previous.code,
@@ -293,8 +359,8 @@ class SupplierViewSet(SearchTextMixin, viewsets.ModelViewSet):
         )
 
     def destroy(self, request, *args, **kwargs):
-        if not can_manage_supplier(request.user):
-            return Response({'error': 'Bạn không có quyền xóa nhà cung cấp.'}, status=status.HTTP_403_FORBIDDEN)
+        if not can_delete_supplier(request.user):
+            raise PermissionDenied(SUPPLIER_PERMISSION_MESSAGES['DELETE'])
         supplier = self.get_object()
         blockers = self._get_delete_blockers(supplier)
         if blockers:
@@ -302,6 +368,7 @@ class SupplierViewSet(SearchTextMixin, viewsets.ModelViewSet):
                 {
                     'error': 'Không thể xóa nhà cung cấp đã phát sinh chứng từ. Hãy chuyển sang Ngưng sử dụng.',
                     'blockers': blockers,
+                    'related_records': blockers,
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )

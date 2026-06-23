@@ -40,6 +40,7 @@ import {
   canViewWorkflowData,
   canManageWorkflowData,
   canViewCustomers,
+  canViewSuppliers,
 } from './utils/authz';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -149,6 +150,7 @@ export default function AppRouter() {
   const canViewReports = canViewReportsCenter();
   const canViewSalesOrders = canAccessSalesOrders();
   const canViewCustomerCatalog = canViewCustomers();
+  const canViewSupplierCatalog = canViewSuppliers();
   const canViewWorkflow = canViewWorkflowData();
   const canManageWorkflow = canManageWorkflowData();
   const canViewOpsLog = canViewOperationsLog();
@@ -263,7 +265,7 @@ export default function AppRouter() {
               <Route path="categories" element={withAsyncBoundary(<CategoryList />)} />
               <Route path="units" element={withAsyncBoundary(<UnitList />)} />
               <Route path="customers" element={<FeatureRoute allow={canViewCustomerCatalog} fallbackTo="/">{withAsyncBoundary(<CustomerList />)}</FeatureRoute>} />
-              <Route path="suppliers" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<SupplierList />)}</FeatureRoute>} />
+              <Route path="suppliers" element={<FeatureRoute allow={canViewSupplierCatalog} fallbackTo="/">{withAsyncBoundary(<SupplierList />)}</FeatureRoute>} />
               <Route path="material-prices" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<MaterialPriceList />)}</FeatureRoute>} />
               <Route path="purchase-orders" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseOrderList />)}</FeatureRoute>} />
               <Route path="purchase-receipts" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseReceiptList />)}</FeatureRoute>} />

@@ -44,7 +44,7 @@ import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { parseApiError } from '../../shared/apiError';
 import type { PreferencesConfig } from '../../types/preferences';
 import type { Supplier } from '../../types/purchasing';
-import { canManagePurchasingData } from '../../utils/authz';
+import { canCreateSuppliers, canEditSuppliers, canViewSuppliers } from '../../utils/authz';
 import { PAGES } from '../../utils/constants';
 import './SupplierList.css';
 
@@ -240,7 +240,10 @@ function FormSection({ title, description, children }: { title: string; descript
 export default function SupplierList() {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
-  const canManage = canManagePurchasingData();
+  const canView = canViewSuppliers();
+  const canCreate = canCreateSuppliers();
+  const canEdit = canEditSuppliers();
+  const canWrite = canCreate || canEdit;
   const [searchInput, setSearchInput] = useState('');
   const [filtersOverride, setFiltersOverride] = useState<SupplierFilters | null>(null);
   const [page, setPage] = useState(1);
@@ -326,6 +329,7 @@ export default function SupplierList() {
   const listQuery = useQuery({
     queryKey: ['purchasing-suppliers', params],
     queryFn: () => purchasingApi.getSuppliers(params),
+    enabled: canView,
   });
 
   const invalidate = async () => {
@@ -406,11 +410,13 @@ export default function SupplierList() {
   const activeFilterCount = activeFilterTags.filter((tag) => tag !== 'Đang dùng').length;
 
   const openDrawer = useCallback((mode: SupplierDrawerMode, row?: Supplier) => {
+    if (mode === 'create' && !canCreate) return;
+    if (mode === 'edit' && !canEdit) return;
     setDrawerMode(mode);
     setSelectedSupplier(row ?? null);
     form.setFieldsValue(toFormValues(row));
     setDrawerOpen(true);
-  }, [form]);
+  }, [canCreate, canEdit, form]);
 
   const closeDrawer = useCallback(() => {
     setDrawerOpen(false);
@@ -430,6 +436,14 @@ export default function SupplierList() {
 
   const onSubmit = async () => {
     if (drawerMode === 'view') return;
+    if (drawerMode === 'create' && !canCreate) {
+      messageApi.error('Bạn không có quyền tạo nhà cung cấp.');
+      return;
+    }
+    if (drawerMode === 'edit' && !canEdit) {
+      messageApi.error('Bạn không có quyền cập nhật nhà cung cấp.');
+      return;
+    }
     try {
       const values = await form.validateFields();
       const payload = trimPayload(values);
@@ -448,6 +462,10 @@ export default function SupplierList() {
   };
 
   const handleSetActive = useCallback((row: Supplier, isActive: boolean) => {
+    if (!canEdit) {
+      messageApi.error('Bạn không có quyền cập nhật nhà cung cấp.');
+      return;
+    }
     const actionText = isActive ? 'kích hoạt lại' : 'ngừng sử dụng';
     Modal.confirm({
       title: `${isActive ? 'Kích hoạt lại' : 'Ngừng sử dụng'} nhà cung cấp ${row.code}?`,
@@ -462,7 +480,7 @@ export default function SupplierList() {
         messageApi.success(`Đã ${actionText} nhà cung cấp`);
       },
     });
-  }, [messageApi, updateMutation]);
+  }, [canEdit, messageApi, updateMutation]);
 
   const handleDensityChange = useCallback((value: SupplierDensity) => {
     setDensityOverride(value);
@@ -589,23 +607,26 @@ export default function SupplierList() {
           <Tooltip title="Xem">
             <Button size="small" aria-label={`Xem ${row.code}`} icon={<EyeOutlined />} onClick={() => openDrawer('view', row)} />
           </Tooltip>
-          <Tooltip title="Sửa">
-            <Button size="small" aria-label={`Sửa ${row.code}`} icon={<EditOutlined />} disabled={!canManage} onClick={() => openDrawer('edit', row)} />
-          </Tooltip>
-          <Tooltip title={row.is_active ? 'Ngừng sử dụng' : 'Kích hoạt lại'}>
-            <Button
-              size="small"
-              aria-label={`${row.is_active ? 'Ngừng sử dụng' : 'Kích hoạt lại'} ${row.code}`}
-              icon={row.is_active ? <PauseCircleOutlined /> : <CheckCircleOutlined />}
-              disabled={!canManage}
-              danger={row.is_active}
-              onClick={() => handleSetActive(row, !row.is_active)}
-            />
-          </Tooltip>
+          {canEdit ? (
+            <Tooltip title="Sửa">
+              <Button size="small" aria-label={`Sửa ${row.code}`} icon={<EditOutlined />} onClick={() => openDrawer('edit', row)} />
+            </Tooltip>
+          ) : null}
+          {canEdit ? (
+            <Tooltip title={row.is_active ? 'Ngừng sử dụng' : 'Kích hoạt lại'}>
+              <Button
+                size="small"
+                aria-label={`${row.is_active ? 'Ngừng sử dụng' : 'Kích hoạt lại'} ${row.code}`}
+                icon={row.is_active ? <PauseCircleOutlined /> : <CheckCircleOutlined />}
+                danger={row.is_active}
+                onClick={() => handleSetActive(row, !row.is_active)}
+              />
+            </Tooltip>
+          ) : null}
         </Space>
       ),
     },
-  ], [canManage, handleSetActive, openDrawer, sortField, sortOrder]);
+  ], [canEdit, handleSetActive, openDrawer, sortField, sortOrder]);
 
   const displayColumns = useMemo(
     () => allColumns.filter((column) => visibleColumns.includes(column.key as string)),
@@ -701,6 +722,8 @@ export default function SupplierList() {
     </Space>
   );
 
+  const canSaveDrawer = drawerMode === 'create' ? canCreate : drawerMode === 'edit' ? canEdit : false;
+
   return (
     <div className="supplier-page">
       {contextHolder}
@@ -710,19 +733,20 @@ export default function SupplierList() {
           <Space wrap size={6}>
             <Tag color="blue">Mua hàng</Tag>
             <Tag color="gold">Nhà cung cấp</Tag>
-            <Tag color={canManage ? 'processing' : 'default'}>{canManage ? 'Danh mục vận hành' : 'Theo quyền hiện tại'}</Tag>
+            <Tag color={canWrite ? 'processing' : 'default'}>{canWrite ? 'Danh mục vận hành' : 'Theo quyền hiện tại'}</Tag>
           </Space>
           <Title level={2}>Nhà cung cấp</Title>
           <Text type="secondary">Quản lý đối tác mua hàng, hạn thanh toán, ưu tiên và trạng thái sử dụng trong cùng một màn hình.</Text>
         </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          disabled={!canManage}
-          onClick={() => openDrawer('create')}
-        >
-          Thêm mới
-        </Button>
+        {canCreate ? (
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => openDrawer('create')}
+          >
+            Thêm mới
+          </Button>
+        ) : null}
       </header>
 
       <div className="supplier-summary-grid">
@@ -811,7 +835,7 @@ export default function SupplierList() {
             scroll={{ x: 'max-content' }}
             size={density === 'compact' ? 'small' : 'middle'}
             onChange={handleTableChange}
-            locale={{ emptyText: canManage ? 'Chưa có nhà cung cấp phù hợp. Nhấn Thêm mới để tạo.' : 'Chưa có nhà cung cấp phù hợp.' }}
+            locale={{ emptyText: canCreate ? 'Chưa có nhà cung cấp phù hợp. Nhấn Thêm mới để tạo.' : 'Chưa có nhà cung cấp phù hợp.' }}
           />
         ) : (
           <div className="supplier-mobile-list" data-testid="supplier-mobile-card-list">
@@ -827,15 +851,18 @@ export default function SupplierList() {
                   </div>
                   <Space size={4}>
                     <Button size="small" aria-label={`Xem ${row.code}`} icon={<EyeOutlined />} onClick={() => openDrawer('view', row)} />
-                    <Button size="small" aria-label={`Sửa ${row.code}`} icon={<EditOutlined />} disabled={!canManage} onClick={() => openDrawer('edit', row)} />
-                    <Button
-                      size="small"
-                      aria-label={`${row.is_active ? 'Ngừng sử dụng' : 'Kích hoạt lại'} ${row.code}`}
-                      icon={row.is_active ? <PauseCircleOutlined /> : <CheckCircleOutlined />}
-                      disabled={!canManage}
-                      danger={row.is_active}
-                      onClick={() => handleSetActive(row, !row.is_active)}
-                    />
+                    {canEdit ? (
+                      <Button size="small" aria-label={`Sửa ${row.code}`} icon={<EditOutlined />} onClick={() => openDrawer('edit', row)} />
+                    ) : null}
+                    {canEdit ? (
+                      <Button
+                        size="small"
+                        aria-label={`${row.is_active ? 'Ngừng sử dụng' : 'Kích hoạt lại'} ${row.code}`}
+                        icon={row.is_active ? <PauseCircleOutlined /> : <CheckCircleOutlined />}
+                        danger={row.is_active}
+                        onClick={() => handleSetActive(row, !row.is_active)}
+                      />
+                    ) : null}
                   </Space>
                 </div>
                 <div className="supplier-mobile-badges">
@@ -897,7 +924,7 @@ export default function SupplierList() {
         footer={
           <div className="supplier-drawer-footer">
             <Button onClick={closeDrawer}>Hủy</Button>
-            {drawerMode !== 'view' ? (
+            {canSaveDrawer ? (
               <Button
                 type="primary"
                 onClick={() => void onSubmit()}
@@ -909,7 +936,7 @@ export default function SupplierList() {
           </div>
         }
       >
-        <Form form={form} layout="vertical" disabled={drawerMode === 'view'} initialValues={emptyForm}>
+        <Form form={form} layout="vertical" disabled={!canSaveDrawer} initialValues={emptyForm}>
           <FormSection title="Thông tin cơ bản" description="Mã NCC đang nhập thủ công trong v1; hệ thống chưa có auto-generate cho Supplier.">
             <div className="supplier-form-grid">
               <Form.Item name="code" label="Mã NCC" rules={[{ required: true, message: 'Vui lòng nhập mã NCC' }]}>

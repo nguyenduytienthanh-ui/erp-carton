@@ -13,6 +13,7 @@ type BuildCommandPaletteCatalogOptions = {
   canViewReports: boolean;
   canViewSalesOrders: boolean;
   canViewCustomers: boolean;
+  canViewSuppliers: boolean;
   canViewSalesFulfillmentCenter: boolean;
   canManagePurchasing: boolean;
   canAccessProductionCenter: boolean;
@@ -342,7 +343,7 @@ export function buildCommandPaletteCatalog(
       group: 'Mua hàng',
       description: 'Quản lý hồ sơ nhà cung cấp, đánh giá hiệu quả và mức độ ưu tiên.',
       keywords: ['nha cung cap', 'supplier', 'vendor'],
-      enabled: options.canManagePurchasing,
+      enabled: options.canViewSuppliers,
     },
     {
       key: 'purchase-orders',

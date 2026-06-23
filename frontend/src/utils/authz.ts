@@ -197,6 +197,36 @@ export function canManagePurchasingData(): boolean {
   ]);
 }
 
+function hasSupplierPermission(action: string): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  return hasPermission(authz.permissions, 'SUPPLIER', action);
+}
+
+export function canViewSuppliers(): boolean {
+  return hasSupplierPermission('VIEW');
+}
+
+export function canCreateSuppliers(): boolean {
+  return hasSupplierPermission('CREATE');
+}
+
+export function canEditSuppliers(): boolean {
+  return hasSupplierPermission('EDIT');
+}
+
+export function canImportSuppliers(): boolean {
+  return hasSupplierPermission('IMPORT');
+}
+
+export function canExportSuppliers(): boolean {
+  return hasSupplierPermission('EXPORT');
+}
+
+export function canDeleteSuppliers(): boolean {
+  return hasSupplierPermission('DELETE');
+}
+
 export function canManageProductionData(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;

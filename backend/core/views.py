@@ -65,7 +65,13 @@ from django.utils import timezone as django_timezone
 from .filters import CustomerFilter, TeamFilter, RoleFilter
 from .utils import export_to_excel, export_to_pdf
 from .mixins import AuditLogMixin, ExportExcelMixin
-from .permissions import CUSTOMER_PERMISSION_DEFINITIONS, check_action_permission, user_has_customer_permission
+from .permissions import (
+    CUSTOMER_PERMISSION_DEFINITIONS,
+    SUPPLIER_PERMISSION_DEFINITIONS,
+    check_action_permission,
+    user_has_customer_permission,
+    user_has_supplier_permission,
+)
 
 
 WORKFLOW_SCHEDULER_JOB_NAME = 'workflow-automation-global-scheduler'
@@ -114,6 +120,7 @@ MODULE_PERMISSION_FIELDS = [
         'changed_type': 'reports',
     },
     *CUSTOMER_PERMISSION_DEFINITIONS,
+    *SUPPLIER_PERMISSION_DEFINITIONS,
     {
         'field': 'workflow_view',
         'label': 'Quy trình xem',
@@ -801,6 +808,10 @@ def _can_view_customers(user):
     return user_has_customer_permission(user, 'VIEW', strict=True)
 
 
+def _can_view_suppliers(user):
+    return user_has_supplier_permission(user, 'VIEW', strict=True)
+
+
 def _can_manage_module_permissions(user):
     if not user or not user.is_authenticated:
         return False
@@ -850,6 +861,7 @@ ACCESS_SURFACE_ROUTE_DEFINITIONS = [
     {'key': 'shipments', 'label': 'Phiếu xuất', 'path': '/shipments', 'capability': 'sales_orders', 'group': 'sales'},
     {'key': 'quotes', 'label': 'Quotes', 'path': '/quotes', 'capability': 'sales_orders', 'group': 'sales'},
     {'key': 'customers', 'label': 'Khách hàng', 'path': '/customers', 'capability': 'customers', 'group': 'sales'},
+    {'key': 'suppliers', 'label': 'Nhà cung cấp', 'path': '/suppliers', 'capability': 'suppliers', 'group': 'purchasing'},
     {'key': 'purchase_orders', 'label': 'Purchase orders', 'path': '/purchase-orders', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_receipts', 'label': 'Purchase receipts', 'path': '/purchase-receipts', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_requests', 'label': 'Purchase requests', 'path': '/purchase-requests', 'capability': 'purchasing', 'group': 'purchasing'},
@@ -901,6 +913,7 @@ ACCESS_SURFACE_API_DEFINITIONS = [
     {'key': 'sales_orders_api', 'label': 'Sales order API', 'path_prefix': '/api/sales/orders/', 'capability': 'sales_orders', 'group': 'sales'},
     {'key': 'shipments_api', 'label': 'Shipment API', 'path_prefix': '/api/sales/shipments/', 'capability': 'sales_orders', 'group': 'sales'},
     {'key': 'customers_api', 'label': 'Customer API', 'path_prefix': '/api/customers/', 'capability': 'customers', 'group': 'sales'},
+    {'key': 'suppliers_api', 'label': 'Supplier API', 'path_prefix': '/api/purchasing/suppliers/', 'capability': 'suppliers', 'group': 'purchasing'},
     {'key': 'purchase_orders_api', 'label': 'Purchase order API', 'path_prefix': '/api/purchasing/orders/', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_requests_api', 'label': 'Purchase request API', 'path_prefix': '/api/purchasing/requests/', 'capability': 'purchasing', 'group': 'purchasing'},
     {'key': 'purchase_receipts_api', 'label': 'Purchase receipt API', 'path_prefix': '/api/purchasing/receipts/', 'capability': 'purchasing', 'group': 'purchasing'},
@@ -955,6 +968,11 @@ ACCESS_SURFACE_CRITICAL_ACTION_DEFINITIONS = [
     {'key': 'customer_export', 'label': 'Export customer data', 'permission_key': 'CUSTOMER:EXPORT', 'group': 'sales'},
     {'key': 'customer_assign', 'label': 'Assign customer owner/team', 'permission_key': 'CUSTOMER:ASSIGN', 'group': 'sales'},
     {'key': 'customer_delete', 'label': 'Hard delete customer', 'permission_key': 'CUSTOMER:DELETE', 'group': 'sales'},
+    {'key': 'supplier_create', 'label': 'Create supplier', 'permission_key': 'SUPPLIER:CREATE', 'group': 'purchasing'},
+    {'key': 'supplier_edit', 'label': 'Edit supplier', 'permission_key': 'SUPPLIER:EDIT', 'group': 'purchasing'},
+    {'key': 'supplier_import', 'label': 'Import supplier data', 'permission_key': 'SUPPLIER:IMPORT', 'group': 'purchasing'},
+    {'key': 'supplier_export', 'label': 'Export supplier data', 'permission_key': 'SUPPLIER:EXPORT', 'group': 'purchasing'},
+    {'key': 'supplier_delete', 'label': 'Hard delete supplier', 'permission_key': 'SUPPLIER:DELETE', 'group': 'purchasing'},
 ]
 
 
@@ -977,6 +995,7 @@ def _build_access_capability_map(user):
     return {
         'sales_orders': _can_access_sales_orders(user),
         'customers': _can_view_customers(user),
+        'suppliers': _can_view_suppliers(user),
         'purchasing': _can_manage_purchasing_data(user),
         'production': _can_access_production_center(user),
         'production_planning': _can_manage_production_data(user),

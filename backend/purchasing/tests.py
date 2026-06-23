@@ -4,7 +4,7 @@ from decimal import Decimal
 from rest_framework.test import APITestCase
 from django.utils import timezone
 
-from core.models import ApprovalHistory, AuditLog, User
+from core.models import ApprovalHistory, AuditLog, Permission, Role, User
 from finance.models import PayableDocument
 from inventory.models import InventoryTransaction, Warehouse, WarehouseLocation
 from products.models import Product, ProductUnit
@@ -139,13 +139,21 @@ class SupplierApiTests(APITestCase):
 
     def test_supplier_delete_is_blocked_when_related_records_exist(self):
         supplier = self._create_supplier(code='SUP-REL-001')
-        PurchaseOrder.objects.create(
+        purchase_order = PurchaseOrder.objects.create(
             code='PO-SUP-REL-001',
             order_date=timezone.localdate(),
             supplier=supplier,
             created_by=self.user,
             updated_by=self.user,
             owner=self.user,
+        )
+        PurchaseReceipt.objects.create(
+            code='GRN-SUP-REL-001',
+            purchase_order=purchase_order,
+            receipt_date=timezone.localdate(),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
         )
         MaterialPurchasePrice.objects.create(
             product=self.product,
@@ -180,6 +188,7 @@ class SupplierApiTests(APITestCase):
         self.assertEqual(response.status_code, 400, response.data)
         self.assertIn('Không thể xóa nhà cung cấp đã phát sinh chứng từ', response.data['error'])
         self.assertIn('đơn mua', response.data['blockers'])
+        self.assertIn('phiếu nhập mua', response.data['blockers'])
         self.assertIn('bảng giá mua', response.data['blockers'])
         self.assertIn('phiếu trả hàng', response.data['blockers'])
         self.assertIn('chứng từ phải trả', response.data['blockers'])
@@ -192,6 +201,95 @@ class SupplierApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 204, response.data)
         self.assertFalse(Supplier.objects.filter(pk=supplier.id).exists())
+
+
+class SupplierSecurityTests(APITestCase):
+    def setUp(self):
+        self.supplier = Supplier.objects.create(
+            code='SUP-SEC-001',
+            name='Nhà cung cấp security',
+            company_name='Công ty security',
+            payment_terms_days=30,
+            rating=3,
+            is_active=True,
+        )
+
+    def _make_user(self, username, actions):
+        user = User.objects.create_user(username=username, password='Demo123!')
+        role = Role.objects.create(code=f'{username.upper()}_ROLE', name=f'{username} role')
+        for action in actions:
+            permission, _ = Permission.objects.update_or_create(
+                resource='SUPPLIER',
+                action=action,
+                defaults={
+                    'code': f'SUPPLIER_{action}',
+                    'name': f'{action.title()} suppliers',
+                },
+            )
+            role.permissions.add(permission)
+        user.roles.add(role)
+        return user
+
+    def test_supplier_api_requires_view_permission_for_read(self):
+        user = self._make_user('supplier_security_none', [])
+        self.client.force_authenticate(user=user)
+
+        list_response = self.client.get('/api/purchasing/suppliers/')
+        detail_response = self.client.get(f'/api/purchasing/suppliers/{self.supplier.id}/')
+
+        self.assertEqual(list_response.status_code, 403, list_response.data)
+        self.assertEqual(detail_response.status_code, 403, detail_response.data)
+
+    def test_supplier_view_only_user_can_read_but_not_write(self):
+        user = self._make_user('supplier_security_view', ['VIEW'])
+        self.client.force_authenticate(user=user)
+
+        list_response = self.client.get('/api/purchasing/suppliers/')
+        detail_response = self.client.get(f'/api/purchasing/suppliers/{self.supplier.id}/')
+        create_response = self.client.post('/api/purchasing/suppliers/', {
+            'code': 'SUP-SEC-CREATE',
+            'name': 'Không được tạo',
+        }, format='json')
+        update_response = self.client.patch(f'/api/purchasing/suppliers/{self.supplier.id}/', {
+            'name': 'Không được sửa',
+        }, format='json')
+        delete_response = self.client.delete(f'/api/purchasing/suppliers/{self.supplier.id}/')
+
+        self.assertEqual(list_response.status_code, 200, list_response.data)
+        self.assertEqual(detail_response.status_code, 200, detail_response.data)
+        self.assertEqual(create_response.status_code, 403, create_response.data)
+        self.assertEqual(update_response.status_code, 403, update_response.data)
+        self.assertEqual(delete_response.status_code, 403, delete_response.data)
+        self.supplier.refresh_from_db()
+        self.assertEqual(self.supplier.name, 'Nhà cung cấp security')
+
+    def test_supplier_create_edit_and_delete_use_separate_permissions(self):
+        editor = self._make_user('supplier_security_editor', ['VIEW', 'CREATE', 'EDIT'])
+        self.client.force_authenticate(user=editor)
+
+        create_response = self.client.post('/api/purchasing/suppliers/', {
+            'code': 'SUP-SEC-NEW',
+            'name': 'Nhà cung cấp mới',
+            'payment_terms_days': 15,
+        }, format='json')
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        created_id = create_response.data['id']
+
+        update_response = self.client.patch(f'/api/purchasing/suppliers/{created_id}/', {
+            'is_active': False,
+        }, format='json')
+        self.assertEqual(update_response.status_code, 200, update_response.data)
+        self.assertFalse(update_response.data['is_active'])
+
+        delete_without_permission = self.client.delete(f'/api/purchasing/suppliers/{created_id}/')
+        self.assertEqual(delete_without_permission.status_code, 403, delete_without_permission.data)
+
+        deleter = self._make_user('supplier_security_deleter', ['VIEW', 'DELETE'])
+        self.client.force_authenticate(user=deleter)
+        delete_response = self.client.delete(f'/api/purchasing/suppliers/{created_id}/')
+
+        self.assertEqual(delete_response.status_code, 204, delete_response.data)
+        self.assertFalse(Supplier.objects.filter(pk=created_id).exists())
 
 
 class PurchasingWorkflowTests(APITestCase):
