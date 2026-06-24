@@ -9,6 +9,7 @@ import type {
   CreatePurchaseOrderFromForecastPayload,
   PurchaseOrderFormValues,
   PurchaseReceipt,
+  PurchaseReceiptReturnableLine,
   PurchaseRequest,
   PurchaseRequestLine,
   PurchaseReturn,
@@ -23,11 +24,12 @@ type SupplierPayload = Omit<Supplier, 'id' | 'created_at' | 'updated_at'>;
 type PurchaseOrderPayload = Omit<PurchaseOrderFormValues, never>;
 type PurchaseReturnPayload = {
   return_date: string;
-  supplier: number;
+  supplier?: number;
   return_reason: string;
   return_notes: string;
   reference?: string;
   purchase_order?: number | null;
+  source_receipt?: number | null;
   lines?: Array<Partial<Omit<PurchaseReturnLine, 'id'>>>;
 };
 
@@ -174,6 +176,10 @@ export const purchasingApi = {
     const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_RECEIPTS}${id}/next_states/`);
     return response.data;
   },
+  getReceiptReturnableLines: async (id: number): Promise<PurchaseReceiptReturnableLine[]> => {
+    const response = await axiosInstance.get(`${API_ENDPOINTS.PURCHASING_RECEIPTS}${id}/returnable_lines/`);
+    return response.data;
+  },
   cancelReceipt: async (id: number, reason: string): Promise<{ status: string }> => {
     const response = await axiosInstance.post(`${API_ENDPOINTS.PURCHASING_RECEIPTS}${id}/cancel/`, { reason });
     return response.data;
@@ -247,6 +253,10 @@ export const purchasingApi = {
   },
   cancelPurchaseReturn: async (id: number, reason?: string): Promise<{ status: string }> => {
     const response = await axiosInstance.post(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/cancel_return/`, { reason: reason ?? '' });
+    return response.data;
+  },
+  reversePurchaseReturn: async (id: number, reason: string): Promise<{ status: string }> => {
+    const response = await axiosInstance.post(`${API_ENDPOINTS.PURCHASING_ORDERS.replace('orders', 'returns')}${id}/reverse_return/`, { reason });
     return response.data;
   },
   getPurchaseReturnApprovalHistory: async (id: number): Promise<PurchaseApprovalHistoryItem[]> => {

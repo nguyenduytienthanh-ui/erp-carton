@@ -55,9 +55,13 @@ from purchasing.serializers import (
 )
 from purchasing.services import (
     add_received_qty,
+    build_returnable_receipt_line_payload,
     build_supplier_snapshot,
+    cancel_unposted_purchase_return,
     get_next_purchase_order_code,
     get_next_purchase_receipt_code,
+    post_purchase_return,
+    reverse_purchase_return,
     subtract_received_qty,
     sync_purchase_order_receipt_status,
 )
@@ -156,7 +160,7 @@ def _serialize_audit_timeline_item(item):
         if amount not in (None, ''):
             segments.append(f'Giá trị {amount}')
         comments = ', '.join(segments)
-    elif action in {'CANCEL', 'REJECT'}:
+    elif action in {'CANCEL', 'REJECT', 'REVERSE'}:
         comments = str(new_values.get('reason') or new_values.get('cancel_reason') or '').strip()
     elif action == 'CREATE':
         comments = str(new_values.get('reference') or '').strip()
@@ -1036,6 +1040,14 @@ class PurchaseReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
         }
         return Response({'current': receipt.status, 'next_states': mapping.get(receipt.status, [])})
 
+    @action(detail=True, methods=['get'])
+    def returnable_lines(self, request, pk=None):
+        receipt = self.get_object()
+        if receipt.status != PurchaseReceiptStatus.POSTED:
+            return Response({'error': 'Chỉ phiếu nhập đã ghi sổ mới có thể trả hàng.'}, status=status.HTTP_400_BAD_REQUEST)
+        lines = receipt.lines.select_related('product', 'purchase_order_line').order_by('line_number')
+        return Response([build_returnable_receipt_line_payload(line) for line in lines])
+
 
 class PurchaseRequestViewSet(viewsets.ModelViewSet):
     """Yêu cầu mua (Purchase Request) – CRUD."""
@@ -1186,7 +1198,17 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
 # Purchase Return ViewSet
 class PurchaseReturnViewSet(viewsets.ModelViewSet):
     """Purchase Returns to Supplier."""
-    queryset = PurchaseReturn.objects.select_related('supplier', 'purchase_order')
+    queryset = PurchaseReturn.objects.select_related(
+        'supplier',
+        'purchase_order',
+        'source_receipt',
+        'source_receipt__purchase_order',
+    ).prefetch_related(
+        'lines',
+        'lines__product',
+        'lines__source_receipt_line',
+        'lines__source_receipt_line__purchase_order_line',
+    )
     serializer_class = PurchaseReturnSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -1202,13 +1224,33 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
             qs = qs.filter(status=status_filter)
         return qs
 
+    def create(self, request, *args, **kwargs):
+        _require_manage_procurement(request.user, 'Bạn không có quyền tạo phiếu trả hàng mua.')
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        _require_manage_procurement(request.user, 'Bạn không có quyền sửa phiếu trả hàng mua.')
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        _require_manage_procurement(request.user, 'Bạn không có quyền sửa phiếu trả hàng mua.')
+        return super().partial_update(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         _require_manage_procurement(self.request.user, 'Bạn không có quyền tạo phiếu trả hàng mua.')
         serializer.save(created_by=self.request.user, updated_by=self.request.user)
 
     def perform_update(self, serializer):
         _require_manage_procurement(self.request.user, 'Bạn không có quyền sửa phiếu trả hàng mua.')
+        if serializer.instance.status != PurchaseReturnStatus.DRAFT:
+            raise PermissionDenied('Chỉ được sửa phiếu trả hàng ở trạng thái Nháp.')
         serializer.save(updated_by=self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        ret = self.get_object()
+        if ret.status != PurchaseReturnStatus.DRAFT:
+            return Response({'error': 'Chỉ được xóa phiếu trả hàng ở trạng thái Nháp.'}, status=status.HTTP_400_BAD_REQUEST)
+        return super().destroy(request, *args, **kwargs)
 
     @action(detail=True, methods=['post'])
     def submit_return(self, request, pk=None):
@@ -1271,101 +1313,10 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def post_return(self, request, pk=None):
-        """APPROVED -> POSTED (reverse inventory & AP)."""
+        """APPROVED -> POSTED through anchored inventory issue and AP adjustment."""
         ret = self.get_object()
-        if ret.status != PurchaseReturnStatus.APPROVED:
-            return Response({'error': 'Chỉ post phiếu trả đã duyệt.'}, status=400)
-        
         previous_status = ret.status
-
-        with transaction.atomic():
-            from inventory.serializers import InventoryTransactionSerializer
-            from finance.models import PayableDocument, PayableStatus
-            from finance.services import refresh_payable_status
-
-            warehouse_id = getattr(ret.purchase_order, 'warehouse_id', None)
-            location_id = getattr(ret.purchase_order, 'location_id', None)
-            for line in ret.lines.all():
-                if line.product:
-                    if not warehouse_id:
-                        raise ValidationError({'error': 'Thiếu kho nguồn để post phiếu trả hàng. Vui lòng khai báo kho trên đơn mua liên quan.'})
-                    serializer = InventoryTransactionSerializer(data={
-                        'transaction_type': 'ISSUE',
-                        'transaction_date': ret.return_date,
-                        'product': line.product_id,
-                        'warehouse': warehouse_id,
-                        'location': location_id,
-                        'quantity': str(line.qty),
-                        'unit_cost': str(line.unit_price or 0),
-                        'reference': ret.code,
-                        'reason': ret.return_reason,
-                        'note': line.note or ret.return_notes or '',
-                    })
-                    serializer.is_valid(raise_exception=True)
-                    serializer.save(
-                        created_by=request.user,
-                        updated_by=request.user,
-                        posted_by=request.user,
-                        purchase_order=ret.purchase_order,
-                    )
-
-            reduction_amount = Decimal(str(ret.total or 0))
-            payable_qs = PayableDocument.objects.select_for_update().exclude(status=PayableStatus.CANCELLED)
-            if ret.purchase_order_id:
-                payable_qs = payable_qs.filter(source_purchase_receipt__purchase_order_id=ret.purchase_order_id)
-            else:
-                payable_qs = payable_qs.filter(supplier_id=ret.supplier_id)
-
-            payable_docs = list(payable_qs.order_by('due_date', 'id'))
-            if reduction_amount > 0:
-                if not payable_docs:
-                    raise ValidationError({'error': 'Không tìm thấy công nợ phải trả phù hợp để giảm khi post phiếu trả hàng.'})
-
-                remaining_to_reduce = reduction_amount
-                for payable in payable_docs:
-                    total_amount = Decimal(str(payable.total_amount or 0))
-                    settled_amount = Decimal(str(payable.settled_amount or 0))
-                    reducible_amount = total_amount - settled_amount
-                    if reducible_amount <= 0:
-                        continue
-                    applied = reducible_amount if reducible_amount <= remaining_to_reduce else remaining_to_reduce
-                    if applied <= 0:
-                        continue
-
-                    old_total = total_amount
-                    new_total = total_amount - applied
-                    if old_total > 0:
-                        ratio = new_total / old_total
-                        payable.subtotal_amount = (Decimal(str(payable.subtotal_amount or 0)) * ratio).quantize(Decimal('0.01'))
-                        payable.tax_amount = (Decimal(str(payable.tax_amount or 0)) * ratio).quantize(Decimal('0.01'))
-                    payable.total_amount = new_total.quantize(Decimal('0.01'))
-                    payable.reference = (payable.reference or '')[:200]
-                    payable.note = ((payable.note or '').strip() + f'\n[Giảm tự động từ trả hàng {ret.code}] -{applied:,.2f}').strip()
-                    payable.updated_by = request.user
-                    payable.save(update_fields=['subtotal_amount', 'tax_amount', 'total_amount', 'note', 'updated_by', 'updated_at'])
-                    if payable.total_amount <= 0 and settled_amount <= 0:
-                        payable.status = PayableStatus.CANCELLED
-                        payable.save(update_fields=['status', 'updated_at'])
-                    else:
-                        refresh_payable_status(payable, actor=request.user)
-
-                    remaining_to_reduce -= applied
-                    if remaining_to_reduce <= 0:
-                        break
-
-                if remaining_to_reduce > 0:
-                    raise ValidationError({
-                        'error': (
-                            'Tổng công nợ phải trả khả dụng không đủ để giảm theo giá trị trả hàng. '
-                            f'Còn chưa phân bổ: {remaining_to_reduce:,.2f}'
-                        )
-                    })
-            
-            ret.status = PurchaseReturnStatus.POSTED
-            ret.posted_by = request.user
-            ret.posted_at = timezone.now()
-            ret.save(update_fields=['status', 'posted_by', 'posted_at', 'updated_at'])
-
+        ret = post_purchase_return(ret, actor=request.user)
         _log_procurement_audit(
             request,
             action='POST',
@@ -1378,23 +1329,36 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
                 'total_amount': str(ret.total or 0),
             },
         )
-
         return Response({'status': ret.status})
 
     @action(detail=True, methods=['post'])
     def cancel_return(self, request, pk=None):
-        """Cancel return - any status -> CANCELLED."""
+        """Cancel unposted return only."""
         ret = self.get_object()
         reason = (request.data.get('reason') or '').strip() or 'Hủy phiếu trả'
         previous_status = ret.status
-        ret.status = PurchaseReturnStatus.CANCELLED
-        ret.cancelled_by = request.user
-        ret.cancelled_at = timezone.now()
-        ret.cancel_reason = reason
-        ret.save(update_fields=['status', 'cancelled_by', 'cancelled_at', 'cancel_reason', 'updated_at'])
+        ret = cancel_unposted_purchase_return(ret, actor=request.user, reason=reason)
         _log_procurement_audit(
             request,
             action='CANCEL',
+            entity_type='PurchaseReturn',
+            entity_id=int(ret.id),
+            entity_code=ret.code,
+            old_values={'status': previous_status},
+            new_values={'status': ret.status, 'reason': reason},
+        )
+        return Response({'status': ret.status})
+
+    @action(detail=True, methods=['post'])
+    def reverse_return(self, request, pk=None):
+        """POSTED -> REVERSED through compensating inventory receipt and AP adjustment."""
+        ret = self.get_object()
+        previous_status = ret.status
+        reason = (request.data.get('reason') or '').strip()
+        ret = reverse_purchase_return(ret, actor=request.user, reason=reason)
+        _log_procurement_audit(
+            request,
+            action='REVERSE',
             entity_type='PurchaseReturn',
             entity_id=int(ret.id),
             entity_code=ret.code,
@@ -1428,7 +1392,8 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
             PurchaseReturnStatus.DRAFT: [PurchaseReturnStatus.SUBMITTED, PurchaseReturnStatus.CANCELLED],
             PurchaseReturnStatus.SUBMITTED: [PurchaseReturnStatus.APPROVED, PurchaseReturnStatus.CANCELLED],
             PurchaseReturnStatus.APPROVED: [PurchaseReturnStatus.POSTED, PurchaseReturnStatus.CANCELLED],
-            PurchaseReturnStatus.POSTED: [],
+            PurchaseReturnStatus.POSTED: [PurchaseReturnStatus.REVERSED],
+            PurchaseReturnStatus.REVERSED: [],
             PurchaseReturnStatus.CANCELLED: [],
         }
         return Response({'current': ret.status, 'next_states': mapping.get(ret.status, [])})

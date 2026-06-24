@@ -9,6 +9,9 @@ from sales.models import PeriodSequence
 from sales.document_policy import round_money
 
 from .models import (
+    PayableAdjustment,
+    PayableAdjustmentDirection,
+    PayableAdjustmentStatus,
     PayableDocument,
     PayableSettlement,
     PayableStatus,
@@ -109,7 +112,7 @@ def refresh_receivable_status(document, actor=None):
 def refresh_payable_status(document, actor=None):
     totals = document.settlements.aggregate(total=models.Sum('amount')) if hasattr(document, 'settlements') else {'total': 0}
     settled_amount = round_money(totals.get('total') or 0)
-    total_amount = round_money(document.total_amount or 0)
+    total_amount = get_payable_adjusted_total(document)
     next_status = document.status
     if document.status == PayableStatus.CANCELLED:
         next_status = PayableStatus.CANCELLED
@@ -134,6 +137,98 @@ def refresh_payable_status(document, actor=None):
         update_fields.append('updated_at')
         document.save(update_fields=update_fields)
     return document.status
+
+
+def get_payable_adjustment_totals(document):
+    if not getattr(document, 'pk', None):
+        return {
+            PayableAdjustmentDirection.CREDIT: Decimal('0'),
+            PayableAdjustmentDirection.DEBIT: Decimal('0'),
+        }
+    totals = (
+        PayableAdjustment.objects
+        .filter(payable=document, status=PayableAdjustmentStatus.POSTED)
+        .values('direction')
+        .annotate(total=models.Sum('amount'))
+    )
+    result = {
+        PayableAdjustmentDirection.CREDIT: Decimal('0'),
+        PayableAdjustmentDirection.DEBIT: Decimal('0'),
+    }
+    for row in totals:
+        direction = row.get('direction')
+        if direction in result:
+            result[direction] = round_money(row.get('total') or 0)
+    return result
+
+
+def get_payable_adjusted_total(document):
+    adjustments = get_payable_adjustment_totals(document)
+    total = (
+        Decimal(str(document.total_amount or 0))
+        - adjustments[PayableAdjustmentDirection.CREDIT]
+        + adjustments[PayableAdjustmentDirection.DEBIT]
+    )
+    return round_money(total if total > 0 else Decimal('0'))
+
+
+def get_payable_open_balance(document):
+    remaining = get_payable_adjusted_total(document) - Decimal(str(document.settled_amount or 0))
+    return round_money(remaining if remaining > 0 else Decimal('0'))
+
+
+def create_payable_adjustment(
+    *,
+    payable,
+    direction,
+    amount,
+    idempotency_key,
+    actor=None,
+    source_purchase_receipt=None,
+    source_return=None,
+    reversal_of=None,
+    reason='',
+    note='',
+):
+    amount = round_money(amount or 0)
+    if amount <= 0:
+        raise ValueError('Số tiền điều chỉnh công nợ phải lớn hơn 0.')
+    if direction == PayableAdjustmentDirection.CREDIT and not source_return:
+        raise ValueError('Điều chỉnh giảm công nợ từ trả hàng phải có phiếu trả hàng nguồn.')
+    if direction == PayableAdjustmentDirection.DEBIT and not reversal_of:
+        raise ValueError('Điều chỉnh hoàn nhập công nợ phải tham chiếu bút toán gốc.')
+
+    defaults = {
+        'payable': payable,
+        'source_purchase_receipt': source_purchase_receipt or getattr(payable, 'source_purchase_receipt', None),
+        'source_return': source_return if direction == PayableAdjustmentDirection.CREDIT else None,
+        'reversal_of': reversal_of,
+        'direction': direction,
+        'status': PayableAdjustmentStatus.POSTED,
+        'amount': amount,
+        'currency': getattr(payable, 'currency', 'VND') or 'VND',
+        'exchange_rate': getattr(payable, 'exchange_rate', Decimal('1')) or Decimal('1'),
+        'reason': str(reason or '').strip(),
+        'note': str(note or '').strip(),
+        'posted_at': timezone.now(),
+        'posted_by': actor,
+        'created_by': actor,
+    }
+    adjustment, created = PayableAdjustment.objects.select_for_update().get_or_create(
+        idempotency_key=str(idempotency_key),
+        defaults=defaults,
+    )
+    if not created:
+        mismatches = []
+        for field in ('payable_id', 'direction', 'amount'):
+            expected = getattr(defaults['payable'], 'id', None) if field == 'payable_id' else defaults[field]
+            actual = getattr(adjustment, field)
+            if str(actual) != str(expected):
+                mismatches.append(field)
+        if mismatches:
+            raise ValueError('Khóa chống ghi trùng công nợ đã được dùng cho dữ liệu khác.')
+    refresh_payable_status(payable, actor=actor)
+    return adjustment
 
 
 def ensure_system_transaction_category(*, code: str, name: str, category_type: str, color: str):

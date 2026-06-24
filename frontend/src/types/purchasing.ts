@@ -269,17 +269,41 @@ export interface PurchaseRequest {
   lines?: PurchaseRequestLine[];
 }
 
-export type PurchaseReturnStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'POSTED' | 'CANCELLED';
+export type PurchaseReturnStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'POSTED' | 'REVERSED' | 'CANCELLED';
+
+export interface PurchaseReceiptReturnableLine {
+  id: number;
+  line_number: number;
+  purchase_order_line?: number | null;
+  purchase_order_line_number?: number | null;
+  product: number;
+  product_code?: string | null;
+  product_name?: string | null;
+  quantity: string;
+  unit_cost: string;
+  tax_pct: string;
+  posted_returned_qty: string;
+  remaining_returnable_qty: string;
+  note?: string;
+}
 
 export interface PurchaseReturnLine {
   id: number;
   line_number: number;
-  product: number;
-  product_code?: string;
-  product_name?: string;
+  source_receipt_line?: number | null;
+  source_receipt_code?: string | null;
+  source_receipt_line_number?: number | null;
+  product?: number | null;
+  product_code?: string | null;
+  product_name?: string | null;
+  received_qty?: string;
+  posted_returned_qty?: string;
+  remaining_returnable_qty?: string;
   qty: string;
   unit_price: string;
   tax_pct: string;
+  inventory_transaction?: number | null;
+  reversal_inventory_transaction?: number | null;
   note: string;
 }
 
@@ -291,6 +315,8 @@ export interface PurchaseReturn {
   reference: string;
   purchase_order?: number | null;
   purchase_order_code?: string | null;
+  source_receipt?: number | null;
+  source_receipt_code?: string | null;
   supplier: number;
   supplier_name?: string;
   subtotal: string;
@@ -304,9 +330,13 @@ export interface PurchaseReturn {
   approved_at?: string | null;
   posted_by?: number | null;
   posted_at?: string | null;
+  reversed_by?: number | null;
+  reversed_at?: string | null;
+  reversal_reason?: string;
   cancelled_by?: number | null;
   cancelled_at?: string | null;
   cancel_reason?: string;
+  legacy_source_warning?: string;
   created_by?: number | null;
   created_at: string;
   updated_by?: number | null;

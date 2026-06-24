@@ -17,12 +17,16 @@ from purchasing.models import (
     PurchaseRequestStatus,
     PurchaseReturn,
     PurchaseReturnLine,
+    PurchaseReturnStatus,
     Supplier,
 )
 from purchasing.services import (
     build_purchase_order_line_product_snapshot,
     build_supplier_snapshot,
     get_next_pr_code,
+    get_remaining_returnable_qty,
+    get_returned_qty_for_receipt_line,
+    recalc_purchase_return_totals,
 )
 
 
@@ -551,36 +555,106 @@ class PurchaseRequestSerializer(serializers.ModelSerializer):
 class PurchaseReturnLineSerializer(serializers.ModelSerializer):
     product_code = serializers.SerializerMethodField()
     product_name = serializers.SerializerMethodField()
+    source_receipt_code = serializers.CharField(source='source_receipt_line.receipt.code', read_only=True)
+    source_receipt_line_number = serializers.IntegerField(source='source_receipt_line.line_number', read_only=True)
+    received_qty = serializers.DecimalField(source='source_receipt_line.quantity', max_digits=18, decimal_places=4, read_only=True)
+    posted_returned_qty = serializers.SerializerMethodField()
+    remaining_returnable_qty = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseReturnLine
-        fields = ['id', 'line_number', 'product', 'product_code', 'product_name', 'qty', 'unit_price', 'tax_pct', 'note']
+        fields = [
+            'id',
+            'line_number',
+            'source_receipt_line',
+            'source_receipt_code',
+            'source_receipt_line_number',
+            'product',
+            'product_code',
+            'product_name',
+            'received_qty',
+            'posted_returned_qty',
+            'remaining_returnable_qty',
+            'qty',
+            'unit_price',
+            'tax_pct',
+            'inventory_transaction',
+            'reversal_inventory_transaction',
+            'note',
+        ]
+        read_only_fields = [
+            'product',
+            'unit_price',
+            'inventory_transaction',
+            'reversal_inventory_transaction',
+        ]
 
     def get_product_code(self, obj):
-        return getattr(obj.product, 'code', None) if obj.product else None
+        snapshot = getattr(getattr(obj, 'source_receipt_line', None), 'product_snapshot', None) or {}
+        return snapshot.get('code') or (getattr(obj.product, 'code', None) if obj.product else None)
 
     def get_product_name(self, obj):
-        return getattr(obj.product, 'name', None) if obj.product else None
+        snapshot = getattr(getattr(obj, 'source_receipt_line', None), 'product_snapshot', None) or {}
+        return snapshot.get('name') or (getattr(obj.product, 'name', None) if obj.product else None)
+
+    def get_posted_returned_qty(self, obj):
+        if not obj.source_receipt_line_id:
+            return '0.0000'
+        return str(get_returned_qty_for_receipt_line(obj.source_receipt_line, exclude_return_id=obj.purchase_return_id))
+
+    def get_remaining_returnable_qty(self, obj):
+        if not obj.source_receipt_line_id:
+            return '0.0000'
+        return str(get_remaining_returnable_qty(obj.source_receipt_line, exclude_return_id=obj.purchase_return_id))
 
 
 class PurchaseReturnSerializer(serializers.ModelSerializer):
     lines = PurchaseReturnLineSerializer(many=True, required=False)
     supplier_name = serializers.SerializerMethodField()
     purchase_order_code = serializers.SerializerMethodField()
+    source_receipt_code = serializers.CharField(source='source_receipt.code', read_only=True)
+    legacy_source_warning = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseReturn
         fields = [
             'id', 'code', 'return_date', 'status', 'reference',
-            'purchase_order', 'purchase_order_code', 'supplier', 'supplier_name',
+            'purchase_order', 'purchase_order_code', 'source_receipt', 'source_receipt_code', 'supplier', 'supplier_name',
             'subtotal', 'tax_total', 'total',
             'return_reason', 'return_notes',
             'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
-            'posted_by', 'posted_at', 'cancelled_by', 'cancelled_at', 'cancel_reason',
+            'posted_by', 'posted_at', 'reversed_by', 'reversed_at', 'reversal_reason',
+            'cancelled_by', 'cancelled_at', 'cancel_reason',
             'created_by', 'created_at', 'updated_by', 'updated_at',
-            'lines',
+            'legacy_source_warning', 'lines',
         ]
-        read_only_fields = ['code', 'created_by', 'created_at', 'updated_by', 'updated_at']
+        read_only_fields = [
+            'code',
+            'status',
+            'subtotal',
+            'tax_total',
+            'total',
+            'submitted_by',
+            'submitted_at',
+            'approved_by',
+            'approved_at',
+            'posted_by',
+            'posted_at',
+            'reversed_by',
+            'reversed_at',
+            'reversal_reason',
+            'cancelled_by',
+            'cancelled_at',
+            'cancel_reason',
+            'created_by',
+            'created_at',
+            'updated_by',
+            'updated_at',
+        ]
+        extra_kwargs = {
+            'purchase_order': {'required': False, 'allow_null': True},
+            'supplier': {'required': False},
+        }
 
     def get_supplier_name(self, obj):
         return getattr(obj.supplier, 'name', None) if obj.supplier else None
@@ -588,30 +662,98 @@ class PurchaseReturnSerializer(serializers.ModelSerializer):
     def get_purchase_order_code(self, obj):
         return getattr(obj.purchase_order, 'code', None) if obj.purchase_order else None
 
+    def get_legacy_source_warning(self, obj):
+        if obj.pk and not obj.source_receipt_id:
+            return 'Phiếu trả hàng cũ chưa gắn phiếu nhập nguồn; cần chọn phiếu nhập trước khi ghi sổ.'
+        return ''
+
+    def validate_lines(self, value):
+        if not value:
+            raise serializers.ValidationError('Phiếu trả hàng phải có ít nhất một dòng.')
+        seen_source_lines = set()
+        for index, line in enumerate(value, start=1):
+            source_line = line.get('source_receipt_line')
+            if not source_line:
+                raise serializers.ValidationError(f'Dòng {index}: thiếu dòng phiếu nhập nguồn.')
+            if source_line.id in seen_source_lines:
+                raise serializers.ValidationError(f'Dòng {index}: dòng phiếu nhập nguồn bị lặp.')
+            seen_source_lines.add(source_line.id)
+            qty = line.get('qty')
+            if qty is None or qty <= 0:
+                raise serializers.ValidationError(f'Dòng {index}: số lượng trả phải lớn hơn 0.')
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if self.instance and self.instance.status != PurchaseReturnStatus.DRAFT:
+            raise serializers.ValidationError({'status': 'Chỉ được sửa phiếu trả hàng ở trạng thái Nháp.'})
+
+        source_receipt = attrs.get('source_receipt', getattr(self.instance, 'source_receipt', None))
+        if self.instance is None and not source_receipt:
+            raise serializers.ValidationError({'source_receipt': 'Phiếu trả hàng phải chọn phiếu nhập nguồn.'})
+        lines = attrs.get('lines')
+        if lines is not None:
+            if not source_receipt:
+                raise serializers.ValidationError({'source_receipt': 'Phiếu trả hàng phải chọn phiếu nhập nguồn.'})
+            if source_receipt.status != 'POSTED':
+                raise serializers.ValidationError({'source_receipt': 'Chỉ được trả hàng từ phiếu nhập đã ghi sổ.'})
+            supplier = attrs.get('supplier', getattr(self.instance, 'supplier', None))
+            if supplier and source_receipt.purchase_order.supplier_id != supplier.id:
+                raise serializers.ValidationError({'supplier': 'Nhà cung cấp phải trùng với phiếu nhập nguồn.'})
+            for index, line in enumerate(lines, start=1):
+                source_line = line.get('source_receipt_line')
+                if source_line.receipt_id != source_receipt.id:
+                    raise serializers.ValidationError({'lines': f'Dòng {index}: dòng phiếu nhập không thuộc phiếu nhập nguồn.'})
+                remaining_qty = get_remaining_returnable_qty(
+                    source_line,
+                    exclude_return_id=getattr(self.instance, 'id', None),
+                )
+                if line.get('qty') > remaining_qty:
+                    raise serializers.ValidationError({'lines': f'Dòng {index}: chỉ còn {remaining_qty} có thể trả.'})
+        return attrs
+
     def create(self, validated_data):
         lines_data = validated_data.pop('lines', [])
         return_date = validated_data.get('return_date')
         if not return_date:
             return_date = date.today()
         validated_data['code'] = f"RET-{return_date.strftime('%Y%m%d')}-{timezone.now().strftime('%H%M%S%f')}"
+        source_receipt = validated_data.get('source_receipt')
+        if source_receipt:
+            validated_data['purchase_order'] = source_receipt.purchase_order
+            validated_data['supplier'] = source_receipt.purchase_order.supplier
         with transaction.atomic():
             ret = PurchaseReturn.objects.create(**validated_data)
-            for i, line_data in enumerate(lines_data, start=1):
-                line_data['line_number'] = line_data.get('line_number') or i
-                line_data['purchase_return'] = ret
-                PurchaseReturnLine.objects.create(**line_data)
+            self._replace_lines(ret, lines_data)
+            recalc_purchase_return_totals(ret)
         return ret
 
     def update(self, instance, validated_data):
+        if instance.status != PurchaseReturnStatus.DRAFT:
+            raise serializers.ValidationError({'status': 'Chỉ được sửa phiếu trả hàng ở trạng thái Nháp.'})
         lines_data = validated_data.pop('lines', None)
+        source_receipt = validated_data.get('source_receipt', instance.source_receipt)
+        if source_receipt:
+            validated_data['purchase_order'] = source_receipt.purchase_order
+            validated_data['supplier'] = source_receipt.purchase_order.supplier
         with transaction.atomic():
             for k, v in validated_data.items():
                 setattr(instance, k, v)
             instance.save()
             if lines_data is not None:
                 instance.lines.all().delete()
-                for i, line_data in enumerate(lines_data, start=1):
-                    line_data['line_number'] = line_data.get('line_number') or i
-                    line_data['purchase_return'] = instance
-                    PurchaseReturnLine.objects.create(**line_data)
+                self._replace_lines(instance, lines_data)
+            recalc_purchase_return_totals(instance)
         return instance
+
+    def _replace_lines(self, purchase_return, lines_data):
+        for index, line_data in enumerate(lines_data, start=1):
+            line_data = dict(line_data)
+            source_line = line_data.get('source_receipt_line')
+            line_data['line_number'] = line_data.get('line_number') or index
+            line_data['purchase_return'] = purchase_return
+            if source_line:
+                line_data['product'] = source_line.product
+                line_data['unit_price'] = source_line.unit_cost
+                line_data['tax_pct'] = Decimal('0')
+            PurchaseReturnLine.objects.create(**line_data)

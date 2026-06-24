@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import dayjs from 'dayjs';
 import { Alert, Button, Card, Input, Modal, Select, Space, Statistic, Table, Tag, Typography, message, Skeleton } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, EyeOutlined, PlusOutlined, DownloadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EyeOutlined, PlusOutlined, DownloadOutlined, UndoOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { purchasingApi } from '../../api/purchasing';
 import type { PurchaseApprovalHistoryItem, PurchaseReturn, PurchaseReturnStatus } from '../../types/purchasing';
@@ -37,6 +37,7 @@ const STATUS_LABELS: Record<PurchaseReturnStatus, string> = {
   SUBMITTED: 'Chờ duyệt',
   APPROVED: 'Đã duyệt',
   POSTED: 'Đã vào sổ',
+  REVERSED: 'Đã đảo',
   CANCELLED: 'Đã hủy',
 };
 
@@ -45,6 +46,7 @@ const STATUS_COLORS: Record<PurchaseReturnStatus, string> = {
   SUBMITTED: 'processing',
   APPROVED: 'success',
   POSTED: 'cyan',
+  REVERSED: 'purple',
   CANCELLED: 'magenta',
 };
 const NEXT_STATE_LABELS: Record<string, string> = {
@@ -52,6 +54,7 @@ const NEXT_STATE_LABELS: Record<string, string> = {
   SUBMITTED: 'Chờ duyệt',
   APPROVED: 'Đã duyệt',
   POSTED: 'Đã vào sổ',
+  REVERSED: 'Đã đảo',
   CANCELLED: 'Đã hủy',
 };
 
@@ -87,7 +90,7 @@ function matchesPurchaseReturnLane(
     case 'READY_TO_POST':
       return row.status === 'APPROVED';
     case 'POSTED_CLOSED':
-      return row.status === 'POSTED';
+      return row.status === 'POSTED' || row.status === 'REVERSED';
     case 'HIGH_VALUE':
       return total > 0 && total >= highValueThreshold;
     default:
@@ -125,7 +128,7 @@ export default function PurchaseReturnList() {
         const filterRecord = filters as Record<string, unknown>;
         const statusValue = typeof filterRecord.status === 'string' ? filterRecord.status : '';
         const laneFilterValue = typeof filterRecord.laneFilter === 'string' ? filterRecord.laneFilter : 'ALL';
-        if (statusValue && !['DRAFT', 'SUBMITTED', 'APPROVED', 'POSTED', 'CANCELLED'].includes(statusValue)) {
+        if (statusValue && !['DRAFT', 'SUBMITTED', 'APPROVED', 'POSTED', 'REVERSED', 'CANCELLED'].includes(statusValue)) {
           return null;
         }
         return {
@@ -248,17 +251,30 @@ export default function PurchaseReturnList() {
     onError: (error) => messageApi.error(getToastMessage(error)),
   });
 
+  const reverseMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: number; reason: string }) => purchasingApi.reversePurchaseReturn(id, reason),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['purchasing-returns'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchasing-return'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchasing-return-lifecycle-history'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchasing-return-next-states'] });
+      messageApi.success('Đã đảo phiếu trả');
+    },
+    onError: (error) => messageApi.error(getToastMessage(error)),
+  });
+
   const rows = useMemo(() => returnsQuery.data?.results ?? [], [returnsQuery.data?.results]);
   const summary = useMemo(() => {
     const draftCount = rows.filter((row) => row.status === 'DRAFT').length;
     const submittedCount = rows.filter((row) => row.status === 'SUBMITTED').length;
     const approvedCount = rows.filter((row) => row.status === 'APPROVED').length;
     const postedCount = rows.filter((row) => row.status === 'POSTED').length;
+    const reversedCount = rows.filter((row) => row.status === 'REVERSED').length;
     const cancelledCount = rows.filter((row) => row.status === 'CANCELLED').length;
     const totalValue = rows.reduce((acc, row) => acc + Number(row.total ?? 0), 0);
     const highValueThreshold = rows.length ? totalValue / rows.length : 0;
     const highValueCount = rows.filter((row) => Number(row.total ?? 0) > 0 && Number(row.total ?? 0) >= highValueThreshold).length;
-    return { draftCount, submittedCount, approvedCount, postedCount, cancelledCount, totalValue, highValueThreshold, highValueCount };
+    return { draftCount, submittedCount, approvedCount, postedCount, reversedCount, postedClosedCount: postedCount + reversedCount, cancelledCount, totalValue, highValueThreshold, highValueCount };
   }, [rows]);
   const visibleRows = useMemo(
     () => rows.filter((row) => matchesPurchaseReturnLane(row, laneFilter, summary.highValueThreshold)),
@@ -270,10 +286,10 @@ export default function PurchaseReturnList() {
       { value: 'DRAFT_REVIEW' as const, label: LANE_LABELS.DRAFT_REVIEW, count: summary.draftCount },
       { value: 'PENDING_APPROVAL' as const, label: LANE_LABELS.PENDING_APPROVAL, count: summary.submittedCount },
       { value: 'READY_TO_POST' as const, label: LANE_LABELS.READY_TO_POST, count: summary.approvedCount },
-      { value: 'POSTED_CLOSED' as const, label: LANE_LABELS.POSTED_CLOSED, count: summary.postedCount },
+      { value: 'POSTED_CLOSED' as const, label: LANE_LABELS.POSTED_CLOSED, count: summary.postedClosedCount },
       { value: 'HIGH_VALUE' as const, label: LANE_LABELS.HIGH_VALUE, count: summary.highValueCount },
     ],
-    [rows.length, summary.approvedCount, summary.draftCount, summary.highValueCount, summary.postedCount, summary.submittedCount],
+    [rows.length, summary.approvedCount, summary.draftCount, summary.highValueCount, summary.postedClosedCount, summary.submittedCount],
   );
   const activeFilterTags = useMemo(() => {
     const tags: string[] = [];
@@ -418,6 +434,32 @@ export default function PurchaseReturnList() {
     setPage(1);
   };
 
+  const confirmReverseReturn = (row: PurchaseReturn) => {
+    let reason = '';
+    Modal.confirm({
+      title: `Đảo phiếu trả ${row.code}`,
+      content: (
+        <Input.TextArea
+          rows={3}
+          placeholder="Nhập lý do đảo phiếu trả"
+          onChange={(event) => {
+            reason = event.target.value;
+          }}
+        />
+      ),
+      okText: 'Đảo phiếu',
+      cancelText: 'Hủy',
+      onOk: () => {
+        const normalizedReason = reason.trim();
+        if (!normalizedReason) {
+          messageApi.error('Vui lòng nhập lý do đảo phiếu trả');
+          return Promise.reject();
+        }
+        return reverseMutation.mutateAsync({ id: row.id, reason: normalizedReason });
+      },
+    });
+  };
+
   const columns: ColumnsType<PurchaseReturn> = [
     { title: 'Mã trả', dataIndex: 'code', width: 150, key: 'code' },
     { title: 'Ngày trả', dataIndex: 'return_date', width: 120, key: 'return_date' },
@@ -495,6 +537,15 @@ export default function PurchaseReturnList() {
             onClick={() => postMutation.mutate(row.id)}
           >
             Post
+          </Button>
+          <Button
+            data-testid={`purchase-return-reverse-${row.id}`}
+            size="small"
+            icon={<UndoOutlined />}
+            disabled={!canManage || row.status !== 'POSTED'}
+            onClick={() => confirmReverseReturn(row)}
+          >
+            Đảo
           </Button>
         </Space>
       ),
@@ -720,12 +771,21 @@ export default function PurchaseReturnList() {
             </div>
           ) : detailQuery.data ? (
             <div data-testid="purchase-return-detail-panel" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {detailQuery.data.legacy_source_warning ? (
+                <Alert showIcon type="warning" message={detailQuery.data.legacy_source_warning} />
+              ) : null}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div>
                   <strong>Ngày trả:</strong> {detailQuery.data.return_date}
                 </div>
                 <div>
                   <strong>NCC:</strong> {detailQuery.data.supplier_name}
+                </div>
+                <div>
+                  <strong>Phiếu nhập nguồn:</strong> {detailQuery.data.source_receipt_code || '-'}
+                </div>
+                <div>
+                  <strong>Đơn mua:</strong> {detailQuery.data.purchase_order_code || '-'}
                 </div>
                 <div>
                   <strong>Lý do:</strong> {detailQuery.data.return_reason}
@@ -739,6 +799,11 @@ export default function PurchaseReturnList() {
                 <div style={{ gridColumn: '1 / -1' }}>
                   <strong>Ghi chú:</strong> {detailQuery.data.return_notes}
                 </div>
+                {detailQuery.data.reversal_reason ? (
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <strong>Lý do đảo:</strong> {detailQuery.data.reversal_reason}
+                  </div>
+                ) : null}
               </div>
 
               <Card size="small" title="Bước kế tiếp">
@@ -837,8 +902,12 @@ export default function PurchaseReturnList() {
                   style={{ marginTop: 0 }}
                   rowKey="id"
                   columns={[
+                    { title: 'Dòng nhập', dataIndex: 'source_receipt_line_number', width: 100 },
                     { title: 'Sản phẩm', dataIndex: 'product_name', width: 200 },
                     { title: 'Mã', dataIndex: 'product_code', width: 100 },
+                    { title: 'Đã nhập', dataIndex: 'received_qty', width: 100 },
+                    { title: 'Đã trả', dataIndex: 'posted_returned_qty', width: 100 },
+                    { title: 'Còn trả', dataIndex: 'remaining_returnable_qty', width: 100 },
                     { title: 'Số lượng', dataIndex: 'qty', width: 100 },
                     { title: 'Đơn giá', dataIndex: 'unit_price', width: 120, render: (v) => Number(v).toLocaleString() },
                   ]}

@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.db import models
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from unidecode import unidecode
 
 
@@ -742,6 +742,22 @@ class PayableStatus:
     ]
 
 
+class PayableAdjustmentDirection:
+    CREDIT = 'CREDIT'
+    DEBIT = 'DEBIT'
+    CHOICES = [
+        (CREDIT, 'Giảm công nợ'),
+        (DEBIT, 'Hoàn nhập giảm công nợ'),
+    ]
+
+
+class PayableAdjustmentStatus:
+    POSTED = 'POSTED'
+    CHOICES = [
+        (POSTED, 'Đã ghi sổ'),
+    ]
+
+
 class ReceivableDocument(SearchTextModelMixin):
     code = models.CharField(max_length=30, unique=True, verbose_name='Mã phải thu')
     source_sales_order = models.OneToOneField(
@@ -1002,8 +1018,37 @@ class PayableDocument(SearchTextModelMixin):
         return self.code
 
     @property
+    def adjustment_credit_amount(self):
+        if not self.pk:
+            return Decimal('0')
+        total = self.adjustments.filter(
+            status=PayableAdjustmentStatus.POSTED,
+            direction=PayableAdjustmentDirection.CREDIT,
+        ).aggregate(total=Sum('amount')).get('total') or Decimal('0')
+        return Decimal(str(total)).quantize(Decimal('0.01'))
+
+    @property
+    def adjustment_debit_amount(self):
+        if not self.pk:
+            return Decimal('0')
+        total = self.adjustments.filter(
+            status=PayableAdjustmentStatus.POSTED,
+            direction=PayableAdjustmentDirection.DEBIT,
+        ).aggregate(total=Sum('amount')).get('total') or Decimal('0')
+        return Decimal(str(total)).quantize(Decimal('0.01'))
+
+    @property
+    def adjusted_total_amount(self):
+        total = (
+            Decimal(str(self.total_amount or 0))
+            - self.adjustment_credit_amount
+            + self.adjustment_debit_amount
+        ).quantize(Decimal('0.01'))
+        return total if total > 0 else Decimal('0')
+
+    @property
     def remaining_amount(self):
-        remaining = Decimal(str(self.total_amount or 0)) - Decimal(str(self.settled_amount or 0))
+        remaining = self.adjusted_total_amount - Decimal(str(self.settled_amount or 0))
         return remaining if remaining > 0 else Decimal('0')
 
     def _search_values(self):
@@ -1023,6 +1068,9 @@ class PayableDocument(SearchTextModelMixin):
             self.vendor_invoice_no,
             self.vendor_invoice_date.isoformat() if self.vendor_invoice_date else '',
             str(self.total_amount or 0),
+            str(self.adjusted_total_amount),
+            str(self.adjustment_credit_amount),
+            str(self.adjustment_debit_amount),
             str(self.settled_amount or 0),
             str(self.remaining_amount),
             dict(PayableStatus.CHOICES).get(self.status, self.status),
@@ -1124,7 +1172,135 @@ class PayableSettlement(SearchTextModelMixin):
         self._build_search_text()
         super().save(*args, **kwargs)
 
-    
+
+class PayableAdjustment(SearchTextModelMixin):
+    payable = models.ForeignKey(
+        PayableDocument,
+        on_delete=models.PROTECT,
+        related_name='adjustments',
+        verbose_name='Chứng từ phải trả',
+    )
+    source_purchase_receipt = models.ForeignKey(
+        'purchasing.PurchaseReceipt',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='payable_adjustments',
+        verbose_name='Phiếu nhập nguồn',
+    )
+    source_return = models.ForeignKey(
+        'purchasing.PurchaseReturn',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='payable_adjustments',
+        verbose_name='Phiếu trả hàng nguồn',
+    )
+    reversal_of = models.OneToOneField(
+        'self',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='reversal_adjustment',
+        verbose_name='Bút toán hoàn nhập',
+    )
+    direction = models.CharField(
+        max_length=10,
+        choices=PayableAdjustmentDirection.CHOICES,
+        verbose_name='Chiều điều chỉnh',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=PayableAdjustmentStatus.CHOICES,
+        default=PayableAdjustmentStatus.POSTED,
+        verbose_name='Trạng thái',
+    )
+    amount = models.DecimalField(max_digits=18, decimal_places=2, verbose_name='Số tiền')
+    currency = models.CharField(max_length=3, default='VND', verbose_name='Tiền tệ')
+    exchange_rate = models.DecimalField(max_digits=18, decimal_places=6, default=Decimal('1'), verbose_name='Tỷ giá')
+    idempotency_key = models.CharField(max_length=120, unique=True, verbose_name='Khóa chống ghi trùng')
+    reason = models.CharField(max_length=255, blank=True, default='', verbose_name='Lý do')
+    note = models.TextField(blank=True, default='', verbose_name='Ghi chú')
+    posted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    posted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_payable_adjustments_posted',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finance_payable_adjustments_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'finance_payable_adjustments'
+        ordering = ['-posted_at', '-id']
+        indexes = [
+            models.Index(fields=['payable', 'status']),
+            models.Index(fields=['source_purchase_receipt']),
+            models.Index(fields=['source_return']),
+            models.Index(fields=['direction']),
+            models.Index(fields=['posted_at']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(amount__gt=0),
+                name='payable_adjustment_amount_positive',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        direction=PayableAdjustmentDirection.CREDIT,
+                        source_return__isnull=False,
+                        reversal_of__isnull=True,
+                    )
+                    | Q(
+                        direction=PayableAdjustmentDirection.DEBIT,
+                        source_return__isnull=True,
+                        reversal_of__isnull=False,
+                    )
+                ),
+                name='payable_adjustment_return_direction_ck',
+            ),
+            models.UniqueConstraint(
+                fields=['source_return'],
+                condition=Q(
+                    direction=PayableAdjustmentDirection.CREDIT,
+                    source_return__isnull=False,
+                ),
+                name='one_credit_adjustment_per_purchase_return',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.direction}-{self.payable_id}-{self.amount}'
+
+    def _search_values(self):
+        return [
+            self.payable.code if self.payable_id else '',
+            getattr(getattr(self, 'source_purchase_receipt', None), 'code', ''),
+            getattr(getattr(self, 'source_return', None), 'code', ''),
+            self.direction,
+            self.status,
+            str(self.amount or 0),
+            self.currency,
+            self.reason,
+            self.note,
+        ]
+
+    def save(self, *args, **kwargs):
+        self._build_search_text()
+        kwargs['update_fields'] = self._merge_update_fields(kwargs.get('update_fields'))
+        super().save(*args, **kwargs)
+
+
 # ============== GENERAL LEDGER ==============
 class GeneralLedgerAccount(models.Model):
     """Chart of Accounts"""

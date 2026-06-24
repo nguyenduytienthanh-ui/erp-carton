@@ -860,12 +860,14 @@ class PurchaseReturnStatus:
     SUBMITTED = 'SUBMITTED'
     APPROVED = 'APPROVED'
     POSTED = 'POSTED'
+    REVERSED = 'REVERSED'
     CANCELLED = 'CANCELLED'
     CHOICES = [
         (DRAFT, 'Nháp'),
         (SUBMITTED, 'Chờ duyệt'),
         (APPROVED, 'Đã duyệt'),
         (POSTED, 'Đã vào sổ'),
+        (REVERSED, 'Đã đảo'),
         (CANCELLED, 'Đã hủy'),
     ]
 
@@ -889,6 +891,13 @@ class PurchaseReturn(SearchTextModelMixin):
         null=True,
         blank=True,
         related_name='returns',
+    )
+    source_receipt = models.ForeignKey(
+        PurchaseReceipt,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='purchase_returns',
     )
     supplier = models.ForeignKey(
         Supplier,
@@ -933,6 +942,14 @@ class PurchaseReturn(SearchTextModelMixin):
         related_name='purchase_returns_posted',
     )
     posted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    # Reversal
+    reversed_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='purchase_returns_reversed',
+    )
+    reversed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    reversal_reason = models.TextField(blank=True, default='')
     
     # Cancellation
     cancelled_by = models.ForeignKey(
@@ -962,6 +979,7 @@ class PurchaseReturn(SearchTextModelMixin):
             models.Index(fields=['return_date']),
             models.Index(fields=['status']),
             models.Index(fields=['supplier']),
+            models.Index(fields=['source_receipt']),
         ]
         verbose_name = 'Purchase Return'
         verbose_name_plural = 'Purchase Returns'
@@ -989,9 +1007,30 @@ class PurchaseReturnLine(models.Model):
         null=True,
         related_name='purchase_return_lines',
     )
+    source_receipt_line = models.ForeignKey(
+        PurchaseReceiptLine,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='return_lines',
+    )
     qty = models.DecimalField(max_digits=15, decimal_places=4, validators=[MinValueValidator(Decimal('0.0001'))])
     unit_price = models.DecimalField(max_digits=18, decimal_places=2)
     tax_pct = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'), validators=[MinValueValidator(0), MaxValueValidator(100)])
+    inventory_transaction = models.ForeignKey(
+        'inventory.InventoryTransaction',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='purchase_return_issue_lines',
+    )
+    reversal_inventory_transaction = models.ForeignKey(
+        'inventory.InventoryTransaction',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='purchase_return_reversal_lines',
+    )
     
     note = models.CharField(max_length=255, blank=True)
 
@@ -999,6 +1038,11 @@ class PurchaseReturnLine(models.Model):
         db_table = 'purchasing_return_lines'
         ordering = ['purchase_return_id', 'line_number']
         unique_together = [['purchase_return', 'line_number']]
+        indexes = [
+            models.Index(fields=['source_receipt_line']),
+            models.Index(fields=['inventory_transaction']),
+            models.Index(fields=['reversal_inventory_transaction']),
+        ]
         verbose_name = 'Purchase Return Line'
         verbose_name_plural = 'Purchase Return Lines'
 

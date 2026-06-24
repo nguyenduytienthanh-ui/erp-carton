@@ -10,6 +10,7 @@ from .models import (
     BankReconciliation,
     CashAccount,
     CashTransaction,
+    PayableAdjustment,
     PayableDocument,
     PayableSettlement,
     ReceivableDocument,
@@ -494,14 +495,53 @@ class PayableSettlementSerializer(serializers.ModelSerializer):
         return snapshot.get('name') or snapshot.get('company_name')
 
 
+class PayableAdjustmentSerializer(serializers.ModelSerializer):
+    payable_code = serializers.CharField(source='payable.code', read_only=True)
+    source_purchase_receipt_code = serializers.CharField(source='source_purchase_receipt.code', read_only=True)
+    source_return_code = serializers.CharField(source='source_return.code', read_only=True)
+    reversal_of_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = PayableAdjustment
+        fields = [
+            'id',
+            'payable',
+            'payable_code',
+            'source_purchase_receipt',
+            'source_purchase_receipt_code',
+            'source_return',
+            'source_return_code',
+            'reversal_of',
+            'reversal_of_id',
+            'direction',
+            'status',
+            'amount',
+            'currency',
+            'exchange_rate',
+            'idempotency_key',
+            'reason',
+            'note',
+            'posted_at',
+            'posted_by',
+            'created_by',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
+
+
 class PayableDocumentSerializer(serializers.ModelSerializer):
     source_purchase_receipt_code = serializers.CharField(source='source_purchase_receipt.code', read_only=True)
     source_purchase_order_code = serializers.SerializerMethodField()
     supplier_name = serializers.SerializerMethodField()
     supplier_code = serializers.SerializerMethodField()
+    adjusted_total_amount = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
+    adjustment_credit_amount = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
+    adjustment_debit_amount = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
     remaining_amount = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
     days_overdue = serializers.SerializerMethodField()
     settlements = PayableSettlementSerializer(many=True, read_only=True)
+    adjustments = PayableAdjustmentSerializer(many=True, read_only=True)
 
     class Meta:
         model = PayableDocument
@@ -525,6 +565,9 @@ class PayableDocumentSerializer(serializers.ModelSerializer):
             'subtotal_amount',
             'tax_amount',
             'total_amount',
+            'adjusted_total_amount',
+            'adjustment_credit_amount',
+            'adjustment_debit_amount',
             'settled_amount',
             'remaining_amount',
             'days_overdue',
@@ -535,6 +578,7 @@ class PayableDocumentSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
             'settlements',
+            'adjustments',
         ]
         read_only_fields = fields
 

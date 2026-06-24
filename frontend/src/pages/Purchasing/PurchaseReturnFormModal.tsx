@@ -1,14 +1,14 @@
 import { useEffect } from 'react';
-import { Button, Form, Input, InputNumber, Modal, Select, Table, message } from 'antd';
+import { Alert, Button, Form, Input, InputNumber, Modal, Select, Table, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { productsApi } from '../../api/products';
 import { purchasingApi, suppliersApi } from '../../api/purchasing';
 import { getToastMessage } from '../../shared/apiError';
-import type { Product } from '../../types/product';
-import type { PurchaseReturn, Supplier } from '../../types/purchasing';
+import type { PurchaseReceipt, PurchaseReceiptReturnableLine, PurchaseReturn, Supplier } from '../../types/purchasing';
+
+const { Text } = Typography;
 
 interface PurchaseReturnFormModalProps {
   open: boolean;
@@ -19,16 +19,16 @@ interface PurchaseReturnFormModalProps {
 
 type PurchaseReturnLineFormValue = {
   line_number: number;
-  product?: number;
+  source_receipt_line?: number;
   qty: number;
-  unit_price: number;
-  tax_pct: number;
   note?: string;
 };
 
 type PurchaseReturnFormValues = {
   return_date: string;
   supplier?: number;
+  source_receipt?: number;
+  reference?: string;
   return_reason: string;
   return_notes: string;
   lines: PurchaseReturnLineFormValue[];
@@ -36,26 +36,32 @@ type PurchaseReturnFormValues = {
 
 type PurchaseReturnPayload = {
   return_date: string;
-  supplier: number;
+  supplier?: number;
+  source_receipt: number;
+  reference?: string;
   return_reason: string;
   return_notes: string;
   lines: Array<{
     line_number: number;
-    product?: number;
+    source_receipt_line: number;
     qty: string;
-    unit_price: string;
-    tax_pct: string;
     note?: string;
   }>;
 };
 
-function createEmptyLine(index: number): PurchaseReturnLineFormValue {
+const RETURN_REASON_OPTIONS = [
+  { value: 'DEFECT', label: 'Lỗi' },
+  { value: 'WRONG_QTY', label: 'Sai số lượng' },
+  { value: 'WRONG_ITEM', label: 'Sai hàng' },
+  { value: 'DAMAGE', label: 'Hỏng hóc' },
+  { value: 'OTHER', label: 'Khác' },
+];
+
+function createEmptyLine(index: number, sourceLine?: PurchaseReceiptReturnableLine): PurchaseReturnLineFormValue {
   return {
     line_number: index + 1,
-    product: undefined,
-    qty: 1,
-    unit_price: 0,
-    tax_pct: 0,
+    source_receipt_line: sourceLine?.id,
+    qty: sourceLine ? Math.min(Number(sourceLine.remaining_returnable_qty || 0), 1) : 1,
     note: '',
   };
 }
@@ -65,21 +71,23 @@ function buildInitialValues(data?: PurchaseReturn | null): PurchaseReturnFormVal
     ? {
         return_date: data.return_date,
         supplier: data.supplier,
-        return_reason: data.return_reason,
+        source_receipt: data.source_receipt ?? undefined,
+        reference: data.reference || '',
+        return_reason: data.return_reason || 'OTHER',
         return_notes: data.return_notes,
         lines: (data.lines ?? []).map((line, index) => ({
           line_number: line.line_number ?? index + 1,
-          product: line.product,
+          source_receipt_line: line.source_receipt_line ?? undefined,
           qty: Number(line.qty ?? 0),
-          unit_price: Number(line.unit_price ?? 0),
-          tax_pct: Number(line.tax_pct ?? 0),
           note: line.note || '',
         })),
       }
     : {
         return_date: '',
         supplier: undefined,
-        return_reason: '',
+        source_receipt: undefined,
+        reference: '',
+        return_reason: 'OTHER',
         return_notes: '',
         lines: [],
       };
@@ -94,6 +102,8 @@ export default function PurchaseReturnFormModal({
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
   const [form] = Form.useForm<PurchaseReturnFormValues>();
+  const supplierId = Form.useWatch('supplier', form);
+  const sourceReceiptId = Form.useWatch('source_receipt', form);
   const lines = Form.useWatch('lines', form) ?? [];
 
   useEffect(() => {
@@ -107,9 +117,20 @@ export default function PurchaseReturnFormModal({
     queryFn: () => suppliersApi.getSuppliers({ is_active: 'true', page_size: 1000 }),
   });
 
-  const productsQuery = useQuery({
-    queryKey: ['products-active'],
-    queryFn: () => productsApi.getProducts({ is_active: 'true', page_size: 10000 }),
+  const receiptsQuery = useQuery({
+    queryKey: ['purchase-return-source-receipts', supplierId],
+    queryFn: () => purchasingApi.getReceipts({
+      status: 'POSTED',
+      supplier: supplierId,
+      page_size: 500,
+    }),
+    enabled: open && !!supplierId,
+  });
+
+  const returnableLinesQuery = useQuery({
+    queryKey: ['purchase-return-returnable-lines', sourceReceiptId],
+    queryFn: () => purchasingApi.getReceiptReturnableLines(sourceReceiptId!),
+    enabled: open && !!sourceReceiptId,
   });
 
   const createMutation = useMutation({
@@ -128,6 +149,7 @@ export default function PurchaseReturnFormModal({
     mutationFn: (payload: PurchaseReturnPayload) => purchasingApi.updatePurchaseReturn(data!.id, payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['purchasing-returns'] });
+      await queryClient.invalidateQueries({ queryKey: ['purchasing-return', data?.id] });
       messageApi.success('Đã cập nhật phiếu trả');
       form.resetFields();
       onClose();
@@ -149,31 +171,30 @@ export default function PurchaseReturnFormModal({
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-
-      if (!values.supplier) {
-        messageApi.error('Vui lòng chọn nhà cung cấp');
+      if (!values.source_receipt) {
+        messageApi.error('Vui lòng chọn phiếu nhập nguồn');
         return;
       }
 
       const payload: PurchaseReturnPayload = {
         return_date: values.return_date,
         supplier: values.supplier,
+        source_receipt: values.source_receipt,
+        reference: values.reference || '',
         return_reason: values.return_reason,
-        return_notes: values.return_notes,
+        return_notes: values.return_notes || '',
         lines: (values.lines || [])
-          .filter((line) => line.product && Number(line.qty) > 0)
+          .filter((line) => line.source_receipt_line && Number(line.qty) > 0)
           .map((line, index) => ({
             line_number: index + 1,
-            product: line.product,
+            source_receipt_line: line.source_receipt_line!,
             qty: String(line.qty),
-            unit_price: String(line.unit_price),
-            tax_pct: String(line.tax_pct),
             note: line.note || '',
           })),
       };
 
       if (payload.lines.length === 0) {
-        messageApi.error('Vui lòng thêm ít nhất một dòng trả hàng hợp lệ');
+        messageApi.error('Vui lòng thêm ít nhất một dòng phiếu nhập để trả hàng');
         return;
       }
 
@@ -195,7 +216,7 @@ export default function PurchaseReturnFormModal({
         title={data ? `Chỉnh sửa phiếu trả - ${data.code}` : 'Tạo phiếu trả mới'}
         open={open}
         onCancel={onClose}
-        width={1000}
+        width={1100}
         okText={data ? 'Lưu thay đổi' : 'Tạo phiếu trả'}
         cancelText="Hủy"
         confirmLoading={createMutation.isPending || updateMutation.isPending}
@@ -203,6 +224,10 @@ export default function PurchaseReturnFormModal({
         destroyOnClose
       >
         <Form form={form} layout="vertical" initialValues={buildInitialValues(data)}>
+          {data?.legacy_source_warning ? (
+            <Alert showIcon type="warning" message={data.legacy_source_warning} style={{ marginBottom: 16 }} />
+          ) : null}
+
           <Form.Item
             label="Ngày trả"
             name="return_date"
@@ -225,15 +250,43 @@ export default function PurchaseReturnFormModal({
               loading={suppliersQuery.isLoading}
               showSearch
               optionFilterProp="label"
+              onChange={() => {
+                form.setFieldsValue({ source_receipt: undefined, lines: [] });
+              }}
             />
+          </Form.Item>
+
+          <Form.Item
+            label="Phiếu nhập nguồn"
+            name="source_receipt"
+            rules={[{ required: true, message: 'Vui lòng chọn phiếu nhập nguồn' }]}
+          >
+            <Select
+              placeholder="Chọn phiếu nhập đã ghi sổ"
+              loading={receiptsQuery.isLoading}
+              disabled={!supplierId}
+              showSearch
+              optionFilterProp="label"
+              onChange={() => {
+                form.setFieldValue('lines', []);
+              }}
+              options={(receiptsQuery.data?.results ?? []).map((receipt: PurchaseReceipt) => ({
+                value: receipt.id,
+                label: `${receipt.code} - ${receipt.receipt_date} - ${Number(receipt.total_amount || 0).toLocaleString('vi-VN')} đ`,
+              }))}
+            />
+          </Form.Item>
+
+          <Form.Item label="Tham chiếu" name="reference">
+            <Input placeholder="Số chứng từ NCC hoặc ghi chú tham chiếu" />
           </Form.Item>
 
           <Form.Item
             label="Lý do trả"
             name="return_reason"
-            rules={[{ required: true, message: 'Vui lòng nhập lý do trả hàng' }]}
+            rules={[{ required: true, message: 'Vui lòng chọn lý do trả hàng' }]}
           >
-            <Input.TextArea data-testid="purchase-return-form-reason" rows={2} placeholder="Nhập lý do trả hàng" />
+            <Select options={RETURN_REASON_OPTIONS} />
           </Form.Item>
 
           <Form.Item label="Ghi chú" name="return_notes">
@@ -244,7 +297,8 @@ export default function PurchaseReturnFormModal({
             <NestedLinesTable
               lines={lines}
               onChange={setLines}
-              products={productsQuery.data?.results ?? []}
+              returnableLines={returnableLinesQuery.data ?? []}
+              loading={returnableLinesQuery.isLoading}
             />
           </Form.Item>
         </Form>
@@ -256,14 +310,21 @@ export default function PurchaseReturnFormModal({
 function NestedLinesTable({
   lines,
   onChange,
-  products,
+  returnableLines,
+  loading,
 }: {
   lines: PurchaseReturnLineFormValue[];
   onChange: (lines: PurchaseReturnLineFormValue[]) => void;
-  products: Product[];
+  returnableLines: PurchaseReceiptReturnableLine[];
+  loading: boolean;
 }) {
+  const usedSourceLineIds = new Set(lines.map((line) => line.source_receipt_line).filter(Boolean));
+
   const addLine = () => {
-    onChange([...(lines ?? []), createEmptyLine(lines.length)]);
+    const nextSourceLine = returnableLines.find(
+      (line) => !usedSourceLineIds.has(line.id) && Number(line.remaining_returnable_qty || 0) > 0,
+    );
+    onChange([...(lines ?? []), createEmptyLine(lines.length, nextSourceLine)]);
   };
 
   const removeLine = (index: number) => {
@@ -286,17 +347,27 @@ function NestedLinesTable({
     onChange(nextLines);
   };
 
+  const findSourceLine = (id?: number) => returnableLines.find((line) => line.id === id);
+
   const columns: ColumnsType<PurchaseReturnLineFormValue> = [
     {
-      title: 'Sản phẩm',
-      dataIndex: 'product',
-      width: 260,
-      render: (_, __, index) => (
+      title: 'Dòng phiếu nhập',
+      dataIndex: 'source_receipt_line',
+      width: 320,
+      render: (_, record, index) => (
         <Select
-          value={lines[index]?.product}
-          onChange={(value) => updateLine(index, 'product', value)}
-          placeholder="Chọn SP"
-          options={products.map((product) => ({ value: product.id, label: `${product.code} - ${product.name}` }))}
+          value={record.source_receipt_line}
+          onChange={(value) => {
+            const sourceLine = findSourceLine(value);
+            updateLine(index, 'source_receipt_line', value);
+            updateLine(index, 'qty', sourceLine ? Math.min(Number(sourceLine.remaining_returnable_qty || 0), 1) : 1);
+          }}
+          placeholder="Chọn dòng phiếu nhập"
+          options={returnableLines.map((line) => ({
+            value: line.id,
+            disabled: usedSourceLineIds.has(line.id) && line.id !== record.source_receipt_line,
+            label: `#${line.line_number} - ${line.product_code || ''} ${line.product_name || ''}`,
+          }))}
           style={{ width: '100%' }}
           showSearch
           optionFilterProp="label"
@@ -304,52 +375,52 @@ function NestedLinesTable({
       ),
     },
     {
-      title: 'Số lượng',
+      title: 'Đã nhập',
+      width: 110,
+      render: (_, record) => <Text>{findSourceLine(record.source_receipt_line)?.quantity ?? '-'}</Text>,
+    },
+    {
+      title: 'Đã trả',
+      width: 110,
+      render: (_, record) => <Text>{findSourceLine(record.source_receipt_line)?.posted_returned_qty ?? '-'}</Text>,
+    },
+    {
+      title: 'Còn trả',
+      width: 110,
+      render: (_, record) => <Text strong>{findSourceLine(record.source_receipt_line)?.remaining_returnable_qty ?? '-'}</Text>,
+    },
+    {
+      title: 'Số lượng trả',
       dataIndex: 'qty',
-      width: 110,
-      render: (_, __, index) => (
-        <InputNumber
-          value={lines[index]?.qty}
-          onChange={(value) => updateLine(index, 'qty', Number(value ?? 0))}
-          min={0}
-          style={{ width: '100%' }}
-        />
-      ),
-    },
-    {
-      title: 'Đơn giá',
-      dataIndex: 'unit_price',
       width: 130,
-      render: (_, __, index) => (
-        <InputNumber
-          value={lines[index]?.unit_price}
-          onChange={(value) => updateLine(index, 'unit_price', Number(value ?? 0))}
-          min={0}
-          style={{ width: '100%' }}
-        />
-      ),
+      render: (_, record, index) => {
+        const sourceLine = findSourceLine(record.source_receipt_line);
+        return (
+          <InputNumber
+            value={record.qty}
+            onChange={(value) => updateLine(index, 'qty', Number(value ?? 0))}
+            min={0}
+            max={sourceLine ? Number(sourceLine.remaining_returnable_qty || 0) : undefined}
+            style={{ width: '100%' }}
+          />
+        );
+      },
     },
     {
-      title: 'Thuế %',
-      dataIndex: 'tax_pct',
-      width: 110,
-      render: (_, __, index) => (
-        <InputNumber
-          value={lines[index]?.tax_pct}
-          onChange={(value) => updateLine(index, 'tax_pct', Number(value ?? 0))}
-          min={0}
-          max={100}
-          style={{ width: '100%' }}
-        />
-      ),
+      title: 'Đơn giá nguồn',
+      width: 130,
+      render: (_, record) => {
+        const sourceLine = findSourceLine(record.source_receipt_line);
+        return sourceLine ? Number(sourceLine.unit_cost || 0).toLocaleString('vi-VN') : '-';
+      },
     },
     {
       title: 'Ghi chú',
       dataIndex: 'note',
       width: 180,
-      render: (_, __, index) => (
+      render: (_, record, index) => (
         <Input
-          value={lines[index]?.note}
+          value={record.note}
           onChange={(event) => updateLine(index, 'note', event.target.value)}
           placeholder="Ghi chú"
         />
@@ -367,14 +438,21 @@ function NestedLinesTable({
   return (
     <div>
       <Table
+        loading={loading}
         dataSource={lines}
         columns={columns}
         rowKey={(record, index) => `${record.line_number}-${index ?? 0}`}
         pagination={false}
         size="small"
-        locale={{ emptyText: 'Chưa có dòng trả hàng nào.' }}
+        locale={{ emptyText: 'Chọn phiếu nhập nguồn rồi thêm dòng trả hàng.' }}
+        scroll={{ x: 1100 }}
       />
-      <Button icon={<PlusOutlined />} onClick={addLine} style={{ marginTop: 8 }}>
+      <Button
+        icon={<PlusOutlined />}
+        onClick={addLine}
+        disabled={returnableLines.length === 0}
+        style={{ marginTop: 8 }}
+      >
         Thêm dòng
       </Button>
     </div>

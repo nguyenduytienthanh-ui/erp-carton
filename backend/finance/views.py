@@ -4345,6 +4345,7 @@ class PayableDocumentViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
             'source_purchase_receipt__purchase_order',
             'supplier',
         ).prefetch_related(
+            'adjustments',
             'settlements',
             'settlements__source_cash_account',
             'settlements__source_bank_account',
@@ -4380,11 +4381,16 @@ class PayableDocumentViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
         queryset = self.filter_queryset(self.get_queryset())
         today = timezone.localdate()
         open_qs = queryset.exclude(status=PayableStatus.CANCELLED)
-        total_amount = Decimal(str(open_qs.aggregate(total=Sum('total_amount')).get('total') or 0))
-        settled_amount = Decimal(str(open_qs.aggregate(total=Sum('settled_amount')).get('total') or 0))
+        open_documents = list(open_qs)
+        total_amount = sum((Decimal(str(doc.adjusted_total_amount or 0)) for doc in open_documents), Decimal('0'))
+        settled_amount = sum((Decimal(str(doc.settled_amount or 0)) for doc in open_documents), Decimal('0'))
         remaining_amount = total_amount - settled_amount
         overdue_qs = open_qs.filter(due_date__lt=today).exclude(status=PayableStatus.SETTLED)
-        overdue_amount = Decimal(str(overdue_qs.aggregate(total=Sum('total_amount')).get('total') or 0)) - Decimal(str(overdue_qs.aggregate(total=Sum('settled_amount')).get('total') or 0))
+        overdue_documents = list(overdue_qs)
+        overdue_amount = (
+            sum((Decimal(str(doc.adjusted_total_amount or 0)) for doc in overdue_documents), Decimal('0'))
+            - sum((Decimal(str(doc.settled_amount or 0)) for doc in overdue_documents), Decimal('0'))
+        )
         return Response({
             'count': queryset.count(),
             'open_count': int(queryset.filter(status=PayableStatus.OPEN).count()),
