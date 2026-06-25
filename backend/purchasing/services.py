@@ -272,7 +272,7 @@ def post_purchase_return(purchase_return, *, actor=None):
     with transaction.atomic():
         locked_return = (
             purchase_return.__class__.objects
-            .select_for_update()
+            .select_for_update(of=('self',))
             .select_related('supplier', 'purchase_order', 'source_receipt', 'source_receipt__purchase_order')
             .prefetch_related('lines', 'lines__source_receipt_line', 'lines__source_receipt_line__purchase_order_line')
             .get(pk=purchase_return.pk)
@@ -337,7 +337,7 @@ def reverse_purchase_return(purchase_return, *, actor=None, reason=''):
     with transaction.atomic():
         locked_return = (
             purchase_return.__class__.objects
-            .select_for_update()
+            .select_for_update(of=('self',))
             .select_related('supplier', 'purchase_order', 'source_receipt', 'source_receipt__purchase_order')
             .prefetch_related('lines', 'lines__source_receipt_line', 'lines__source_receipt_line__purchase_order_line')
             .get(pk=purchase_return.pk)

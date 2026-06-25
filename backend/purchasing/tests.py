@@ -1031,6 +1031,80 @@ class PurchasingWorkflowTests(APITestCase):
         receipt_tx = InventoryTransaction.objects.get(purchase_return_reversal_lines__purchase_return_id=return_id)
         self.assertEqual(receipt_tx.transaction_type, InventoryTransactionType.RECEIPT)
 
+    def test_purchase_receipt_cancel_is_blocked_when_return_exists(self):
+        _order, receipt, receipt_line = self._create_posted_purchase_receipt(qty='5', unit_cost='11800', reference='GRN-RET-CANCEL-BLOCK')
+
+        create_response = self.client.post('/api/purchasing/returns/', {
+            'return_date': timezone.localdate().isoformat(),
+            'source_receipt': receipt.id,
+            'reference': 'RET-BLOCK-RECEIPT-CANCEL',
+            'return_reason': 'OTHER',
+            'return_notes': 'Block receipt cancel after return',
+            'lines': [
+                {
+                    'source_receipt_line': receipt_line.id,
+                    'qty': '2',
+                }
+            ],
+        }, format='json')
+        self.assertEqual(create_response.status_code, 201, create_response.data)
+        return_id = create_response.data['id']
+
+        next_states = self.client.get(f'/api/purchasing/receipts/{receipt.id}/next_states/')
+        self.assertEqual(next_states.status_code, 200, next_states.data)
+        self.assertEqual(next_states.data['next_states'], [])
+
+        cancel_response = self.client.post(
+            f'/api/purchasing/receipts/{receipt.id}/cancel/',
+            {'reason': 'Khong duoc huy receipt da co return'},
+            format='json',
+        )
+        self.assertEqual(cancel_response.status_code, 400, cancel_response.data)
+        self.assertIn('phiếu trả hàng', str(cancel_response.data))
+        receipt.refresh_from_db()
+        self.assertEqual(receipt.status, 'POSTED')
+
+        self.client.post(f'/api/purchasing/returns/{return_id}/submit_return/', format='json')
+        self.client.post(f'/api/purchasing/returns/{return_id}/approve_return/', format='json')
+        post_response = self.client.post(f'/api/purchasing/returns/{return_id}/post_return/', format='json')
+        self.assertEqual(post_response.status_code, 200, post_response.data)
+        reverse_response = self.client.post(
+            f'/api/purchasing/returns/{return_id}/reverse_return/',
+            {'reason': 'Reverse but keep source receipt audit immutable'},
+            format='json',
+        )
+        self.assertEqual(reverse_response.status_code, 200, reverse_response.data)
+
+        cancel_after_reverse = self.client.post(
+            f'/api/purchasing/receipts/{receipt.id}/cancel/',
+            {'reason': 'Khong huy receipt sau return reversed'},
+            format='json',
+        )
+        self.assertEqual(cancel_after_reverse.status_code, 400, cancel_after_reverse.data)
+        receipt.refresh_from_db()
+        self.assertEqual(receipt.status, 'POSTED')
+
+    def test_legacy_purchase_return_without_source_is_readable_but_not_postable(self):
+        supplier = Supplier.objects.get(pk=self.supplier_id)
+        legacy_return = PurchaseReturn.objects.create(
+            code='RET-LEGACY-NO-SOURCE',
+            return_date=timezone.localdate(),
+            supplier=supplier,
+            return_reason='OTHER',
+            status='APPROVED',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        detail_response = self.client.get(f'/api/purchasing/returns/{legacy_return.id}/')
+        self.assertEqual(detail_response.status_code, 200, detail_response.data)
+        self.assertIsNone(detail_response.data['source_receipt'])
+        self.assertTrue(detail_response.data['legacy_source_warning'])
+
+        post_response = self.client.post(f'/api/purchasing/returns/{legacy_return.id}/post_return/', format='json')
+        self.assertEqual(post_response.status_code, 400, post_response.data)
+        self.assertIn('source_receipt', post_response.data)
+
     def test_purchase_return_rejects_missing_source_over_return_and_paid_payable(self):
         _order, receipt, receipt_line = self._create_posted_purchase_receipt(qty='3', unit_cost='10000', reference='GRN-RET-GUARD')
 

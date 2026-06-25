@@ -33,7 +33,7 @@ test('purchase return detail shows full lifecycle after workflow transitions', a
 
   await expect(page.getByTestId('purchase-return-detail-panel')).toBeVisible();
   await expect(page.getByTestId('purchase-return-next-states')).toContainText('Hiện tại: Đã vào sổ');
-  await expect(page.getByTestId('purchase-return-next-states')).toContainText('Không còn bước tiếp theo');
+  await expect(page.getByTestId('purchase-return-next-states')).toContainText('Đã đảo');
   await expect(page.getByTestId('purchase-return-approval-history')).toContainText('Đã duyệt');
   await expect(page.getByTestId('purchase-return-approval-history')).toContainText('Gửi duyệt');
   await expect(page.getByTestId('purchase-return-lifecycle-history')).toContainText('Đã vào sổ');

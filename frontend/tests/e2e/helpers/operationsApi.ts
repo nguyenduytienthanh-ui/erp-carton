@@ -75,6 +75,11 @@ type PurchaseReceiptSeed = {
   status: string;
   reference?: string;
   cancel_reason?: string;
+  lines: Array<{
+    id: number;
+    line_number: number;
+    quantity?: string;
+  }>;
 };
 
 type PurchaseOrderSeed = {
@@ -382,20 +387,21 @@ export async function createPurchaseReturnSeed(page: Page, token: string, key: s
   supplier: Supplier;
 }> {
   const receiptSeed = await createPurchaseReceiptSeed(page, token, `${key}rt`);
+  const receiptLine = receiptSeed.receipt.lines[0];
+  if (!receiptLine) {
+    throw new Error(`Purchase receipt seed ${receiptSeed.receipt.code} did not return receipt lines.`);
+  }
   const purchaseReturn = await apiPost<PurchaseReturnSeed>(page, token, '/purchasing/returns/', {
     return_date: formatDate(new Date()),
-    supplier: receiptSeed.supplier.id,
-    purchase_order: receiptSeed.order.id,
+    source_receipt: receiptSeed.receipt.id,
     reference: `PW-RET-${key}`,
     return_reason: 'OTHER',
     return_notes: `Phiếu trả hàng seed ${key}`,
     lines: [
       {
         line_number: 1,
-        product: receiptSeed.product.id,
+        source_receipt_line: receiptLine.id,
         qty: '2',
-        unit_price: '11800',
-        tax_pct: '0',
         note: `Dòng trả hàng ${key}`,
       },
     ],

@@ -985,6 +985,21 @@ class PurchaseReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
             )
             if locked_receipt.status != PurchaseReceiptStatus.POSTED:
                 return Response({'error': 'Phiếu nhập không còn hiệu lực để hủy.'}, status=status.HTTP_400_BAD_REQUEST)
+            linked_return = (
+                PurchaseReturn.objects
+                .filter(source_receipt=locked_receipt)
+                .exclude(status=PurchaseReturnStatus.CANCELLED)
+                .order_by('id')
+                .first()
+            )
+            if linked_return:
+                return Response({
+                    'error': (
+                        f'Phiếu nhập đã phát sinh phiếu trả hàng {linked_return.code}; '
+                        'hãy hủy phiếu trả chưa ghi sổ hoặc xử lý nghiệp vụ điều chỉnh riêng, '
+                        'không hủy trực tiếp phiếu nhập nguồn.'
+                    )
+                }, status=status.HTTP_400_BAD_REQUEST)
             try:
                 from finance.services import cancel_payable_for_purchase_receipt
 
@@ -1038,7 +1053,13 @@ class PurchaseReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
             PurchaseReceiptStatus.POSTED: [PurchaseReceiptStatus.CANCELLED],
             PurchaseReceiptStatus.CANCELLED: [],
         }
-        return Response({'current': receipt.status, 'next_states': mapping.get(receipt.status, [])})
+        next_states = mapping.get(receipt.status, [])
+        if (
+            receipt.status == PurchaseReceiptStatus.POSTED
+            and PurchaseReturn.objects.filter(source_receipt=receipt).exclude(status=PurchaseReturnStatus.CANCELLED).exists()
+        ):
+            next_states = []
+        return Response({'current': receipt.status, 'next_states': next_states})
 
     @action(detail=True, methods=['get'])
     def returnable_lines(self, request, pk=None):
