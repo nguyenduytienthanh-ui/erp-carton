@@ -36,6 +36,7 @@ test('purchase receipt detail shows next states and lifecycle history after canc
   await page.locator('.ant-drawer-close').last().click();
   await expect(page.getByTestId('purchase-receipt-detail-panel')).toBeHidden();
 
+  await expect(page.getByTestId(`purchase-receipt-cancel-${seed.receipt.id}`)).toBeEnabled();
   await page.getByTestId(`purchase-receipt-cancel-${seed.receipt.id}`).click();
   const cancelDialog = page.getByRole('dialog').last();
   await cancelDialog.getByLabel('Lý do hủy').fill(cancelReason);

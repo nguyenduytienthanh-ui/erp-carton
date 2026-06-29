@@ -217,6 +217,8 @@ export interface PurchaseReceipt {
   cancelled_at?: string | null;
   cancelled_by?: number | null;
   cancel_reason?: string;
+  can_cancel?: boolean;
+  cancel_block_reason?: string;
   created_at: string;
   updated_at: string;
   lines: PurchaseReceiptLine[];
@@ -233,6 +235,7 @@ export interface PurchaseApprovalHistoryItem {
 export interface PurchaseWorkflowStateSummary {
   current: string;
   next_states: string[];
+  cancel_block_reason?: string;
 }
 
 /** Yêu cầu mua (Purchase Request) */

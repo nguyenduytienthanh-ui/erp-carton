@@ -7,8 +7,9 @@ from rest_framework.exceptions import ValidationError
 
 from finance.models import PayableAdjustmentDirection, PayableDocument, PayableStatus
 from finance.services import create_payable_adjustment, get_payable_open_balance, refresh_payable_status
-from inventory.models import InventoryTransactionType
+from inventory.models import InventoryTransaction, InventoryTransactionStatus, InventoryTransactionType
 from inventory.serializers import InventoryTransactionSerializer
+from inventory.services import get_stock_balance
 from sales.document_policy import calc_line_totals, round_money, round_qty
 from sales.models import PeriodSequence
 
@@ -17,6 +18,7 @@ from purchasing.models import (
     PurchaseReceiptLine,
     PurchaseReceiptStatus,
     PurchaseRequestSequence,
+    PurchaseReturn,
     PurchaseReturnLine,
     PurchaseReturnStatus,
 )
@@ -136,6 +138,15 @@ RETURN_AP_OPEN_BALANCE_MESSAGE = (
 )
 
 
+RECEIPT_CANCEL_PAYABLE_BLOCK_MESSAGE = (
+    'Không thể hủy phiếu nhập vì công nợ đã phát sinh thanh toán hoặc không còn đủ số dư. '
+    'Hãy dùng quy trình trả hàng/điều chỉnh riêng.'
+)
+RECEIPT_CANCEL_RETURN_BLOCK_MESSAGE = 'Không thể hủy phiếu nhập đã phát sinh phiếu trả hàng.'
+RECEIPT_CANCEL_STOCK_BLOCK_MESSAGE = 'Không thể hủy phiếu nhập vì tồn khả dụng không đủ để hoàn tác lượng đã nhập.'
+RECEIPT_ALREADY_CANCELLED_MESSAGE = 'Phiếu nhập đã hủy trước đó.'
+
+
 def recalc_purchase_return_totals(purchase_return):
     subtotal = Decimal('0')
     tax_total = Decimal('0')
@@ -194,6 +205,213 @@ def build_returnable_receipt_line_payload(receipt_line):
         'posted_returned_qty': str(posted_returned_qty),
         'remaining_returnable_qty': str(remaining_qty),
         'note': receipt_line.note,
+    }
+
+
+def _message_from_validation_error(exc):
+    detail = getattr(exc, 'detail', exc)
+    if isinstance(detail, dict):
+        for value in detail.values():
+            message = _message_from_validation_error(value)
+            if message:
+                return message
+        return ''
+    if isinstance(detail, (list, tuple)):
+        for value in detail:
+            message = _message_from_validation_error(value)
+            if message:
+                return message
+        return ''
+    return str(detail or '').strip()
+
+
+def _get_receipt_cancel_lines(receipt):
+    return list(
+        receipt.lines
+        .select_related('product', 'purchase_order_line')
+        .order_by('line_number')
+    )
+
+
+def _get_receipt_cancel_payable(receipt, *, for_update=False):
+    queryset = PayableDocument.objects.exclude(status=PayableStatus.CANCELLED).filter(
+        source_purchase_receipt=receipt,
+    )
+    if for_update:
+        queryset = queryset.select_for_update()
+    return queryset.first()
+
+
+def _validate_receipt_cancel_payable(receipt, payable):
+    if not payable:
+        raise ValidationError({'error': RECEIPT_CANCEL_PAYABLE_BLOCK_MESSAGE})
+    reduction_amount = round_money(receipt.total_amount or 0)
+    if reduction_amount <= 0:
+        raise ValidationError({'error': 'Giá trị phiếu nhập phải lớn hơn 0 để hủy.'})
+    if payable.settled_amount > 0 or payable.settlements.exists() or reduction_amount > get_payable_open_balance(payable):
+        raise ValidationError({'error': RECEIPT_CANCEL_PAYABLE_BLOCK_MESSAGE})
+    return reduction_amount
+
+
+def _validate_receipt_cancel_stock(receipt, lines):
+    required_by_stock_key = {}
+    for line in lines:
+        key = (line.product_id, receipt.warehouse_id, receipt.location_id)
+        required_by_stock_key[key] = required_by_stock_key.get(key, Decimal('0')) + Decimal(str(line.quantity or 0))
+
+    for product_id, warehouse_id, location_id in required_by_stock_key:
+        required_qty = round_qty(required_by_stock_key[(product_id, warehouse_id, location_id)])
+        if required_qty <= 0:
+            continue
+        if not warehouse_id:
+            raise ValidationError({'error': RECEIPT_CANCEL_STOCK_BLOCK_MESSAGE})
+        balance = get_stock_balance(product_id=product_id, warehouse_id=warehouse_id, location_id=location_id)
+        if balance['on_hand'] < required_qty or balance['available'] < required_qty:
+            raise ValidationError({'error': RECEIPT_CANCEL_STOCK_BLOCK_MESSAGE})
+
+
+def _validate_purchase_receipt_cancel(receipt, *, lines=None, payable=None):
+    if receipt.status == PurchaseReceiptStatus.CANCELLED:
+        raise ValidationError({'error': RECEIPT_ALREADY_CANCELLED_MESSAGE})
+    if receipt.status != PurchaseReceiptStatus.POSTED:
+        raise ValidationError({'error': 'Phiếu nhập không còn hiệu lực để hủy.'})
+    if PurchaseReturn.objects.filter(source_receipt=receipt).exclude(status=PurchaseReturnStatus.CANCELLED).exists():
+        raise ValidationError({'error': RECEIPT_CANCEL_RETURN_BLOCK_MESSAGE})
+
+    cancel_lines = lines if lines is not None else _get_receipt_cancel_lines(receipt)
+    if not cancel_lines:
+        raise ValidationError({'error': 'Phiếu nhập không có dòng để hủy.'})
+    cancel_payable = payable if payable is not None else _get_receipt_cancel_payable(receipt)
+    reduction_amount = _validate_receipt_cancel_payable(receipt, cancel_payable)
+    _validate_receipt_cancel_stock(receipt, cancel_lines)
+    return reduction_amount
+
+
+def get_purchase_receipt_cancel_block_reason(receipt):
+    try:
+        _validate_purchase_receipt_cancel(receipt)
+    except ValidationError as exc:
+        return _message_from_validation_error(exc)
+    return ''
+
+
+def can_cancel_purchase_receipt(receipt):
+    return not get_purchase_receipt_cancel_block_reason(receipt)
+
+
+def create_receipt_cancel_inventory_reversal(receipt, receipt_line, *, actor=None, reason=''):
+    reference = f'{receipt.code}-CANCEL-L{receipt_line.line_number}'
+    existing = (
+        InventoryTransaction.objects
+        .select_for_update()
+        .filter(
+            purchase_receipt=receipt,
+            purchase_order=receipt.purchase_order,
+            purchase_order_line=receipt_line.purchase_order_line,
+            product=receipt_line.product,
+            transaction_type=InventoryTransactionType.ISSUE,
+            reference=reference,
+            status=InventoryTransactionStatus.POSTED,
+        )
+        .first()
+    )
+    if existing:
+        return existing
+
+    serializer = InventoryTransactionSerializer(data={
+        'transaction_type': InventoryTransactionType.ISSUE,
+        'transaction_date': timezone.localdate(),
+        'product': receipt_line.product_id,
+        'warehouse': receipt.warehouse_id,
+        'location': receipt.location_id,
+        'quantity': str(receipt_line.quantity),
+        'unit_cost': str(receipt_line.unit_cost or 0),
+        'reference': reference,
+        'reason': 'CANCEL_PURCHASE_RECEIPT',
+        'note': str(reason or '').strip(),
+    })
+    serializer.is_valid(raise_exception=True)
+    return serializer.save(
+        created_by=actor,
+        updated_by=actor,
+        posted_by=actor,
+        purchase_order=receipt.purchase_order,
+        purchase_order_line=receipt_line.purchase_order_line,
+        purchase_receipt=receipt,
+    )
+
+
+def create_receipt_cancel_payable_adjustment(receipt, payable, *, actor=None, reason=''):
+    return create_payable_adjustment(
+        payable=payable,
+        direction=PayableAdjustmentDirection.CREDIT,
+        amount=round_money(receipt.total_amount or 0),
+        idempotency_key=f'purchase-receipt:{receipt.id}:cancel-credit',
+        actor=actor,
+        source_purchase_receipt=receipt,
+        reason=f'Hủy phiếu nhập {receipt.code}',
+        note=str(reason or '').strip(),
+    )
+
+
+def cancel_purchase_receipt(receipt, *, actor=None, reason=''):
+    reason = str(reason or '').strip()
+    if not reason:
+        raise ValidationError({'error': 'Bắt buộc nhập lý do hủy phiếu nhập.'})
+
+    with transaction.atomic():
+        locked_receipt = (
+            receipt.__class__.objects
+            .select_for_update(of=('self',))
+            .select_related('purchase_order', 'warehouse', 'location')
+            .get(pk=receipt.pk)
+        )
+        lines = list(
+            PurchaseReceiptLine.objects
+            .select_for_update(of=('self',))
+            .select_related('product', 'purchase_order_line')
+            .filter(receipt=locked_receipt)
+            .order_by('line_number')
+        )
+        payable = _get_receipt_cancel_payable(locked_receipt, for_update=True)
+        _validate_purchase_receipt_cancel(locked_receipt, lines=lines, payable=payable)
+
+        inventory_reversals = [
+            create_receipt_cancel_inventory_reversal(
+                locked_receipt,
+                line,
+                actor=actor,
+                reason=reason,
+            )
+            for line in lines
+        ]
+        try:
+            payable_adjustment = create_receipt_cancel_payable_adjustment(
+                locked_receipt,
+                payable,
+                actor=actor,
+                reason=reason,
+            )
+        except ValueError as exc:
+            raise ValidationError({'error': str(exc)}) from exc
+
+        for line in lines:
+            if line.purchase_order_line_id:
+                subtract_received_qty(line.purchase_order_line, line.quantity)
+
+        locked_receipt.status = PurchaseReceiptStatus.CANCELLED
+        locked_receipt.cancelled_at = timezone.now()
+        locked_receipt.cancelled_by = actor
+        locked_receipt.cancel_reason = reason
+        locked_receipt.updated_by = actor
+        locked_receipt.save(update_fields=['status', 'cancelled_at', 'cancelled_by', 'cancel_reason', 'updated_by', 'updated_at'])
+        sync_purchase_order_receipt_status(locked_receipt.purchase_order)
+        refresh_payable_status(payable, actor=actor)
+
+    return {
+        'receipt': locked_receipt,
+        'inventory_reversals': inventory_reversals,
+        'payable_adjustment': payable_adjustment,
     }
 
 

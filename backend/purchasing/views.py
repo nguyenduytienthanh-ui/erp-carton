@@ -35,7 +35,6 @@ from purchasing.models import (
 from purchasing.permissions import (
     can_approve_purchase_order,
     can_cancel_purchase_order,
-    can_cancel_purchase_receipt,
     can_create_supplier,
     can_delete_supplier,
     can_edit_supplier,
@@ -57,12 +56,13 @@ from purchasing.services import (
     add_received_qty,
     build_returnable_receipt_line_payload,
     build_supplier_snapshot,
+    cancel_purchase_receipt,
+    get_purchase_receipt_cancel_block_reason,
     cancel_unposted_purchase_return,
     get_next_purchase_order_code,
     get_next_purchase_receipt_code,
     post_purchase_return,
     reverse_purchase_return,
-    subtract_received_qty,
     sync_purchase_order_receipt_status,
 )
 
@@ -970,61 +970,16 @@ class PurchaseReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         receipt = self.get_object()
-        if not can_cancel_purchase_receipt(request.user, receipt):
+        if not check_action_permission(request.user, 'PURCHASEORDER', 'CANCEL', strict=True):
             return Response({'error': 'Không có quyền hoặc trạng thái không hợp lệ.'}, status=status.HTTP_403_FORBIDDEN)
         reason = (request.data.get('reason') or request.data.get('cancel_reason') or '').strip()
         if not reason:
             return Response({'error': 'Bắt buộc nhập lý do hủy phiếu nhập.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        with transaction.atomic():
-            locked_receipt = (
-                PurchaseReceipt.objects.select_for_update()
-                .select_related('purchase_order')
-                .prefetch_related('lines', 'lines__purchase_order_line', 'lines__inventory_transaction')
-                .get(pk=receipt.pk)
-            )
-            if locked_receipt.status != PurchaseReceiptStatus.POSTED:
-                return Response({'error': 'Phiếu nhập không còn hiệu lực để hủy.'}, status=status.HTTP_400_BAD_REQUEST)
-            linked_return = (
-                PurchaseReturn.objects
-                .filter(source_receipt=locked_receipt)
-                .exclude(status=PurchaseReturnStatus.CANCELLED)
-                .order_by('id')
-                .first()
-            )
-            if linked_return:
-                return Response({
-                    'error': (
-                        f'Phiếu nhập đã phát sinh phiếu trả hàng {linked_return.code}; '
-                        'hãy hủy phiếu trả chưa ghi sổ hoặc xử lý nghiệp vụ điều chỉnh riêng, '
-                        'không hủy trực tiếp phiếu nhập nguồn.'
-                    )
-                }, status=status.HTTP_400_BAD_REQUEST)
-            try:
-                from finance.services import cancel_payable_for_purchase_receipt
-
-                cancel_payable_for_purchase_receipt(locked_receipt, actor=request.user, reason=reason)
-            except ValueError as exc:
-                return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-            for line in locked_receipt.lines.all():
-                tx = getattr(line, 'inventory_transaction', None)
-                if tx and tx.status != 'CANCELLED':
-                    tx.status = 'CANCELLED'
-                    tx.cancelled_at = timezone.now()
-                    tx.cancelled_by = request.user
-                    tx.cancel_reason = reason
-                    tx.updated_by = request.user
-                    tx.save(update_fields=['status', 'cancelled_at', 'cancelled_by', 'cancel_reason', 'updated_by', 'updated_at'])
-                if line.purchase_order_line_id:
-                    subtract_received_qty(line.purchase_order_line, line.quantity)
-
-            locked_receipt.status = PurchaseReceiptStatus.CANCELLED
-            locked_receipt.cancelled_at = timezone.now()
-            locked_receipt.cancelled_by = request.user
-            locked_receipt.cancel_reason = reason
-            locked_receipt.updated_by = request.user
-            locked_receipt.save(update_fields=['status', 'cancelled_at', 'cancelled_by', 'cancel_reason', 'updated_by', 'updated_at'])
-            sync_purchase_order_receipt_status(locked_receipt.purchase_order)
+        result = cancel_purchase_receipt(receipt, actor=request.user, reason=reason)
+        locked_receipt = result['receipt']
+        inventory_reversal_ids = [tx.id for tx in result['inventory_reversals']]
+        payable_adjustment = result['payable_adjustment']
 
         _log_procurement_audit(
             request,
@@ -1033,9 +988,20 @@ class PurchaseReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
             entity_id=int(receipt.id),
             entity_code=receipt.code,
             old_values={'status': PurchaseReceiptStatus.POSTED},
-            new_values={'status': PurchaseReceiptStatus.CANCELLED, 'reason': reason},
+            new_values={
+                'status': PurchaseReceiptStatus.CANCELLED,
+                'reason': reason,
+                'cancelled_at': locked_receipt.cancelled_at.isoformat() if locked_receipt.cancelled_at else None,
+                'cancelled_by': request.user.username,
+                'inventory_reversal_transaction_ids': inventory_reversal_ids,
+                'payable_adjustment_id': payable_adjustment.id if payable_adjustment else None,
+            },
         )
-        return Response({'status': PurchaseReceiptStatus.CANCELLED})
+        return Response({
+            'status': PurchaseReceiptStatus.CANCELLED,
+            'inventory_reversal_transaction_ids': inventory_reversal_ids,
+            'payable_adjustment_id': payable_adjustment.id if payable_adjustment else None,
+        })
 
     @action(detail=True, methods=['get'])
     def lifecycle_history(self, request, pk=None):
@@ -1054,12 +1020,12 @@ class PurchaseReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
             PurchaseReceiptStatus.CANCELLED: [],
         }
         next_states = mapping.get(receipt.status, [])
-        if (
-            receipt.status == PurchaseReceiptStatus.POSTED
-            and PurchaseReturn.objects.filter(source_receipt=receipt).exclude(status=PurchaseReturnStatus.CANCELLED).exists()
-        ):
+        cancel_block_reason = ''
+        if receipt.status == PurchaseReceiptStatus.POSTED:
+            cancel_block_reason = get_purchase_receipt_cancel_block_reason(receipt)
+        if receipt.status == PurchaseReceiptStatus.POSTED and cancel_block_reason:
             next_states = []
-        return Response({'current': receipt.status, 'next_states': next_states})
+        return Response({'current': receipt.status, 'next_states': next_states, 'cancel_block_reason': cancel_block_reason})
 
     @action(detail=True, methods=['get'])
     def returnable_lines(self, request, pk=None):

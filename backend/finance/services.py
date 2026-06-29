@@ -193,8 +193,8 @@ def create_payable_adjustment(
     amount = round_money(amount or 0)
     if amount <= 0:
         raise ValueError('Số tiền điều chỉnh công nợ phải lớn hơn 0.')
-    if direction == PayableAdjustmentDirection.CREDIT and not source_return:
-        raise ValueError('Điều chỉnh giảm công nợ từ trả hàng phải có phiếu trả hàng nguồn.')
+    if direction == PayableAdjustmentDirection.CREDIT and not (source_return or source_purchase_receipt):
+        raise ValueError('Điều chỉnh giảm công nợ phải có phiếu trả hàng hoặc phiếu nhập nguồn.')
     if direction == PayableAdjustmentDirection.DEBIT and not reversal_of:
         raise ValueError('Điều chỉnh hoàn nhập công nợ phải tham chiếu bút toán gốc.')
 

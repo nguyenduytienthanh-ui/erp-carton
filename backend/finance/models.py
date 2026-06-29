@@ -1262,6 +1262,12 @@ class PayableAdjustment(SearchTextModelMixin):
                         reversal_of__isnull=True,
                     )
                     | Q(
+                        direction=PayableAdjustmentDirection.CREDIT,
+                        source_return__isnull=True,
+                        source_purchase_receipt__isnull=False,
+                        reversal_of__isnull=True,
+                    )
+                    | Q(
                         direction=PayableAdjustmentDirection.DEBIT,
                         source_return__isnull=True,
                         reversal_of__isnull=False,
@@ -1276,6 +1282,15 @@ class PayableAdjustment(SearchTextModelMixin):
                     source_return__isnull=False,
                 ),
                 name='one_credit_adjustment_per_purchase_return',
+            ),
+            models.UniqueConstraint(
+                fields=['source_purchase_receipt'],
+                condition=Q(
+                    direction=PayableAdjustmentDirection.CREDIT,
+                    source_return__isnull=True,
+                    source_purchase_receipt__isnull=False,
+                ),
+                name='one_credit_adjustment_per_receipt_cancel',
             ),
         ]
 

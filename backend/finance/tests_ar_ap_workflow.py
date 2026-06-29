@@ -4,7 +4,14 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from core.models import Customer, User
-from finance.models import CashAccount, CashTransaction, PayableDocument, ReceivableDocument
+from finance.models import (
+    CashAccount,
+    CashTransaction,
+    PayableAdjustment,
+    PayableAdjustmentDirection,
+    PayableDocument,
+    ReceivableDocument,
+)
 from products.models import Product, ProductUnit
 from purchasing.models import Supplier
 from sales.management.commands.seed_sales_order_workflow import Command as SeedSalesWorkflowCommand
@@ -239,7 +246,7 @@ class FinanceArApWorkflowTests(APITestCase):
         )
         self.assertEqual(cancel_receipt_response.status_code, 400, cancel_receipt_response.data)
 
-    def test_cancel_unpaid_purchase_receipt_auto_cancels_payable(self):
+    def test_cancel_unpaid_purchase_receipt_posts_payable_credit_adjustment(self):
         receipt_payload = self._create_received_purchase_receipt()
         payable = PayableDocument.objects.get(source_purchase_receipt_id=receipt_payload['id'])
         self.assertEqual(payable.status, 'OPEN')
@@ -251,4 +258,14 @@ class FinanceArApWorkflowTests(APITestCase):
         )
         self.assertEqual(cancel_receipt_response.status_code, 200, cancel_receipt_response.data)
         payable.refresh_from_db()
-        self.assertEqual(payable.status, 'CANCELLED')
+        self.assertEqual(payable.status, 'OPEN')
+        self.assertEqual(payable.adjusted_total_amount, Decimal('0'))
+        self.assertEqual(
+            PayableAdjustment.objects.filter(
+                payable=payable,
+                source_purchase_receipt_id=receipt_payload['id'],
+                source_return__isnull=True,
+                direction=PayableAdjustmentDirection.CREDIT,
+            ).count(),
+            1,
+        )

@@ -1,12 +1,13 @@
 from datetime import timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 from rest_framework.test import APITestCase
 from django.utils import timezone
 
 from core.models import ApprovalHistory, AuditLog, Permission, Role, User
 from finance.models import PayableAdjustment, PayableAdjustmentDirection, PayableDocument, PayableSettlement
-from inventory.models import InventoryTransaction, InventoryTransactionType, Warehouse, WarehouseLocation
+from inventory.models import InventoryTransaction, InventoryTransactionStatus, InventoryTransactionType, Warehouse, WarehouseLocation
 from products.models import Product, ProductUnit
 from purchasing.models import (
     MaterialPurchasePrice,
@@ -573,12 +574,54 @@ class PurchasingWorkflowTests(APITestCase):
         line.refresh_from_db()
         order_obj = PurchaseOrder.objects.get(pk=order_id)
         receipt = PurchaseReceipt.objects.get(pk=receipt_id)
-        inventory_tx = InventoryTransaction.objects.get(purchase_receipt=receipt)
+        original_inventory_tx = InventoryTransaction.objects.get(
+            purchase_receipt=receipt,
+            transaction_type=InventoryTransactionType.RECEIPT,
+        )
+        reversal_tx = InventoryTransaction.objects.get(
+            purchase_receipt=receipt,
+            transaction_type=InventoryTransactionType.ISSUE,
+        )
+        payable = PayableDocument.objects.get(source_purchase_receipt=receipt)
+        payable_adjustment = PayableAdjustment.objects.get(
+            payable=payable,
+            source_purchase_receipt=receipt,
+            source_return__isnull=True,
+            direction=PayableAdjustmentDirection.CREDIT,
+        )
 
         self.assertEqual(str(line.received_qty), '0.0000')
         self.assertEqual(order_obj.status, 'APPROVED')
         self.assertEqual(receipt.status, 'CANCELLED')
-        self.assertEqual(inventory_tx.status, 'CANCELLED')
+        self.assertEqual(original_inventory_tx.status, InventoryTransactionStatus.POSTED)
+        self.assertEqual(reversal_tx.status, InventoryTransactionStatus.POSTED)
+        self.assertEqual(str(reversal_tx.quantity), '3.0000')
+        self.assertEqual(str(payable_adjustment.amount), str(receipt.total_amount))
+        self.assertNotEqual(payable.status, 'CANCELLED')
+        self.assertEqual(payable.adjusted_total_amount, Decimal('0'))
+
+        double_cancel_response = self.client.post(
+            f'/api/purchasing/receipts/{receipt_id}/cancel/',
+            {'reason': 'Không tạo thêm bút toán hủy lần hai'},
+            format='json',
+        )
+        self.assertEqual(double_cancel_response.status_code, 400, double_cancel_response.data)
+        self.assertEqual(
+            InventoryTransaction.objects.filter(
+                purchase_receipt=receipt,
+                transaction_type=InventoryTransactionType.ISSUE,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            PayableAdjustment.objects.filter(
+                payable=payable,
+                source_purchase_receipt=receipt,
+                source_return__isnull=True,
+                direction=PayableAdjustmentDirection.CREDIT,
+            ).count(),
+            1,
+        )
 
     def test_purchase_receipt_exposes_next_states_and_lifecycle_history(self):
         order = self._create_purchase_order(qty='5')
@@ -1083,6 +1126,126 @@ class PurchasingWorkflowTests(APITestCase):
         self.assertEqual(cancel_after_reverse.status_code, 400, cancel_after_reverse.data)
         receipt.refresh_from_db()
         self.assertEqual(receipt.status, 'POSTED')
+
+    def test_purchase_receipt_cancel_blocks_paid_payable_without_side_effects(self):
+        _order, receipt, _receipt_line = self._create_posted_purchase_receipt(qty='4', unit_cost='12500', reference='GRN-CANCEL-PAID')
+        payable = PayableDocument.objects.get(source_purchase_receipt=receipt)
+        PayableSettlement.objects.create(
+            payable_document=payable,
+            settlement_date=timezone.localdate(),
+            amount=payable.total_amount,
+            source_type=PayableSettlement.SOURCE_CASH,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        payable.settled_amount = payable.total_amount
+        payable.status = 'SETTLED'
+        payable.save(update_fields=['settled_amount', 'status'])
+
+        response = self.client.post(
+            f'/api/purchasing/receipts/{receipt.id}/cancel/',
+            {'reason': 'Không hủy khi đã thanh toán'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(
+            response.data['error'],
+            'Không thể hủy phiếu nhập vì công nợ đã phát sinh thanh toán hoặc không còn đủ số dư. Hãy dùng quy trình trả hàng/điều chỉnh riêng.',
+        )
+        receipt.refresh_from_db()
+        self.assertEqual(receipt.status, 'POSTED')
+        self.assertEqual(
+            InventoryTransaction.objects.filter(
+                purchase_receipt=receipt,
+                transaction_type=InventoryTransactionType.ISSUE,
+            ).count(),
+            0,
+        )
+        self.assertEqual(
+            PayableAdjustment.objects.filter(
+                payable=payable,
+                direction=PayableAdjustmentDirection.CREDIT,
+                source_return__isnull=True,
+            ).count(),
+            0,
+        )
+
+    def test_purchase_receipt_cancel_blocks_insufficient_stock_before_ap_adjustment(self):
+        _order, receipt, receipt_line = self._create_posted_purchase_receipt(qty='5', unit_cost='11800', reference='GRN-CANCEL-STOCK')
+        payable = PayableDocument.objects.get(source_purchase_receipt=receipt)
+        InventoryTransaction.objects.create(
+            code='INVTX-CANCEL-STOCK-DRAIN',
+            transaction_type=InventoryTransactionType.ISSUE,
+            status=InventoryTransactionStatus.POSTED,
+            transaction_date=timezone.localdate(),
+            reference='DRAIN-CANCEL-STOCK',
+            reason='TEST_DRAIN_STOCK',
+            product=receipt_line.product,
+            warehouse=receipt.warehouse,
+            location=receipt.location,
+            quantity=Decimal('5'),
+            unit_cost=receipt_line.unit_cost,
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+
+        response = self.client.post(
+            f'/api/purchasing/receipts/{receipt.id}/cancel/',
+            {'reason': 'Không đủ tồn để hủy'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('tồn khả dụng không đủ', response.data['error'])
+        receipt.refresh_from_db()
+        self.assertEqual(receipt.status, 'POSTED')
+        self.assertEqual(
+            InventoryTransaction.objects.filter(
+                purchase_receipt=receipt,
+                transaction_type=InventoryTransactionType.ISSUE,
+            ).count(),
+            0,
+        )
+        self.assertEqual(
+            PayableAdjustment.objects.filter(
+                payable=payable,
+                direction=PayableAdjustmentDirection.CREDIT,
+                source_return__isnull=True,
+            ).count(),
+            0,
+        )
+
+    def test_purchase_receipt_cancel_rolls_back_inventory_if_ap_adjustment_fails(self):
+        _order, receipt, _receipt_line = self._create_posted_purchase_receipt(qty='2', unit_cost='11800', reference='GRN-CANCEL-ROLLBACK')
+        payable = PayableDocument.objects.get(source_purchase_receipt=receipt)
+
+        with patch('purchasing.services.create_payable_adjustment', side_effect=ValueError('AP adjustment failed')):
+            response = self.client.post(
+                f'/api/purchasing/receipts/{receipt.id}/cancel/',
+                {'reason': 'Rollback nếu AP lỗi'},
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        receipt.refresh_from_db()
+        self.assertEqual(receipt.status, 'POSTED')
+        self.assertEqual(
+            InventoryTransaction.objects.filter(
+                purchase_receipt=receipt,
+                transaction_type=InventoryTransactionType.ISSUE,
+            ).count(),
+            0,
+        )
+        self.assertEqual(
+            PayableAdjustment.objects.filter(
+                payable=payable,
+                direction=PayableAdjustmentDirection.CREDIT,
+                source_return__isnull=True,
+            ).count(),
+            0,
+        )
 
     def test_legacy_purchase_return_without_source_is_readable_but_not_postable(self):
         supplier = Supplier.objects.get(pk=self.supplier_id)

@@ -23,6 +23,8 @@ from purchasing.models import (
 from purchasing.services import (
     build_purchase_order_line_product_snapshot,
     build_supplier_snapshot,
+    can_cancel_purchase_receipt,
+    get_purchase_receipt_cancel_block_reason,
     get_next_pr_code,
     get_remaining_returnable_qty,
     get_returned_qty_for_receipt_line,
@@ -383,6 +385,8 @@ class PurchaseReceiptSerializer(serializers.ModelSerializer):
     supplier_name = serializers.SerializerMethodField()
     warehouse_name = serializers.CharField(source='warehouse.name', read_only=True)
     location_name = serializers.CharField(source='location.name', read_only=True)
+    can_cancel = serializers.SerializerMethodField()
+    cancel_block_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseReceipt
@@ -408,6 +412,8 @@ class PurchaseReceiptSerializer(serializers.ModelSerializer):
             'cancelled_at',
             'cancelled_by',
             'cancel_reason',
+            'can_cancel',
+            'cancel_block_reason',
             'created_at',
             'updated_at',
             'lines',
@@ -417,6 +423,12 @@ class PurchaseReceiptSerializer(serializers.ModelSerializer):
     def get_supplier_name(self, obj):
         snapshot = obj.supplier_snapshot or {}
         return snapshot.get('name') or snapshot.get('company_name')
+
+    def get_can_cancel(self, obj):
+        return can_cancel_purchase_receipt(obj)
+
+    def get_cancel_block_reason(self, obj):
+        return get_purchase_receipt_cancel_block_reason(obj)
 
 
 class MaterialPurchasePriceSerializer(serializers.ModelSerializer):

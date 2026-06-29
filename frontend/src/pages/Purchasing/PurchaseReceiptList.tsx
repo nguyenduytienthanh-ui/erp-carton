@@ -13,6 +13,7 @@ import {
   Statistic,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd';
@@ -393,6 +394,13 @@ export default function PurchaseReceiptList() {
     };
   }, [summary.cancelledCount, summary.postedCount]);
 
+  const getReceiptCancelBlockReason = (receipt: PurchaseReceipt) => {
+    if (!canManage || !canCancel) return 'Bạn không có quyền hủy phiếu nhập.';
+    if (receipt.status !== 'POSTED') return 'Phiếu nhập không còn hiệu lực để hủy.';
+    if (receipt.can_cancel === false) return receipt.cancel_block_reason || 'Phiếu nhập hiện không thể hủy.';
+    return '';
+  };
+
   const columns: ColumnsType<PurchaseReceipt> = [
     { title: 'Phiếu nhập', dataIndex: 'code', width: 140 },
     { title: 'Đơn mua', dataIndex: 'purchase_order_code', width: 140, render: (value) => value || '-' },
@@ -412,25 +420,30 @@ export default function PurchaseReceiptList() {
       key: 'actions',
       width: 180,
       fixed: 'right',
-      render: (_, row) => (
-        <Space>
-          <Button data-testid={`purchase-receipt-view-${row.id}`} size="small" onClick={() => setDrawerReceipt(row)}>
-            Xem
-          </Button>
-          <Button
-            data-testid={`purchase-receipt-cancel-${row.id}`}
-            size="small"
-            danger
-            disabled={!canManage || !canCancel || row.status !== 'POSTED'}
-            onClick={() => {
-              setCancelReceipt(row);
-              reasonForm.setFieldValue('reason', '');
-            }}
-          >
-            Hủy phiếu
-          </Button>
-        </Space>
-      ),
+      render: (_, row) => {
+        const cancelBlockReason = getReceiptCancelBlockReason(row);
+        return (
+          <Space>
+            <Button data-testid={`purchase-receipt-view-${row.id}`} size="small" onClick={() => setDrawerReceipt(row)}>
+              Xem
+            </Button>
+            <Tooltip title={cancelBlockReason || undefined}>
+              <Button
+                data-testid={`purchase-receipt-cancel-${row.id}`}
+                size="small"
+                danger
+                disabled={!!cancelBlockReason}
+                onClick={() => {
+                  setCancelReceipt(row);
+                  reasonForm.setFieldValue('reason', '');
+                }}
+              >
+                Hủy phiếu
+              </Button>
+            </Tooltip>
+          </Space>
+        );
+      },
     },
   ];
 
