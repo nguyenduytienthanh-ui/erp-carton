@@ -1,8 +1,9 @@
+import hashlib
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -47,6 +48,20 @@ def get_next_stocktake_code(count_date: date | None = None) -> str:
 
 def _normalize_key(product_id, warehouse_id, location_id):
     return (int(product_id), int(warehouse_id) if warehouse_id else 0, int(location_id) if location_id else 0)
+
+
+def lock_stock_balance_key(*, product_id: int, warehouse_id: int, location_id: int | None = None) -> bool:
+    if connection.vendor != 'postgresql' or not product_id or not warehouse_id:
+        return False
+
+    product_id, warehouse_id, location_id = _normalize_key(product_id, warehouse_id, location_id)
+    payload = f'inventory-stock:{product_id}:{warehouse_id}:{location_id}'.encode('utf-8')
+    lock_id = int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), 'big', signed=False)
+    if lock_id >= 2**63:
+        lock_id -= 2**64
+    with connection.cursor() as cursor:
+        cursor.execute('SELECT pg_advisory_xact_lock(%s)', [lock_id])
+    return True
 
 
 def build_stock_balance_map(

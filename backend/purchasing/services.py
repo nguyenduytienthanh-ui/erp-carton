@@ -9,7 +9,7 @@ from finance.models import PayableAdjustmentDirection, PayableDocument, PayableS
 from finance.services import create_payable_adjustment, get_payable_open_balance, refresh_payable_status
 from inventory.models import InventoryTransaction, InventoryTransactionStatus, InventoryTransactionType
 from inventory.serializers import InventoryTransactionSerializer
-from inventory.services import get_stock_balance
+from inventory.services import get_stock_balance, lock_stock_balance_key
 from sales.document_policy import calc_line_totals, round_money, round_qty
 from sales.models import PeriodSequence
 
@@ -265,6 +265,7 @@ def _validate_receipt_cancel_stock(receipt, lines):
             continue
         if not warehouse_id:
             raise ValidationError({'error': RECEIPT_CANCEL_STOCK_BLOCK_MESSAGE})
+        lock_stock_balance_key(product_id=product_id, warehouse_id=warehouse_id, location_id=location_id)
         balance = get_stock_balance(product_id=product_id, warehouse_id=warehouse_id, location_id=location_id)
         if balance['on_hand'] < required_qty or balance['available'] < required_qty:
             raise ValidationError({'error': RECEIPT_CANCEL_STOCK_BLOCK_MESSAGE})

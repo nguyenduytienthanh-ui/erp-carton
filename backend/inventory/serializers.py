@@ -30,6 +30,7 @@ from inventory.services import (
     get_next_inventory_transaction_code,
     get_next_stocktake_code,
     get_stock_balance,
+    lock_stock_balance_key,
 )
 from sales.services import ensure_sales_order_line_shipment_allowed
 
@@ -486,7 +487,9 @@ class InventoryTransactionSerializer(serializers.ModelSerializer):
             InventoryTransactionType.ADJUSTMENT_OUT,
             InventoryTransactionType.TRANSFER,
         } and product and warehouse and quantity:
-            balance = get_stock_balance(product_id=product.id, warehouse_id=warehouse.id, location_id=getattr(location, 'id', None))
+            location_id = getattr(location, 'id', None)
+            lock_stock_balance_key(product_id=product.id, warehouse_id=warehouse.id, location_id=location_id)
+            balance = get_stock_balance(product_id=product.id, warehouse_id=warehouse.id, location_id=location_id)
             if balance['on_hand'] < quantity:
                 raise serializers.ValidationError(
                     {'quantity': f'Tồn hiện tại không đủ. On hand={balance["on_hand"]}, yêu cầu={quantity}.'}
