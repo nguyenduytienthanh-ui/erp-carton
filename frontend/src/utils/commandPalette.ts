@@ -15,7 +15,7 @@ type BuildCommandPaletteCatalogOptions = {
   canViewCustomers: boolean;
   canViewSuppliers: boolean;
   canViewSalesFulfillmentCenter: boolean;
-  canManagePurchasing: boolean;
+  canViewPurchasing: boolean;
   canAccessProductionCenter: boolean;
   canAccessMaterialIssues: boolean;
   canAccessProductionReceipts: boolean;
@@ -352,8 +352,8 @@ export function buildCommandPaletteCatalog(
       group: 'Mua hàng',
       description: 'Điều phối đơn mua, tiến độ nhận hàng và giá trị đơn theo nhà cung cấp.',
       keywords: ['don mua', 'purchase order', 'po'],
-      enabled: options.canManagePurchasing,
-      spotlight: options.canManagePurchasing,
+      enabled: options.canViewPurchasing,
+      spotlight: options.canViewPurchasing,
     },
     {
       key: 'purchase-receipts',
@@ -362,7 +362,7 @@ export function buildCommandPaletteCatalog(
       group: 'Mua hàng',
       description: 'Theo dõi chứng từ nhập mua, chênh lệch số lượng và trạng thái ghi sổ.',
       keywords: ['phieu nhap mua', 'purchase receipt', 'grn'],
-      enabled: options.canManagePurchasing,
+      enabled: options.canViewPurchasing,
     },
     {
       key: 'purchase-requests',
@@ -371,7 +371,7 @@ export function buildCommandPaletteCatalog(
       group: 'Mua hàng',
       description: 'Theo dõi yêu cầu mua, phê duyệt, từ chối và chuyển đổi sang đơn mua.',
       keywords: ['yeu cau mua', 'purchase request', 'pr'],
-      enabled: options.canManagePurchasing,
+      enabled: options.canViewPurchasing,
     },
     {
       key: 'purchase-returns',
@@ -380,7 +380,7 @@ export function buildCommandPaletteCatalog(
       group: 'Mua hàng',
       description: 'Kiểm soát hàng trả nhà cung cấp, lý do trả và bút toán liên quan.',
       keywords: ['tra hang mua', 'purchase return', 'return vendor'],
-      enabled: options.canManagePurchasing,
+      enabled: options.canViewPurchasing,
     },
     {
       key: 'purchase-order-forecast',
@@ -389,8 +389,8 @@ export function buildCommandPaletteCatalog(
       group: 'Mua hàng',
       description: 'Biến forecast vật tư thành đề xuất mua và tạo đơn mua thật từ một nơi.',
       keywords: ['du bao don mua', 'forecast', 'replenishment'],
-      enabled: options.canManagePurchasing,
-      spotlight: options.canManagePurchasing,
+      enabled: options.canViewPurchasing,
+      spotlight: options.canViewPurchasing,
     },
     {
       key: 'supplier-analytics',
@@ -399,7 +399,7 @@ export function buildCommandPaletteCatalog(
       group: 'Mua hàng',
       description: 'Phân tích lead time, độ ổn định và chất lượng thực thi của từng nhà cung cấp.',
       keywords: ['phan tich nha cung cap', 'supplier analytics', 'lead time'],
-      enabled: options.canManagePurchasing,
+      enabled: options.canViewPurchasing,
     },
     {
       key: 'material-prices',
@@ -408,7 +408,7 @@ export function buildCommandPaletteCatalog(
       group: 'Mua hàng',
       description: 'Quản lý bảng giá nguyên vật liệu và nguồn giá theo nhà cung cấp.',
       keywords: ['bang gia nvl', 'material price', 'gia nvl'],
-      enabled: options.canManagePurchasing,
+      enabled: options.canViewPurchasing,
     },
     {
       key: 'production-orders',

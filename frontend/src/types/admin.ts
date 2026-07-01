@@ -20,6 +20,7 @@ export interface RoleModulePermissionItem {
   workforce_manage: boolean;
   finance_manage: boolean;
   purchasing_manage: boolean;
+  purchasing_view: boolean;
   production_manage: boolean;
   ops_view: boolean;
   reports_view: boolean;
@@ -68,6 +69,7 @@ export interface RoleModulePermissionUpdatePayload {
     workforce_manage: boolean;
     finance_manage: boolean;
     purchasing_manage: boolean;
+    purchasing_view: boolean;
     production_manage: boolean;
     ops_view: boolean;
     reports_view: boolean;

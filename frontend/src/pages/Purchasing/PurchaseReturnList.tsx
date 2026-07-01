@@ -486,10 +486,12 @@ export default function PurchaseReturnList() {
           <Button data-testid={`purchase-return-view-${row.id}`} size="small" icon={<EyeOutlined />} onClick={() => setDetailReturn(row)}>
             Xem
           </Button>
+          {canManage ? (
+            <>
           <Button
             data-testid={`purchase-return-edit-${row.id}`}
             size="small"
-            disabled={!canManage || row.status !== 'DRAFT'}
+            disabled={row.status !== 'DRAFT'}
             onClick={() => {
               setEditReturn(row);
               setFormOpen(true);
@@ -500,7 +502,7 @@ export default function PurchaseReturnList() {
           <Button
             data-testid={`purchase-return-delete-${row.id}`}
             size="small"
-            disabled={!canManage || row.status !== 'DRAFT'}
+            disabled={row.status !== 'DRAFT'}
             danger
             icon={<DeleteOutlined />}
             onClick={() =>
@@ -516,7 +518,7 @@ export default function PurchaseReturnList() {
           <Button
             data-testid={`purchase-return-submit-${row.id}`}
             size="small"
-            disabled={!canManage || row.status !== 'DRAFT'}
+            disabled={row.status !== 'DRAFT'}
             onClick={() => submitMutation.mutate(row.id)}
           >
             Gửi duyệt
@@ -524,7 +526,7 @@ export default function PurchaseReturnList() {
           <Button
             data-testid={`purchase-return-approve-${row.id}`}
             size="small"
-            disabled={!canManage || row.status !== 'SUBMITTED'}
+            disabled={row.status !== 'SUBMITTED'}
             type="primary"
             onClick={() => approveMutation.mutate(row.id)}
           >
@@ -533,7 +535,7 @@ export default function PurchaseReturnList() {
           <Button
             data-testid={`purchase-return-post-${row.id}`}
             size="small"
-            disabled={!canManage || row.status !== 'APPROVED'}
+            disabled={row.status !== 'APPROVED'}
             onClick={() => postMutation.mutate(row.id)}
           >
             Post
@@ -542,11 +544,13 @@ export default function PurchaseReturnList() {
             data-testid={`purchase-return-reverse-${row.id}`}
             size="small"
             icon={<UndoOutlined />}
-            disabled={!canManage || row.status !== 'POSTED'}
+            disabled={row.status !== 'POSTED'}
             onClick={() => confirmReverseReturn(row)}
           >
             Đảo
           </Button>
+            </>
+          ) : null}
         </Space>
       ),
     },
@@ -567,36 +571,38 @@ export default function PurchaseReturnList() {
               <Title level={3} style={{ margin: '8px 0 4px' }}>Trung tâm trả hàng mua</Title>
               <Text type="secondary">Theo dõi toàn bộ phiếu trả nhà cung cấp từ nháp, duyệt đến post để hoàn tất vòng đời trả hàng và đối soát công nợ.</Text>
             </div>
-            <Space>
-              <Button
-                icon={<DownloadOutlined />}
-                disabled={visibleRows.length === 0}
-                onClick={() => {
-                  const exportData = visibleRows.map((r) => ({
-                    'Mã trả': r.code,
-                    'Ngày trả': r.return_date,
-                    'NCC': r.supplier_name,
-                    'Trạng thái': STATUS_LABELS[r.status as keyof typeof STATUS_LABELS],
-                    'Tổng tiền': Number(r.total).toLocaleString('vi-VN'),
-                  }));
-                  downloadCSV(exportData, 'phieu-tra-hang');
-                }}
-              >
-                Xuất CSV
-              </Button>
-              <Button
-                data-testid="purchase-returns-open-create"
-                type="primary"
-                icon={<PlusOutlined />}
-                disabled={!canManage}
-                onClick={() => {
-                  setEditReturn(null);
-                  setFormOpen(true);
-                }}
-              >
-                Tạo phiếu trả
-              </Button>
-            </Space>
+            {canManage ? (
+              <Space>
+                <Button
+                  data-testid="purchase-returns-export-csv"
+                  icon={<DownloadOutlined />}
+                  disabled={visibleRows.length === 0}
+                  onClick={() => {
+                    const exportData = visibleRows.map((r) => ({
+                      'Mã trả': r.code,
+                      'Ngày trả': r.return_date,
+                      'NCC': r.supplier_name,
+                      'Trạng thái': STATUS_LABELS[r.status as keyof typeof STATUS_LABELS],
+                      'Tổng tiền': Number(r.total).toLocaleString('vi-VN'),
+                    }));
+                    downloadCSV(exportData, 'phieu-tra-hang');
+                  }}
+                >
+                  Xuất CSV
+                </Button>
+                <Button
+                  data-testid="purchase-returns-open-create"
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={() => {
+                    setEditReturn(null);
+                    setFormOpen(true);
+                  }}
+                >
+                  Tạo phiếu trả
+                </Button>
+              </Space>
+            ) : null}
           </div>
 
           <Alert showIcon type={statusAlert.type} message={statusAlert.message} description={statusAlert.description} />

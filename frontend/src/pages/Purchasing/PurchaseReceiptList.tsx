@@ -23,7 +23,7 @@ import dayjs from 'dayjs';
 import { purchasingApi } from '../../api/purchasing';
 import type { PurchaseApprovalHistoryItem, PurchaseReceipt, Supplier } from '../../types/purchasing';
 import { PAGES } from '../../utils/constants';
-import { canCancelPurchaseOrders, canManagePurchasingData } from '../../utils/authz';
+import { canCancelPurchaseOrders } from '../../utils/authz';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
@@ -114,7 +114,6 @@ function matchesReceiptLane(
 export default function PurchaseReceiptList() {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
-  const canManage = canManagePurchasingData();
   const canCancel = canCancelPurchaseOrders();
   const [searchInput, setSearchInput] = useState('');
   const [filters, setFilters] = useState<Filters>({});
@@ -395,7 +394,7 @@ export default function PurchaseReceiptList() {
   }, [summary.cancelledCount, summary.postedCount]);
 
   const getReceiptCancelBlockReason = (receipt: PurchaseReceipt) => {
-    if (!canManage || !canCancel) return 'Bạn không có quyền hủy phiếu nhập.';
+    if (!canCancel) return 'Bạn không có quyền hủy phiếu nhập.';
     if (receipt.status !== 'POSTED') return 'Phiếu nhập không còn hiệu lực để hủy.';
     if (receipt.can_cancel === false) return receipt.cancel_block_reason || 'Phiếu nhập hiện không thể hủy.';
     return '';
@@ -427,20 +426,22 @@ export default function PurchaseReceiptList() {
             <Button data-testid={`purchase-receipt-view-${row.id}`} size="small" onClick={() => setDrawerReceipt(row)}>
               Xem
             </Button>
-            <Tooltip title={cancelBlockReason || undefined}>
-              <Button
-                data-testid={`purchase-receipt-cancel-${row.id}`}
-                size="small"
-                danger
-                disabled={!!cancelBlockReason}
-                onClick={() => {
-                  setCancelReceipt(row);
-                  reasonForm.setFieldValue('reason', '');
-                }}
-              >
-                Hủy phiếu
-              </Button>
-            </Tooltip>
+            {canCancel ? (
+              <Tooltip title={cancelBlockReason || undefined}>
+                <Button
+                  data-testid={`purchase-receipt-cancel-${row.id}`}
+                  size="small"
+                  danger
+                  disabled={!!cancelBlockReason}
+                  onClick={() => {
+                    setCancelReceipt(row);
+                    reasonForm.setFieldValue('reason', '');
+                  }}
+                >
+                  Hủy phiếu
+                </Button>
+              </Tooltip>
+            ) : null}
           </Space>
         );
       },

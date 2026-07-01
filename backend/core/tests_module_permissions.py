@@ -7,7 +7,7 @@ from django.test.utils import override_settings
 from rest_framework.test import APIClient
 
 from core.models import AuditLog, Notification, Permission, Role, Team, User
-from core.permissions import CUSTOMER_PERMISSION_DEFINITIONS, SUPPLIER_PERMISSION_DEFINITIONS
+from core.permissions import CUSTOMER_PERMISSION_DEFINITIONS, PURCHASING_PERMISSION_DEFINITIONS, SUPPLIER_PERMISSION_DEFINITIONS
 from purchasing.models import Supplier
 
 
@@ -38,6 +38,10 @@ class RoleModulePermissionsApiTest(TestCase):
             ('CORE', 'VIEW_OPERATIONS_LOG', 'CORE_VIEW_OPERATIONS_LOG', 'View operations log'),
             ('CORE', 'VIEW_RBAC_AUDIT', 'CORE_VIEW_RBAC_AUDIT', 'View RBAC audit history'),
             ('CORE', 'MANAGE_RBAC', 'CORE_MANAGE_RBAC', 'Manage RBAC settings'),
+            *[
+                (row['resource'], row['action'], row['code'], row['name'])
+                for row in PURCHASING_PERMISSION_DEFINITIONS
+            ],
             *[
                 (row['resource'], row['action'], row['code'], row['name'])
                 for row in CUSTOMER_PERMISSION_DEFINITIONS
@@ -352,6 +356,44 @@ class SeedSupplierPermissionsCommandTest(TestCase):
         self.assertEqual(admin_actions, all_supplier_actions)
         self.assertEqual(ops_actions, {'VIEW', 'CREATE', 'EDIT'})
         self.assertIn('Supplier UAT role grants synced', out.getvalue())
+
+
+class SeedPurchasingPermissionsCommandTest(TestCase):
+    def test_seed_purchasing_permissions_creates_rows_without_demo_data(self):
+        Permission.objects.filter(resource='PURCHASING', action='VIEW').delete()
+        out = StringIO()
+
+        call_command('seed_purchasing_permissions', stdout=out)
+
+        permission_keys = set(
+            Permission.objects.filter(resource='PURCHASING', action='VIEW').values_list('resource', 'action')
+        )
+        expected_keys = {
+            (row['resource'], row['action'])
+            for row in PURCHASING_PERMISSION_DEFINITIONS
+        }
+        self.assertEqual(permission_keys, expected_keys)
+        self.assertFalse(Role.objects.exists())
+        self.assertIn('Purchasing permissions synced', out.getvalue())
+
+    def test_seed_purchasing_permissions_can_grant_existing_uat_roles(self):
+        for code in ('ADMIN', 'MANAGER', 'FINANCE_MANAGER', 'OPS_MANAGER', 'PRODUCT_MANAGER'):
+            Role.objects.create(code=code, name=code.replace('_', ' ').title())
+        out = StringIO()
+
+        call_command('seed_purchasing_permissions', grant_uat_roles=True, stdout=out)
+
+        granted_role_codes = set(
+            Role.objects.filter(permissions__resource='PURCHASING', permissions__action='VIEW')
+            .values_list('code', flat=True)
+        )
+        self.assertEqual(granted_role_codes, {'ADMIN', 'MANAGER', 'FINANCE_MANAGER', 'OPS_MANAGER', 'PRODUCT_MANAGER'})
+        self.assertIn('Purchasing UAT role grants synced', out.getvalue())
+
+    @override_settings(APP_ENV='production', DATABASES={'default': {'NAME': 'erp_carton_prod', 'HOST': '127.0.0.1'}})
+    def test_seed_purchasing_permissions_refuses_production_target(self):
+        with self.assertRaisesMessage(CommandError, 'Refusing Purchasing permission seed'):
+            call_command('seed_purchasing_permissions', stdout=StringIO())
 
 
 class SeedUatRolesOnlyCommandTest(TestCase):

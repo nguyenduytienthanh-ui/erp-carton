@@ -1,4 +1,4 @@
-from core.permissions import check_action_permission, user_has_supplier_permission
+from core.permissions import check_action_permission, user_has_purchasing_permission, user_has_supplier_permission
 
 
 def can_view_supplier(user):
@@ -27,6 +27,14 @@ def can_delete_supplier(user):
 
 def can_manage_supplier(user):
     return can_create_supplier(user) or can_edit_supplier(user)
+
+
+def can_view_purchasing(user):
+    return user_has_purchasing_permission(user, 'VIEW', strict=True)
+
+
+def can_manage_purchasing(user):
+    return user_has_purchasing_permission(user, 'MANAGE', strict=True)
 
 
 def can_edit_purchase_order(user, order):

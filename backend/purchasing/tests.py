@@ -293,6 +293,293 @@ class SupplierSecurityTests(APITestCase):
         self.assertFalse(Supplier.objects.filter(pk=created_id).exists())
 
 
+class PurchasingViewPermissionSecurityTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='purchasing_perm_admin',
+            password='Demo123!',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.no_view_user = User.objects.create_user(username='purchasing_perm_no_view', password='Demo123!')
+        self.view_user = self._create_user_with_permissions(
+            'purchasing_perm_view',
+            [('PURCHASING', 'VIEW', 'PURCHASING_VIEW', 'View purchasing module')],
+        )
+        self.manager_user = self._create_user_with_permissions(
+            'purchasing_perm_manager',
+            [
+                ('PURCHASING', 'VIEW', 'PURCHASING_VIEW', 'View purchasing module'),
+                ('PURCHASING', 'MANAGE', 'PURCHASING_MANAGE', 'Manage purchasing module'),
+                ('PURCHASEORDER', 'SUBMIT', 'PURCHASEORDER_SUBMIT', 'Submit purchase orders'),
+                ('PURCHASEORDER', 'APPROVE', 'PURCHASEORDER_APPROVE', 'Approve purchase orders'),
+                ('PURCHASEORDER', 'REJECT', 'PURCHASEORDER_REJECT', 'Reject purchase orders'),
+                ('PURCHASEORDER', 'RECEIVE', 'PURCHASEORDER_RECEIVE', 'Receive purchase orders'),
+                ('PURCHASEORDER', 'CANCEL', 'PURCHASEORDER_CANCEL', 'Cancel purchase orders'),
+            ],
+        )
+
+        self.unit = ProductUnit.objects.create(code='P4F2-UOM', name='P4F2 UOM')
+        self.product = Product.objects.create(
+            code='P4F2-PRODUCT',
+            name='P4F2 product',
+            unit=self.unit,
+            cost_price=10000,
+            sale_price=15000,
+            min_stock=5,
+            status='ACTIVE',
+            created_by=self.admin,
+            updated_by=self.admin,
+            owner=self.admin,
+        )
+        self.warehouse = Warehouse.objects.create(
+            code='P4F2-WH',
+            name='P4F2 warehouse',
+            created_by=self.admin,
+            updated_by=self.admin,
+        )
+        self.location = WarehouseLocation.objects.create(
+            warehouse=self.warehouse,
+            code='P4F2-A1',
+            name='P4F2 bin',
+            created_by=self.admin,
+            updated_by=self.admin,
+        )
+        self.supplier = Supplier.objects.create(
+            code='P4F2-SUP',
+            name='P4F2 Supplier',
+            company_name='P4F2 Supplier',
+            payment_terms_days=15,
+            rating=3,
+        )
+        self.order = PurchaseOrder.objects.create(
+            code='PO-P4F2-VIEW',
+            order_date=timezone.localdate(),
+            expected_receipt_date=timezone.localdate() + timedelta(days=3),
+            supplier=self.supplier,
+            warehouse=self.warehouse,
+            location=self.location,
+            status='DRAFT',
+            created_by=self.admin,
+            updated_by=self.admin,
+            owner=None,
+        )
+        self.order_line = PurchaseOrderLine.objects.create(
+            purchase_order=self.order,
+            line_number=1,
+            product=self.product,
+            product_snapshot={'code': self.product.code, 'name': self.product.name},
+            qty=Decimal('5'),
+            unit_price=Decimal('10000'),
+        )
+        self.receipt = PurchaseReceipt.objects.create(
+            code='GRN-P4F2-VIEW',
+            purchase_order=self.order,
+            receipt_date=timezone.localdate(),
+            reference='P4F2 receipt',
+            warehouse=self.warehouse,
+            location=self.location,
+            total_qty=Decimal('5'),
+            total_amount=Decimal('50000'),
+            created_by=self.admin,
+            updated_by=self.admin,
+            posted_by=self.admin,
+        )
+        self.purchase_request = PurchaseRequest.objects.create(
+            code='PR-P4F2-VIEW',
+            request_date=timezone.localdate(),
+            reference='P4F2 request',
+            notes='P4F2 request',
+            created_by=self.admin,
+            updated_by=self.admin,
+        )
+        self.purchase_return = PurchaseReturn.objects.create(
+            code='RET-P4F2-VIEW',
+            return_date=timezone.localdate(),
+            supplier=self.supplier,
+            purchase_order=self.order,
+            source_receipt=self.receipt,
+            return_reason='OTHER',
+            return_notes='P4F2 return',
+            status='DRAFT',
+            created_by=self.admin,
+            updated_by=self.admin,
+        )
+        self.material_price = MaterialPurchasePrice.objects.create(
+            product=self.product,
+            supplier=self.supplier,
+            unit_price=Decimal('10000'),
+            currency='VND',
+            uom='P4F2-UOM',
+            effective_from=timezone.localdate(),
+            created_by=self.admin,
+            updated_by=self.admin,
+        )
+
+    def _create_user_with_permissions(self, username, permissions):
+        user = User.objects.create_user(username=username, password='Demo123!')
+        role = Role.objects.create(code=f'{username.upper()}_ROLE', name=f'{username} role')
+        for resource, action, code, name in permissions:
+            permission, _ = Permission.objects.update_or_create(
+                resource=resource,
+                action=action,
+                defaults={'code': code, 'name': name},
+            )
+            role.permissions.add(permission)
+        user.roles.add(role)
+        return user
+
+    def _assert_read_endpoints(self, expected_status):
+        endpoints = [
+            '/api/purchasing/material-prices/',
+            f'/api/purchasing/material-prices/{self.material_price.id}/',
+            '/api/purchasing/requests/',
+            f'/api/purchasing/requests/{self.purchase_request.id}/',
+            f'/api/purchasing/requests/{self.purchase_request.id}/approval_history/',
+            '/api/purchasing/orders/',
+            f'/api/purchasing/orders/{self.order.id}/',
+            '/api/purchasing/orders/summary/',
+            f'/api/purchasing/orders/{self.order.id}/approval_history/',
+            f'/api/purchasing/orders/{self.order.id}/receipt_overview/',
+            f'/api/purchasing/orders/{self.order.id}/next_states/',
+            '/api/purchasing/receipts/',
+            f'/api/purchasing/receipts/{self.receipt.id}/',
+            f'/api/purchasing/receipts/{self.receipt.id}/lifecycle_history/',
+            f'/api/purchasing/receipts/{self.receipt.id}/next_states/',
+            f'/api/purchasing/receipts/{self.receipt.id}/returnable_lines/',
+            '/api/purchasing/returns/',
+            f'/api/purchasing/returns/{self.purchase_return.id}/',
+            f'/api/purchasing/returns/{self.purchase_return.id}/approval_history/',
+            f'/api/purchasing/returns/{self.purchase_return.id}/lifecycle_history/',
+            f'/api/purchasing/returns/{self.purchase_return.id}/next_states/',
+        ]
+        for endpoint in endpoints:
+            with self.subTest(endpoint=endpoint):
+                response = self.client.get(endpoint)
+                self.assertEqual(response.status_code, expected_status, response.data)
+
+    def test_anonymous_and_no_view_cannot_read_purchasing_business_endpoints(self):
+        self.client.force_authenticate(user=None)
+        anonymous_response = self.client.get('/api/purchasing/orders/')
+        self.assertIn(anonymous_response.status_code, (401, 403), anonymous_response.data)
+
+        self.client.force_authenticate(user=self.no_view_user)
+        self._assert_read_endpoints(403)
+
+    def test_view_only_can_read_purchasing_surfaces(self):
+        self.client.force_authenticate(user=self.view_user)
+        self._assert_read_endpoints(200)
+
+    def test_view_only_cannot_mutate_purchasing_surfaces(self):
+        self.client.force_authenticate(user=self.view_user)
+
+        create_order_response = self.client.post('/api/purchasing/orders/', {
+            'order_date': timezone.localdate().isoformat(),
+            'supplier': self.supplier.id,
+            'warehouse': self.warehouse.id,
+            'location': self.location.id,
+            'lines': [
+                {
+                    'line_number': 1,
+                    'product': self.product.id,
+                    'qty': '1',
+                    'unit_price': '10000',
+                    'discount_pct': '0',
+                    'tax_pct': '0',
+                }
+            ],
+        }, format='json')
+        update_order_response = self.client.patch(
+            f'/api/purchasing/orders/{self.order.id}/',
+            {'reference': 'view-only update'},
+            format='json',
+        )
+        delete_order_response = self.client.delete(f'/api/purchasing/orders/{self.order.id}/')
+        submit_response = self.client.post(f'/api/purchasing/orders/{self.order.id}/submit/', format='json')
+        approve_response = self.client.post(f'/api/purchasing/orders/{self.order.id}/approve/', format='json')
+        receive_response = self.client.post(f'/api/purchasing/orders/{self.order.id}/receive/', format='json')
+        cancel_order_response = self.client.post(
+            f'/api/purchasing/orders/{self.order.id}/cancel/',
+            {'reason': 'view-only cancel'},
+            format='json',
+        )
+        cancel_receipt_response = self.client.post(
+            f'/api/purchasing/receipts/{self.receipt.id}/cancel/',
+            {'reason': 'view-only cancel'},
+            format='json',
+        )
+        create_return_response = self.client.post('/api/purchasing/returns/', {
+            'return_date': timezone.localdate().isoformat(),
+            'supplier': self.supplier.id,
+            'reference': 'view-only return',
+            'return_reason': 'OTHER',
+            'lines': [
+                {
+                    'line_number': 1,
+                    'product': self.product.id,
+                    'qty': '1',
+                    'unit_price': '10000',
+                    'tax_pct': '0',
+                }
+            ],
+        }, format='json')
+        update_return_response = self.client.patch(
+            f'/api/purchasing/returns/{self.purchase_return.id}/',
+            {'reference': 'view-only return update'},
+            format='json',
+        )
+        delete_return_response = self.client.delete(f'/api/purchasing/returns/{self.purchase_return.id}/')
+        submit_return_response = self.client.post(f'/api/purchasing/returns/{self.purchase_return.id}/submit_return/', format='json')
+        approve_return_response = self.client.post(f'/api/purchasing/returns/{self.purchase_return.id}/approve_return/', format='json')
+        post_return_response = self.client.post(f'/api/purchasing/returns/{self.purchase_return.id}/post_return/', format='json')
+        cancel_return_response = self.client.post(f'/api/purchasing/returns/{self.purchase_return.id}/cancel_return/', format='json')
+        reverse_return_response = self.client.post(
+            f'/api/purchasing/returns/{self.purchase_return.id}/reverse_return/',
+            {'reason': 'view-only reverse'},
+            format='json',
+        )
+        price_create_response = self.client.post('/api/purchasing/material-prices/', {
+            'product': self.product.id,
+            'supplier': self.supplier.id,
+            'unit_price': '10000',
+            'currency': 'VND',
+            'uom': 'P4F2-UOM',
+            'effective_from': timezone.localdate().isoformat(),
+        }, format='json')
+        request_create_response = self.client.post('/api/purchasing/requests/', {
+            'request_date': timezone.localdate().isoformat(),
+            'reference': 'view-only request',
+        }, format='json')
+        request_submit_response = self.client.post(f'/api/purchasing/requests/{self.purchase_request.id}/submit/', format='json')
+
+        for response in [
+            create_order_response,
+            update_order_response,
+            delete_order_response,
+            submit_response,
+            approve_response,
+            receive_response,
+            cancel_order_response,
+            cancel_receipt_response,
+            create_return_response,
+            update_return_response,
+            delete_return_response,
+            submit_return_response,
+            approve_return_response,
+            post_return_response,
+            cancel_return_response,
+            reverse_return_response,
+            price_create_response,
+            request_create_response,
+            request_submit_response,
+        ]:
+            self.assertEqual(response.status_code, 403, response.data)
+
+    def test_manage_permission_still_allows_read_surfaces(self):
+        self.client.force_authenticate(user=self.manager_user)
+        self._assert_read_endpoints(200)
+
+
 class PurchasingWorkflowTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(

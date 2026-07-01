@@ -797,6 +797,7 @@ export default function PurchaseOrderList() {
   };
 
   const actionPermissions = { canManage, canSubmit, canApprove, canReceive, canCancel };
+  const canSeeOrderWriteActions = canManage || canSubmit || canApprove || canReceive || canCancel;
 
   const handleOrderAction = (row: PurchaseOrder, action: PurchaseOrderMenuActionKey) => {
     if (action === 'view') {
@@ -843,14 +844,16 @@ export default function PurchaseOrderList() {
   };
 
   const renderOrderActions = (row: PurchaseOrder, compact = false) => {
-    const quickActions = getPurchaseOrderQuickActions(row);
-    const menuItems: MenuProps['items'] = PURCHASE_ORDER_ACTION_MENU.map((item) => ({
-      key: item.key,
-      danger: item.danger,
-      disabled: item.key !== 'view' && Boolean(getPurchaseOrderActionDisabledReason(row, item.key, actionPermissions)),
-      icon: PURCHASE_ORDER_ACTION_ICONS[item.key],
-      label: PURCHASE_ORDER_ACTION_LABELS[item.key],
-    }));
+    const quickActions = getPurchaseOrderQuickActions(row).filter((action) => action === 'view' || canSeeOrderWriteActions);
+    const menuItems: MenuProps['items'] = PURCHASE_ORDER_ACTION_MENU
+      .filter((item) => item.key === 'view' || canSeeOrderWriteActions)
+      .map((item) => ({
+        key: item.key,
+        danger: item.danger,
+        disabled: item.key !== 'view' && Boolean(getPurchaseOrderActionDisabledReason(row, item.key, actionPermissions)),
+        icon: PURCHASE_ORDER_ACTION_ICONS[item.key],
+        label: PURCHASE_ORDER_ACTION_LABELS[item.key],
+      }));
     return (
       <Space size={compact ? 8 : 6} wrap>
         {quickActions.map((action) => {
@@ -992,19 +995,22 @@ export default function PurchaseOrderList() {
               <Title level={3} style={{ margin: '8px 0 4px' }}>Trung tâm đơn mua</Title>
               <Text type="secondary">Điều phối toàn bộ luồng từ tạo đơn, gửi duyệt tới nhập kho và theo dõi tiến độ nhận hàng trên cùng một màn hình.</Text>
             </div>
-            <Tooltip title={supplierOptions.length === 0 ? 'Vui lòng tạo nhà cung cấp trước' : ''}>
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                disabled={!canManage || supplierOptions.length === 0}
-                onClick={() => {
-                  setEditingOrder(null);
-                  setOpenForm(true);
-                }}
-              >
-                Tạo đơn mua
-              </Button>
-            </Tooltip>
+            {canManage ? (
+              <Tooltip title={supplierOptions.length === 0 ? 'Vui lòng tạo nhà cung cấp trước' : ''}>
+                <Button
+                  data-testid="purchase-orders-open-create"
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  disabled={supplierOptions.length === 0}
+                  onClick={() => {
+                    setEditingOrder(null);
+                    setOpenForm(true);
+                  }}
+                >
+                  Tạo đơn mua
+                </Button>
+              </Tooltip>
+            ) : null}
           </div>
 
           <Alert showIcon type={statusAlert.type} message={statusAlert.message} description={statusAlert.description} />
@@ -1228,7 +1234,7 @@ export default function PurchaseOrderList() {
                       Xóa bộ lọc
                     </Button>
                   </div>
-                ) : 'Chưa có đơn mua. Nhấn Tạo đơn mua để thêm mới.'}
+                ) : canManage ? 'Chưa có đơn mua. Nhấn Tạo đơn mua để thêm mới.' : 'Chưa có đơn mua.'}
               </div>
             ) : undefined,
           }}

@@ -160,6 +160,28 @@ SUPPLIER_PERMISSION_DEFINITIONS = (
     },
 )
 
+PURCHASING_PERMISSION_DEFINITIONS = (
+    {
+        'field': 'purchasing_view',
+        'label': 'Mua hĂ ng - xem',
+        'resource': 'PURCHASING',
+        'action': 'VIEW',
+        'changed_type': 'purchasing_view',
+        'code': 'PURCHASING_VIEW',
+        'name': 'View purchasing module',
+    },
+)
+
+PURCHASING_VIEW_IMPLIED_PERMISSIONS = (
+    ('PURCHASING', 'VIEW'),
+    ('PURCHASING', 'MANAGE'),
+    ('PURCHASEORDER', 'SUBMIT'),
+    ('PURCHASEORDER', 'APPROVE'),
+    ('PURCHASEORDER', 'REJECT'),
+    ('PURCHASEORDER', 'RECEIVE'),
+    ('PURCHASEORDER', 'CANCEL'),
+)
+
 
 class ResourceActionPermission(BasePermission):
     """
@@ -219,3 +241,17 @@ def user_has_supplier_permission(user, action, *, strict=True):
     if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
         return True
     return check_action_permission(user, 'SUPPLIER', action, strict=strict)
+
+
+def user_has_purchasing_permission(user, action, *, strict=True):
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    normalized_action = str(action or '').strip().upper()
+    if normalized_action == 'VIEW':
+        return any(
+            check_action_permission(user, resource, permission_action, strict=True)
+            for resource, permission_action in PURCHASING_VIEW_IMPLIED_PERMISSIONS
+        )
+    return check_action_permission(user, 'PURCHASING', normalized_action, strict=strict)

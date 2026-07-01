@@ -67,9 +67,11 @@ from .utils import export_to_excel, export_to_pdf
 from .mixins import AuditLogMixin, ExportExcelMixin
 from .permissions import (
     CUSTOMER_PERMISSION_DEFINITIONS,
+    PURCHASING_PERMISSION_DEFINITIONS,
     SUPPLIER_PERMISSION_DEFINITIONS,
     check_action_permission,
     user_has_customer_permission,
+    user_has_purchasing_permission,
     user_has_supplier_permission,
 )
 
@@ -98,6 +100,7 @@ MODULE_PERMISSION_FIELDS = [
         'action': 'MANAGE',
         'changed_type': 'purchasing',
     },
+    *PURCHASING_PERMISSION_DEFINITIONS,
     {
         'field': 'production_manage',
         'label': 'Sản xuất',
@@ -199,6 +202,7 @@ ROLE_GOVERNANCE_TEMPLATE_DEFINITIONS = [
             ('OPS', 'VIEW'),
             ('WORKFLOW', 'VIEW'),
             ('WORKFLOW', 'MANAGE'),
+            ('PURCHASING', 'VIEW'),
             ('PURCHASING', 'MANAGE'),
             ('PRODUCTION', 'MANAGE'),
             ('INVENTORY', 'MANAGE'),
@@ -361,6 +365,7 @@ ROLE_GOVERNANCE_MODULE_KEY_LOOKUP = {
     ('WORKFORCE', 'MANAGE'): 'workforce',
     ('FINANCE', 'MANAGE'): 'finance',
     ('PURCHASING', 'MANAGE'): 'purchasing',
+    ('PURCHASING', 'VIEW'): 'purchasing-view',
     ('PRODUCTION', 'MANAGE'): 'production',
     ('OPS', 'VIEW'): 'operations',
     ('CORE', 'VIEW_REPORTS'): 'reports',
@@ -444,6 +449,7 @@ ACCOUNT_ACCESS_MODULES = [
         'description': 'Nhà cung cấp, đơn mua và nhập mua',
         'primary_route': '/purchase-orders',
         'permissions': [
+            ('PURCHASING', 'VIEW'),
             ('PURCHASING', 'MANAGE'),
             ('PURCHASEORDER', 'SUBMIT'),
             ('PURCHASEORDER', 'APPROVE'),
@@ -451,7 +457,7 @@ ACCOUNT_ACCESS_MODULES = [
             ('PURCHASEORDER', 'CANCEL'),
         ],
         'role_names': {'admin', 'manager', 'operation-manager', 'ops-manager', 'product-manager', 'finance-manager', 'quan-ly', 'quanly'},
-        'matcher': '_can_manage_purchasing_data',
+        'matcher': '_can_view_purchasing_data',
     },
     {
         'key': 'production',
@@ -761,6 +767,12 @@ def _can_manage_purchasing_data(user):
     return _has_any_role_name(user, {'admin', 'manager', 'operation-manager', 'ops-manager', 'product-manager', 'finance-manager', 'quan-ly', 'quanly'})
 
 
+def _can_view_purchasing_data(user):
+    if _can_manage_purchasing_data(user):
+        return True
+    return user_has_purchasing_permission(user, 'VIEW', strict=True)
+
+
 def _can_manage_production_data(user):
     if not user or not user.is_authenticated:
         return False
@@ -996,7 +1008,7 @@ def _build_access_capability_map(user):
         'sales_orders': _can_access_sales_orders(user),
         'customers': _can_view_customers(user),
         'suppliers': _can_view_suppliers(user),
-        'purchasing': _can_manage_purchasing_data(user),
+        'purchasing': _can_view_purchasing_data(user),
         'production': _can_access_production_center(user),
         'production_planning': _can_manage_production_data(user),
         'inventory': _can_manage_inventory_data(user),
@@ -1354,6 +1366,7 @@ def _get_access_summary(user):
         '_can_access_sales_orders': _can_access_sales_orders,
         '_can_access_inventory_hub': _can_access_inventory_hub,
         '_can_manage_purchasing_data': _can_manage_purchasing_data,
+        '_can_view_purchasing_data': _can_view_purchasing_data,
         '_can_access_production_center': _can_access_production_center,
         '_can_manage_production_data': _can_manage_production_data,
         '_can_manage_workforce_data': _can_manage_workforce_data,

@@ -144,6 +144,7 @@ export default function MaterialPriceList() {
       ),
     },
   ];
+  const visibleColumns = canManage ? columns : columns.filter((column) => column.key !== 'actions');
 
   const toPayload = (values: FormValues & { effective_from?: dayjs.Dayjs; effective_to?: dayjs.Dayjs }) => {
     return {
@@ -213,15 +214,15 @@ export default function MaterialPriceList() {
       <PageHeader
         title="Bảng giá nguyên vật liệu"
         subtitle="Giá mua NVL và hàng mua theo nhà cung cấp"
-        extra={
+        extra={canManage ? (
           <Space>
-            <Button icon={<DownloadOutlined />} onClick={exportCsv} disabled={!listQuery.data?.results?.length}>
+            <Button data-testid="material-prices-export-csv" icon={<DownloadOutlined />} onClick={exportCsv} disabled={!listQuery.data?.results?.length}>
               Xuất CSV
             </Button>
             <Button
+              data-testid="material-prices-open-create"
               type="primary"
               icon={<PlusOutlined />}
-              disabled={!canManage}
               onClick={() => {
                 setEditing(null);
                 form.setFieldsValue({ ...emptyForm, effective_from: dayjs(), effective_to: null });
@@ -231,7 +232,7 @@ export default function MaterialPriceList() {
               Thêm bảng giá
             </Button>
           </Space>
-        }
+        ) : null}
       />
 
       <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -288,7 +289,7 @@ export default function MaterialPriceList() {
       <Table
         rowKey="id"
         loading={listQuery.isLoading}
-        columns={columns}
+        columns={visibleColumns}
         dataSource={listQuery.data?.results ?? []}
         scroll={{ x: 1150 }}
         pagination={{

@@ -23,7 +23,7 @@ import dayjs, { Dayjs } from 'dayjs';
 import { useSearchParams } from 'react-router-dom';
 import { purchasingApi } from '../../api/purchasing';
 import type { PurchaseApprovalHistoryItem, PurchaseRequest, PurchaseRequestStatus } from '../../types/purchasing';
-import { getToastMessage } from '../../utils/authz';
+import { canManagePurchasingData, getToastMessage } from '../../utils/authz';
 import { downloadCSV } from '../../utils/csvExport';
 
 const { Text, Title } = Typography;
@@ -122,6 +122,7 @@ const PurchaseRequestList: React.FC = () => {
   const [rejectReason, setRejectReason] = useState('');
   const [form] = Form.useForm<RequestFormValues>();
   const queryClient = useQueryClient();
+  const canManage = canManagePurchasingData();
 
   const params = {
     search: search || undefined,
@@ -359,6 +360,8 @@ const PurchaseRequestList: React.FC = () => {
             <Button size="small" icon={<EyeOutlined />} onClick={() => { setDetailRequestId(row.id); setDismissedFocusKey(focusKey); }}>
               Xem
             </Button>
+            {canManage ? (
+              <>
             <Button
               size="small"
               disabled={Boolean(editReason)}
@@ -433,6 +436,8 @@ const PurchaseRequestList: React.FC = () => {
                 </Button>
               </>
             )}
+              </>
+            ) : null}
           </Space>
         );
       },
@@ -457,21 +462,23 @@ const PurchaseRequestList: React.FC = () => {
               <Title level={3} style={{ margin: '8px 0 4px' }}>Trung tâm yêu cầu mua</Title>
               <Text type="secondary">Theo dõi yêu cầu mua từ lúc tạo nháp, gửi duyệt tới khi chốt quyết định để đẩy sang bước mua hàng thực thi.</Text>
             </div>
-            <Space wrap>
-              <Button onClick={handleExportCSV}>Xuất CSV</Button>
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={() => {
-                  setEditRequest(null);
-                  form.resetFields();
-                  form.setFieldValue('request_date', dayjs());
-                  setFormOpen(true);
-                }}
-              >
-                Tạo mới
-              </Button>
-            </Space>
+            {canManage ? (
+              <Space wrap>
+                <Button onClick={handleExportCSV}>Xuất CSV</Button>
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={() => {
+                    setEditRequest(null);
+                    form.resetFields();
+                    form.setFieldValue('request_date', dayjs());
+                    setFormOpen(true);
+                  }}
+                >
+                  Tạo mới
+                </Button>
+              </Space>
+            ) : null}
           </div>
 
           <Alert showIcon type={statusAlert.type} message={statusAlert.message} description={statusAlert.description} />

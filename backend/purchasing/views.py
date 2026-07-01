@@ -42,6 +42,7 @@ from purchasing.permissions import (
     can_receive_purchase_order,
     can_reject_purchase_order,
     can_submit_purchase_order,
+    can_view_purchasing,
     can_view_supplier,
 )
 from purchasing.serializers import (
@@ -105,6 +106,15 @@ def _can_manage_procurement(user):
 
 def _require_manage_procurement(user, message='Bạn không có quyền quản lý mua hàng.'):
     if not _can_manage_procurement(user):
+        raise PermissionDenied(message)
+
+
+def _can_view_procurement(user):
+    return _can_manage_procurement(user) or can_view_purchasing(user)
+
+
+def _require_view_procurement(user, message='Ban khong co quyen xem du lieu mua hang.'):
+    if not _can_view_procurement(user):
         raise PermissionDenied(message)
 
 
@@ -178,8 +188,7 @@ class SearchTextMixin:
     search_text_field = 'search_text'
 
     def check_module_read_permission(self):
-        if not _can_manage_procurement(self.request.user):
-            raise PermissionDenied('Bạn không có quyền xem dữ liệu mua hàng.')
+        _require_view_procurement(self.request.user)
 
     def apply_search(self, queryset):
         self.check_module_read_permission()
@@ -407,7 +416,7 @@ class MaterialPurchasePriceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        _require_manage_procurement(self.request.user, 'Bạn không có quyền xem bảng giá nguyên vật liệu.')
+        _require_view_procurement(self.request.user, 'Bạn không có quyền xem bảng giá nguyên vật liệu.')
         product = self.request.query_params.get('product')
         if product:
             qs = qs.filter(product_id=product)
@@ -437,6 +446,7 @@ class PurchaseOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
     ordering = ['-order_date', '-id']
 
     def get_queryset(self):
+        _require_view_procurement(self.request.user)
         queryset = PurchaseOrder.objects.select_related(
             'supplier',
             'warehouse',
@@ -534,6 +544,7 @@ class PurchaseOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
         )
 
     def destroy(self, request, *args, **kwargs):
+        _require_manage_procurement(request.user, 'Bạn không có quyền xóa đơn mua.')
         order = self.get_object()
         if order.status not in {PurchaseOrderStatus.DRAFT, PurchaseOrderStatus.REJECTED}:
             return Response({'error': 'Chỉ được xóa đơn mua ở trạng thái Nháp hoặc Từ chối.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -551,6 +562,14 @@ class PurchaseOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
             new_values={},
         )
         return response
+
+    def update(self, request, *args, **kwargs):
+        _require_manage_procurement(request.user, 'Ban khong co quyen sua don mua.')
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        _require_manage_procurement(request.user, 'Ban khong co quyen sua don mua.')
+        return super().partial_update(request, *args, **kwargs)
 
     @action(detail=True, methods=['post'])
     def submit(self, request, pk=None):
@@ -927,6 +946,7 @@ class PurchaseReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
     ordering = ['-receipt_date', '-id']
 
     def get_queryset(self):
+        _require_view_procurement(self.request.user)
         queryset = PurchaseReceipt.objects.select_related(
             'purchase_order',
             'purchase_order__supplier',
@@ -1049,7 +1069,7 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         qs = PurchaseRequest.objects.select_related(
             'requested_by', 'approved_by', 'rejected_by', 'created_by', 'updated_by',
         ).prefetch_related('lines', 'lines__product')
-        _require_manage_procurement(self.request.user)
+        _require_view_procurement(self.request.user)
         status = self.request.query_params.get('status')
         if status:
             qs = qs.filter(status=status)
@@ -1066,11 +1086,13 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         serializer.save(created_by=self.request.user, updated_by=self.request.user)
 
     def perform_update(self, serializer):
+        _require_manage_procurement(self.request.user, 'Bạn không có quyền sửa yêu cầu mua.')
         if serializer.instance.status != PurchaseRequestStatus.DRAFT:
             raise PermissionDenied('Chỉ được sửa yêu cầu mua ở trạng thái Nháp.')
         serializer.save(updated_by=self.request.user)
 
     def perform_destroy(self, instance):
+        _require_manage_procurement(self.request.user, 'Bạn không có quyền xóa yêu cầu mua.')
         if instance.status != PurchaseRequestStatus.DRAFT:
             raise PermissionDenied('Chỉ được xóa yêu cầu mua ở trạng thái Nháp.')
         instance.delete()
@@ -1078,6 +1100,7 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def submit(self, request, pk=None):
         """DRAFT -> SUBMITTED (gửi duyệt)."""
+        _require_manage_procurement(request.user, 'Bạn không có quyền gửi duyệt yêu cầu mua.')
         pr = self.get_object()
         if pr.status != PurchaseRequestStatus.DRAFT:
             return Response({'error': 'Chỉ gửi duyệt yêu cầu ở trạng thái Nháp.'}, status=400)
@@ -1107,6 +1130,7 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         """SUBMITTED -> APPROVED."""
+        _require_manage_procurement(request.user, 'Bạn không có quyền duyệt yêu cầu mua.')
         pr = self.get_object()
         if pr.status != PurchaseRequestStatus.SUBMITTED:
             return Response({'error': 'Chỉ duyệt yêu cầu đã gửi.'}, status=400)
@@ -1140,6 +1164,7 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
         """SUBMITTED -> REJECTED. Body: { reason }."""
+        _require_manage_procurement(request.user, 'Bạn không có quyền từ chối yêu cầu mua.')
         pr = self.get_object()
         if pr.status != PurchaseRequestStatus.SUBMITTED:
             return Response({'error': 'Chỉ từ chối yêu cầu đã gửi.'}, status=400)
@@ -1204,7 +1229,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
     ordering = ['-return_date']
 
     def get_queryset(self):
-        _require_manage_procurement(self.request.user, 'Bạn không có quyền quản lý phiếu trả hàng mua.')
+        _require_view_procurement(self.request.user, 'Bạn không có quyền xem phiếu trả hàng mua.')
         qs = super().get_queryset()
         status_filter = self.request.query_params.get('status')
         if status_filter:
@@ -1234,6 +1259,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         serializer.save(updated_by=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
+        _require_manage_procurement(request.user, 'Bạn không có quyền xóa phiếu trả hàng mua.')
         ret = self.get_object()
         if ret.status != PurchaseReturnStatus.DRAFT:
             return Response({'error': 'Chỉ được xóa phiếu trả hàng ở trạng thái Nháp.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1242,6 +1268,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def submit_return(self, request, pk=None):
         """DRAFT -> SUBMITTED."""
+        _require_manage_procurement(request.user, 'Bạn không có quyền gửi duyệt phiếu trả hàng mua.')
         ret = self.get_object()
         if ret.status != PurchaseReturnStatus.DRAFT:
             return Response({'error': 'Chỉ gửi duyệt phiếu trả ở trạng thái Nháp.'}, status=400)
@@ -1271,6 +1298,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def approve_return(self, request, pk=None):
         """SUBMITTED -> APPROVED."""
+        _require_manage_procurement(request.user, 'Bạn không có quyền duyệt phiếu trả hàng mua.')
         ret = self.get_object()
         if ret.status != PurchaseReturnStatus.SUBMITTED:
             return Response({'error': 'Chỉ duyệt phiếu trả đã gửi.'}, status=400)
@@ -1301,6 +1329,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def post_return(self, request, pk=None):
         """APPROVED -> POSTED through anchored inventory issue and AP adjustment."""
+        _require_manage_procurement(request.user, 'Bạn không có quyền post phiếu trả hàng mua.')
         ret = self.get_object()
         previous_status = ret.status
         ret = post_purchase_return(ret, actor=request.user)
@@ -1321,6 +1350,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def cancel_return(self, request, pk=None):
         """Cancel unposted return only."""
+        _require_manage_procurement(request.user, 'Bạn không có quyền hủy phiếu trả hàng mua.')
         ret = self.get_object()
         reason = (request.data.get('reason') or '').strip() or 'Hủy phiếu trả'
         previous_status = ret.status
@@ -1339,6 +1369,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def reverse_return(self, request, pk=None):
         """POSTED -> REVERSED through compensating inventory receipt and AP adjustment."""
+        _require_manage_procurement(request.user, 'Bạn không có quyền đảo phiếu trả hàng mua.')
         ret = self.get_object()
         previous_status = ret.status
         reason = (request.data.get('reason') or '').strip()

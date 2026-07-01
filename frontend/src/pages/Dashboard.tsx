@@ -34,7 +34,7 @@ import {
   canManageFinanceData,
   canManageInventoryData,
   canManageOnboardingStudio,
-  canManagePurchasingData,
+  canViewPurchasingData,
   canManageWorkforceData,
   canViewOpsHub,
   canViewReportsCenter,
@@ -177,7 +177,7 @@ export default function Dashboard() {
   }, []);
 
   const canViewSales = canAccessSalesOrders();
-  const canManagePurchasing = canManagePurchasingData();
+  const canViewPurchasing = canViewPurchasingData();
   const canAccessProduction = canAccessProductionCenter();
   const canManageProduction = canManageProductionData();
   const canViewQuality = canViewQualityData();
@@ -188,7 +188,7 @@ export default function Dashboard() {
   const canViewReports = canViewReportsCenter();
   const canViewOps = canViewOpsHub();
   const canViewWorkflow = canViewWorkflowData();
-  const canViewSalesFulfillmentCenter = canViewSales || canManagePurchasing || canManageProduction || canViewReports;
+  const canViewSalesFulfillmentCenter = canViewSales || canViewPurchasing || canManageProduction || canViewReports;
 
   const { config, saveConfig } = useUserPreferences(PAGES.DASHBOARD);
 
@@ -203,7 +203,7 @@ export default function Dashboard() {
   const purchasingSummaryQuery = useQuery({
     queryKey: ['dashboard-purchasing-summary'],
     queryFn: () => purchasingApi.getOrderSummary(),
-    enabled: canManagePurchasing,
+    enabled: canViewPurchasing,
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
@@ -690,7 +690,7 @@ export default function Dashboard() {
       });
     }
 
-    if (canManagePurchasing) {
+    if (canViewPurchasing) {
       const tone: Tone = (purchasingSummary?.overdue_receipt_count ?? 0) > 0
         ? 'critical'
         : (purchasingSummary?.pending_approval_count ?? 0) > 0
@@ -774,7 +774,7 @@ export default function Dashboard() {
     canManageFinance,
     canManageInventory,
     canAccessProduction,
-    canManagePurchasing,
+    canViewPurchasing,
     canViewSales,
     payableSummary?.open_count,
     payableSummary?.overdue_amount,
@@ -817,7 +817,7 @@ export default function Dashboard() {
         detail: 'Rà lại reservation tồn, năng lực sản xuất và lịch xuất hàng trong ngày.',
       });
     }
-    if (canManagePurchasing && (purchasingSummary?.overdue_receipt_count ?? 0) > 0) {
+    if (canViewPurchasing && (purchasingSummary?.overdue_receipt_count ?? 0) > 0) {
       items.push({
         tone: 'critical',
         title: `${formatNumber(purchasingSummary?.overdue_receipt_count)} đơn mua quá hạn nhận hàng`,
@@ -866,7 +866,7 @@ export default function Dashboard() {
     canManageFinance,
     canManageInventory,
     canAccessProduction,
-    canManagePurchasing,
+    canViewPurchasing,
     canViewSales,
     payableSummary?.overdue_count,
     productionSummary?.overdue_plan_count,
@@ -887,7 +887,7 @@ export default function Dashboard() {
         color: theme.colors.primary,
       });
     }
-    if (canManagePurchasing) {
+    if (canViewPurchasing) {
       stats.push({
         label: 'Đơn mua nhận đủ',
         value: `${formatNumber(purchasingSummary?.received_count)}/${formatNumber(purchasingSummary?.total_orders)}`,
@@ -915,7 +915,7 @@ export default function Dashboard() {
   }, [
     canManageFinance,
     canAccessProduction,
-    canManagePurchasing,
+    canViewPurchasing,
     canViewSales,
     productionSummary?.completed_count,
     productionSummary?.total_orders,
@@ -1043,7 +1043,7 @@ export default function Dashboard() {
         tone: 'critical',
       });
     }
-    if (canManagePurchasing && (purchasingSummary?.overdue_receipt_count ?? 0) > 0) {
+    if (canViewPurchasing && (purchasingSummary?.overdue_receipt_count ?? 0) > 0) {
       items.push({
         key: 'purchasing-followup',
         title: 'Đẩy theo các đơn mua quá hạn nhận',
@@ -1083,7 +1083,7 @@ export default function Dashboard() {
 
     return items.slice(0, 4);
   }, [
-    canManagePurchasing,
+    canViewPurchasing,
     canViewOps,
     canViewReports,
     canViewWorkflow,

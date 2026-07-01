@@ -22,7 +22,6 @@ import {
   canManageFinanceData,
   canManageInventoryData,
   canManageStocktake,
-  canManagePurchasingData,
   canManageProductionData,
   canViewQualityData,
   canAccessProductionCenter,
@@ -40,6 +39,7 @@ import {
   canViewWorkflowData,
   canManageWorkflowData,
   canViewCustomers,
+  canViewPurchasingData,
   canViewSuppliers,
 } from './utils/authz';
 
@@ -169,7 +169,7 @@ export default function AppRouter() {
   const canManageFinance = canManageFinanceData();
   const canManageInventory = canManageInventoryData();
   const canManageStocktakeRoute = canManageStocktake();
-  const canManagePurchasing = canManagePurchasingData();
+  const canViewPurchasing = canViewPurchasingData();
   const canManageProduction = canManageProductionData();
   const canViewQuality = canViewQualityData();
   const canAccessProduction = canAccessProductionCenter();
@@ -177,7 +177,7 @@ export default function AppRouter() {
   const canAccessProductionReceiptRoute = canAccessProductionReceipts();
   const canManageWorkforce = canManageWorkforceData();
   const canViewApprovalTower = canViewApprovalControlTower();
-  const canViewSalesFulfillmentCenter = canViewSalesOrders || canManagePurchasing || canManageProduction || canViewReports;
+  const canViewSalesFulfillmentCenter = canViewSalesOrders || canViewPurchasing || canManageProduction || canViewReports;
   const [antdLocale, setAntdLocale] = useState<Locale | undefined>(undefined);
 
   useEffect(() => {
@@ -266,13 +266,13 @@ export default function AppRouter() {
               <Route path="units" element={withAsyncBoundary(<UnitList />)} />
               <Route path="customers" element={<FeatureRoute allow={canViewCustomerCatalog} fallbackTo="/">{withAsyncBoundary(<CustomerList />)}</FeatureRoute>} />
               <Route path="suppliers" element={<FeatureRoute allow={canViewSupplierCatalog} fallbackTo="/">{withAsyncBoundary(<SupplierList />)}</FeatureRoute>} />
-              <Route path="material-prices" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<MaterialPriceList />)}</FeatureRoute>} />
-              <Route path="purchase-orders" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseOrderList />)}</FeatureRoute>} />
-              <Route path="purchase-receipts" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseReceiptList />)}</FeatureRoute>} />
-              <Route path="purchase-requests" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseRequestList />)}</FeatureRoute>} />
-              <Route path="purchase-returns" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseReturnList />)}</FeatureRoute>} />
-              <Route path="purchase-order-forecast" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseOrderForecast />)}</FeatureRoute>} />
-              <Route path="supplier-analytics" element={<FeatureRoute allow={canManagePurchasing} fallbackTo="/">{withAsyncBoundary(<SupplierPerformanceAnalytics />)}</FeatureRoute>} />
+              <Route path="material-prices" element={<FeatureRoute allow={canViewPurchasing} fallbackTo="/">{withAsyncBoundary(<MaterialPriceList />)}</FeatureRoute>} />
+              <Route path="purchase-orders" element={<FeatureRoute allow={canViewPurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseOrderList />)}</FeatureRoute>} />
+              <Route path="purchase-receipts" element={<FeatureRoute allow={canViewPurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseReceiptList />)}</FeatureRoute>} />
+              <Route path="purchase-requests" element={<FeatureRoute allow={canViewPurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseRequestList />)}</FeatureRoute>} />
+              <Route path="purchase-returns" element={<FeatureRoute allow={canViewPurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseReturnList />)}</FeatureRoute>} />
+              <Route path="purchase-order-forecast" element={<FeatureRoute allow={canViewPurchasing} fallbackTo="/">{withAsyncBoundary(<PurchaseOrderForecast />)}</FeatureRoute>} />
+              <Route path="supplier-analytics" element={<FeatureRoute allow={canViewPurchasing} fallbackTo="/">{withAsyncBoundary(<SupplierPerformanceAnalytics />)}</FeatureRoute>} />
               <Route path="production-demands" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionDemandList />)}</FeatureRoute>} />
               <Route path="production-orders" element={<FeatureRoute allow={canAccessProduction} fallbackTo="/">{withAsyncBoundary(<ProductionOrderList />)}</FeatureRoute>} />
               <Route path="production-planning" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionPlanningBoard />)}</FeatureRoute>} />

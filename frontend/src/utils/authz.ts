@@ -197,6 +197,32 @@ export function canManagePurchasingData(): boolean {
   ]);
 }
 
+export function canViewPurchasingData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PURCHASING', 'VIEW')) return true;
+  if (hasPermission(authz.permissions, 'PURCHASING', 'MANAGE')) return true;
+  if (
+    hasPermission(authz.permissions, 'PURCHASEORDER', 'SUBMIT')
+    || hasPermission(authz.permissions, 'PURCHASEORDER', 'APPROVE')
+    || hasPermission(authz.permissions, 'PURCHASEORDER', 'REJECT')
+    || hasPermission(authz.permissions, 'PURCHASEORDER', 'RECEIVE')
+    || hasPermission(authz.permissions, 'PURCHASEORDER', 'CANCEL')
+  ) {
+    return true;
+  }
+  return hasAnyRole(authz.roleNames, [
+    'admin',
+    'manager',
+    'operation-manager',
+    'ops-manager',
+    'product-manager',
+    'finance-manager',
+    'quan-ly',
+    'quanly',
+  ]);
+}
+
 function hasSupplierPermission(action: string): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;

@@ -19,6 +19,7 @@ type PermissionFieldKey =
   | 'workforce_manage'
   | 'finance_manage'
   | 'purchasing_manage'
+  | 'purchasing_view'
   | 'production_manage'
   | 'ops_view'
   | 'reports_view'
@@ -42,6 +43,7 @@ const DEFAULT_PERMISSION_FIELDS: Array<{ field: PermissionFieldKey; label: strin
   { field: 'workforce_manage', label: 'Nhân sự' },
   { field: 'finance_manage', label: 'Tài chính' },
   { field: 'purchasing_manage', label: 'Mua hàng' },
+  { field: 'purchasing_view', label: 'Mua hàng - xem' },
   { field: 'production_manage', label: 'Sản xuất' },
   { field: 'ops_view', label: 'Điều hành' },
   { field: 'reports_view', label: 'Trung tâm báo cáo' },
@@ -288,6 +290,7 @@ export default function ModulePermissionSettings() {
         workforce_manage: Boolean(item.workforce_manage),
         finance_manage: Boolean(item.finance_manage),
         purchasing_manage: Boolean(item.purchasing_manage),
+        purchasing_view: Boolean(item.purchasing_view),
         production_manage: Boolean(item.production_manage),
         ops_view: Boolean(item.ops_view),
         reports_view: Boolean(item.reports_view),

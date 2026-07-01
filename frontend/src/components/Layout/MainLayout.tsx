@@ -77,6 +77,7 @@ import {
   canViewWorkflowData,
   canManageWorkflowData,
   canViewCustomers,
+  canViewPurchasingData,
   canViewSuppliers,
 } from '../../utils/authz';
 import { useRealtimePollingInterval } from '../../hooks/useRealtimePollingInterval';
@@ -233,6 +234,7 @@ const MainLayout = () => {
   const canManageInventory = canManageInventoryData();
   const canManageStocktakeMenu = canManageStocktake();
   const canManagePurchasing = canManagePurchasingData();
+  const canViewPurchasing = canViewPurchasingData();
   const canManageProduction = canManageProductionData();
   const canViewQuality = canViewQualityData();
   const canAccessProduction = canAccessProductionCenter();
@@ -240,7 +242,7 @@ const MainLayout = () => {
   const canAccessProductionReceiptRoute = canAccessProductionReceipts();
   const canManageWorkforce = canManageWorkforceData();
   const canUseScanCenter = canManageInventory || canViewSalesOrders || canManagePurchasing || canManageProduction;
-  const canViewSalesFulfillmentCenter = canViewSalesOrders || canManagePurchasing || canManageProduction || canViewReports;
+  const canViewSalesFulfillmentCenter = canViewSalesOrders || canViewPurchasing || canManageProduction || canViewReports;
   const canViewApprovalTower = canViewApprovalControlTower();
   const canManageModulePermissions = canManageModulePermissionSettings();
   const canManageAccessExceptions = canManageUserAccessExceptions();
@@ -384,7 +386,7 @@ const MainLayout = () => {
     canViewCustomers: canViewCustomerCatalog,
     canViewSuppliers: canViewSupplierCatalog,
     canViewSalesFulfillmentCenter,
-    canManagePurchasing,
+    canViewPurchasing,
     canAccessProductionCenter: canAccessProduction,
     canAccessMaterialIssues: canAccessMaterialIssueRoute,
     canAccessProductionReceipts: canAccessProductionReceiptRoute,
@@ -429,7 +431,7 @@ const MainLayout = () => {
     canManageOnboarding,
     canManageProduction,
     canManageProvisioning,
-    canManagePurchasing,
+    canViewPurchasing,
     canManageRoleTeams,
     canManageStocktakeMenu,
     canManageUsers,
@@ -803,7 +805,7 @@ const MainLayout = () => {
       icon: <UserOutlined />,
       label: renderMenuLabel('/customer-portal', 'Cổng khách hàng'),
     } : null,
-    (canViewSupplierCatalog || canManagePurchasing) ? {
+    (canViewSupplierCatalog || canViewPurchasing) ? {
       key: 'purchasing-group',
       icon: <ShoppingCartOutlined />,
       label: 'Mua hàng',
@@ -814,7 +816,7 @@ const MainLayout = () => {
           label: renderMenuLabel('/suppliers', 'Nhà cung cấp'),
         },
         ] : []),
-        ...(canManagePurchasing ? [
+        ...(canViewPurchasing ? [
         {
           key: '/purchase-orders',
           label: renderMenuLabel('/purchase-orders', 'Đơn mua'),
