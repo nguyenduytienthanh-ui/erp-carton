@@ -11,7 +11,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { getToastMessage } from '../../shared/apiError';
 import type { InventorySalesOrderLineOption, InventoryStockRow } from '../../types/inventory';
-import { canManageInventoryData } from '../../utils/authz';
+import { canAdjustInventoryData, canReserveInventoryData } from '../../utils/authz';
 import { PAGES } from '../../utils/constants';
 import { downloadCSV } from '../../utils/csvExport';
 
@@ -137,7 +137,8 @@ export default function InventoryStockOverview() {
   const [selectedOrderId, setSelectedOrderId] = useState<number | undefined>();
   const [moveForm] = Form.useForm<QuickMoveForm>();
   const [reservationForm] = Form.useForm<ReservationForm>();
-  const canManage = canManageInventoryData();
+  const canAdjust = canAdjustInventoryData();
+  const canReserve = canReserveInventoryData();
   const { config, saveConfig } = useUserPreferences(PAGES.INVENTORY_STOCK);
   const configRecord = useMemo<Record<string, unknown>>(
     () => (config && typeof config === 'object' ? (config as Record<string, unknown>) : {}),
@@ -410,8 +411,8 @@ export default function InventoryStockOverview() {
       </Space>
     ) },
     { title: 'Tác vụ', width: 230, fixed: 'right', render: (_, row) => {
-      const moveReason = getStockMovementDisabledReason(row, canManage);
-      const reserveReason = getStockReservationDisabledReason(row, canManage);
+      const moveReason = getStockMovementDisabledReason(row, canAdjust);
+      const reserveReason = getStockReservationDisabledReason(row, canReserve);
       return (
         <Space>
           <Button size="small" disabled={Boolean(moveReason)} title={moveReason || 'Tạo giao dịch nhập/xuất/điều chỉnh nhanh từ dòng tồn này'} onClick={() => {
@@ -430,6 +431,11 @@ export default function InventoryStockOverview() {
   const onSubmitMovement = async () => {
     if (!movementRow) return;
     const values = await moveForm.validateFields();
+    const isAdjustment = values.transaction_type === 'ADJUSTMENT_IN' || values.transaction_type === 'ADJUSTMENT_OUT';
+    if (isAdjustment && !values.reason?.trim()) {
+      moveForm.setFields([{ name: 'reason', errors: ['Điều chỉnh tồn kho bắt buộc có lý do.'] }]);
+      return;
+    }
     await createMovementMutation.mutateAsync({
       transaction_type: values.transaction_type, transaction_date: values.transaction_date, product: movementRow.product_id,
       warehouse: movementRow.warehouse_id, location: movementRow.location_id ?? null, quantity: String(values.quantity),

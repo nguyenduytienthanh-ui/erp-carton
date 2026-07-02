@@ -412,6 +412,7 @@ class InventoryTransactionSerializer(serializers.ModelSerializer):
         quantity = attrs.get('quantity', getattr(self.instance, 'quantity', None))
         sales_order_line = attrs.get('sales_order_line', getattr(self.instance, 'sales_order_line', None))
         reservation = attrs.get('reservation', getattr(self.instance, 'reservation', None))
+        reason = attrs.get('reason', getattr(self.instance, 'reason', None))
 
         _ensure_active_warehouse('warehouse', warehouse)
         _ensure_active_location('location', location)
@@ -428,6 +429,8 @@ class InventoryTransactionSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError('Chuyển kho bắt buộc có kho nguồn và kho đích.')
             if warehouse.id == target_warehouse.id and (location_id := getattr(location, 'id', None)) == getattr(target_location, 'id', None):
                 raise serializers.ValidationError('Kho/vị trí nguồn và đích không được trùng nhau.')
+        elif tx_type in {InventoryTransactionType.ADJUSTMENT_IN, InventoryTransactionType.ADJUSTMENT_OUT} and not str(reason or '').strip():
+            raise serializers.ValidationError({'reason': 'Điều chỉnh tồn kho bắt buộc có lý do.'})
         elif tx_type in {InventoryTransactionType.RECEIPT, InventoryTransactionType.ADJUSTMENT_IN}:
             if not warehouse:
                 raise serializers.ValidationError({'warehouse': 'Chứng từ nhập/tăng tồn bắt buộc có kho.'})

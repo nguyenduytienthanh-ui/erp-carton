@@ -151,34 +151,49 @@ export function canManageInventoryData(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
   if (hasPermission(authz.permissions, 'INVENTORY', 'MANAGE')) return true;
-  return hasAnyRole(authz.roleNames, [
-    'admin',
-    'manager',
-    'operation-manager',
-    'ops-manager',
-    'product-manager',
-    'sales-manager',
-    'quan-ly',
-    'quanly',
-  ]);
+  return false;
 }
 
 /** Quyền kiểm tồn: INVENTORY:STOCKTAKE hoặc INVENTORY:MANAGE */
 export function canManageStocktake(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
-  if (hasPermission(authz.permissions, 'INVENTORY', 'MANAGE')) return true;
   if (hasPermission(authz.permissions, 'INVENTORY', 'STOCKTAKE')) return true;
-  return hasAnyRole(authz.roleNames, [
-    'admin',
-    'manager',
-    'operation-manager',
-    'ops-manager',
-    'product-manager',
-    'sales-manager',
-    'quan-ly',
-    'quanly',
-  ]);
+  return false;
+}
+
+export function canViewInventoryData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  return (
+    hasPermission(authz.permissions, 'INVENTORY', 'VIEW') ||
+    hasPermission(authz.permissions, 'INVENTORY', 'MANAGE') ||
+    hasPermission(authz.permissions, 'INVENTORY', 'ADJUST') ||
+    hasPermission(authz.permissions, 'INVENTORY', 'STOCKTAKE') ||
+    hasPermission(authz.permissions, 'INVENTORY', 'TRANSFER') ||
+    hasPermission(authz.permissions, 'INVENTORY', 'RESERVE')
+  );
+}
+
+export function canAdjustInventoryData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'INVENTORY', 'ADJUST')) return true;
+  return false;
+}
+
+export function canTransferInventoryData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'INVENTORY', 'TRANSFER')) return true;
+  return false;
+}
+
+export function canReserveInventoryData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'INVENTORY', 'RESERVE')) return true;
+  return false;
 }
 
 export function canManagePurchasingData(): boolean {
@@ -401,7 +416,7 @@ export function canUpdateProductionOperations(): boolean {
 }
 
 export function canUseShipmentExecutionWorkspace(): boolean {
-  return canManageInventoryData();
+  return canViewInventoryData();
 }
 
 export function canSubmitPurchaseOrders(): boolean {

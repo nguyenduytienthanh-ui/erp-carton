@@ -32,7 +32,7 @@ import {
   canManageProductionData,
   canViewQualityData,
   canManageFinanceData,
-  canManageInventoryData,
+  canViewInventoryData,
   canManageOnboardingStudio,
   canViewPurchasingData,
   canManageWorkforceData,
@@ -181,7 +181,7 @@ export default function Dashboard() {
   const canAccessProduction = canAccessProductionCenter();
   const canManageProduction = canManageProductionData();
   const canViewQuality = canViewQualityData();
-  const canManageInventory = canManageInventoryData();
+  const canViewInventory = canViewInventoryData();
   const canManageFinance = canManageFinanceData();
   const canManageWorkforce = canManageWorkforceData();
   const canManageOnboarding = canManageOnboardingStudio();
@@ -219,7 +219,7 @@ export default function Dashboard() {
   const stockSummaryQuery = useQuery({
     queryKey: ['dashboard-stock-summary'],
     queryFn: () => inventoryApi.getStockSummary(),
-    enabled: canManageInventory,
+    enabled: canViewInventory,
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
@@ -724,7 +724,7 @@ export default function Dashboard() {
       });
     }
 
-    if (canManageInventory) {
+    if (canViewInventory) {
       const belowMin = stockSummary?.below_min_count ?? 0;
       cards.push({
         key: 'inventory',
@@ -772,7 +772,7 @@ export default function Dashboard() {
     });
   }, [
     canManageFinance,
-    canManageInventory,
+    canViewInventory,
     canAccessProduction,
     canViewPurchasing,
     canViewSales,
@@ -831,7 +831,7 @@ export default function Dashboard() {
         detail: 'Ưu tiên bóc tách công đoạn nghẽn, thiếu vật tư và các lệnh cần can thiệp ngay.',
       });
     }
-    if (canManageInventory && (stockSummary?.below_min_count ?? 0) > 0) {
+    if (canViewInventory && (stockSummary?.below_min_count ?? 0) > 0) {
       items.push({
         tone: 'warning',
         title: `${formatNumber(stockSummary?.below_min_count)} dòng tồn kho dưới định mức`,
@@ -864,7 +864,7 @@ export default function Dashboard() {
     return items.slice(0, 6);
   }, [
     canManageFinance,
-    canManageInventory,
+    canViewInventory,
     canAccessProduction,
     canViewPurchasing,
     canViewSales,

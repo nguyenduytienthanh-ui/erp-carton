@@ -21,6 +21,7 @@ type BuildCommandPaletteCatalogOptions = {
   canAccessProductionReceipts: boolean;
   canManageProduction: boolean;
   canViewQuality: boolean;
+  canViewInventory: boolean;
   canManageInventory: boolean;
   canManageStocktake: boolean;
   canManageFinance: boolean;
@@ -511,8 +512,8 @@ export function buildCommandPaletteCatalog(
       group: 'Kho',
       description: 'Xem tồn kho thời gian thực, cảnh báo rủi ro và phân bổ theo vị trí kho.',
       keywords: ['ton kho', 'inventory stock', 'stock overview'],
-      enabled: options.canManageInventory,
-      spotlight: options.canManageInventory,
+      enabled: options.canViewInventory,
+      spotlight: options.canViewInventory,
     },
     {
       key: 'inventory-forecast',
@@ -521,7 +522,7 @@ export function buildCommandPaletteCatalog(
       group: 'Kho',
       description: 'Đánh giá mức bao phủ, nguy cơ stockout và tồn kho an toàn theo SKU.',
       keywords: ['du bao ton kho', 'inventory forecast', 'stockout'],
-      enabled: options.canManageInventory,
+      enabled: options.canViewInventory,
     },
     {
       key: 'inventory-transactions',
@@ -530,7 +531,7 @@ export function buildCommandPaletteCatalog(
       group: 'Kho',
       description: 'Tra cứu chứng từ nhập xuất tồn, hủy chứng từ và audit biến động kho.',
       keywords: ['so kho', 'inventory transaction', 'ledger'],
-      enabled: options.canManageInventory,
+      enabled: options.canViewInventory,
     },
     {
       key: 'inventory-reservations',
@@ -539,7 +540,7 @@ export function buildCommandPaletteCatalog(
       group: 'Kho',
       description: 'Quản lý reservation, ưu tiên cấp hàng và cảnh báo khối lượng bị giữ chỗ.',
       keywords: ['giu cho ton kho', 'reservation', 'allocation'],
-      enabled: options.canManageInventory,
+      enabled: options.canViewInventory,
     },
     {
       key: 'stock-alerts',
@@ -548,7 +549,7 @@ export function buildCommandPaletteCatalog(
       group: 'Kho',
       description: 'Theo dõi cảnh báo tồn dưới ngưỡng, tồn ứ đọng và hành động khuyến nghị.',
       keywords: ['canh bao ton kho', 'stock alert', 'reorder'],
-      enabled: options.canManageInventory,
+      enabled: options.canViewInventory,
     },
     {
       key: 'warehouse-transfers',
@@ -557,7 +558,7 @@ export function buildCommandPaletteCatalog(
       group: 'Kho',
       description: 'Điều phối phiếu chuyển kho, trạng thái ghi sổ và cân đối nguồn hàng nội bộ.',
       keywords: ['chuyen kho', 'warehouse transfer', 'internal transfer'],
-      enabled: options.canManageInventory,
+      enabled: options.canViewInventory,
     },
     {
       key: 'warehouses',
@@ -566,7 +567,7 @@ export function buildCommandPaletteCatalog(
       group: 'Kho',
       description: 'Quản lý kho, trạng thái kích hoạt và cấu hình vận hành ở từng điểm lưu trữ.',
       keywords: ['kho hang', 'warehouse', 'storage'],
-      enabled: options.canManageInventory,
+      enabled: options.canViewInventory,
     },
     {
       key: 'warehouse-locations',
@@ -575,7 +576,7 @@ export function buildCommandPaletteCatalog(
       group: 'Kho',
       description: 'Quản lý bin, zone và các vị trí kho phục vụ xuất nhập và kiểm đếm.',
       keywords: ['vi tri kho', 'warehouse location', 'bin location'],
-      enabled: options.canManageInventory,
+      enabled: options.canViewInventory,
     },
     {
       key: 'stocktakes',
@@ -584,7 +585,7 @@ export function buildCommandPaletteCatalog(
       group: 'Kho',
       description: 'Tạo và vận hành đợt kiểm tồn với các bước kiểm kê, chốt số và ghi nhận lệch.',
       keywords: ['kiem ton', 'stocktake', 'cycle count'],
-      enabled: options.canManageStocktake,
+      enabled: options.canViewInventory,
     },
     {
       key: 'employees',

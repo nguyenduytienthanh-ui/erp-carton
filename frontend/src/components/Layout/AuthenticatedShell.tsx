@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import MainLayout from './MainLayout';
-import { canAccessOpsModules, canAccessSalesOrders, canAccessMaterialIssues, canAccessProductionCenter, canAccessProductionReceipts, canManageFinanceData, canManageInventoryData, canManageModulePermissionSettings, canManageProductionData, canViewPurchasingData, canViewReportsCenter, canViewWorkflowData, canManageWorkflowData } from '../../utils/authz';
+import { canAccessOpsModules, canAccessSalesOrders, canAccessMaterialIssues, canAccessProductionCenter, canAccessProductionReceipts, canManageFinanceData, canManageModulePermissionSettings, canManageProductionData, canViewInventoryData, canViewPurchasingData, canViewReportsCenter, canViewWorkflowData, canManageWorkflowData } from '../../utils/authz';
 import { usersApi } from '../../api/users';
 import { storage } from '../../utils/storage';
 
@@ -145,7 +145,7 @@ export default function AuthenticatedShell() {
     const canViewReports = canViewReportsCenter();
     const canAccessSales = canAccessSalesOrders();
     const canManageFinance = canManageFinanceData();
-    const canManageInventory = canManageInventoryData();
+    const canManageInventory = canViewInventoryData();
     const canViewPurchasing = canViewPurchasingData();
     const canManageProduction = canManageProductionData();
     const canAccessProduction = canAccessProductionCenter();

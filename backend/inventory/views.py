@@ -14,7 +14,7 @@ from rest_framework.response import Response
 
 from core.mixins import get_client_ip
 from core.models import AuditLog
-from core.permissions import check_action_permission
+from core.permissions import user_has_inventory_permission
 from inventory.filters import (
     InventoryReservationFilter,
     InventoryTransactionFilter,
@@ -52,7 +52,7 @@ from inventory.serializers import (
     build_inventory_source_audit,
 )
 from inventory.services import build_stock_balance_map
-from inventory.services import apply_reservation_fulfillment, cancel_inventory_transaction_record
+from inventory.services import apply_reservation_fulfillment
 from products.models import Product
 from sales.services import apply_delivery_plan_shipment
 
@@ -63,6 +63,19 @@ NXT_SOURCE_TYPES = (
     SOURCE_TYPE_STOCKTAKE,
     SOURCE_TYPE_TRANSFER,
     SOURCE_TYPE_MANUAL,
+)
+
+INVENTORY_PERMISSION_MESSAGES = {
+    'VIEW': 'Bạn không có quyền xem kho.',
+    'MANAGE': 'Bạn không có quyền quản lý dữ liệu kho.',
+    'ADJUST': 'Bạn không có quyền điều chỉnh tồn kho.',
+    'STOCKTAKE': 'Bạn không có quyền kiểm tồn.',
+    'TRANSFER': 'Bạn không có quyền chuyển kho.',
+    'RESERVE': 'Bạn không có quyền thao tác giữ chỗ tồn kho.',
+}
+INVENTORY_DIRECT_CANCEL_MESSAGE = (
+    'Không thể hủy trực tiếp giao dịch kho đã ghi nhận. '
+    'Hãy dùng chứng từ đảo/điều chỉnh phù hợp.'
 )
 
 
@@ -134,40 +147,38 @@ def _user_role_names(user):
     return names
 
 
+def _has_inventory_permission(user, action):
+    return user_has_inventory_permission(user, action, strict=True)
+
+
 def _can_manage_inventory(user):
-    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
-        return True
-    if check_action_permission(user, 'INVENTORY', 'MANAGE', strict=True):
-        return True
-    role_names = _user_role_names(user)
-    allowed_roles = {
-        'admin',
-        'manager',
-        'operation-manager',
-        'ops-manager',
-        'product-manager',
-        'sales-manager',
-        'quan-ly',
-        'quanly',
-    }
-    return any(role in allowed_roles for role in role_names)
+    return _has_inventory_permission(user, 'MANAGE')
 
 
 def _can_manage_stocktake(user):
+    return _has_inventory_permission(user, 'STOCKTAKE')
     """Cho phép nếu có INVENTORY:MANAGE hoặc INVENTORY:STOCKTAKE."""
-    if _can_manage_inventory(user):
-        return True
-    if check_action_permission(user, 'INVENTORY', 'STOCKTAKE', strict=True):
-        return True
-    return False
 
 
 class InventoryManagePermissionMixin:
     permission_classes = [IsAuthenticated]
+    inventory_write_permission = 'MANAGE'
+    inventory_action_permissions = {}
+
+    def get_inventory_permission_action(self):
+        action_name = getattr(self, 'action', None)
+        if action_name in self.inventory_action_permissions:
+            return self.inventory_action_permissions[action_name]
+        if self.request.method in ('GET', 'HEAD', 'OPTIONS'):
+            return 'VIEW'
+        return self.inventory_write_permission
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
-        if not _can_manage_inventory(request.user):
+        required_action = self.get_inventory_permission_action()
+        if not _has_inventory_permission(request.user, required_action):
+            raise PermissionDenied(INVENTORY_PERMISSION_MESSAGES.get(required_action, 'Bạn không có quyền kho.'))
+        if False and not _can_manage_stocktake(request.user):
             raise PermissionDenied('Bạn không có quyền quản lý kho.')
 
 
@@ -274,6 +285,10 @@ class WarehouseLocationViewSet(InventoryManagePermissionMixin, viewsets.ModelVie
 
 
 class InventoryTransactionViewSet(InventoryManagePermissionMixin, viewsets.ModelViewSet):
+    inventory_write_permission = 'ADJUST'
+    inventory_action_permissions = {
+        'cancel': 'ADJUST',
+    }
     serializer_class = InventoryTransactionSerializer
     filter_backends = [django_filters.rest_framework.DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = InventoryTransactionFilter
@@ -451,6 +466,9 @@ class InventoryTransactionViewSet(InventoryManagePermissionMixin, viewsets.Model
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         tx = self.get_object()
+        if tx.status == InventoryTransactionStatus.CANCELLED:
+            return Response({'status': tx.status})
+        raise ValidationError({'detail': INVENTORY_DIRECT_CANCEL_MESSAGE})
         reason = (request.data.get('reason') or request.data.get('cancel_reason') or '').strip()
         try:
             cancel_inventory_transaction_record(tx, actor=request.user, reason=reason)
@@ -475,6 +493,11 @@ class InventoryTransactionViewSet(InventoryManagePermissionMixin, viewsets.Model
 
 
 class InventoryReservationViewSet(InventoryManagePermissionMixin, viewsets.ModelViewSet):
+    inventory_write_permission = 'RESERVE'
+    inventory_action_permissions = {
+        'release': 'RESERVE',
+        'cancel': 'RESERVE',
+    }
     serializer_class = InventoryReservationSerializer
     filter_backends = [django_filters.rest_framework.DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = InventoryReservationFilter
@@ -540,12 +563,18 @@ class InventoryReservationViewSet(InventoryManagePermissionMixin, viewsets.Model
         return Response({'status': reservation.status})
 
 
-class StocktakePermissionMixin:
+class StocktakePermissionMixin(InventoryManagePermissionMixin):
     permission_classes = [IsAuthenticated]
+    inventory_write_permission = 'STOCKTAKE'
+    inventory_action_permissions = {
+        'preview_adjustments': 'STOCKTAKE',
+        'post_adjustments': 'STOCKTAKE',
+        'complete': 'STOCKTAKE',
+    }
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
-        if not _can_manage_stocktake(request.user):
+        if False and not _can_manage_stocktake(request.user):
             raise PermissionDenied('Bạn không có quyền kiểm tồn.')
 
 
@@ -696,7 +725,10 @@ class StocktakeViewSet(StocktakePermissionMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def post_adjustments(self, request, pk=None):
-        if not _can_manage_inventory(request.user):
+        required_action = self.get_inventory_permission_action()
+        if not _has_inventory_permission(request.user, required_action):
+            raise PermissionDenied(INVENTORY_PERMISSION_MESSAGES.get(required_action, 'Bạn không có quyền kho.'))
+        if False and not _can_manage_inventory(request.user):
             raise PermissionDenied('Báº¡n khĂ´ng cĂ³ quyá»n ghi Ä‘iá»u chá»‰nh tá»“n kho.')
         reason = (request.data.get('reason') or '').strip()
         if not reason:
@@ -773,7 +805,7 @@ class StocktakeViewSet(StocktakePermissionMixin, viewsets.ModelViewSet):
         return Response(response)
 
 
-class OutboundShipmentViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class OutboundShipmentViewSet(InventoryManagePermissionMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     """Danh sách phiếu xuất / giao hàng (read-only)."""
     permission_classes = [IsAuthenticated]
     serializer_class = OutboundShipmentSerializer
@@ -902,6 +934,11 @@ class InventoryStockViewSet(InventoryManagePermissionMixin, mixins.ListModelMixi
 
 
 class StockAlertViewSet(InventoryManagePermissionMixin, viewsets.ModelViewSet):
+    inventory_write_permission = 'MANAGE'
+    inventory_action_permissions = {
+        'acknowledge_alert': 'MANAGE',
+        'check_low_stock': 'MANAGE',
+    }
     serializer_class = StockAlertSerializer
     filter_backends = [django_filters.rest_framework.DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['status']
@@ -966,6 +1003,13 @@ from inventory.serializers import WarehouseTransferSerializer
 
 
 class WarehouseTransferViewSet(InventoryManagePermissionMixin, viewsets.ModelViewSet):
+    inventory_write_permission = 'TRANSFER'
+    inventory_action_permissions = {
+        'submit_transfer': 'TRANSFER',
+        'post_transfer': 'TRANSFER',
+        'receive_transfer': 'TRANSFER',
+        'cancel_transfer': 'TRANSFER',
+    }
     """Warehouse Transfers - chuyển hàng giữa kho."""
     queryset = WarehouseTransfer.objects.select_related('from_warehouse', 'to_warehouse', 'created_by', 'submitted_by', 'posted_by', 'cancelled_by')
     serializer_class = WarehouseTransferSerializer

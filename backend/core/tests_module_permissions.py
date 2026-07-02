@@ -7,7 +7,12 @@ from django.test.utils import override_settings
 from rest_framework.test import APIClient
 
 from core.models import AuditLog, Notification, Permission, Role, Team, User
-from core.permissions import CUSTOMER_PERMISSION_DEFINITIONS, PURCHASING_PERMISSION_DEFINITIONS, SUPPLIER_PERMISSION_DEFINITIONS
+from core.permissions import (
+    CUSTOMER_PERMISSION_DEFINITIONS,
+    INVENTORY_PERMISSION_DEFINITIONS,
+    PURCHASING_PERMISSION_DEFINITIONS,
+    SUPPLIER_PERMISSION_DEFINITIONS,
+)
 from purchasing.models import Supplier
 
 
@@ -41,6 +46,10 @@ class RoleModulePermissionsApiTest(TestCase):
             *[
                 (row['resource'], row['action'], row['code'], row['name'])
                 for row in PURCHASING_PERMISSION_DEFINITIONS
+            ],
+            *[
+                (row['resource'], row['action'], row['code'], row['name'])
+                for row in INVENTORY_PERMISSION_DEFINITIONS
             ],
             *[
                 (row['resource'], row['action'], row['code'], row['name'])
@@ -394,6 +403,53 @@ class SeedPurchasingPermissionsCommandTest(TestCase):
     def test_seed_purchasing_permissions_refuses_production_target(self):
         with self.assertRaisesMessage(CommandError, 'Refusing Purchasing permission seed'):
             call_command('seed_purchasing_permissions', stdout=StringIO())
+
+
+class SeedInventoryPermissionsCommandTest(TestCase):
+    def test_seed_inventory_permissions_creates_rows_without_demo_data(self):
+        Permission.objects.filter(resource='INVENTORY').delete()
+        out = StringIO()
+
+        call_command('seed_inventory_permissions', stdout=out)
+
+        permission_keys = set(
+            Permission.objects.filter(resource='INVENTORY').values_list('resource', 'action')
+        )
+        expected_keys = {
+            (row['resource'], row['action'])
+            for row in INVENTORY_PERMISSION_DEFINITIONS
+        }
+        self.assertEqual(permission_keys, expected_keys)
+        self.assertFalse(Role.objects.exists())
+        self.assertIn('Inventory permissions synced', out.getvalue())
+
+    def test_seed_inventory_permissions_can_grant_existing_uat_roles(self):
+        for code in ('ADMIN', 'MANAGER', 'SALES_MANAGER', 'OPS_MANAGER', 'PRODUCT_MANAGER'):
+            Role.objects.create(code=code, name=code.replace('_', ' ').title())
+        out = StringIO()
+
+        call_command('seed_inventory_permissions', grant_uat_roles=True, stdout=out)
+
+        all_actions = {
+            row['action']
+            for row in INVENTORY_PERMISSION_DEFINITIONS
+        }
+        admin_actions = set(
+            Permission.objects.filter(roles__code='ADMIN', resource='INVENTORY')
+            .values_list('action', flat=True)
+        )
+        sales_actions = set(
+            Permission.objects.filter(roles__code='SALES_MANAGER', resource='INVENTORY')
+            .values_list('action', flat=True)
+        )
+        self.assertEqual(admin_actions, all_actions)
+        self.assertEqual(sales_actions, {'VIEW', 'RESERVE'})
+        self.assertIn('Inventory UAT role grants synced', out.getvalue())
+
+    @override_settings(APP_ENV='production', DATABASES={'default': {'NAME': 'erp_carton_prod', 'HOST': '127.0.0.1'}})
+    def test_seed_inventory_permissions_refuses_production_target(self):
+        with self.assertRaisesMessage(CommandError, 'Refusing Inventory permission seed'):
+            call_command('seed_inventory_permissions', stdout=StringIO())
 
 
 class SeedUatRolesOnlyCommandTest(TestCase):

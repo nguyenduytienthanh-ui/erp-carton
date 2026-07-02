@@ -51,6 +51,7 @@ import {
   canAccessSalesOrders,
   canManageInventoryData,
   canManageStocktake,
+  canViewInventoryData,
   canManagePurchasingData,
   canManageProductionData,
   canViewQualityData,
@@ -232,6 +233,7 @@ const MainLayout = () => {
   const canViewOpsLog = canViewOperationsLog();
   const canManageFinance = canManageFinanceData();
   const canManageInventory = canManageInventoryData();
+  const canViewInventory = canViewInventoryData();
   const canManageStocktakeMenu = canManageStocktake();
   const canManagePurchasing = canManagePurchasingData();
   const canViewPurchasing = canViewPurchasingData();
@@ -241,7 +243,7 @@ const MainLayout = () => {
   const canAccessMaterialIssueRoute = canAccessMaterialIssues();
   const canAccessProductionReceiptRoute = canAccessProductionReceipts();
   const canManageWorkforce = canManageWorkforceData();
-  const canUseScanCenter = canManageInventory || canViewSalesOrders || canManagePurchasing || canManageProduction;
+  const canUseScanCenter = canViewInventory || canViewSalesOrders || canManagePurchasing || canManageProduction;
   const canViewSalesFulfillmentCenter = canViewSalesOrders || canViewPurchasing || canManageProduction || canViewReports;
   const canViewApprovalTower = canViewApprovalControlTower();
   const canManageModulePermissions = canManageModulePermissionSettings();
@@ -392,6 +394,7 @@ const MainLayout = () => {
     canAccessProductionReceipts: canAccessProductionReceiptRoute,
     canManageProduction,
     canViewQuality,
+    canViewInventory,
     canManageInventory,
     canManageStocktake: canManageStocktakeMenu,
     canManageFinance,
@@ -426,6 +429,7 @@ const MainLayout = () => {
     canManageAccessReviews,
     canManageFinance,
     canManageInventory,
+    canViewInventory,
     canManageLifecycle,
     canManageModulePermissions,
     canManageOnboarding,
@@ -888,12 +892,12 @@ const MainLayout = () => {
       icon: <SafetyOutlined />,
       label: renderMenuLabel('/qc-printing', 'QC Printing'),
     } : null,
-    (canManageInventory || canManageStocktakeMenu) ? {
+    canViewInventory ? {
       key: 'inventory-group',
       icon: <DatabaseOutlined />,
       label: 'Kho',
       children: [
-        ...(canManageInventory ? [
+        ...(canViewInventory ? [
           { key: '/inventory-stock', label: renderMenuLabel('/inventory-stock', 'Tồn kho') },
           { key: '/inventory-forecast', label: renderMenuLabel('/inventory-forecast', 'Dự báo tồn kho') },
           { key: '/inventory-transactions', label: renderMenuLabel('/inventory-transactions', 'Sổ kho') },
@@ -903,7 +907,7 @@ const MainLayout = () => {
           { key: '/warehouses', label: renderMenuLabel('/warehouses', 'Kho hàng') },
           { key: '/warehouse-locations', label: renderMenuLabel('/warehouse-locations', 'Vị trí kho') },
         ] : []),
-        ...(canManageStocktakeMenu ? [
+        ...(canViewInventory ? [
           { key: '/stocktakes', label: renderMenuLabel('/stocktakes', 'Kiểm tồn') },
         ] : []),
       ],

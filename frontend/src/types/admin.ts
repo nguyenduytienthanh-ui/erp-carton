@@ -21,6 +21,12 @@ export interface RoleModulePermissionItem {
   finance_manage: boolean;
   purchasing_manage: boolean;
   purchasing_view: boolean;
+  inventory_view: boolean;
+  inventory_manage: boolean;
+  inventory_adjust: boolean;
+  inventory_stocktake: boolean;
+  inventory_transfer: boolean;
+  inventory_reserve: boolean;
   production_manage: boolean;
   ops_view: boolean;
   reports_view: boolean;
@@ -70,6 +76,12 @@ export interface RoleModulePermissionUpdatePayload {
     finance_manage: boolean;
     purchasing_manage: boolean;
     purchasing_view: boolean;
+    inventory_view: boolean;
+    inventory_manage: boolean;
+    inventory_adjust: boolean;
+    inventory_stocktake: boolean;
+    inventory_transfer: boolean;
+    inventory_reserve: boolean;
     production_manage: boolean;
     ops_view: boolean;
     reports_view: boolean;

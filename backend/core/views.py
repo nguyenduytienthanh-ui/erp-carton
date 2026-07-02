@@ -67,10 +67,12 @@ from .utils import export_to_excel, export_to_pdf
 from .mixins import AuditLogMixin, ExportExcelMixin
 from .permissions import (
     CUSTOMER_PERMISSION_DEFINITIONS,
+    INVENTORY_PERMISSION_DEFINITIONS,
     PURCHASING_PERMISSION_DEFINITIONS,
     SUPPLIER_PERMISSION_DEFINITIONS,
     check_action_permission,
     user_has_customer_permission,
+    user_has_inventory_permission,
     user_has_purchasing_permission,
     user_has_supplier_permission,
 )
@@ -101,6 +103,7 @@ MODULE_PERMISSION_FIELDS = [
         'changed_type': 'purchasing',
     },
     *PURCHASING_PERMISSION_DEFINITIONS,
+    *INVENTORY_PERMISSION_DEFINITIONS,
     {
         'field': 'production_manage',
         'label': 'Sản xuất',
@@ -437,10 +440,14 @@ ACCOUNT_ACCESS_MODULES = [
         'description': 'Tồn kho, kiểm tồn và chuyển kho',
         'primary_route': '/inventory-stock',
         'permissions': [
+            ('INVENTORY', 'VIEW'),
             ('INVENTORY', 'MANAGE'),
+            ('INVENTORY', 'ADJUST'),
             ('INVENTORY', 'STOCKTAKE'),
+            ('INVENTORY', 'TRANSFER'),
+            ('INVENTORY', 'RESERVE'),
         ],
-        'role_names': {'admin', 'manager', 'operation-manager', 'ops-manager', 'product-manager', 'sales-manager', 'quan-ly', 'quanly'},
+        'role_names': set(),
         'matcher': '_can_access_inventory_hub',
     },
     {
@@ -732,29 +739,38 @@ def _can_manage_finance_data(user):
 
 
 def _can_manage_inventory_data(user):
-    if not user or not user.is_authenticated:
-        return False
-    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
-        return True
-    if check_action_permission(user, 'INVENTORY', 'MANAGE', strict=True):
-        return True
-    return _has_any_role_name(user, {'admin', 'manager', 'operation-manager', 'ops-manager', 'product-manager', 'sales-manager', 'quan-ly', 'quanly'})
+    return user_has_inventory_permission(user, 'MANAGE', strict=True)
+
+
+def _can_view_inventory_data(user):
+    return user_has_inventory_permission(user, 'VIEW', strict=True)
+
+
+def _can_adjust_inventory_data(user):
+    return user_has_inventory_permission(user, 'ADJUST', strict=True)
+
+
+def _can_transfer_inventory_data(user):
+    return user_has_inventory_permission(user, 'TRANSFER', strict=True)
+
+
+def _can_reserve_inventory_data(user):
+    return user_has_inventory_permission(user, 'RESERVE', strict=True)
 
 
 def _can_manage_stocktake(user):
-    if not user or not user.is_authenticated:
-        return False
-    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
-        return True
-    if check_action_permission(user, 'INVENTORY', 'MANAGE', strict=True):
-        return True
-    if check_action_permission(user, 'INVENTORY', 'STOCKTAKE', strict=True):
-        return True
-    return _has_any_role_name(user, {'admin', 'manager', 'operation-manager', 'ops-manager', 'product-manager', 'sales-manager', 'quan-ly', 'quanly'})
+    return user_has_inventory_permission(user, 'STOCKTAKE', strict=True)
 
 
 def _can_access_inventory_hub(user):
-    return _can_manage_inventory_data(user) or _can_manage_stocktake(user)
+    return (
+        _can_view_inventory_data(user)
+        or _can_manage_inventory_data(user)
+        or _can_adjust_inventory_data(user)
+        or _can_manage_stocktake(user)
+        or _can_transfer_inventory_data(user)
+        or _can_reserve_inventory_data(user)
+    )
 
 
 def _can_manage_purchasing_data(user):
@@ -1011,7 +1027,7 @@ def _build_access_capability_map(user):
         'purchasing': _can_view_purchasing_data(user),
         'production': _can_access_production_center(user),
         'production_planning': _can_manage_production_data(user),
-        'inventory': _can_manage_inventory_data(user),
+        'inventory': _can_access_inventory_hub(user),
         'stocktake': _can_manage_stocktake(user),
         'ops_hub': _can_view_ops_hub(user),
         'reports': _can_view_reports_center(user),

@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { inventoryApi } from '../../api/inventory';
 import type { WarehouseTransfer, WarehouseTransferStatus } from '../../types/inventory';
 import { PAGES } from '../../utils/constants';
-import { canManageInventoryData } from '../../utils/authz';
+import { canTransferInventoryData } from '../../utils/authz';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
@@ -167,7 +167,7 @@ export default function WarehouseTransferList() {
   } = useUserPreferences(PAGES.INVENTORY_WAREHOUSE_TRANSFERS);
   const configRecord = config as Record<string, unknown>;
   const pageSize = Number(configRecord.pageSize ?? 20);
-  const canManage = canManageInventoryData();
+  const canManage = canTransferInventoryData();
 
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,

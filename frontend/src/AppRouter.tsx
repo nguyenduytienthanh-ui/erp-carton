@@ -20,8 +20,7 @@ import {
   canManageUserLifecycle,
   canManageUserProvisioning,
   canManageFinanceData,
-  canManageInventoryData,
-  canManageStocktake,
+  canViewInventoryData,
   canManageProductionData,
   canViewQualityData,
   canAccessProductionCenter,
@@ -167,8 +166,7 @@ export default function AppRouter() {
   const canViewAdminObservability = canViewAdminObservabilityCenter();
   const canViewAccessGovernance = canViewAccessGovernanceCenter();
   const canManageFinance = canManageFinanceData();
-  const canManageInventory = canManageInventoryData();
-  const canManageStocktakeRoute = canManageStocktake();
+  const canViewInventory = canViewInventoryData();
   const canViewPurchasing = canViewPurchasingData();
   const canManageProduction = canManageProductionData();
   const canViewQuality = canViewQualityData();
@@ -280,15 +278,15 @@ export default function AppRouter() {
               <Route path="material-issues" element={<FeatureRoute allow={canAccessMaterialIssueRoute} fallbackTo="/">{withAsyncBoundary(<MaterialIssueList />)}</FeatureRoute>} />
               <Route path="production-receipts" element={<FeatureRoute allow={canAccessProductionReceiptRoute} fallbackTo="/">{withAsyncBoundary(<ProductionReceiptList />)}</FeatureRoute>} />
               <Route path="qc-printing" element={<FeatureRoute allow={canViewQuality} fallbackTo="/">{withAsyncBoundary(<QCPrintingWorkspace />)}</FeatureRoute>} />
-              <Route path="warehouses" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseList />)}</FeatureRoute>} />
-              <Route path="warehouse-locations" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseLocationList />)}</FeatureRoute>} />
-              <Route path="inventory-stock" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryStockOverview />)}</FeatureRoute>} />
-              <Route path="inventory-forecast" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryForecast />)}</FeatureRoute>} />
-              <Route path="inventory-transactions" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryTransactionList />)}</FeatureRoute>} />
-              <Route path="inventory-reservations" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<InventoryReservationList />)}</FeatureRoute>} />
-              <Route path="stocktakes" element={<FeatureRoute allow={canManageStocktakeRoute} fallbackTo="/">{withAsyncBoundary(<StocktakeList />)}</FeatureRoute>} />
-              <Route path="stock-alerts" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<StockAlertList />)}</FeatureRoute>} />
-              <Route path="warehouse-transfers" element={<FeatureRoute allow={canManageInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseTransferList />)}</FeatureRoute>} />
+              <Route path="warehouses" element={<FeatureRoute allow={canViewInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseList />)}</FeatureRoute>} />
+              <Route path="warehouse-locations" element={<FeatureRoute allow={canViewInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseLocationList />)}</FeatureRoute>} />
+              <Route path="inventory-stock" element={<FeatureRoute allow={canViewInventory} fallbackTo="/">{withAsyncBoundary(<InventoryStockOverview />)}</FeatureRoute>} />
+              <Route path="inventory-forecast" element={<FeatureRoute allow={canViewInventory} fallbackTo="/">{withAsyncBoundary(<InventoryForecast />)}</FeatureRoute>} />
+              <Route path="inventory-transactions" element={<FeatureRoute allow={canViewInventory} fallbackTo="/">{withAsyncBoundary(<InventoryTransactionList />)}</FeatureRoute>} />
+              <Route path="inventory-reservations" element={<FeatureRoute allow={canViewInventory} fallbackTo="/">{withAsyncBoundary(<InventoryReservationList />)}</FeatureRoute>} />
+              <Route path="stocktakes" element={<FeatureRoute allow={canViewInventory} fallbackTo="/">{withAsyncBoundary(<StocktakeList />)}</FeatureRoute>} />
+              <Route path="stock-alerts" element={<FeatureRoute allow={canViewInventory} fallbackTo="/">{withAsyncBoundary(<StockAlertList />)}</FeatureRoute>} />
+              <Route path="warehouse-transfers" element={<FeatureRoute allow={canViewInventory} fallbackTo="/">{withAsyncBoundary(<WarehouseTransferList />)}</FeatureRoute>} />
               <Route path="executive-cockpit" element={<FeatureRoute allow={canViewOps} fallbackTo="/task-inbox">{withAsyncBoundary(<ExecutiveCockpit />)}</FeatureRoute>} />
               <Route path="reports" element={<FeatureRoute allow={canViewReports} fallbackTo="/">{withAsyncBoundary(<ReportsCenter />)}</FeatureRoute>} />
               <Route path="production-costing" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionCostingReport />)}</FeatureRoute>} />

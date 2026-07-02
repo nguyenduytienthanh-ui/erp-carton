@@ -8,7 +8,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
-import { canManageInventoryData } from '../../utils/authz';
+import { canReserveInventoryData } from '../../utils/authz';
 import { getToastMessage } from '../../shared/apiError';
 
 type Filters = { warehouse?: number; status?: string };
@@ -81,7 +81,7 @@ export default function InventoryReservationList() {
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
   const [actionModal, setActionModal] = useState<ActionModalState>(null);
   const [actionForm] = Form.useForm<ReservationActionForm>();
-  const canManage = canManageInventoryData();
+  const canManage = canReserveInventoryData();
   const { config, saveConfig } = useUserPreferences(PAGES.INVENTORY_RESERVATIONS);
   const pageSize = Number((config as Record<string, unknown>)?.pageSize ?? 20);
 

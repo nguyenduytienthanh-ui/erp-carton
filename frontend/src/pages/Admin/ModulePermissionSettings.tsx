@@ -20,6 +20,12 @@ type PermissionFieldKey =
   | 'finance_manage'
   | 'purchasing_manage'
   | 'purchasing_view'
+  | 'inventory_view'
+  | 'inventory_manage'
+  | 'inventory_adjust'
+  | 'inventory_stocktake'
+  | 'inventory_transfer'
+  | 'inventory_reserve'
   | 'production_manage'
   | 'ops_view'
   | 'reports_view'
@@ -44,6 +50,12 @@ const DEFAULT_PERMISSION_FIELDS: Array<{ field: PermissionFieldKey; label: strin
   { field: 'finance_manage', label: 'Tài chính' },
   { field: 'purchasing_manage', label: 'Mua hàng' },
   { field: 'purchasing_view', label: 'Mua hàng - xem' },
+  { field: 'inventory_view', label: 'Kho - xem' },
+  { field: 'inventory_manage', label: 'Kho - master data' },
+  { field: 'inventory_adjust', label: 'Kho - điều chỉnh' },
+  { field: 'inventory_stocktake', label: 'Kho - kiểm tồn' },
+  { field: 'inventory_transfer', label: 'Kho - chuyển kho' },
+  { field: 'inventory_reserve', label: 'Kho - giữ chỗ' },
   { field: 'production_manage', label: 'Sản xuất' },
   { field: 'ops_view', label: 'Điều hành' },
   { field: 'reports_view', label: 'Trung tâm báo cáo' },
@@ -291,6 +303,12 @@ export default function ModulePermissionSettings() {
         finance_manage: Boolean(item.finance_manage),
         purchasing_manage: Boolean(item.purchasing_manage),
         purchasing_view: Boolean(item.purchasing_view),
+        inventory_view: Boolean(item.inventory_view),
+        inventory_manage: Boolean(item.inventory_manage),
+        inventory_adjust: Boolean(item.inventory_adjust),
+        inventory_stocktake: Boolean(item.inventory_stocktake),
+        inventory_transfer: Boolean(item.inventory_transfer),
+        inventory_reserve: Boolean(item.inventory_reserve),
         production_manage: Boolean(item.production_manage),
         ops_view: Boolean(item.ops_view),
         reports_view: Boolean(item.reports_view),

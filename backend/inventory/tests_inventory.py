@@ -7,7 +7,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from core.models import AuditLog
+from core.models import AuditLog, Permission, Role
 from inventory.models import (
     InventoryReservation,
     InventoryReservationStatus,
@@ -103,6 +103,23 @@ class InventoryApiFlowTest(TestCase):
             updated_by=self.user,
             posted_by=self.user,
         )
+
+    def _grant_inventory_permission(self, user, action):
+        permission, _ = Permission.objects.update_or_create(
+            resource='INVENTORY',
+            action=action,
+            defaults={
+                'code': f'INVENTORY_{action}',
+                'name': f'Inventory {action.lower()}',
+            },
+        )
+        role, _ = Role.objects.get_or_create(
+            code=f'INV_{action}',
+            defaults={'name': f'Inventory {action.title()}'},
+        )
+        role.permissions.add(permission)
+        user.roles.add(role)
+        return permission
 
     def _create_completed_stocktake(self, lines_data):
         create_response = self.client.post(
@@ -389,12 +406,65 @@ class InventoryApiFlowTest(TestCase):
         self.assertEqual(overview_response.status_code, 200)
         self.assertEqual(overview_response.json()['count'], 1)
 
-    def test_inventory_endpoints_require_manage_permission(self):
+    def test_inventory_endpoints_use_view_and_specialized_write_permissions(self):
         self.client.force_authenticate(self.viewer)
         response = self.client.get('/api/inventory/stock/')
         self.assertEqual(response.status_code, 403)
 
-    def test_cancel_transaction_changes_status(self):
+        self._grant_inventory_permission(self.viewer, 'VIEW')
+        response = self.client.get('/api/inventory/stock/')
+        self.assertEqual(response.status_code, 200)
+
+        blocked_write = self.client.post(
+            '/api/inventory/transactions/',
+            {
+                'transaction_type': 'ADJUSTMENT_IN',
+                'transaction_date': str(timezone.localdate()),
+                'product': self.product.id,
+                'warehouse': self.warehouse.id,
+                'location': self.location.id,
+                'quantity': '2',
+                'unit_cost': '0',
+                'reason': 'Cycle count correction',
+            },
+            format='json',
+        )
+        self.assertEqual(blocked_write.status_code, 403)
+
+        self._grant_inventory_permission(self.viewer, 'ADJUST')
+        missing_reason = self.client.post(
+            '/api/inventory/transactions/',
+            {
+                'transaction_type': 'ADJUSTMENT_IN',
+                'transaction_date': str(timezone.localdate()),
+                'product': self.product.id,
+                'warehouse': self.warehouse.id,
+                'location': self.location.id,
+                'quantity': '2',
+                'unit_cost': '0',
+            },
+            format='json',
+        )
+        self.assertEqual(missing_reason.status_code, 400)
+        self.assertIn('reason', missing_reason.json())
+
+        allowed_write = self.client.post(
+            '/api/inventory/transactions/',
+            {
+                'transaction_type': 'ADJUSTMENT_IN',
+                'transaction_date': str(timezone.localdate()),
+                'product': self.product.id,
+                'warehouse': self.warehouse.id,
+                'location': self.location.id,
+                'quantity': '2',
+                'unit_cost': '0',
+                'reason': 'Cycle count correction',
+            },
+            format='json',
+        )
+        self.assertEqual(allowed_write.status_code, 201, allowed_write.json())
+
+    def test_cancel_transaction_direct_cancel_is_blocked(self):
         tx = InventoryTransaction.objects.create(
             code='INVTX-TEST-004',
             transaction_type='RECEIPT',
@@ -412,9 +482,10 @@ class InventoryApiFlowTest(TestCase):
             {'reason': 'Sai kho'},
             format='json',
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Không thể hủy trực tiếp', str(response.json()))
         tx.refresh_from_db()
-        self.assertEqual(tx.status, InventoryTransactionStatus.CANCELLED)
+        self.assertEqual(tx.status, InventoryTransactionStatus.POSTED)
 
     def test_release_reservation_endpoint_updates_active_qty_and_status(self):
         InventoryTransaction.objects.create(
@@ -547,11 +618,11 @@ class InventoryApiFlowTest(TestCase):
             {'reason': 'Khách dời lịch giao'},
             format='json',
         )
-        self.assertEqual(cancel_response.status_code, 200)
+        self.assertEqual(cancel_response.status_code, 400)
         reservation.refresh_from_db()
-        self.assertEqual(reservation.fulfilled_qty, Decimal('0'))
-        self.assertEqual(reservation.active_qty, Decimal('6'))
-        self.assertEqual(reservation.status, InventoryReservationStatus.OPEN)
+        self.assertEqual(reservation.fulfilled_qty, Decimal('6'))
+        self.assertEqual(reservation.active_qty, Decimal('0'))
+        self.assertEqual(reservation.status, InventoryReservationStatus.FULFILLED)
 
     def test_issue_and_cancel_sync_delivery_plan_actuals(self):
         InventoryTransaction.objects.create(
@@ -621,12 +692,12 @@ class InventoryApiFlowTest(TestCase):
             {'reason': 'Rollback giao hàng'},
             format='json',
         )
-        self.assertEqual(cancel_response.status_code, 200)
+        self.assertEqual(cancel_response.status_code, 400)
         plan_1.refresh_from_db()
         plan_2.refresh_from_db()
-        self.assertEqual(plan_1.shipped_qty, Decimal('0'))
+        self.assertEqual(plan_1.shipped_qty, Decimal('2'))
         self.assertEqual(plan_1.delivered_qty, Decimal('0'))
-        self.assertEqual(plan_2.shipped_qty, Decimal('0'))
+        self.assertEqual(plan_2.shipped_qty, Decimal('2'))
         self.assertEqual(plan_2.delivered_qty, Decimal('0'))
 
     def test_sales_order_ship_action_creates_issue_transaction(self):
@@ -1442,6 +1513,7 @@ class InventoryApiFlowTest(TestCase):
                 'warehouse': self.warehouse.id,
                 'location': self.location.id,
                 'quantity': '1',
+                'reason': 'Cycle count adjustment',
             },
             format='json',
         )

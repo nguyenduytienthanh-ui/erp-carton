@@ -11,7 +11,7 @@ import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { PAGES } from '../../utils/constants';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
-import { canManageInventoryData } from '../../utils/authz';
+import { canAdjustInventoryData } from '../../utils/authz';
 import { getToastMessage } from '../../shared/apiError';
 import { downloadCSV } from '../../utils/csvExport';
 
@@ -110,8 +110,8 @@ function getTransactionNextStep(row: InventoryTransaction): string {
 
 function getCancelTransactionDisabledReason(row: InventoryTransaction, canManage: boolean): string {
   if (!canManage) return 'Bạn chưa có quyền hủy chứng từ kho.';
-  if (row.status !== 'POSTED') return 'Chỉ hủy được chứng từ đã ghi sổ.';
-  return '';
+  if (row.status === 'POSTED') return 'Không thể hủy trực tiếp giao dịch kho đã ghi nhận. Hãy dùng chứng từ đảo/điều chỉnh phù hợp.';
+  return 'Chỉ tra cứu chứng từ đã hủy.';
 }
 
 const STATUS_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({
@@ -373,7 +373,7 @@ export default function InventoryTransactionList() {
   const [cancelTarget, setCancelTarget] = useState<InventoryTransaction | null>(null);
   const [form] = Form.useForm<FormValues>();
   const [cancelForm] = Form.useForm<CancelFormValues>();
-  const canManage = canManageInventoryData();
+  const canManage = canAdjustInventoryData();
   const {
     config,
     saveConfig,
@@ -944,6 +944,11 @@ export default function InventoryTransactionList() {
 
   const onSubmit = async () => {
     const values = await form.validateFields();
+    const isAdjustment = values.transaction_type === 'ADJUSTMENT_IN' || values.transaction_type === 'ADJUSTMENT_OUT';
+    if (isAdjustment && !values.reason?.trim()) {
+      form.setFields([{ name: 'reason', errors: ['Điều chỉnh tồn kho bắt buộc có lý do.'] }]);
+      return;
+    }
     const payload = {
       ...values,
       warehouse: values.warehouse ?? null,

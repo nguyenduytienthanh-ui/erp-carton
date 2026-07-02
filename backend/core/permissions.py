@@ -182,6 +182,68 @@ PURCHASING_VIEW_IMPLIED_PERMISSIONS = (
     ('PURCHASEORDER', 'CANCEL'),
 )
 
+INVENTORY_PERMISSION_DEFINITIONS = (
+    {
+        'field': 'inventory_view',
+        'label': 'Kho - xem',
+        'resource': 'INVENTORY',
+        'action': 'VIEW',
+        'changed_type': 'inventory_view',
+        'code': 'INVENTORY_VIEW',
+        'name': 'View inventory module',
+    },
+    {
+        'field': 'inventory_manage',
+        'label': 'Kho - master data',
+        'resource': 'INVENTORY',
+        'action': 'MANAGE',
+        'changed_type': 'inventory_manage',
+        'code': 'INVENTORY_MANAGE',
+        'name': 'Manage warehouse master data',
+    },
+    {
+        'field': 'inventory_adjust',
+        'label': 'Kho - điều chỉnh',
+        'resource': 'INVENTORY',
+        'action': 'ADJUST',
+        'changed_type': 'inventory_adjust',
+        'code': 'INVENTORY_ADJUST',
+        'name': 'Create manual inventory adjustments',
+    },
+    {
+        'field': 'inventory_stocktake',
+        'label': 'Kho - kiểm tồn',
+        'resource': 'INVENTORY',
+        'action': 'STOCKTAKE',
+        'changed_type': 'inventory_stocktake',
+        'code': 'INVENTORY_STOCKTAKE',
+        'name': 'Manage inventory stocktakes',
+    },
+    {
+        'field': 'inventory_transfer',
+        'label': 'Kho - chuyển kho',
+        'resource': 'INVENTORY',
+        'action': 'TRANSFER',
+        'changed_type': 'inventory_transfer',
+        'code': 'INVENTORY_TRANSFER',
+        'name': 'Manage warehouse transfers',
+    },
+    {
+        'field': 'inventory_reserve',
+        'label': 'Kho - giữ chỗ',
+        'resource': 'INVENTORY',
+        'action': 'RESERVE',
+        'changed_type': 'inventory_reserve',
+        'code': 'INVENTORY_RESERVE',
+        'name': 'Manage inventory reservations',
+    },
+)
+
+INVENTORY_VIEW_IMPLIED_PERMISSIONS = tuple(
+    (row['resource'], row['action'])
+    for row in INVENTORY_PERMISSION_DEFINITIONS
+)
+
 
 class ResourceActionPermission(BasePermission):
     """
@@ -255,3 +317,17 @@ def user_has_purchasing_permission(user, action, *, strict=True):
             for resource, permission_action in PURCHASING_VIEW_IMPLIED_PERMISSIONS
         )
     return check_action_permission(user, 'PURCHASING', normalized_action, strict=strict)
+
+
+def user_has_inventory_permission(user, action, *, strict=True):
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    normalized_action = str(action or '').strip().upper()
+    if normalized_action == 'VIEW':
+        return any(
+            check_action_permission(user, resource, permission_action, strict=True)
+            for resource, permission_action in INVENTORY_VIEW_IMPLIED_PERMISSIONS
+        )
+    return check_action_permission(user, 'INVENTORY', normalized_action, strict=strict)
