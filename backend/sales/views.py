@@ -2544,7 +2544,7 @@ class QuoteViewSet(viewsets.ModelViewSet):
         today = timezone.now().date()
         with transaction.atomic():
             quote = (
-                Quote.objects.select_for_update()
+                Quote.objects.select_for_update(of=('self',))
                 .select_related('customer')
                 .prefetch_related('lines__product__unit')
                 .get(pk=quote.pk)
