@@ -561,7 +561,7 @@ export default function DeliveryPlanningPage() {
               </Button>
               <Button
                 size="small"
-                onClick={() => navigate(`/shipments?order_id=${row.sales_order_id}${row.shipment_id ? `&focus_id=${row.shipment_id}` : ''}`)}
+                onClick={() => navigate(`/sales-orders?focus_id=${row.sales_order_id}&section=shipments`)}
               >
                 Phiếu xuất
               </Button>

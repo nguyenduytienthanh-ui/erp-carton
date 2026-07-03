@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import timedelta
 from decimal import Decimal
 
@@ -5,6 +6,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from core.models import Setting
+from inventory.models import Warehouse, WarehouseLocation, WarehouseLocationType
+from inventory.services import build_stock_balance_map
 from production.models import (
     ProductionDemand,
     ProductionDemandPlanningStatus,
@@ -21,6 +24,15 @@ PRODUCTION_DEMAND_SETTING_DEFAULTS = {
     'PRODUCTION_DEMAND_REMINDER_LEAD_DAYS': 1,
     'PRODUCTION_DEMAND_GENERIC_EXTRA_LEAD_DAYS': 2,
 }
+
+SALES_PRODUCTION_DEMAND_POLICY_SETTING = 'SALES_PRODUCTION_DEMAND_POLICY'
+SALES_PRODUCTION_DEMAND_POLICY_ALL_APPROVED_LINES = 'ALL_APPROVED_LINES'
+SALES_PRODUCTION_DEMAND_POLICY_SHORTAGE_ONLY = 'SHORTAGE_ONLY'
+SALES_PRODUCTION_DEMAND_POLICY_CHOICES = {
+    SALES_PRODUCTION_DEMAND_POLICY_ALL_APPROVED_LINES,
+    SALES_PRODUCTION_DEMAND_POLICY_SHORTAGE_ONLY,
+}
+SALES_PRODUCTION_DEMAND_POLICY_DEFAULT = SALES_PRODUCTION_DEMAND_POLICY_SHORTAGE_ONLY
 
 SYNCED_DEMAND_SOURCE = 'SALES_ORDER'
 DEMAND_HOLD_REASON_SOURCE_CHANGED = 'Nguon nhu cau da thay doi, can planner kiem tra lai.'
@@ -116,6 +128,83 @@ def get_production_demand_settings():
         'reminder_lead_days': settings['PRODUCTION_DEMAND_REMINDER_LEAD_DAYS'],
         'generic_extra_lead_days': settings['PRODUCTION_DEMAND_GENERIC_EXTRA_LEAD_DAYS'],
     }
+
+
+def get_sales_production_demand_policy():
+    value = (
+        Setting.objects.filter(key=SALES_PRODUCTION_DEMAND_POLICY_SETTING, is_active=True)
+        .values_list('value', flat=True)
+        .first()
+    )
+    normalized = str(value or SALES_PRODUCTION_DEMAND_POLICY_DEFAULT).strip().upper()
+    if normalized in SALES_PRODUCTION_DEMAND_POLICY_CHOICES:
+        return normalized
+    return SALES_PRODUCTION_DEMAND_POLICY_DEFAULT
+
+
+def _sales_ready_available_qty_by_product(product_ids):
+    product_ids = [product_id for product_id in set(product_ids or []) if product_id]
+    if not product_ids:
+        return {}
+
+    warehouse_ids = list(
+        Warehouse.objects.filter(is_active=True, deleted_at__isnull=True)
+        .values_list('id', flat=True)
+    )
+    if not warehouse_ids:
+        return {product_id: Decimal('0') for product_id in product_ids}
+
+    ready_location_ids = set(
+        WarehouseLocation.objects.filter(
+            warehouse_id__in=warehouse_ids,
+            is_active=True,
+            deleted_at__isnull=True,
+        )
+        .exclude(location_type=WarehouseLocationType.RETURN)
+        .values_list('id', flat=True)
+    )
+    balances = build_stock_balance_map(product_ids=product_ids, warehouse_ids=warehouse_ids)
+    totals = defaultdict(lambda: Decimal('0'))
+    for (product_id, _warehouse_id, location_id), row in balances.items():
+        if location_id and location_id not in ready_location_ids:
+            continue
+        available = _to_decimal(row.get('on_hand')) - _to_decimal(row.get('reserved'))
+        if available > 0:
+            totals[product_id] += available
+    return {product_id: totals[product_id] for product_id in product_ids}
+
+
+def _apply_sales_production_demand_policy(payloads):
+    payloads = list(payloads or [])
+    policy = get_sales_production_demand_policy()
+    if policy == SALES_PRODUCTION_DEMAND_POLICY_ALL_APPROVED_LINES:
+        return payloads, 0
+
+    product_ids = [
+        getattr(payload.get('product'), 'id', None)
+        for payload in payloads
+        if getattr(payload.get('product'), 'id', None)
+    ]
+    available_by_product = _sales_ready_available_qty_by_product(product_ids)
+    filtered = []
+    skipped = 0
+    for payload in payloads:
+        product_id = getattr(payload.get('product'), 'id', None)
+        required = _to_decimal(payload.get('qty_required'))
+        if not product_id:
+            filtered.append(payload)
+            continue
+        available = available_by_product.get(product_id, Decimal('0'))
+        covered = min(required, max(available, Decimal('0')))
+        shortage = required - covered
+        available_by_product[product_id] = max(available - required, Decimal('0'))
+        if shortage > 0:
+            next_payload = dict(payload)
+            next_payload['qty_required'] = round_qty(shortage)
+            filtered.append(next_payload)
+        else:
+            skipped += 1
+    return filtered, skipped
 
 
 def compute_demand_dates(delivery_date, product_kind='', requires_review=False):
@@ -515,7 +604,8 @@ def _line_source_payloads(line):
 
 def sync_production_demands_for_sales_line(line, *, user=None, dry_run=False):
     result = _result(dry_run)
-    payloads = _line_source_payloads(line)
+    payloads, skipped = _apply_sales_production_demand_policy(_line_source_payloads(line))
+    result['skipped'] += skipped
     active_keys = {payload['demand_key'] for payload in payloads}
     for payload in payloads:
         _merge_result(result, upsert_production_demand(payload, user=user, dry_run=dry_run))
@@ -536,11 +626,14 @@ def sync_production_demands_for_sales_order(order, *, user=None, dry_run=False):
         .prefetch_related('delivery_plans')
         .order_by('line_number', 'id')
     )
+    source_payloads = []
     for line in lines:
-        payloads = _line_source_payloads(line)
-        for payload in payloads:
-            active_keys.add(payload['demand_key'])
-            _merge_result(result, upsert_production_demand(payload, user=user, dry_run=dry_run))
+        source_payloads.extend(_line_source_payloads(line))
+    payloads, skipped = _apply_sales_production_demand_policy(source_payloads)
+    result['skipped'] += skipped
+    for payload in payloads:
+        active_keys.add(payload['demand_key'])
+        _merge_result(result, upsert_production_demand(payload, user=user, dry_run=dry_run))
     stale_qs = ProductionDemand.objects.filter(
         sales_order=order,
         source=SYNCED_DEMAND_SOURCE,

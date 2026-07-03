@@ -22,7 +22,6 @@ import {
   BellOutlined,
   SafetyOutlined,
   DatabaseOutlined,
-  CarOutlined,
   QrcodeOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
@@ -52,7 +51,6 @@ import {
   canManageInventoryData,
   canManageStocktake,
   canViewInventoryData,
-  canManagePurchasingData,
   canManageProductionData,
   canViewQualityData,
   canAccessProductionCenter,
@@ -235,7 +233,6 @@ const MainLayout = () => {
   const canManageInventory = canManageInventoryData();
   const canViewInventory = canViewInventoryData();
   const canManageStocktakeMenu = canManageStocktake();
-  const canManagePurchasing = canManagePurchasingData();
   const canViewPurchasing = canViewPurchasingData();
   const canManageProduction = canManageProductionData();
   const canViewQuality = canViewQualityData();
@@ -243,7 +240,7 @@ const MainLayout = () => {
   const canAccessMaterialIssueRoute = canAccessMaterialIssues();
   const canAccessProductionReceiptRoute = canAccessProductionReceipts();
   const canManageWorkforce = canManageWorkforceData();
-  const canUseScanCenter = canViewInventory || canViewSalesOrders || canManagePurchasing || canManageProduction;
+  const canUseScanCenter = canViewInventory;
   const canViewSalesFulfillmentCenter = canViewSalesOrders || canViewPurchasing || canManageProduction || canViewReports;
   const canViewApprovalTower = canViewApprovalControlTower();
   const canManageModulePermissions = canManageModulePermissionSettings();
@@ -758,11 +755,6 @@ const MainLayout = () => {
       key: '/sales-fulfillment-center',
       icon: <ControlOutlined />,
       label: renderMenuLabel('/sales-fulfillment-center', 'Điều độ đơn hàng xuất'),
-    } : null,
-    canViewSalesOrders ? {
-      key: '/shipments',
-      icon: <CarOutlined />,
-      label: renderMenuLabel('/shipments', 'Phiếu xuất'),
     } : null,
     canUseScanCenter ? {
       key: '/scan-center',

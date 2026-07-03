@@ -146,6 +146,14 @@ class SalesOrder(models.Model):
     )
     # Reference (link chứng từ liên quan)
     reference = models.CharField(max_length=200, blank=True)
+    source_quote = models.OneToOneField(
+        'sales.Quote',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='converted_order',
+        help_text='Quote that created this sales order. Nullable for legacy orders.',
+    )
     # Customer
     customer = models.ForeignKey(
         'core.Customer',
@@ -475,6 +483,7 @@ class Quote(models.Model):
         default=QuoteStatus.DRAFT,
         db_index=True,
     )
+    converted_at = models.DateTimeField(null=True, blank=True, db_index=True)
     reference = models.CharField(max_length=200, blank=True)
     customer = models.ForeignKey(
         'core.Customer',

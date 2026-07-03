@@ -254,8 +254,8 @@ export default function AppRouter() {
               <Route path="delivery-carriers" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/sales-orders">{withAsyncBoundary(<DeliveryCarrierList />)}</FeatureRoute>} />
               <Route path="sales-fulfillment-center" element={<FeatureRoute allow={canViewSalesFulfillmentCenter} fallbackTo="/sales-orders">{withAsyncBoundary(<SalesFulfillmentCenter />)}</FeatureRoute>} />
               <Route path="shipments" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<ShipmentList />)}</FeatureRoute>} />
-              <Route path="scan-center" element={withAsyncBoundary(<ScanCenter />)} />
-              <Route path="shipments/scan" element={withAsyncBoundary(<ScanCenter />)} />
+              <Route path="scan-center" element={<FeatureRoute allow={canViewInventory} fallbackTo="/">{withAsyncBoundary(<ScanCenter />)}</FeatureRoute>} />
+              <Route path="shipments/scan" element={<FeatureRoute allow={canViewInventory} fallbackTo="/">{withAsyncBoundary(<ScanCenter />)}</FeatureRoute>} />
               <Route path="quotes" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<QuoteList />)}</FeatureRoute>} />
               <Route path="sales-analytics" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<SalesAnalyticsDashboard />)}</FeatureRoute>} />
               <Route path="discount-management" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<DiscountManagement />)}</FeatureRoute>} />

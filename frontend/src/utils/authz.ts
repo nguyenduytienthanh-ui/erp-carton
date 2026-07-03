@@ -479,27 +479,14 @@ export function canCancelPurchaseOrders(): boolean {
 export function canAccessSalesOrders(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
-  if (
-    hasPermission(authz.permissions, 'SALESORDER', 'SUBMIT')
+  return (
+    hasPermission(authz.permissions, 'SALESORDER', 'VIEW')
+    || hasPermission(authz.permissions, 'SALESORDER', 'SUBMIT')
     || hasPermission(authz.permissions, 'SALESORDER', 'APPROVE')
     || hasPermission(authz.permissions, 'SALESORDER', 'REJECT')
     || hasPermission(authz.permissions, 'SALESORDER', 'POST')
     || hasPermission(authz.permissions, 'SALESORDER', 'VOID')
-  ) {
-    return true;
-  }
-  return hasAnyRole(authz.roleNames, [
-    'admin',
-    'manager',
-    'sales',
-    'sales-manager',
-    'accountant',
-    'finance',
-    'finance-manager',
-    'ops-manager',
-    'quan-ly',
-    'quanly',
-  ]);
+  );
 }
 
 function hasCustomerPermission(action: string): boolean {
@@ -557,30 +544,26 @@ export function canManageDeliveryCarriers(): boolean {
 export function canSubmitSalesOrders(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
-  if (hasPermission(authz.permissions, 'SALESORDER', 'SUBMIT')) return true;
-  return hasAnyRole(authz.roleNames, ['admin', 'manager', 'sales', 'sales-manager', 'quan-ly', 'quanly']);
+  return hasPermission(authz.permissions, 'SALESORDER', 'SUBMIT');
 }
 
 export function canApproveSalesOrders(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
-  if (hasPermission(authz.permissions, 'SALESORDER', 'APPROVE')) return true;
-  if (hasPermission(authz.permissions, 'SALESORDER', 'REJECT')) return true;
-  return hasAnyRole(authz.roleNames, ['admin', 'manager', 'sales-manager', 'quan-ly', 'quanly']);
+  return hasPermission(authz.permissions, 'SALESORDER', 'APPROVE')
+    || hasPermission(authz.permissions, 'SALESORDER', 'REJECT');
 }
 
 export function canPostSalesOrders(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
-  if (hasPermission(authz.permissions, 'SALESORDER', 'POST')) return true;
-  return hasAnyRole(authz.roleNames, ['admin', 'manager', 'accountant', 'finance', 'finance-manager', 'quan-ly', 'quanly']);
+  return hasPermission(authz.permissions, 'SALESORDER', 'POST');
 }
 
 export function canVoidSalesOrders(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
-  if (hasPermission(authz.permissions, 'SALESORDER', 'VOID')) return true;
-  return hasAnyRole(authz.roleNames, ['admin', 'manager', 'sales-manager', 'finance-manager', 'quan-ly', 'quanly']);
+  return hasPermission(authz.permissions, 'SALESORDER', 'VOID');
 }
 
 export function canManageModulePermissionSettings(): boolean {

@@ -12,7 +12,6 @@ from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.filters import SearchFilter, OrderingFilter
-from rest_framework.permissions import DjangoObjectPermissions
 from django_filters.rest_framework import DjangoFilterBackend
 import django_filters
 from datetime import date, timedelta
@@ -32,14 +31,14 @@ from reportlab.pdfgen import canvas
 
 from core.mixins import get_client_ip
 from core.models import AuditLog, ApprovalHistory, Attachment
-from core.permissions import check_action_permission
 from core.workflow_services import generate_tasks_for_entity
 from finance.services import cancel_receivable_for_sales_order
 from production.demand_services import (
     cancel_production_demands_for_sales_order,
     sync_production_demands_for_sales_order,
 )
-from sales.models import DeliveryCarrier, SalesOrder, SalesOrderStatus, Quote, QuoteStatus, OutboundShipment, OutboundShipmentStatus, ShipmentLine, SalesLineMaterialPlan, SalesOrderDeliveryPlan
+from sales.document_policy import calc_line_totals
+from sales.models import DeliveryCarrier, SalesOrder, SalesOrderLine, SalesOrderStatus, Quote, QuoteStatus, OutboundShipment, OutboundShipmentStatus, ShipmentLine, SalesLineMaterialPlan, SalesOrderDeliveryPlan
 from sales.serializers import DeliveryCarrierSerializer, SalesOrderSerializer, QuoteSerializer, OutboundShipmentSerializer, ShipmentLineSerializer, SalesLineMaterialPlanSerializer, SalesOrderDeliveryPlanSerializer
 from sales.filters import SalesOrderFilter, QuoteFilter
 from sales.services import (
@@ -69,28 +68,21 @@ from sales.material_plan_services import (
     sync_sales_line_material_plan_for_line,
 )
 from sales.permissions import (
+    can_access_sales_orders,
     can_edit_sales_order,
+    can_manage_sales_order_draft,
     can_submit_sales_order,
     can_approve_sales_order,
     can_reject_sales_order,
     can_post_sales_order,
     can_void_sales_order,
+    can_manage_quote,
+    can_convert_quote,
+    can_manage_legacy_shipment,
     can_manage_delivery_carrier,
+    can_manage_inventory_execution,
+    can_use_sales_scan_center,
 )
-
-
-def _user_role_names(user):
-    try:
-        pairs = user.roles.values_list('name', 'code')
-    except Exception:
-        return set()
-    names = set()
-    for name, code in pairs:
-        if name:
-            names.add(str(name).strip().lower())
-        if code:
-            names.add(str(code).strip().lower())
-    return names
 
 
 def _create_outbound_shipment_audit_log(*, request, shipment, action, old_status=None):
@@ -111,50 +103,11 @@ def _create_outbound_shipment_audit_log(*, request, shipment, action, old_status
 
 
 def _can_manage_inventory_execution(user):
-    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
-        return True
-    if check_action_permission(user, 'INVENTORY', 'MANAGE', strict=True):
-        return True
-    return any(
-        role in {
-            'admin',
-            'manager',
-            'operation-manager',
-            'ops-manager',
-            'product-manager',
-            'sales-manager',
-            'quan-ly',
-            'quanly',
-        }
-        for role in _user_role_names(user)
-    )
+    return can_manage_inventory_execution(user)
 
 
 def _can_access_sales_orders(user):
-    if not user or not user.is_authenticated:
-        return False
-    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
-        return True
-    if any(
-        check_action_permission(user, 'SALESORDER', action, strict=True)
-        for action in ('SUBMIT', 'APPROVE', 'REJECT', 'POST', 'VOID')
-    ):
-        return True
-    return any(
-        role in {
-            'admin',
-            'manager',
-            'sales',
-            'sales-manager',
-            'accountant',
-            'finance',
-            'finance-manager',
-            'ops-manager',
-            'quan-ly',
-            'quanly',
-        }
-        for role in _user_role_names(user)
-    )
+    return can_access_sales_orders(user)
 
 
 def _draw_pdf_qr(pdf_canvas, value, *, x, y, size):
@@ -474,9 +427,14 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
     ordering_fields = ['code', 'order_date', 'status', 'total', 'created_at']
     ordering = ['-order_date', '-id']
 
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not can_access_sales_orders(request.user):
+            raise PermissionDenied('Ban khong co quyen truy cap don hang xuat.')
+
     def get_queryset(self):
         qs = SalesOrder.objects.select_related(
-            'customer', 'owner', 'team', 'created_by', 'updated_by',
+            'customer', 'source_quote', 'owner', 'team', 'created_by', 'updated_by',
             'submitted_by', 'approved_by', 'rejected_by', 'posted_by', 'voided_by',
         ).prefetch_related('lines', 'lines__product', 'lines__delivery_plans')
         user = self.request.user
@@ -488,6 +446,8 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         return qs.filter(Q(owner=user) | Q(owner__isnull=True))
 
     def perform_create(self, serializer):
+        if not can_manage_sales_order_draft(self.request.user):
+            raise PermissionDenied('Ban khong co quyen tao don hang xuat.')
         order_date = serializer.validated_data.get('order_date') or timezone.now().date()
         code = get_next_sales_order_code(order_date)
         order = serializer.save(
@@ -500,15 +460,13 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         if not can_edit_sales_order(self.request.user, serializer.instance):
-            from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied('Chỉ được sửa đơn ở trạng thái Nháp.')
+            raise PermissionDenied('Chi duoc sua don nhap khi co quyen gui duyet don hang.')
         order = serializer.save(updated_by=self.request.user)
         sync_sales_order_delivery_tasks(actor=self.request.user, order_ids=[order.id], days_ahead=14)
 
     def perform_destroy(self, instance):
-        if instance.status != SalesOrderStatus.DRAFT:
-            from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied('Chỉ được xóa đơn Nháp.')
+        if not can_edit_sales_order(self.request.user, instance):
+            raise PermissionDenied('Chi duoc xoa don nhap khi co quyen gui duyet don hang.')
         instance.delete()
 
     @action(detail=True, methods=['post'])
@@ -617,7 +575,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
     def confirm_order(self, request, pk=None):
         """Confirm order with customer (xác nhận đơn hàng với khách hàng)."""
         order = self.get_object()
-        if not can_edit_sales_order(request.user, order):
+        if not can_manage_sales_order_draft(request.user):
             return Response({'error': 'Không có quyền hoặc trạng thái không hợp lệ.'}, status=status.HTTP_403_FORBIDDEN)
         if order.status not in [SalesOrderStatus.DRAFT, SalesOrderStatus.SUBMITTED]:
             return Response({'error': 'Chỉ có thể xác nhận đơn hàng ở trạng thái Nháp hoặc Đã gửi.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -2508,21 +2466,32 @@ class QuoteViewSet(viewsets.ModelViewSet):
     ordering_fields = ['code', 'quote_date', 'status', 'total', 'created_at']
     ordering = ['-quote_date', '-id']
 
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not can_access_sales_orders(request.user):
+            raise PermissionDenied('Ban khong co quyen truy cap bao gia.')
+
     def get_queryset(self):
         return Quote.objects.select_related('customer', 'created_by', 'updated_by').prefetch_related(
             'lines', 'lines__product',
         )
 
     def perform_create(self, serializer):
+        if not can_manage_quote(self.request.user):
+            raise PermissionDenied('Ban khong co quyen tao bao gia.')
         serializer.save(created_by=self.request.user, updated_by=self.request.user)
 
     def perform_update(self, serializer):
+        if not can_manage_quote(self.request.user):
+            raise PermissionDenied('Ban khong co quyen sua bao gia.')
         if serializer.instance.status != QuoteStatus.DRAFT:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied('Chỉ được sửa báo giá ở trạng thái Nháp.')
         serializer.save(updated_by=self.request.user)
 
     def perform_destroy(self, instance):
+        if not can_manage_quote(self.request.user):
+            raise PermissionDenied('Ban khong co quyen xoa bao gia.')
         if instance.status != QuoteStatus.DRAFT:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied('Chỉ được xóa báo giá ở trạng thái Nháp.')
@@ -2532,6 +2501,8 @@ class QuoteViewSet(viewsets.ModelViewSet):
     def send(self, request, pk=None):
         """DRAFT -> SENT (gửi báo giá cho khách)."""
         quote = self.get_object()
+        if not can_manage_quote(request.user):
+            return Response({'error': 'Khong co quyen cap nhat bao gia.'}, status=status.HTTP_403_FORBIDDEN)
         if quote.status != QuoteStatus.DRAFT:
             return Response({'error': 'Chỉ gửi báo giá ở trạng thái Nháp.'}, status=status.HTTP_400_BAD_REQUEST)
         quote.status = QuoteStatus.SENT
@@ -2542,6 +2513,8 @@ class QuoteViewSet(viewsets.ModelViewSet):
     def accept(self, request, pk=None):
         """SENT -> ACCEPTED (khách chấp nhận)."""
         quote = self.get_object()
+        if not can_manage_quote(request.user):
+            return Response({'error': 'Khong co quyen cap nhat bao gia.'}, status=status.HTTP_403_FORBIDDEN)
         if quote.status != QuoteStatus.SENT:
             return Response({'error': 'Chỉ chấp nhận báo giá đã gửi.'}, status=status.HTTP_400_BAD_REQUEST)
         quote.status = QuoteStatus.ACCEPTED
@@ -2552,6 +2525,8 @@ class QuoteViewSet(viewsets.ModelViewSet):
     def reject(self, request, pk=None):
         """SENT -> REJECTED. Body: { reason }."""
         quote = self.get_object()
+        if not can_manage_quote(request.user):
+            return Response({'error': 'Khong co quyen cap nhat bao gia.'}, status=status.HTTP_403_FORBIDDEN)
         if quote.status != QuoteStatus.SENT:
             return Response({'error': 'Chỉ từ chối báo giá đã gửi.'}, status=status.HTTP_400_BAD_REQUEST)
         quote.status = QuoteStatus.REJECTED
@@ -2561,56 +2536,73 @@ class QuoteViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def convert_to_order(self, request, pk=None):
         """Tạo đơn hàng từ báo giá (chỉ khi ACCEPTED). Trả về order_id, order_code."""
-        from django.db import transaction
-        from sales.models import SalesOrderLine
-        from sales.document_policy import calc_line_totals
         quote = self.get_object()
+        if not can_convert_quote(request.user):
+            return Response({'error': 'Khong co quyen chuyen bao gia thanh don hang.'}, status=status.HTTP_403_FORBIDDEN)
         if quote.status != QuoteStatus.ACCEPTED:
             return Response({'error': 'Chỉ chuyển thành đơn hàng khi báo giá đã được chấp nhận.'}, status=400)
         today = timezone.now().date()
-        order_code = get_next_sales_order_code(today)
         with transaction.atomic():
-            order = SalesOrder.objects.create(
-                code=order_code,
-                doc_type='SO',
-                order_date=today,
-                delivery_date=None,
-                status=SalesOrderStatus.DRAFT,
-                reference=quote.code or '',
-                customer=quote.customer,
-                currency=quote.currency or 'VND',
-                subtotal=quote.subtotal,
-                discount_total=quote.discount_total,
-                tax_total=quote.tax_total,
-                total=quote.total,
-                notes=quote.notes or '',
-                created_by=request.user,
-                updated_by=request.user,
-                owner=request.user,
+            quote = (
+                Quote.objects.select_for_update()
+                .select_related('customer')
+                .prefetch_related('lines__product__unit')
+                .get(pk=quote.pk)
             )
-            for i, qline in enumerate(quote.lines.all().order_by('line_number'), start=1):
-                sub, disc, tax, total = calc_line_totals(
-                    qline.qty, qline.unit_price, qline.discount_pct, qline.tax_pct,
+            order = SalesOrder.objects.filter(source_quote=quote).first()
+            created = False
+            if order is None:
+                order = SalesOrder.objects.create(
+                    code=get_next_sales_order_code(today),
+                    doc_type='SO',
+                    order_date=today,
+                    delivery_date=None,
+                    status=SalesOrderStatus.DRAFT,
+                    reference=quote.code or '',
+                    source_quote=quote,
+                    customer=quote.customer,
+                    currency=quote.currency or 'VND',
+                    subtotal=quote.subtotal,
+                    discount_total=quote.discount_total,
+                    tax_total=quote.tax_total,
+                    total=quote.total,
+                    notes=quote.notes or '',
+                    created_by=request.user,
+                    updated_by=request.user,
+                    owner=request.user,
                 )
-                product = qline.product
-                uom = getattr(getattr(product, 'unit', None), 'code', '') or ''
-                SalesOrderLine.objects.create(
-                    sales_order=order,
-                    line_number=i,
-                    product=product,
-                    internal_product_code=getattr(product, 'code', '') or '',
-                    uom=uom,
-                    qty=qline.qty,
-                    unit_price=qline.unit_price,
-                    discount_pct=qline.discount_pct,
-                    tax_pct=qline.tax_pct,
-                    line_subtotal=sub,
-                    discount_amount=disc,
-                    tax_amount=tax,
-                    line_total=total,
-                    note=qline.note or '',
-                )
-        return Response({'order_id': order.id, 'order_code': order.code})
+                for i, qline in enumerate(quote.lines.all().order_by('line_number'), start=1):
+                    sub, disc, tax, total = calc_line_totals(
+                        qline.qty, qline.unit_price, qline.discount_pct, qline.tax_pct,
+                    )
+                    product = qline.product
+                    uom = getattr(getattr(product, 'unit', None), 'code', '') or ''
+                    SalesOrderLine.objects.create(
+                        sales_order=order,
+                        line_number=i,
+                        product=product,
+                        internal_product_code=getattr(product, 'code', '') or '',
+                        uom=uom,
+                        qty=qline.qty,
+                        unit_price=qline.unit_price,
+                        discount_pct=qline.discount_pct,
+                        tax_pct=qline.tax_pct,
+                        line_subtotal=sub,
+                        discount_amount=disc,
+                        tax_amount=tax,
+                        line_total=total,
+                        note=qline.note or '',
+                    )
+                created = True
+            if quote.converted_at is None:
+                quote.converted_at = timezone.now()
+                quote.save(update_fields=['converted_at', 'updated_at'])
+        return Response({
+            'order_id': order.id,
+            'order_code': order.code,
+            'created': created,
+            'source_quote_id': quote.id,
+        })
 
     @action(detail=True, methods=['get'])
     def quote_pdf(self, request, pk=None):
@@ -2636,17 +2628,40 @@ class ShipmentViewSet(viewsets.ModelViewSet):
     search_fields = ['code', 'customer__name', 'reference', 'tracking_number']
     ordering_fields = ['shipment_date', 'status', 'created_at']
     ordering = ['-shipment_date']
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if self.action == 'resolve_scan':
+            if not can_use_sales_scan_center(request.user):
+                raise PermissionDenied('Ban khong co quyen su dung trung tam quet QR.')
+            return
+        if not can_access_sales_orders(request.user):
+            raise PermissionDenied('Ban khong co quyen truy cap phieu xuat legacy.')
     
     def get_permissions(self):
-        """Check sales.manage_shipment permission"""
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), DjangoObjectPermissions()]
         return [IsAuthenticated()]
     
     def get_serializer_context(self):
         context = super().get_serializer_context()
         context['request'] = self.request
         return context
+
+    def _ensure_legacy_write_permission(self, action=None):
+        action_key = action or self.action
+        if not can_manage_legacy_shipment(self.request.user, action_key):
+            raise PermissionDenied('Ban khong co quyen thuc hien thao tac phieu xuat legacy.')
+
+    def perform_create(self, serializer):
+        self._ensure_legacy_write_permission('CREATE')
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._ensure_legacy_write_permission('UPDATE')
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._ensure_legacy_write_permission('DESTROY')
+        instance.delete()
 
     @action(detail=False, methods=['post'])
     def resolve_scan(self, request):
@@ -2719,6 +2734,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
     def submit_shipment(self, request, pk=None):
         """Submit shipment for approval (DRAFT -> SUBMITTED)"""
         shipment = self.get_object()
+        self._ensure_legacy_write_permission('SUBMIT_SHIPMENT')
         if shipment.status != OutboundShipmentStatus.DRAFT:
             return Response(
                 {'error': f'Can only submit DRAFT shipments. Current status: {shipment.status}'},
@@ -2748,6 +2764,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
     def approve_shipment(self, request, pk=None):
         """Approve shipment (SUBMITTED -> APPROVED)"""
         shipment = self.get_object()
+        self._ensure_legacy_write_permission('APPROVE_SHIPMENT')
         if shipment.status != OutboundShipmentStatus.SUBMITTED:
             return Response(
                 {'error': f'Can only approve SUBMITTED shipments. Current status: {shipment.status}'},
@@ -2777,6 +2794,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
     def pack_shipment(self, request, pk=None):
         """Pack shipment (APPROVED -> PACKED)"""
         shipment = self.get_object()
+        self._ensure_legacy_write_permission('PACK_SHIPMENT')
         if shipment.status != OutboundShipmentStatus.APPROVED:
             return Response(
                 {'error': f'Can only pack APPROVED shipments. Current status: {shipment.status}'},
@@ -2806,6 +2824,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
     def send_shipment(self, request, pk=None):
         """Send shipment (PACKED -> IN_TRANSIT)"""
         shipment = self.get_object()
+        self._ensure_legacy_write_permission('SEND_SHIPMENT')
         if shipment.status != OutboundShipmentStatus.PACKED:
             return Response(
                 {'error': f'Can only send PACKED shipments. Current status: {shipment.status}'},
@@ -2833,6 +2852,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
     def confirm_delivery(self, request, pk=None):
         """Confirm delivery (IN_TRANSIT -> DELIVERED)"""
         shipment = self.get_object()
+        self._ensure_legacy_write_permission('CONFIRM_DELIVERY')
         if shipment.status != OutboundShipmentStatus.IN_TRANSIT:
             return Response(
                 {'error': f'Can only confirm delivery for IN_TRANSIT shipments. Current status: {shipment.status}'},
@@ -2868,6 +2888,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
     def cancel_shipment(self, request, pk=None):
         """Cancel shipment"""
         shipment = self.get_object()
+        self._ensure_legacy_write_permission('CANCEL_SHIPMENT')
         if shipment.status == OutboundShipmentStatus.DELIVERED:
             return Response(
                 {'error': 'Cannot cancel DELIVERED shipments'},

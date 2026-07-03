@@ -289,7 +289,7 @@ export function buildCommandPaletteCatalog(
       group: 'Bán hàng',
       description: 'Điều phối giao hàng, xe, tài xế, đóng gói, bàn giao xe và xác nhận giao xong.',
       keywords: ['phieu xuat', 'shipment', 'giao hang', 'dieu phoi giao hang', 'dieu phoi xe'],
-      enabled: options.canViewSalesOrders,
+      enabled: false,
     },
     {
       key: 'scan-center',
@@ -298,8 +298,8 @@ export function buildCommandPaletteCatalog(
       group: 'Điểm nóng',
       description: 'Quét QR kiện hàng, tra cứu lệnh sản xuất và phiếu xuất. Hỗ trợ camera và máy quét cắm ngoài.',
       keywords: ['quet qr', 'qr', 'scan center', 'quet kien', 'tra cuu kien', 'trung tam quet qr', 'scan'],
-      enabled: true,
-      spotlight: true,
+      enabled: options.canViewInventory,
+      spotlight: options.canViewInventory,
     },
     {
       key: 'quotes',

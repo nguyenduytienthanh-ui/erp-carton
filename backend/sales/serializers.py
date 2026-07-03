@@ -283,11 +283,13 @@ class SalesOrderLineSerializer(serializers.ModelSerializer):
 class SalesOrderSerializer(serializers.ModelSerializer):
     lines = SalesOrderLineSerializer(many=True, required=False)
     customer_name = serializers.SerializerMethodField()
+    source_quote_code = serializers.CharField(source='source_quote.code', read_only=True, allow_null=True)
 
     class Meta:
         model = SalesOrder
         fields = [
             'id', 'code', 'doc_type', 'order_date', 'delivery_date', 'status', 'reference',
+            'source_quote', 'source_quote_code',
             'customer', 'customer_name', 'currency', 'exchange_rate',
             'subtotal', 'discount_total', 'tax_total', 'total', 'notes',
             'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
@@ -299,7 +301,7 @@ class SalesOrderSerializer(serializers.ModelSerializer):
             'owner', 'team', 'reversal_of', 'lines',
         ]
         read_only_fields = [
-            'code', 'subtotal', 'discount_total', 'tax_total', 'total',
+            'code', 'source_quote', 'source_quote_code', 'subtotal', 'discount_total', 'tax_total', 'total',
             'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
             'rejected_by', 'rejected_at', 'reject_reason',
             'posted_by', 'posted_at', 'post_number',
@@ -671,6 +673,9 @@ class QuoteLineSerializer(serializers.ModelSerializer):
 class QuoteSerializer(serializers.ModelSerializer):
     lines = QuoteLineSerializer(many=True, required=False)
     customer_name = serializers.SerializerMethodField()
+    is_converted = serializers.SerializerMethodField()
+    converted_order_id = serializers.SerializerMethodField()
+    converted_order_code = serializers.SerializerMethodField()
 
     class Meta:
         model = Quote
@@ -678,10 +683,12 @@ class QuoteSerializer(serializers.ModelSerializer):
             'id', 'code', 'quote_date', 'valid_until', 'status', 'reference',
             'customer', 'customer_name', 'currency',
             'subtotal', 'discount_total', 'tax_total', 'total', 'notes',
+            'converted_at', 'is_converted', 'converted_order_id', 'converted_order_code',
             'created_by', 'created_at', 'updated_by', 'updated_at', 'lines',
         ]
         read_only_fields = [
             'code', 'subtotal', 'discount_total', 'tax_total', 'total',
+            'converted_at', 'is_converted', 'converted_order_id', 'converted_order_code',
             'created_by', 'created_at', 'updated_by', 'updated_at',
         ]
 
@@ -689,6 +696,23 @@ class QuoteSerializer(serializers.ModelSerializer):
         if obj.customer_id and getattr(obj, 'customer', None):
             return obj.customer.name
         return None
+
+    def _converted_order(self, obj):
+        try:
+            return obj.converted_order
+        except SalesOrder.DoesNotExist:
+            return None
+
+    def get_is_converted(self, obj):
+        return self._converted_order(obj) is not None
+
+    def get_converted_order_id(self, obj):
+        order = self._converted_order(obj)
+        return getattr(order, 'id', None)
+
+    def get_converted_order_code(self, obj):
+        order = self._converted_order(obj)
+        return getattr(order, 'code', None)
 
     def create(self, validated_data, **kwargs):
         from django.db import transaction

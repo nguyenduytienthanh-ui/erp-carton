@@ -11,10 +11,20 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient, APIRequestFactory
-from core.models import AuditLog, Customer, Team, Task
+from core.models import AuditLog, Customer, Permission, Role, Setting, Team, Task
 from finance.models import GeneralLedgerAccount
 from finance.posting import save_finance_gl_control_mappings
-from inventory.models import InventoryReservation, InventoryTransaction, OutboundShipment, OutboundShipmentPackage, Warehouse
+from inventory.models import (
+    InventoryReservation,
+    InventoryTransaction,
+    InventoryTransactionStatus,
+    InventoryTransactionType,
+    OutboundShipment,
+    OutboundShipmentPackage,
+    Warehouse,
+    WarehouseLocation,
+    WarehouseLocationType,
+)
 from products.models import Operation, Product, ProductOperation, ProductRoutingStep, ProductUnit
 from production.models import ProductionDemand, ProductionDemandPlanningStatus, ProductionDemandProductionStatus, ProductionOrder
 from sales.admin import SalesOrderAdmin
@@ -24,6 +34,9 @@ from sales.models import (
     SalesOrderLine,
     SalesOrderDeliveryPlan,
     SalesOrderStatus,
+    Quote,
+    QuoteLine,
+    QuoteStatus,
     PeriodSequence,
     OutboundShipment as SalesOutboundShipment,
 )
@@ -167,6 +180,135 @@ class SalesOrderIdempotentPostTests(TestCase):
         self.assertEqual(self.order.post_number, post_number_first)
 
 
+class QuoteConversionContractTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='quote_convert_admin',
+            password='test',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_authenticate(self.user)
+        self.unit = ProductUnit.objects.create(code='QT-U', name='Quote Unit')
+        self.product = Product.objects.create(
+            code='QT-P1',
+            name='Quote Product',
+            unit=self.unit,
+            sale_price=Decimal('120'),
+        )
+        self.customer = Customer.objects.create(code='QT-CUS', name='Quote Customer', is_active=True)
+
+    def _quote(self, code='QT-P6B-001', status=QuoteStatus.ACCEPTED):
+        today = timezone.localdate()
+        quote = Quote.objects.create(
+            code=code,
+            quote_date=today,
+            valid_until=today + timedelta(days=7),
+            status=status,
+            customer=self.customer,
+            currency='VND',
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        sub, disc, tax, total = calc_line_totals(Decimal('2'), Decimal('120'), Decimal('0'), Decimal('0'))
+        QuoteLine.objects.create(
+            quote=quote,
+            line_number=1,
+            product=self.product,
+            qty=Decimal('2'),
+            unit_price=Decimal('120'),
+            line_subtotal=sub,
+            discount_amount=disc,
+            tax_amount=tax,
+            line_total=total,
+        )
+        quote.recalc_totals()
+        return quote
+
+    def test_accepted_quote_conversion_is_traceable_and_idempotent(self):
+        quote = self._quote()
+
+        first = self.client.post(f'/api/sales/quotes/{quote.id}/convert_to_order/', format='json')
+        second = self.client.post(f'/api/sales/quotes/{quote.id}/convert_to_order/', format='json')
+
+        self.assertEqual(first.status_code, 200, first.data)
+        self.assertEqual(second.status_code, 200, second.data)
+        self.assertTrue(first.data['created'])
+        self.assertFalse(second.data['created'])
+        self.assertEqual(first.data['order_id'], second.data['order_id'])
+        self.assertEqual(SalesOrder.objects.filter(source_quote=quote).count(), 1)
+        order = SalesOrder.objects.get(source_quote=quote)
+        self.assertEqual(order.reference, quote.code)
+        self.assertEqual(order.lines.count(), 1)
+        quote.refresh_from_db()
+        self.assertIsNotNone(quote.converted_at)
+
+    def test_non_accepted_quote_cannot_convert(self):
+        quote = self._quote(code='QT-P6B-DRAFT', status=QuoteStatus.DRAFT)
+
+        response = self.client.post(f'/api/sales/quotes/{quote.id}/convert_to_order/', format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(SalesOrder.objects.filter(source_quote=quote).exists())
+
+
+class SalesPermissionBaselineTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.unit = ProductUnit.objects.create(code='PERM-U', name='Permission Unit')
+        self.product = Product.objects.create(code='PERM-P1', name='Permission Product', unit=self.unit, sale_price=Decimal('10'))
+
+    def _grant(self, user, resource, action):
+        permission, _ = Permission.objects.update_or_create(
+            resource=resource,
+            action=action,
+            defaults={'code': f'{resource}_{action}', 'name': f'{resource} {action}'},
+        )
+        role, _ = Role.objects.get_or_create(code=f'{resource}_{action}_ROLE', defaults={'name': f'{resource} {action} role'})
+        role.permissions.add(permission)
+        user.roles.add(role)
+
+    def test_sales_order_list_requires_authentication(self):
+        response = self.client.get('/api/sales/orders/')
+        self.assertEqual(response.status_code, 401)
+
+    def test_role_name_without_permission_is_forbidden(self):
+        user = User.objects.create_user(username='sales_role_only', password='test')
+        role = Role.objects.create(code='SALES', name='Sales')
+        user.roles.add(role)
+        self.client.force_authenticate(user)
+
+        response = self.client.get('/api/sales/orders/')
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_explicit_sales_permission_allows_read(self):
+        user = User.objects.create_user(username='sales_submit_perm', password='test')
+        self._grant(user, 'SALESORDER', 'SUBMIT')
+        self.client.force_authenticate(user)
+
+        response = self.client.get('/api/sales/orders/')
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_view_only_sales_permission_allows_read_but_blocks_conversion(self):
+        user = User.objects.create_user(username='sales_view_perm', password='test')
+        self._grant(user, 'SALESORDER', 'VIEW')
+        self.client.force_authenticate(user)
+        quote = Quote.objects.create(
+            code='QT-PERM-VIEW',
+            quote_date=timezone.localdate(),
+            status=QuoteStatus.ACCEPTED,
+        )
+
+        list_response = self.client.get('/api/sales/orders/')
+        convert_response = self.client.post(f'/api/sales/quotes/{quote.id}/convert_to_order/', format='json')
+
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(convert_response.status_code, 403)
+
+
 class SalesOrderProductionDemandWorkflowTests(TestCase):
     def setUp(self):
         from sales.management.commands.seed_sales_order_workflow import Command
@@ -220,6 +362,29 @@ class SalesOrderProductionDemandWorkflowTests(TestCase):
             )
         return order, line
 
+    def _post_sales_ready_stock(self, qty, code_suffix):
+        warehouse = Warehouse.objects.create(code=f'PD-WH-{code_suffix}', name=f'PD warehouse {code_suffix}', is_active=True)
+        location = WarehouseLocation.objects.create(
+            warehouse=warehouse,
+            code=f'SALES-{code_suffix}',
+            name=f'Sales location {code_suffix}',
+            location_type=WarehouseLocationType.STORAGE,
+            is_active=True,
+        )
+        return InventoryTransaction.objects.create(
+            code=f'PD-STOCK-{code_suffix}',
+            transaction_type=InventoryTransactionType.RECEIPT,
+            status=InventoryTransactionStatus.POSTED,
+            transaction_date=timezone.localdate(),
+            product=self.product,
+            warehouse=warehouse,
+            location=location,
+            quantity=Decimal(str(qty)),
+            created_by=self.user,
+            updated_by=self.user,
+            posted_by=self.user,
+        )
+
     def _approve(self, order):
         return self.client.post(f'/api/sales/orders/{order.id}/approve/', format='json')
 
@@ -254,6 +419,28 @@ class SalesOrderProductionDemandWorkflowTests(TestCase):
                 demand_key__startswith=f'SO:{order.id}:LINE:{line.id}:PLAN:',
             ).exists()
         )
+
+    def test_shortage_only_policy_skips_demand_when_stock_is_enough(self):
+        self._post_sales_ready_stock('20', 'ENOUGH')
+        order, _ = self._submitted_order(code='SO-PD-WF-STOCK-ENOUGH', qty='10')
+
+        response = self._approve(order)
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['production_demand_sync']['created'], 0)
+        self.assertEqual(response.data['production_demand_sync']['skipped'], 1)
+        self.assertFalse(ProductionDemand.objects.filter(sales_order=order).exists())
+
+    def test_shortage_only_policy_creates_only_shortage_quantity(self):
+        self._post_sales_ready_stock('4', 'SHORT')
+        order, _ = self._submitted_order(code='SO-PD-WF-STOCK-SHORT', qty='10')
+
+        response = self._approve(order)
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['production_demand_sync']['created'], 1)
+        demand = ProductionDemand.objects.get(sales_order=order)
+        self.assertEqual(demand.qty_required, Decimal('6.0000'))
 
     def test_invalid_second_approve_does_not_create_duplicate_demands(self):
         order, _ = self._submitted_order(code='SO-PD-WF-003')

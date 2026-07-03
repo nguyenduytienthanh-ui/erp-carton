@@ -50,6 +50,7 @@ import {
   canApproveSalesOrders,
   canPostSalesOrders,
   canSubmitSalesOrders,
+  canUseShipmentExecutionWorkspace,
   canVoidSalesOrders,
 } from '../../utils/authz';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
@@ -1430,6 +1431,7 @@ export default function SalesOrderList() {
   const canApprove = canApproveSalesOrders();
   const canPost = canPostSalesOrders();
   const canVoid = canVoidSalesOrders();
+  const canUseShipmentScan = canUseShipmentExecutionWorkspace();
   const {
     config,
     saveConfig,
@@ -3982,12 +3984,13 @@ export default function SalesOrderList() {
           </Button>
           <Button
             type="primary"
+            disabled={!canUseShipmentScan}
             onClick={() => detailOrder && navigate(`/shipments/scan?order_id=${detailOrder.id}`)}
           >
             Mở QR nhanh
           </Button>
           <Button
-            onClick={() => detailOrder && navigate(`/shipments?order_id=${detailOrder.id}`)}
+            onClick={() => shipmentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
           >
             Mở Phiếu xuất
           </Button>
@@ -4218,12 +4221,13 @@ export default function SalesOrderList() {
           />
           <Space wrap>
             <Button
-              onClick={() => detailOrder && navigate(`/shipments?order_id=${detailOrder.id}`)}
+              onClick={() => shipmentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
             >
               Mở danh sách Phiếu xuất
             </Button>
             <Button
               type="primary"
+              disabled={!canUseShipmentScan}
               onClick={() => detailOrder && navigate(`/shipments/scan?order_id=${detailOrder.id}`)}
             >
               Vào QR nhanh
@@ -4345,7 +4349,7 @@ export default function SalesOrderList() {
                 <Space wrap>
                   <Button
                     size="small"
-                    disabled={!detailOrder || Number(row.package_count || 0) <= 0 || row.status !== 'POSTED' || Boolean(row.loading_confirmed_at)}
+                    disabled={!canUseShipmentScan || !detailOrder || Number(row.package_count || 0) <= 0 || row.status !== 'POSTED' || Boolean(row.loading_confirmed_at)}
                     loading={
                       (scanShipmentPackageMutation.isPending || loadShipmentPackagesMutation.isPending) &&
                       shipmentScanModal?.shipment.shipment_id === row.shipment_id
@@ -4356,6 +4360,7 @@ export default function SalesOrderList() {
                   </Button>
                   <Button
                     size="small"
+                    disabled={!canUseShipmentScan}
                     onClick={() => detailOrder && navigate(`/shipments/scan?order_id=${detailOrder.id}&shipment_id=${row.shipment_id}`)}
                   >
                     QR nhanh

@@ -219,6 +219,7 @@ ROLE_GOVERNANCE_TEMPLATE_DEFINITIONS = [
         'description': 'Nhom kinh doanh co kha nang submit, phe duyet va theo doi thong tin ban hang.',
         'tone': 'green',
         'permission_pairs': [
+            ('SALESORDER', 'VIEW'),
             ('SALESORDER', 'SUBMIT'),
             ('SALESORDER', 'APPROVE'),
             ('SALESORDER', 'REJECT'),
@@ -425,6 +426,7 @@ ACCOUNT_ACCESS_MODULES = [
         'description': 'Đơn hàng xuất, báo giá và giao hàng',
         'primary_route': '/sales-orders',
         'permissions': [
+            ('SALESORDER', 'VIEW'),
             ('SALESORDER', 'SUBMIT'),
             ('SALESORDER', 'APPROVE'),
             ('SALESORDER', 'REJECT'),
@@ -822,14 +824,15 @@ def _can_access_sales_orders(user):
     if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
         return True
     if (
-        check_action_permission(user, 'SALESORDER', 'SUBMIT', strict=True)
+        check_action_permission(user, 'SALESORDER', 'VIEW', strict=True)
+        or check_action_permission(user, 'SALESORDER', 'SUBMIT', strict=True)
         or check_action_permission(user, 'SALESORDER', 'APPROVE', strict=True)
         or check_action_permission(user, 'SALESORDER', 'REJECT', strict=True)
         or check_action_permission(user, 'SALESORDER', 'POST', strict=True)
         or check_action_permission(user, 'SALESORDER', 'VOID', strict=True)
     ):
         return True
-    return _has_any_role_name(user, {'admin', 'manager', 'sales', 'sales-manager', 'accountant', 'finance', 'finance-manager', 'ops-manager', 'quan-ly', 'quanly'})
+    return False
 
 
 def _can_view_customers(user):
@@ -982,6 +985,7 @@ ACCESS_SURFACE_CRITICAL_ACTION_DEFINITIONS = [
     {'key': 'production_order_issue', 'label': 'Issue materials', 'permission_key': 'PRODUCTIONORDER:ISSUE', 'group': 'production'},
     {'key': 'production_order_receive', 'label': 'Receive production output', 'permission_key': 'PRODUCTIONORDER:RECEIVE', 'group': 'production'},
     {'key': 'production_order_cancel', 'label': 'Cancel production order', 'permission_key': 'PRODUCTIONORDER:CANCEL', 'group': 'production'},
+    {'key': 'sales_order_view', 'label': 'View sales orders', 'permission_key': 'SALESORDER:VIEW', 'group': 'sales'},
     {'key': 'sales_order_submit', 'label': 'Submit sales order', 'permission_key': 'SALESORDER:SUBMIT', 'group': 'sales'},
     {'key': 'sales_order_approve', 'label': 'Approve sales order', 'permission_key': 'SALESORDER:APPROVE', 'group': 'sales'},
     {'key': 'sales_order_reject', 'label': 'Reject sales order', 'permission_key': 'SALESORDER:REJECT', 'group': 'sales'},
