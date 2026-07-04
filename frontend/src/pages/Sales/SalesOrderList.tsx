@@ -285,6 +285,7 @@ function getSalesOrderActionDisabledReason(
   permissions: SalesOrderActionPermissions
 ): string {
   if (action === 'edit') {
+    if (!permissions.canSubmit) return 'Bạn chưa có quyền sửa đơn hàng nháp.';
     return order.status === 'DRAFT' ? '' : 'Chỉ sửa được đơn ở trạng thái Nháp.';
   }
   if (action === 'submit') {
@@ -1506,6 +1507,11 @@ export default function SalesOrderList() {
   const canPost = canPostSalesOrders();
   const canVoid = canVoidSalesOrders();
   const canUseShipmentScan = canUseShipmentExecutionWorkspace();
+  const canCreateSalesOrder = canSubmit;
+  const canManageReservationActions = canSubmit;
+  const canManageShipmentActions = canUseShipmentScan;
+  const canUseSalesOrderDocumentActions = canSubmit || canApprove || canPost || canVoid;
+  const canUseShipmentNavigation = canUseSalesOrderDocumentActions || canUseShipmentScan;
   const {
     config,
     saveConfig,
@@ -2796,17 +2802,19 @@ export default function SalesOrderList() {
           <div style={{ color: '#8c8c8c' }}>Quản lý đơn khách hàng, duyệt, ghi sổ và theo dõi giữ chỗ theo đơn</div>
         </div>
         <Space wrap>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => {
-              setEditingOrder(null);
-              form.setFieldsValue(emptyFormValues);
-              setOpenEditModal(true);
-            }}
-          >
-            Tạo đơn hàng
-          </Button>
+          {canCreateSalesOrder ? (
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                setEditingOrder(null);
+                form.setFieldsValue(emptyFormValues);
+                setOpenEditModal(true);
+              }}
+            >
+              Tạo đơn hàng
+            </Button>
+          ) : null}
           {selectedPreset ? (
             <Tag color="purple" style={{ marginInlineEnd: 0 }}>
               Mẫu đang dùng: {selectedPreset.name}
@@ -4171,46 +4179,53 @@ export default function SalesOrderList() {
             }
           />
         ) : null}
-        <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Button
-            onClick={() => detailOrder && invoicePdfMutation.mutate(detailOrder.id)}
-            loading={invoicePdfMutation.isPending}
-          >
-            In hóa đơn
-          </Button>
-          <Button
-            onClick={() => detailOrder && packingSlipMutation.mutate(detailOrder.id)}
-            loading={packingSlipMutation.isPending}
-          >
-            Tải phiếu giao hàng tổng hợp
-          </Button>
-          <Button
-            onClick={() => {
-              traceLabelForm.setFieldsValue({
-                label_mode: 'copies',
-                copies_per_line: 1,
-                packages_per_line: 1,
-                line_ids: detailLines.map((line) => line.id).filter(Boolean) as number[],
-              });
-              setTraceLabelModalOpen(true);
-            }}
-            loading={traceLabelsMutation.isPending}
-          >
-            Tải tem QR PDF
-          </Button>
-          <Button
-            type="primary"
-            disabled={!canUseShipmentScan}
-            onClick={() => detailOrder && navigate(`/shipments/scan?order_id=${detailOrder.id}`)}
-          >
-            Mở QR nhanh
-          </Button>
-          <Button
-            onClick={() => shipmentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-          >
-            Mở Phiếu xuất
-          </Button>
-        </div>
+        {canUseShipmentNavigation ? (
+          <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {canUseSalesOrderDocumentActions ? (
+              <>
+                <Button
+                  onClick={() => detailOrder && invoicePdfMutation.mutate(detailOrder.id)}
+                  loading={invoicePdfMutation.isPending}
+                >
+                  In hóa đơn
+                </Button>
+                <Button
+                  onClick={() => detailOrder && packingSlipMutation.mutate(detailOrder.id)}
+                  loading={packingSlipMutation.isPending}
+                >
+                  Tải phiếu giao hàng tổng hợp
+                </Button>
+                <Button
+                  onClick={() => {
+                    traceLabelForm.setFieldsValue({
+                      label_mode: 'copies',
+                      copies_per_line: 1,
+                      packages_per_line: 1,
+                      line_ids: detailLines.map((line) => line.id).filter(Boolean) as number[],
+                    });
+                    setTraceLabelModalOpen(true);
+                  }}
+                  loading={traceLabelsMutation.isPending}
+                >
+                  Tải tem QR PDF
+                </Button>
+              </>
+            ) : null}
+            {canUseShipmentScan ? (
+              <Button
+                type="primary"
+                onClick={() => detailOrder && navigate(`/shipments/scan?order_id=${detailOrder.id}`)}
+              >
+                Mở QR nhanh
+              </Button>
+            ) : null}
+            <Button
+              onClick={() => shipmentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            >
+              Mở Phiếu xuất
+            </Button>
+          </div>
+        ) : null}
         <div
           data-testid="sales-order-detail-primary-shipment-path"
           style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#fafafa', color: '#595959' }}
@@ -4220,33 +4235,35 @@ export default function SalesOrderList() {
 
         <Divider style={{ marginTop: 24 }}>Dòng hàng</Divider>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Button
-            disabled={!detailOrder || !['APPROVED', 'POSTED'].includes(detailOrder.status) || reserveCandidateLines.length === 0}
-            onClick={async () => {
-              batchReserveForm.resetFields();
-              const result = await batchReserveStockQuery.refetch();
-              const rows = (result.data ?? [])
-                .filter((row) => Number(row.available || 0) > 0)
-                .map((row) => ({
-                  key: `${row.product_id}:${row.warehouse_id}:${row.location_id ?? 0}`,
-                  product_id: row.product_id,
-                  warehouse_id: row.warehouse_id,
-                  warehouse_name: row.warehouse_name,
-                  location_id: row.location_id ?? null,
-                  location_name: row.location_name ?? null,
-                  available: toNumber(row.available),
-                }));
-              batchReserveForm.setFieldsValue({
-                reservation_date: dayjs().format('YYYY-MM-DD'),
-                reference: detailOrder?.code || '',
-                note: '',
-                items: buildBatchReserveDraft(reserveCandidateLines, rows),
-              });
-              setBatchReserveOpen(true);
-            }}
-          >
-            Giữ chỗ hàng loạt gợi ý
-          </Button>
+          {canManageReservationActions ? (
+            <Button
+              disabled={!detailOrder || !['APPROVED', 'POSTED'].includes(detailOrder.status) || reserveCandidateLines.length === 0}
+              onClick={async () => {
+                batchReserveForm.resetFields();
+                const result = await batchReserveStockQuery.refetch();
+                const rows = (result.data ?? [])
+                  .filter((row) => Number(row.available || 0) > 0)
+                  .map((row) => ({
+                    key: `${row.product_id}:${row.warehouse_id}:${row.location_id ?? 0}`,
+                    product_id: row.product_id,
+                    warehouse_id: row.warehouse_id,
+                    warehouse_name: row.warehouse_name,
+                    location_id: row.location_id ?? null,
+                    location_name: row.location_name ?? null,
+                    available: toNumber(row.available),
+                  }));
+                batchReserveForm.setFieldsValue({
+                  reservation_date: dayjs().format('YYYY-MM-DD'),
+                  reference: detailOrder?.code || '',
+                  note: '',
+                  items: buildBatchReserveDraft(reserveCandidateLines, rows),
+                });
+                setBatchReserveOpen(true);
+              }}
+            >
+              Giữ chỗ hàng loạt gợi ý
+            </Button>
+          ) : null}
         </div>
         <Table
           rowKey={(row) => row.id ?? row.line_number}
@@ -4302,10 +4319,10 @@ export default function SalesOrderList() {
               width: 110,
               render: (_, row) => renderSnapshotPopover(row),
             },
-            {
+            ...(canManageReservationActions ? [{
               title: 'Giữ chỗ',
               width: 110,
-              render: (_, row) => (
+              render: (_: unknown, row: SalesOrderLine) => (
                 <Button
                   size="small"
                   disabled={!detailOrder || !['APPROVED', 'POSTED'].includes(detailOrder.status) || Number(row.remaining_reservation_qty || 0) <= 0}
@@ -4323,7 +4340,7 @@ export default function SalesOrderList() {
                   Giữ chỗ
                 </Button>
               ),
-            },
+            }] : []),
             { title: 'Tổng dòng', dataIndex: 'line_total', width: 140, render: (value) => <FormattedPrice value={Number(value || 0)} /> },
           ]}
           dataSource={detailLines}
@@ -4371,30 +4388,32 @@ export default function SalesOrderList() {
 
         <Divider style={{ marginTop: 24 }}>Đặt trữ (Giữ chỗ tồn kho)</Divider>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Button
-            type="primary"
-            disabled={!detailOrder || !['APPROVED', 'POSTED'].includes(detailOrder.status) || openReservations.length === 0}
-            onClick={() => {
-              shipmentForm.setFieldsValue({
-                items: openReservations.map((item) => ({
-                  reservation_id: item.id,
-                  quantity: Number(item.active_qty || 0),
-                })),
-                transaction_date: dayjs().format('YYYY-MM-DD'),
-                reference: detailOrder?.code || '',
-                reason: 'Xuất kho theo đơn hàng',
-                note: '',
-                carrier_name: '',
-                tracking_number: '',
-                vehicle_no: '',
-                driver_name: '',
-                driver_phone: '',
-              });
-              setShipmentModalOpen(true);
-            }}
-          >
-            Xuất kho từ phiếu giữ chỗ
-          </Button>
+          {canManageShipmentActions ? (
+            <Button
+              type="primary"
+              disabled={!detailOrder || !['APPROVED', 'POSTED'].includes(detailOrder.status) || openReservations.length === 0}
+              onClick={() => {
+                shipmentForm.setFieldsValue({
+                  items: openReservations.map((item) => ({
+                    reservation_id: item.id,
+                    quantity: Number(item.active_qty || 0),
+                  })),
+                  transaction_date: dayjs().format('YYYY-MM-DD'),
+                  reference: detailOrder?.code || '',
+                  reason: 'Xuất kho theo đơn hàng',
+                  note: '',
+                  carrier_name: '',
+                  tracking_number: '',
+                  vehicle_no: '',
+                  driver_name: '',
+                  driver_phone: '',
+                });
+                setShipmentModalOpen(true);
+              }}
+            >
+              Xuất kho từ phiếu giữ chỗ
+            </Button>
+          ) : null}
         </div>
         <Table
           rowKey="id"
@@ -4438,20 +4457,23 @@ export default function SalesOrderList() {
             style={{ flex: '1 1 420px' }}
             message="Phiếu xuất là nơi điều phối giao hàng thực tế: xe, tài xế, đóng gói, quét kiện, bàn giao xe và xác nhận giao xong."
           />
-          <Space wrap>
-            <Button
-              onClick={() => shipmentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-            >
-              Mở danh sách Phiếu xuất
-            </Button>
-            <Button
-              type="primary"
-              disabled={!canUseShipmentScan}
-              onClick={() => detailOrder && navigate(`/shipments/scan?order_id=${detailOrder.id}`)}
-            >
-              Vào QR nhanh
-            </Button>
-          </Space>
+          {canUseShipmentNavigation ? (
+            <Space wrap>
+              <Button
+                onClick={() => shipmentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              >
+                Mở danh sách Phiếu xuất
+              </Button>
+              {canUseShipmentScan ? (
+                <Button
+                  type="primary"
+                  onClick={() => detailOrder && navigate(`/shipments/scan?order_id=${detailOrder.id}`)}
+                >
+                  Vào QR nhanh
+                </Button>
+              ) : null}
+            </Space>
+          ) : null}
         </div>
         <Table
           rowKey="id"
@@ -4500,10 +4522,10 @@ export default function SalesOrderList() {
                 </div>
               ),
             },
-            {
+            ...(canUseShipmentNavigation ? [{
               title: 'Chứng từ',
               width: 650,
-              render: (_, row) => (
+              render: (_: unknown, row: SalesOrderShipmentOverviewItem) => (
                 <Space wrap>
                   <Button
                     size="small"
@@ -4560,11 +4582,11 @@ export default function SalesOrderList() {
                   </Button>
                 </Space>
               ),
-            },
-            {
+            }] : []),
+            ...(canManageShipmentActions ? [{
               title: 'Thao tác',
               width: 540,
-              render: (_, row) => (
+              render: (_: unknown, row: SalesOrderShipmentOverviewItem) => (
                 <Space wrap>
                   <Button
                     size="small"
@@ -4633,7 +4655,7 @@ export default function SalesOrderList() {
                   </Button>
                 </Space>
               ),
-            },
+            }] : []),
           ]}
           dataSource={shipmentOverviewQuery.data?.results ?? []}
           locale={{ emptyText: 'Chưa có phiếu xuất kho cho đơn này.' }}

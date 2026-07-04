@@ -12,6 +12,7 @@ import { customersApi } from '../../api/customers';
 import type { Quote, QuoteStatus } from '../../types/sales';
 import { getToastMessage } from '../../shared/apiError';
 import { downloadCSV } from '../../utils/csvExport';
+import { canSubmitSalesOrders } from '../../utils/authz';
 
 const statusColor: Record<QuoteStatus, string> = {
   DRAFT: 'default',
@@ -69,6 +70,7 @@ const QuoteList: React.FC = () => {
   const [form] = Form.useForm();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const canManageQuotes = canSubmitSalesOrders();
 
   const params = {
     search: search || undefined,
@@ -314,25 +316,27 @@ const QuoteList: React.FC = () => {
           <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailQuote(row)}>
             Xem
           </Button>
-          <Button
-            size="small"
-            disabled={Boolean(editReason)}
-            title={editReason || 'Sửa báo giá nháp'}
-            onClick={() => {
-              setEditQuote(row);
-              form.setFieldsValue({
-                customer: row.customer,
-                quote_date: dayjs(row.quote_date),
-                valid_until: row.valid_until ? dayjs(row.valid_until) : null,
-                reference: row.reference,
-                notes: row.notes,
-              });
-              setFormOpen(true);
-            }}
-          >
-            Sửa
-          </Button>
-          {row.status === 'DRAFT' && (
+          {canManageQuotes ? (
+            <Button
+              size="small"
+              disabled={Boolean(editReason)}
+              title={editReason || 'Sửa báo giá nháp'}
+              onClick={() => {
+                setEditQuote(row);
+                form.setFieldsValue({
+                  customer: row.customer,
+                  quote_date: dayjs(row.quote_date),
+                  valid_until: row.valid_until ? dayjs(row.valid_until) : null,
+                  reference: row.reference,
+                  notes: row.notes,
+                });
+                setFormOpen(true);
+              }}
+            >
+              Sửa
+            </Button>
+          ) : null}
+          {canManageQuotes && row.status === 'DRAFT' && (
             <>
               <Button
                 size="small"
@@ -361,7 +365,7 @@ const QuoteList: React.FC = () => {
               </Button>
             </>
           )}
-          {row.status === 'SENT' && (
+          {canManageQuotes && row.status === 'SENT' && (
             <>
               <Button
                 size="small"
@@ -404,7 +408,7 @@ const QuoteList: React.FC = () => {
               >
                 Mở SO
               </Button>
-            ) : (
+            ) : canManageQuotes ? (
               <Button
                 size="small"
                 type="primary"
@@ -415,11 +419,13 @@ const QuoteList: React.FC = () => {
               >
                 Chuyển đơn
               </Button>
-            )
+            ) : null
           )}
-          <Button size="small" icon={<FileTextOutlined />} onClick={() => handlePdfDownload(row.id, row.code)}>
-            PDF
-          </Button>
+          {canManageQuotes ? (
+            <Button size="small" icon={<FileTextOutlined />} onClick={() => handlePdfDownload(row.id, row.code)}>
+              PDF
+            </Button>
+          ) : null}
         </Space>
         );
       },
@@ -473,20 +479,24 @@ const QuoteList: React.FC = () => {
           style={{ width: '180px' }}
           options={Object.entries(statusLabel).map(([value, label]) => ({ value, label }))}
         />
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => {
-            setEditQuote(null);
-            form.resetFields();
-            setFormOpen(true);
-          }}
-        >
-          Tạo mới
-        </Button>
-        <Button icon={<DownloadOutlined />} onClick={handleExportCSV}>
-          Xuất CSV
-        </Button>
+        {canManageQuotes ? (
+          <>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                setEditQuote(null);
+                form.resetFields();
+                setFormOpen(true);
+              }}
+            >
+              Tạo mới
+            </Button>
+            <Button icon={<DownloadOutlined />} onClick={handleExportCSV}>
+              Xuất CSV
+            </Button>
+          </>
+        ) : null}
       </div>
 
       <Table
