@@ -202,6 +202,8 @@ export interface SalesOrder {
   delivery_date?: string | null;
   status: SalesOrderStatus;
   reference?: string;
+  source_quote?: number | null;
+  source_quote_code?: string | null;
   customer?: number | null;
   customer_name?: string | null;
   currency: string;
@@ -214,7 +216,23 @@ export interface SalesOrder {
   reject_reason?: string;
   void_reason?: string;
   post_number?: string;
+  posted_at?: string | null;
   confirmed_at?: string | null;
+  production_demand_summary?: {
+    count: number;
+    total_qty_required: string;
+    planning_statuses: string[];
+    production_statuses: string[];
+  };
+  receivable_summary?: {
+    exists: boolean;
+    id: number | null;
+    code: string | null;
+    status: string | null;
+    total_amount: string | null;
+    settled_amount: string | null;
+    remaining_amount: string | null;
+  };
   version?: number;
   lines: SalesOrderLine[];
   created_at: string;
@@ -634,6 +652,10 @@ export interface Quote {
   tax_total: string;
   total: string;
   notes: string;
+  converted_at?: string | null;
+  is_converted?: boolean;
+  converted_order_id?: number | null;
+  converted_order_code?: string | null;
   created_by: number | null;
   created_at: string;
   updated_by: number | null;

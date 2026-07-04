@@ -6,6 +6,7 @@ import {
   Checkbox,
   Descriptions,
   Divider,
+  Dropdown,
   Drawer,
   Form,
   Input,
@@ -22,7 +23,8 @@ import {
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, EyeOutlined, PaperClipOutlined, PlusOutlined } from '@ant-design/icons';
+import type { MenuProps } from 'antd';
+import { DeleteOutlined, EyeOutlined, MoreOutlined, PaperClipOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -77,6 +79,29 @@ type SalesOrderNamedPreset = {
   name: string;
   filters: SalesOrderViewSnapshot;
 };
+
+const DEFAULT_SALES_ORDER_COLUMN_KEYS = [
+  'code',
+  'order_date',
+  'customer',
+  'status',
+  'shipment',
+  'production',
+  'ar',
+  'total',
+  'delivery_date',
+  'actions',
+];
+
+function normalizeSalesOrderColumnKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) return DEFAULT_SALES_ORDER_COLUMN_KEYS;
+  const allowed = new Set(DEFAULT_SALES_ORDER_COLUMN_KEYS);
+  const keys = value
+    .map((item) => String(item))
+    .filter((item) => allowed.has(item));
+  const unique = Array.from(new Set([...keys, 'actions']));
+  return unique.length > 1 ? unique : DEFAULT_SALES_ORDER_COLUMN_KEYS;
+}
 
 type ReasonModalState =
   | { type: 'reject'; order: SalesOrder }
@@ -1287,6 +1312,55 @@ function getOrderFulfillmentMetrics(order: SalesOrder) {
   };
 }
 
+function getProductionDemandLabel(order: SalesOrder): { color: string; text: string; detail: string } {
+  const summary = order.production_demand_summary;
+  if (!summary) {
+    return { color: 'default', text: 'Chưa có dữ liệu SX', detail: 'API chưa trả summary nhu cầu sản xuất.' };
+  }
+  if (summary.count > 0) {
+    const qty = Number(summary.total_qty_required || 0);
+    return {
+      color: 'orange',
+      text: `Cần SX ${qty.toLocaleString('vi-VN')}`,
+      detail: `${summary.count} nhu cầu theo phần thiếu tồn kho.`,
+    };
+  }
+  if (['APPROVED', 'POSTED'].includes(order.status)) {
+    return {
+      color: 'green',
+      text: 'Đủ tồn, không cần SX',
+      detail: 'SHORTAGE_ONLY không tạo nhu cầu khi tồn khả dụng đủ.',
+    };
+  }
+  return { color: 'default', text: 'Chờ duyệt để tính SX', detail: 'Nhu cầu sản xuất được đồng bộ khi duyệt đơn.' };
+}
+
+function getReceivableLabel(order: SalesOrder): { color: string; text: string; detail: string } {
+  const summary = order.receivable_summary;
+  if (summary?.exists) {
+    const status = summary.status || 'OPEN';
+    const color = status === 'SETTLED' ? 'green' : status === 'CANCELLED' ? 'default' : status === 'PARTIAL' ? 'gold' : 'blue';
+    return {
+      color,
+      text: `${summary.code || 'AR'} · ${status}`,
+      detail: `Còn thu ${Number(summary.remaining_amount || 0).toLocaleString('vi-VN')}`,
+    };
+  }
+  if (order.status === 'POSTED') {
+    return { color: 'red', text: 'Chưa thấy AR', detail: 'Đơn đã ghi sổ nhưng API chưa trả phải thu.' };
+  }
+  return { color: 'default', text: 'Chưa ghi sổ', detail: 'AR được tạo khi ghi sổ đơn bán.' };
+}
+
+function getShipmentLabel(order: SalesOrder): { color: string; text: string; detail: string } {
+  const metrics = getOrderFulfillmentMetrics(order);
+  if (metrics.orderedQty <= 0) return { color: 'default', text: 'Chưa có dòng giao', detail: 'Thêm dòng hàng và kế hoạch giao trước.' };
+  if (metrics.shippedQty >= metrics.orderedQty) return { color: 'green', text: 'Đã xuất đủ', detail: 'Theo dõi POD/package ở luồng xuất kho.' };
+  if (metrics.shippedQty > 0) return { color: 'blue', text: 'Xuất một phần', detail: `${metrics.shippedQty}/${metrics.orderedQty}` };
+  if (metrics.remainingReserveQty > 0) return { color: 'orange', text: 'Cần giữ chỗ', detail: `Còn ${metrics.remainingReserveQty}` };
+  return { color: 'green', text: 'Sẵn sàng xuất', detail: 'Giữ chỗ ổn, dùng luồng xuất kho/kiện/POD.' };
+}
+
 function getCurrentUser() {
   return storage.getUser() as {
     id?: number;
@@ -1438,6 +1512,8 @@ export default function SalesOrderList() {
     isLoading: isPreferencesLoading,
   } = useUserPreferences(PAGES.SALES_ORDERS);
   const configRecord = config as Record<string, unknown>;
+  const [visibleColumnKeys, setVisibleColumnKeys] = useState<string[]>(DEFAULT_SALES_ORDER_COLUMN_KEYS);
+  const visibleColumnConfig = configRecord.visible_columns;
   const pageSize = Number(configRecord.pageSize ?? 20);
   const liveLines = Form.useWatch('lines', form);
   const syncLinePrintColors = (lineIndex: number, colorIndex: number, value: string) => {
@@ -1451,6 +1527,10 @@ export default function SalesOrderList() {
     form.setFieldValue(['lines', lineIndex, 'product_snapshot', 'print_colors'], cleaned);
     form.setFieldValue(['lines', lineIndex, 'product_snapshot', 'color_count'], cleaned.length);
   };
+
+  useEffect(() => {
+    setVisibleColumnKeys(normalizeSalesOrderColumnKeys(visibleColumnConfig));
+  }, [visibleColumnConfig]);
 
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
@@ -2019,18 +2099,16 @@ export default function SalesOrderList() {
     }, 120);
   }, [detailOrder, focusSection]);
   const stats = useMemo(() => getStatusStats(rows), [rows]);
-  const fulfillmentStats = useMemo(
-    () =>
-      rows.reduce(
-        (acc, row) => {
-          const metrics = getOrderFulfillmentMetrics(row);
-          if (metrics.remainingReserveQty > 0) acc.needReserve += 1;
-          if (metrics.overduePlans > 0) acc.overdue += 1;
-          if (metrics.shippedQty > 0 && metrics.shippedQty < metrics.orderedQty) acc.partialShipment += 1;
-          return acc;
-        },
-        { needReserve: 0, overdue: 0, partialShipment: 0 }
-      ),
+  const waitingProductionCount = useMemo(
+    () => rows.filter((row) => (row.production_demand_summary?.count ?? 0) > 0).length,
+    [rows]
+  );
+  const readyToShipCount = useMemo(
+    () => rows.filter((row) => ['APPROVED', 'POSTED'].includes(row.status) && getShipmentLabel(row).color === 'green').length,
+    [rows]
+  );
+  const postedReceivableCount = useMemo(
+    () => rows.filter((row) => row.status === 'POSTED' && row.receivable_summary?.exists).length,
     [rows]
   );
   const namedPresets = useMemo<SalesOrderNamedPreset[]>(() => {
@@ -2237,33 +2315,71 @@ export default function SalesOrderList() {
   );
 
   const columns: ColumnsType<SalesOrder> = [
-    { title: 'Mã đơn', dataIndex: 'code', width: 150 },
-    { title: 'Ngày đơn', dataIndex: 'order_date', width: 110 },
-    { title: 'KH', dataIndex: 'customer_name', width: 220, render: (value) => value || '-' },
-    { title: 'Tham chiếu', dataIndex: 'reference', width: 180, render: (value) => value || '-' },
     {
-      title: 'Thực hiện đơn',
-      width: 250,
+      title: 'Mã SO',
+      key: 'code',
+      dataIndex: 'code',
+      width: 160,
+      render: (value: string, row) => (
+        <div>
+          <strong>{value}</strong>
+          {row.source_quote_code ? (
+            <div data-testid={`sales-order-source-quote-${row.id}`} style={{ marginTop: 4, color: '#595959', fontSize: 12 }}>
+              Từ báo giá {row.source_quote_code}
+            </div>
+          ) : null}
+        </div>
+      ),
+    },
+    { title: 'Ngày đơn', key: 'order_date', dataIndex: 'order_date', width: 110, render: (value: string) => value ? dayjs(value).format('DD/MM/YYYY') : '-' },
+    { title: 'Khách hàng', key: 'customer', dataIndex: 'customer_name', width: 220, render: (value) => value || '-' },
+    {
+      title: 'Xuất kho',
+      key: 'shipment',
+      width: 190,
       render: (_, row) => {
-        const metrics = getOrderFulfillmentMetrics(row);
+        const shipment = getShipmentLabel(row);
         return (
-          <div>
-            <div>Thiếu giữ chỗ: <strong>{metrics.remainingReserveQty}</strong></div>
-            <div>Đã xuất: <strong>{metrics.shippedQty}</strong> / {metrics.orderedQty}</div>
-            <Space wrap size={4}>
-              {metrics.remainingReserveQty > 0 ? <Tag color="orange">Cần giữ chỗ</Tag> : <Tag color="green">Giữ chỗ ổn</Tag>}
-              {metrics.overduePlans > 0 ? <Tag color="red">Quá hạn giao</Tag> : null}
-              {metrics.dueSoonPlans > 0 ? <Tag color="gold">Sắp đến hạn</Tag> : null}
-              {metrics.shippedQty > 0 && metrics.shippedQty < metrics.orderedQty ? <Tag color="blue">Xuất một phần</Tag> : null}
-            </Space>
+          <div data-testid={`sales-order-shipment-status-${row.id}`}>
+            <Tag color={shipment.color}>{shipment.text}</Tag>
+            <div style={{ marginTop: 4, color: '#595959', fontSize: 12 }}>{shipment.detail}</div>
           </div>
         );
       },
     },
-    { title: 'Tổng tiền', width: 140, render: (_, row) => <FormattedPrice value={Number(row.total || 0)} /> },
-    { title: 'Dòng hàng', width: 90, render: (_, row) => row.lines?.length ?? 0 },
+    {
+      title: 'Sản xuất',
+      key: 'production',
+      width: 200,
+      render: (_, row) => {
+        const demand = getProductionDemandLabel(row);
+        return (
+          <div data-testid={`sales-order-production-status-${row.id}`}>
+            <Tag color={demand.color}>{demand.text}</Tag>
+            <div style={{ marginTop: 4, color: '#595959', fontSize: 12 }}>{demand.detail}</div>
+          </div>
+        );
+      },
+    },
+    {
+      title: 'AR',
+      key: 'ar',
+      width: 180,
+      render: (_, row) => {
+        const receivable = getReceivableLabel(row);
+        return (
+          <div data-testid={`sales-order-ar-status-${row.id}`}>
+            <Tag color={receivable.color}>{receivable.text}</Tag>
+            <div style={{ marginTop: 4, color: '#595959', fontSize: 12 }}>{receivable.detail}</div>
+          </div>
+        );
+      },
+    },
+    { title: 'Tổng tiền', key: 'total', width: 140, render: (_, row) => <FormattedPrice value={Number(row.total || 0)} /> },
+    { title: 'Ngày giao', key: 'delivery_date', dataIndex: 'delivery_date', width: 120, render: (value: string | null) => value ? dayjs(value).format('DD/MM/YYYY') : '-' },
     {
       title: 'Trạng thái',
+      key: 'status',
       width: 260,
       render: (_, row) => (
         <div>
@@ -2280,7 +2396,7 @@ export default function SalesOrderList() {
     {
       title: 'Thao tác',
       key: 'actions',
-      width: 420,
+      width: 320,
       fixed: 'right',
       render: (_, row) => {
         const permissions = { canSubmit, canApprove, canPost, canVoid };
@@ -2292,114 +2408,156 @@ export default function SalesOrderList() {
         const postReason = getSalesOrderActionDisabledReason(row, 'post', permissions);
         const voidReason = getSalesOrderActionDisabledReason(row, 'void', permissions);
         const deleteReason = row.status === 'DRAFT' ? '' : 'Chỉ xóa được đơn ở trạng thái Nháp.';
+        const secondaryItems: MenuProps['items'] = [];
+        if (!deleteReason) {
+          secondaryItems.push({
+            key: 'delete',
+            label: (
+              <Button
+                type="text"
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                data-testid={`sales-order-delete-${row.id}`}
+                onClick={() =>
+                  Modal.confirm({
+                    title: `Xóa đơn ${row.code}?`,
+                    okText: 'Xóa',
+                    cancelText: 'Hủy',
+                    onOk: () => deleteMutation.mutateAsync(row.id),
+                  })
+                }
+              >
+                Xóa đơn nháp
+              </Button>
+            ),
+          });
+        }
 
         return (
-        <Space wrap>
-          <Button
-            size="small"
-            icon={<EyeOutlined />}
-            data-testid={`sales-order-view-${row.id}`}
-            onClick={() => setDetailOrder(row)}
-          >
-            Xem
-          </Button>
-          <Button
-            size="small"
-            data-testid={`sales-order-edit-${row.id}`}
-            disabled={Boolean(editReason)}
-            title={editReason || 'Sửa thông tin đơn nháp'}
-            onClick={() => {
-              setEditingOrder(row);
-              form.setFieldsValue(toOrderFormValues(row));
-              setOpenEditModal(true);
-            }}
-          >
-            Sửa
-          </Button>
-          <Button
-            size="small"
-            data-testid={`sales-order-submit-${row.id}`}
-            disabled={Boolean(submitReason)}
-            title={submitReason || 'Gửi đơn sang bước duyệt'}
-            onClick={() => void submitMutation.mutateAsync(row.id)}
-          >
-            Gửi duyệt
-          </Button>
-          <Button
-            size="small"
-            data-testid={`sales-order-approve-${row.id}`}
-            disabled={Boolean(approveReason)}
-            title={approveReason || 'Duyệt đơn để chuyển sang xử lý'}
-            onClick={() => void approveMutation.mutateAsync(row.id)}
-          >
-            Duyệt
-          </Button>
-          <Button
-            size="small"
-            type="primary"
-            data-testid={`sales-order-confirm-${row.id}`}
-            disabled={Boolean(confirmReason)}
-            title={confirmReason || 'Đánh dấu đã xác nhận đơn với khách hàng'}
-            onClick={() => void confirmMutation.mutateAsync(row.id)}
-          >
-            {row.confirmed_at ? 'Đã xác nhận' : 'Xác nhận'}
-          </Button>
-          <Button
-            size="small"
-            danger
-            data-testid={`sales-order-reject-${row.id}`}
-            disabled={Boolean(rejectReason)}
-            title={rejectReason || 'Từ chối đơn và nhập lý do rõ ràng'}
-            onClick={() => {
-              setReasonModal({ type: 'reject', order: row });
-              setReasonText('');
-            }}
-          >
-            Từ chối
-          </Button>
-          <Button
-            size="small"
-            data-testid={`sales-order-post-${row.id}`}
-            disabled={Boolean(postReason)}
-            title={postReason || 'Ghi sổ chứng từ bán hàng'}
-            onClick={() => void postMutation.mutateAsync(row.id)}
-          >
-            Ghi sổ
-          </Button>
-          <Button
-            size="small"
-            danger
-            data-testid={`sales-order-void-${row.id}`}
-            disabled={Boolean(voidReason)}
-            title={voidReason || 'Hủy đơn với lý do bắt buộc'}
-            onClick={() => {
-              setReasonModal({ type: 'void', order: row });
-              setReasonText('');
-            }}
-          >
-            Hủy chứng từ
-          </Button>
-          <Button
-            size="small"
-            danger
-            icon={<DeleteOutlined />}
-            data-testid={`sales-order-delete-${row.id}`}
-            disabled={Boolean(deleteReason)}
-            title={deleteReason || 'Xóa đơn nháp chưa gửi duyệt'}
-            onClick={() =>
-              Modal.confirm({
-                title: `Xóa đơn ${row.code}?`,
-                okText: 'Xóa',
-                cancelText: 'Hủy',
-                onOk: () => deleteMutation.mutateAsync(row.id),
-              })
-            }
-          />
-        </Space>
+          <Space wrap size="small">
+            <Button
+              size="small"
+              icon={<EyeOutlined />}
+              data-testid={`sales-order-view-${row.id}`}
+              onClick={() => setDetailOrder(row)}
+            >
+              Xem
+            </Button>
+            {!editReason ? (
+              <Button
+                size="small"
+                data-testid={`sales-order-edit-${row.id}`}
+                title="Sửa thông tin đơn nháp"
+                onClick={() => {
+                  setEditingOrder(row);
+                  form.setFieldsValue(toOrderFormValues(row));
+                  setOpenEditModal(true);
+                }}
+              >
+                Sửa
+              </Button>
+            ) : null}
+            {!submitReason ? (
+              <Button
+                size="small"
+                type="primary"
+                data-testid={`sales-order-submit-${row.id}`}
+                title="Gửi đơn sang bước duyệt"
+                onClick={() => void submitMutation.mutateAsync(row.id)}
+              >
+                Gửi duyệt
+              </Button>
+            ) : null}
+            {!approveReason ? (
+              <Button
+                size="small"
+                type="primary"
+                data-testid={`sales-order-approve-${row.id}`}
+                title="Duyệt đơn để chuyển sang xử lý"
+                onClick={() => void approveMutation.mutateAsync(row.id)}
+              >
+                Duyệt
+              </Button>
+            ) : null}
+            {!rejectReason ? (
+              <Button
+                size="small"
+                danger
+                data-testid={`sales-order-reject-${row.id}`}
+                title="Từ chối đơn và nhập lý do rõ ràng"
+                onClick={() => {
+                  setReasonModal({ type: 'reject', order: row });
+                  setReasonText('');
+                }}
+              >
+                Từ chối
+              </Button>
+            ) : null}
+            {!confirmReason ? (
+              <Button
+                size="small"
+                data-testid={`sales-order-confirm-${row.id}`}
+                title="Đánh dấu đã xác nhận đơn với khách hàng"
+                onClick={() => void confirmMutation.mutateAsync(row.id)}
+              >
+                {row.confirmed_at ? 'Đã xác nhận' : 'Xác nhận'}
+              </Button>
+            ) : null}
+            {!postReason ? (
+              <Button
+                size="small"
+                type="primary"
+                data-testid={`sales-order-post-${row.id}`}
+                title="Ghi sổ chứng từ bán hàng"
+                onClick={() => void postMutation.mutateAsync(row.id)}
+              >
+                Ghi sổ
+              </Button>
+            ) : null}
+            {!voidReason ? (
+              <Button
+                size="small"
+                danger
+                data-testid={`sales-order-void-${row.id}`}
+                title="Hủy đơn với lý do bắt buộc"
+                onClick={() => {
+                  setReasonModal({ type: 'void', order: row });
+                  setReasonText('');
+                }}
+              >
+                Hủy
+              </Button>
+            ) : null}
+            {secondaryItems.length ? (
+              <Dropdown menu={{ items: secondaryItems }} trigger={['click']}>
+                <Button size="small" icon={<MoreOutlined />} aria-label="Thao tác khác" />
+              </Dropdown>
+            ) : null}
+          </Space>
         );
       },
     },
   ];
+
+  const visibleColumns = columns.filter((column) => {
+    const key = String(column.key ?? '');
+    return key === 'actions' || visibleColumnKeys.includes(key);
+  });
+  const columnSettingOptions = DEFAULT_SALES_ORDER_COLUMN_KEYS
+    .filter((key) => key !== 'actions')
+    .map((key) => {
+      const column = columns.find((item) => item.key === key);
+      return {
+        label: typeof column?.title === 'string' ? column.title : key,
+        value: key,
+      };
+    });
+  const onVisibleColumnChange = async (checkedValues: Array<string | number | boolean>) => {
+    const next = normalizeSalesOrderColumnKeys([...checkedValues.map((item) => String(item)), 'actions']);
+    setVisibleColumnKeys(next);
+    await saveConfig({ ...(config as Record<string, unknown>), visible_columns: next });
+  };
 
   const onSubmitOrder = async () => {
     const values = await form.validateFields();
@@ -2659,13 +2817,10 @@ export default function SalesOrderList() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
         <Card><Statistic title="Tổng đơn" value={orderQuery.data?.count ?? 0} /></Card>
-        <Card><Statistic title="Nháp" value={stats.DRAFT ?? 0} /></Card>
         <Card><Statistic title="Chờ duyệt" value={stats.SUBMITTED ?? 0} /></Card>
-        <Card><Statistic title="Đã duyệt" value={stats.APPROVED ?? 0} /></Card>
-        <Card><Statistic title="Đã ghi sổ" value={stats.POSTED ?? 0} /></Card>
-        <Card><Statistic title="Cần giữ chỗ" value={fulfillmentStats.needReserve} /></Card>
-        <Card><Statistic title="Quá hạn giao" value={fulfillmentStats.overdue} /></Card>
-        <Card><Statistic title="Xuất một phần" value={fulfillmentStats.partialShipment} /></Card>
+        <Card><Statistic title="Sẵn sàng xuất" value={readyToShipCount} /></Card>
+        <Card><Statistic title="Chờ sản xuất" value={waitingProductionCount} /></Card>
+        <Card><Statistic title="Đã ghi sổ / AR" value={postedReceivableCount} suffix={`/ ${stats.POSTED ?? 0}`} /></Card>
       </div>
 
       <div style={{ border: '1px solid #f0f0f0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -2719,6 +2874,23 @@ export default function SalesOrderList() {
             }))}
           />
         </div>
+        <Popover
+          trigger="click"
+          placement="bottomLeft"
+          content={
+            <Checkbox.Group
+              data-testid="sales-orders-column-settings-panel"
+              value={visibleColumnKeys.filter((key) => key !== 'actions')}
+              options={columnSettingOptions}
+              onChange={(checkedValues) => void onVisibleColumnChange(checkedValues)}
+              style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(120px, 1fr))', gap: 8 }}
+            />
+          }
+        >
+          <Button data-testid="sales-orders-column-settings" icon={<SettingOutlined />}>
+            Cột hiển thị
+          </Button>
+        </Popover>
         <Button
           onClick={() => {
             setSearchInput('');
@@ -2780,7 +2952,7 @@ export default function SalesOrderList() {
       <Table
         rowKey="id"
         loading={orderQuery.isLoading}
-        columns={columns}
+        columns={visibleColumns}
         dataSource={rows}
         locale={{ emptyText: 'Chưa có đơn hàng xuất phù hợp. Kiểm tra bộ lọc hoặc tạo đơn mới khi đã có khách hàng và dòng hàng.' }}
         scroll={{ x: 1900 }}
@@ -3935,11 +4107,55 @@ export default function SalesOrderList() {
           <Descriptions.Item label="Ngày đơn">{detailQuery.data?.order_date || detailOrder?.order_date}</Descriptions.Item>
           <Descriptions.Item label="Ngày giao">{detailQuery.data?.delivery_date || detailOrder?.delivery_date || '-'}</Descriptions.Item>
           <Descriptions.Item label="Tham chiếu">{detailQuery.data?.reference || detailOrder?.reference || '-'}</Descriptions.Item>
+          <Descriptions.Item label="Báo giá nguồn">
+            <span data-testid="sales-order-detail-source-quote">
+              {detailQuery.data?.source_quote_code || detailOrder?.source_quote_code || '-'}
+            </span>
+          </Descriptions.Item>
           <Descriptions.Item label="Tổng tiền">
             <FormattedPrice value={Number(detailQuery.data?.total || detailOrder?.total || 0)} />
           </Descriptions.Item>
           <Descriptions.Item label="Post #">{detailQuery.data?.post_number || detailOrder?.post_number || '-'}</Descriptions.Item>
           <Descriptions.Item label="Xác nhận">{detailQuery.data?.confirmed_at ? dayjs(detailQuery.data.confirmed_at).format('DD/MM/YYYY HH:mm') : detailOrder?.confirmed_at ? dayjs(detailOrder.confirmed_at).format('DD/MM/YYYY HH:mm') : '-'}</Descriptions.Item>
+          {(() => {
+            const order = detailQuery.data || detailOrder;
+            if (!order) return null;
+            const demand = getProductionDemandLabel(order);
+            const shipment = getShipmentLabel(order);
+            const receivable = getReceivableLabel(order);
+            return (
+              <>
+                <Descriptions.Item label="Sản xuất">
+                  <span data-testid="sales-order-detail-production-status">
+                    <Tag color={demand.color}>{demand.text}</Tag>
+                    {demand.detail}
+                  </span>
+                </Descriptions.Item>
+                <Descriptions.Item label="Xuất kho">
+                  <span data-testid="sales-order-detail-shipment-status">
+                    <Tag color={shipment.color}>{shipment.text}</Tag>
+                    {shipment.detail}
+                  </span>
+                </Descriptions.Item>
+                <Descriptions.Item label="Công nợ phải thu">
+                  <span data-testid="sales-order-detail-ar-status">
+                    <Tag color={receivable.color}>{receivable.text}</Tag>
+                    {receivable.detail}
+                    {order.receivable_summary?.id ? (
+                      <Button
+                        size="small"
+                        type="link"
+                        style={{ paddingInlineEnd: 0 }}
+                        onClick={() => navigate('/receivables')}
+                      >
+                        Mở công nợ
+                      </Button>
+                    ) : null}
+                  </span>
+                </Descriptions.Item>
+              </>
+            );
+          })()}
         </Descriptions>
         {(detailQuery.data || detailOrder) ? (
           <Alert
@@ -3995,8 +4211,11 @@ export default function SalesOrderList() {
             Mở Phiếu xuất
           </Button>
         </div>
-        <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#fafafa', color: '#595959' }}>
-          `Ghi sổ` chỉ chốt chứng từ bán hàng. Bước trừ tồn thực tế là `Xuất kho` từ phiếu giữ chỗ bên dưới.
+        <div
+          data-testid="sales-order-detail-primary-shipment-path"
+          style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#fafafa', color: '#595959' }}
+        >
+          Ghi sổ chỉ chốt chứng từ bán hàng và tạo công nợ. Luồng thực thi chính để trừ tồn là Xuất kho / kiện / POD trong khu vực Phiếu xuất bên dưới; màn hình shipment cũ chỉ giữ vai trò tương thích đọc khi cần.
         </div>
 
         <Divider style={{ marginTop: 24 }}>Dòng hàng</Divider>

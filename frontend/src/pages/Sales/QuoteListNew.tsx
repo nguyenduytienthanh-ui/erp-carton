@@ -37,8 +37,11 @@ const quoteNextSteps: Record<QuoteStatus, string> = {
   EXPIRED: 'Báo giá đã hết hạn; tạo báo giá mới trước khi chuyển đơn.',
 };
 
-function getQuoteNextStep(quote?: Pick<Quote, 'status'> | null): string {
+function getQuoteNextStep(quote?: Pick<Quote, 'status' | 'is_converted' | 'converted_order_code'> | null): string {
   if (!quote) return 'Chọn một báo giá để xem bước xử lý tiếp theo.';
+  if (quote.is_converted) {
+    return `Đã chuyển thành đơn hàng ${quote.converted_order_code || ''}. Tiếp tục xử lý ở màn Đơn hàng xuất.`;
+  }
   return quoteNextSteps[quote.status] ?? 'Kiểm tra trạng thái báo giá trước khi thao tác tiếp.';
 }
 
@@ -47,7 +50,10 @@ function getQuoteActionDisabledReason(quote: Quote, action: 'edit' | 'send' | 'a
   if (action === 'send') return quote.status === 'DRAFT' ? '' : 'Chỉ báo giá Nháp mới gửi được.';
   if (action === 'accept') return quote.status === 'SENT' ? '' : 'Chỉ báo giá Đã gửi mới chấp nhận được.';
   if (action === 'reject') return quote.status === 'SENT' ? '' : 'Chỉ báo giá Đã gửi mới từ chối được.';
-  if (action === 'convert') return quote.status === 'ACCEPTED' ? '' : 'Chỉ báo giá Đã chấp nhận mới chuyển thành đơn hàng.';
+  if (action === 'convert') {
+    if (quote.is_converted) return 'Báo giá đã chuyển thành đơn hàng; mở đơn đã tạo thay vì chuyển lại.';
+    return quote.status === 'ACCEPTED' ? '' : 'Chỉ báo giá Đã chấp nhận mới chuyển thành đơn hàng.';
+  }
   if (action === 'delete') return quote.status === 'DRAFT' ? '' : 'Chỉ xóa được báo giá Nháp.';
   return '';
 }
@@ -210,6 +216,7 @@ const QuoteList: React.FC = () => {
   const draftCount = rows.filter((q) => q.status === 'DRAFT').length;
   const sentCount = rows.filter((q) => q.status === 'SENT').length;
   const acceptedCount = rows.filter((q) => q.status === 'ACCEPTED').length;
+  const convertedCount = rows.filter((q) => q.is_converted).length;
 
   const columns = [
     {
@@ -263,6 +270,32 @@ const QuoteList: React.FC = () => {
       width: 140,
       align: 'right' as const,
       render: (value: string) => Number(value || 0).toLocaleString('vi-VN'),
+    },
+    {
+      title: 'Chuyển SO',
+      key: 'converted',
+      width: 190,
+      render: (_: unknown, row: Quote) => (
+        <div data-testid={`quote-converted-status-${row.id}`}>
+          {row.is_converted ? (
+            <>
+              <Tag color="green">Đã chuyển</Tag>
+              <Button
+                size="small"
+                type="link"
+                style={{ paddingInline: 0 }}
+                onClick={() => row.converted_order_id && navigate(`/sales-orders?focus_id=${row.converted_order_id}`)}
+              >
+                {row.converted_order_code || 'Mở SO'}
+              </Button>
+            </>
+          ) : row.status === 'ACCEPTED' ? (
+            <Tag color="orange">Sẵn sàng chuyển</Tag>
+          ) : (
+            <Tag>Chưa chuyển</Tag>
+          )}
+        </div>
+      ),
     },
     {
       title: 'Thao tác',
@@ -359,16 +392,30 @@ const QuoteList: React.FC = () => {
             </>
           )}
           {row.status === 'ACCEPTED' && (
-            <Button
-              size="small"
-              type="primary"
-              icon={<SwapOutlined />}
-              disabled={Boolean(convertReason)}
-              title={convertReason || 'Tạo đơn hàng xuất từ báo giá đã chấp nhận'}
-              onClick={() => convertMutation.mutate(row.id)}
-            >
-              Chuyển đơn
-            </Button>
+            row.is_converted ? (
+              <Button
+                size="small"
+                type="primary"
+                icon={<EyeOutlined />}
+                data-testid={`quote-open-converted-order-${row.id}`}
+                disabled={!row.converted_order_id}
+                title="Mở đơn hàng đã chuyển từ báo giá này"
+                onClick={() => row.converted_order_id && navigate(`/sales-orders?focus_id=${row.converted_order_id}`)}
+              >
+                Mở SO
+              </Button>
+            ) : (
+              <Button
+                size="small"
+                type="primary"
+                icon={<SwapOutlined />}
+                disabled={Boolean(convertReason)}
+                title={convertReason || 'Tạo đơn hàng xuất từ báo giá đã chấp nhận'}
+                onClick={() => convertMutation.mutate(row.id)}
+              >
+                Chuyển đơn
+              </Button>
+            )
           )}
           <Button size="small" icon={<FileTextOutlined />} onClick={() => handlePdfDownload(row.id, row.code)}>
             PDF
@@ -387,17 +434,20 @@ const QuoteList: React.FC = () => {
     <div style={{ padding: '20px' }}>
       <Card style={{ marginBottom: '20px' }}>
         <Row gutter={24}>
-          <Col span={6}>
+          <Col xs={24} sm={12} lg={5}>
             <Statistic title="Tổng tiền" value={totalAmount} prefix="₫" formatter={(value) => (Number(value) || 0).toLocaleString('vi-VN')} />
           </Col>
-          <Col span={6}>
+          <Col xs={24} sm={12} lg={4}>
             <Statistic title="Nháp" value={draftCount} valueStyle={{ color: '#faad14' }} />
           </Col>
-          <Col span={6}>
+          <Col xs={24} sm={12} lg={4}>
             <Statistic title="Đã gửi" value={sentCount} valueStyle={{ color: '#1677ff' }} />
           </Col>
-          <Col span={6}>
+          <Col xs={24} sm={12} lg={5}>
             <Statistic title="Đã chấp nhận" value={acceptedCount} valueStyle={{ color: '#52c41a' }} />
+          </Col>
+          <Col xs={24} sm={12} lg={6}>
+            <Statistic title="Đã chuyển SO" value={convertedCount} valueStyle={{ color: '#13c2c2' }} />
           </Col>
         </Row>
       </Card>
@@ -509,6 +559,29 @@ const QuoteList: React.FC = () => {
               message="Việc cần làm tiếp"
               description={<span data-testid="quote-detail-next-step">{getQuoteNextStep(detailQuote)}</span>}
             />
+            {detailQuote.is_converted ? (
+              <Alert
+                showIcon
+                type="success"
+                style={{ marginBottom: 12 }}
+                message="Đã chuyển đơn hàng"
+                description={
+                  <Space wrap>
+                    <span data-testid="quote-detail-converted-order">
+                      {detailQuote.converted_order_code || 'Đơn hàng đã tạo'}
+                    </span>
+                    <Button
+                      size="small"
+                      type="link"
+                      disabled={!detailQuote.converted_order_id}
+                      onClick={() => detailQuote.converted_order_id && navigate(`/sales-orders?focus_id=${detailQuote.converted_order_id}`)}
+                    >
+                      Mở đơn hàng
+                    </Button>
+                  </Space>
+                }
+              />
+            ) : null}
             <p><strong>Mã:</strong> {detailQuote.code}</p>
             <p><strong>Khách hàng:</strong> {detailQuote.customer_name ?? '-'}</p>
             <p><strong>Ngày báo giá:</strong> {dayjs(detailQuote.quote_date).format('DD/MM/YYYY')}</p>

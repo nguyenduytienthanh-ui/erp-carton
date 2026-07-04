@@ -284,6 +284,8 @@ class SalesOrderSerializer(serializers.ModelSerializer):
     lines = SalesOrderLineSerializer(many=True, required=False)
     customer_name = serializers.SerializerMethodField()
     source_quote_code = serializers.CharField(source='source_quote.code', read_only=True, allow_null=True)
+    production_demand_summary = serializers.SerializerMethodField()
+    receivable_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = SalesOrder
@@ -298,10 +300,11 @@ class SalesOrderSerializer(serializers.ModelSerializer):
             'voided_by', 'voided_at', 'void_reason',
             'posted_snapshot', 'version',
             'created_by', 'created_at', 'updated_by', 'updated_at',
-            'owner', 'team', 'reversal_of', 'lines',
+            'owner', 'team', 'reversal_of', 'production_demand_summary', 'receivable_summary', 'lines',
         ]
         read_only_fields = [
-            'code', 'source_quote', 'source_quote_code', 'subtotal', 'discount_total', 'tax_total', 'total',
+            'code', 'source_quote', 'source_quote_code', 'production_demand_summary', 'receivable_summary',
+            'subtotal', 'discount_total', 'tax_total', 'total',
             'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
             'rejected_by', 'rejected_at', 'reject_reason',
             'posted_by', 'posted_at', 'post_number',
@@ -314,6 +317,43 @@ class SalesOrderSerializer(serializers.ModelSerializer):
         if obj.customer_id and hasattr(obj, 'customer') and obj.customer:
             return obj.customer.name
         return None
+
+    def get_production_demand_summary(self, obj):
+        ProductionDemand = apps.get_model('production', 'ProductionDemand')
+        qs = ProductionDemand.objects.filter(sales_order=obj)
+        active_qs = qs.exclude(planning_status='CANCELLED').exclude(production_status='CANCELLED')
+        total_qty = active_qs.aggregate(total=Sum('qty_required')).get('total') or Decimal('0')
+        return {
+            'count': active_qs.count(),
+            'total_qty_required': str(total_qty),
+            'planning_statuses': sorted(set(active_qs.values_list('planning_status', flat=True))),
+            'production_statuses': sorted(set(active_qs.values_list('production_status', flat=True))),
+        }
+
+    def get_receivable_summary(self, obj):
+        ReceivableDocument = apps.get_model('finance', 'ReceivableDocument')
+        document = ReceivableDocument.objects.filter(source_sales_order=obj).only(
+            'id', 'code', 'status', 'total_amount', 'settled_amount'
+        ).first()
+        if not document:
+            return {
+                'exists': False,
+                'id': None,
+                'code': None,
+                'status': None,
+                'total_amount': None,
+                'settled_amount': None,
+                'remaining_amount': None,
+            }
+        return {
+            'exists': True,
+            'id': document.id,
+            'code': document.code,
+            'status': document.status,
+            'total_amount': str(document.total_amount),
+            'settled_amount': str(document.settled_amount),
+            'remaining_amount': str(document.remaining_amount),
+        }
 
     def validate_lines(self, value):
         if not value:
