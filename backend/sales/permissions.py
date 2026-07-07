@@ -52,7 +52,7 @@ def can_reject_sales_order(user, order):
 
 
 def can_post_sales_order(user, order):
-    return order.status == 'APPROVED' and _has_action(user, 'SALESORDER', 'POST')
+    return order.status in ('APPROVED', 'POSTED') and _has_action(user, 'SALESORDER', 'POST')
 
 
 def can_void_sales_order(user, order):

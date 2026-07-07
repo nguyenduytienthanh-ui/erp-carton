@@ -159,6 +159,8 @@ class SalesOrderVersionLockTests(TestCase):
 class SalesOrderIdempotentPostTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='test3', password='test')
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
         self.unit = ProductUnit.objects.create(code='CAI3', name='Cái')
         self.product = Product.objects.create(code='P3', name='P3', unit=self.unit, sale_price=Decimal('1'))
         self.order = SalesOrder.objects.create(
@@ -166,6 +168,14 @@ class SalesOrderIdempotentPostTests(TestCase):
             status=SalesOrderStatus.APPROVED, created_by=self.user, updated_by=self.user,
             approved_by=self.user, approved_at=timezone.now(),
         )
+        post_permission, _ = Permission.objects.get_or_create(
+            resource='SALESORDER',
+            action='POST',
+            defaults={'code': 'SALESORDER_POST', 'name': 'Post sales orders'},
+        )
+        post_role = Role.objects.create(code='SO_POST_TEST', name='SO post test')
+        post_role.permissions.add(post_permission)
+        self.user.roles.add(post_role)
 
     def test_post_twice_idempotent(self):
         ok1, msg1 = post_sales_order(self.order, self.user)
@@ -178,6 +188,21 @@ class SalesOrderIdempotentPostTests(TestCase):
         self.assertTrue('idempotent' in msg2.lower() or 'Already' in msg2)
         self.order.refresh_from_db()
         self.assertEqual(self.order.post_number, post_number_first)
+
+    def test_post_document_endpoint_is_idempotent_after_posted(self):
+        first = self.client.post(f'/api/sales/orders/{self.order.id}/post_document/', format='json')
+        self.assertEqual(first.status_code, 200, first.data)
+        self.order.refresh_from_db()
+        post_number_first = self.order.post_number
+        self.assertEqual(self.order.posting_logs.count(), 1)
+
+        second = self.client.post(f'/api/sales/orders/{self.order.id}/post_document/', format='json')
+
+        self.assertEqual(second.status_code, 200, second.data)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, SalesOrderStatus.POSTED)
+        self.assertEqual(self.order.post_number, post_number_first)
+        self.assertEqual(self.order.posting_logs.count(), 1)
 
 
 class QuoteConversionContractTests(TestCase):

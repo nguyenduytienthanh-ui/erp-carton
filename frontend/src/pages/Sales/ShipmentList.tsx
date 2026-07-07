@@ -28,6 +28,12 @@ import { getToastMessage } from '../../shared/apiError';
 import type { OutboundShipment, OutboundShipmentStatus, ShipmentLine } from '../../types/shipments';
 import { downloadCSV } from '../../utils/csvExport';
 import { PAGES } from '../../utils/constants';
+import {
+  canApproveSalesOrders,
+  canSubmitSalesOrders,
+  canUseShipmentExecutionWorkspace,
+  canVoidSalesOrders,
+} from '../../utils/authz';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import ShipmentFormModal from './ShipmentFormModal';
@@ -142,6 +148,12 @@ function matchesShipmentLane(item: OutboundShipment, laneFilter: ShipmentLaneFil
 
 export default function ShipmentList() {
   const navigate = useNavigate();
+  const canSubmitLegacyShipment = canSubmitSalesOrders();
+  const canApproveLegacyShipment = canApproveSalesOrders();
+  const canUseShipmentScan = canUseShipmentExecutionWorkspace();
+  const canVoidLegacyShipment = canVoidSalesOrders();
+  const canExportLegacyShipment = canSubmitLegacyShipment;
+  const canDeleteLegacyShipment = canVoidLegacyShipment || canUseShipmentScan;
   const [searchParams] = useSearchParams();
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
@@ -536,12 +548,14 @@ export default function ShipmentList() {
           <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailShipment(row)}>
             Xem
           </Button>
+          {canUseShipmentScan ? (
           <Button
             size="small"
             onClick={() => navigate(`/shipments/scan?shipment_id=${row.id}${row.sales_order ? `&order_id=${row.sales_order}` : ''}`)}
           >
             QR nhanh
           </Button>
+          ) : null}
           {row.sales_order ? (
             <Button
               size="small"
@@ -550,6 +564,7 @@ export default function ShipmentList() {
               Đơn gốc
             </Button>
           ) : null}
+          {canSubmitLegacyShipment ? (
           <Button
             data-testid={`shipment-edit-${row.id}`}
             size="small"
@@ -561,6 +576,8 @@ export default function ShipmentList() {
           >
             Sửa
           </Button>
+          ) : null}
+          {canDeleteLegacyShipment ? (
           <Button
             data-testid={`shipment-delete-${row.id}`}
             size="small"
@@ -580,6 +597,8 @@ export default function ShipmentList() {
           >
             Xóa
           </Button>
+          ) : null}
+          {canSubmitLegacyShipment ? (
           <Button
             data-testid={`shipment-submit-${row.id}`}
             size="small"
@@ -588,6 +607,8 @@ export default function ShipmentList() {
           >
             Gửi duyệt
           </Button>
+          ) : null}
+          {canApproveLegacyShipment ? (
           <Button
             data-testid={`shipment-approve-${row.id}`}
             size="small"
@@ -597,6 +618,9 @@ export default function ShipmentList() {
           >
             Duyệt
           </Button>
+          ) : null}
+          {canUseShipmentScan ? (
+          <>
           <Button
             data-testid={`shipment-pack-${row.id}`}
             size="small"
@@ -634,6 +658,8 @@ export default function ShipmentList() {
           >
             Hoàn tất giao
           </Button>
+          </>
+          ) : null}
         </Space>
       ),
     },
@@ -705,9 +731,12 @@ export default function ShipmentList() {
             </Text>
           </div>
           <Space wrap>
+            {canExportLegacyShipment ? (
             <Button icon={<DownloadOutlined />} disabled={rows.length === 0} onClick={handleExportCSV}>
               Xuất CSV
             </Button>
+            ) : null}
+            {canSubmitLegacyShipment ? (
             <Button
               data-testid="shipments-open-create"
               type="primary"
@@ -719,6 +748,7 @@ export default function ShipmentList() {
             >
               Tạo phiếu giao hàng
             </Button>
+            ) : null}
             {selectedPreset ? (
               <Tag color="purple" style={{ marginInlineEnd: 0 }}>
                 Mẫu đang dùng: {selectedPreset.name}
@@ -944,6 +974,7 @@ export default function ShipmentList() {
                     Về Đơn hàng xuất
                   </Button>
                 ) : null}
+                {canUseShipmentScan ? (
                 <Button
                   type="primary"
                   onClick={() =>
@@ -952,6 +983,7 @@ export default function ShipmentList() {
                 >
                   Mở QR nhanh
                 </Button>
+                ) : null}
               </Space>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
