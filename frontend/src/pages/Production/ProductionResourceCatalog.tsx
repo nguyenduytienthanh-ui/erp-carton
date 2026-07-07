@@ -37,6 +37,7 @@ import type {
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { getToastMessage } from '../../shared/apiError';
+import { canManageProductionData } from '../../utils/authz';
 
 type ResourceFilters = {
   activeOnly: boolean;
@@ -186,6 +187,7 @@ export default function ProductionResourceCatalog() {
   const [editingMachine, setEditingMachine] = useState<ProductionMachine | null>(null);
   const [workCenterForm] = Form.useForm<WorkCenterFormValues>();
   const [machineForm] = Form.useForm<MachineFormValues>();
+  const canManageProduction = canManageProductionData();
 
   const { intentSearch, intentFilters } = useSearchFilterIntent({
     searchInput,
@@ -448,6 +450,7 @@ export default function ProductionResourceCatalog() {
       width: 190,
       fixed: 'right',
       render: (_, row) => (
+        canManageProduction ? (
         <Space>
           <Button
             size="small"
@@ -467,6 +470,7 @@ export default function ProductionResourceCatalog() {
             {row.is_active ? 'Ngưng dùng' : 'Bật lại'}
           </Button>
         </Space>
+        ) : null
       ),
     },
   ];
@@ -505,6 +509,7 @@ export default function ProductionResourceCatalog() {
       width: 190,
       fixed: 'right',
       render: (_, row) => (
+        canManageProduction ? (
         <Space>
           <Button
             size="small"
@@ -524,6 +529,7 @@ export default function ProductionResourceCatalog() {
             {row.is_active ? 'Ngưng dùng' : 'Bật lại'}
           </Button>
         </Space>
+        ) : null
       ),
     },
   ];
@@ -550,22 +556,22 @@ export default function ProductionResourceCatalog() {
           <Button icon={<ReloadOutlined />} loading={isRefreshing} onClick={() => void refresh()}>
             Tải lại
           </Button>
-          <Button
+          {canManageProduction ? <Button
             type="primary"
             icon={<PlusOutlined />}
             data-testid="production-resource-add-work-center"
             onClick={openCreateWorkCenter}
           >
             Thêm tổ sản xuất
-          </Button>
-          <Button
+          </Button> : null}
+          {canManageProduction ? <Button
             icon={<PlusOutlined />}
             data-testid="production-resource-add-machine"
             onClick={openCreateMachine}
             disabled={workCenterOptions.length === 0}
           >
             Thêm máy
-          </Button>
+          </Button> : null}
         </Space>
       </div>
 

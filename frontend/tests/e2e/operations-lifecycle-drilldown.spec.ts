@@ -41,12 +41,11 @@ test('purchase return detail shows full lifecycle after workflow transitions', a
   await expect(page.getByTestId('purchase-return-lifecycle-history')).toContainText('Gửi duyệt');
 });
 
-test('material issue detail refreshes from API and shows lifecycle after canceling', async ({ page }) => {
+test('material issue detail blocks direct cancel for posted production ledger', async ({ page }) => {
   test.setTimeout(120_000);
   await login(page, adminUser.username, adminUser.password);
   const token = await getAccessToken(page);
   const seed = await createProductionIssueSeed(page, token, `${Date.now()}iss`);
-  const cancelReason = `Điều chỉnh cấp vật tư ${Date.now()}`;
 
   await page.goto('/material-issues');
   const searchInput = page.getByTestId('material-issues-command-search').locator('input');
@@ -58,29 +57,19 @@ test('material issue detail refreshes from API and shows lifecycle after canceli
   await expect(page.getByTestId('material-issue-detail-panel')).toContainText(seed.order.code);
   await expect(page.getByTestId('material-issue-detail-panel')).toContainText(seed.issue.reference || '');
   await expect(page.getByTestId('material-issue-next-states')).toContainText('Hiện tại: Đã ghi nhận');
-  await expect(page.getByTestId('material-issue-next-states')).toContainText('Đã hủy');
+  await expect(page.getByTestId('material-issue-next-states')).toContainText('Không còn bước tiếp theo');
+  await expect(page.getByTestId('material-issue-next-states')).toContainText('immutable reversal');
   await expect(page.getByTestId('material-issue-lifecycle-history')).toContainText('Đã cấp vật tư');
   await page.keyboard.press('Escape');
 
-  await page.getByTestId(`material-issue-cancel-${seed.issue.id}`).click();
-  const dialog = page.getByRole('dialog').last();
-  await dialog.getByLabel('Lý do hủy').fill(cancelReason);
-  await dialog.getByRole('button', { name: 'Xác nhận hủy' }).click();
-
-  await expect.poll(async () => {
-    const payload = await apiGet<ProductionIssueRecord>(page, token, `/production/issues/${seed.issue.id}/`);
-    return payload.status;
-  }, {
-    timeout: 20_000,
-    intervals: [500, 1000, 2000],
-  }).toBe('CANCELLED');
+  await expect(page.getByTestId(`material-issue-cancel-${seed.issue.id}`)).toBeDisabled();
+  const payload = await apiGet<ProductionIssueRecord>(page, token, `/production/issues/${seed.issue.id}/`);
+  expect(payload.status).toBe('POSTED');
 
   await page.getByTestId(`material-issue-view-${seed.issue.id}`).click();
-  await expect(page.getByTestId('material-issue-detail-panel')).toContainText(cancelReason);
-  await expect(page.getByTestId('material-issue-next-states')).toContainText('Hiện tại: Đã hủy');
+  await expect(page.getByTestId('material-issue-next-states')).toContainText('Hiện tại: Đã ghi nhận');
   await expect(page.getByTestId('material-issue-next-states')).toContainText('Không còn bước tiếp theo');
-  await expect(page.getByTestId('material-issue-lifecycle-history')).toContainText('Đã hủy');
-  await expect(page.getByTestId('material-issue-lifecycle-history')).toContainText(cancelReason);
+  await expect(page.getByTestId('material-issue-next-states')).toContainText('immutable reversal');
   await expect(page.getByTestId('material-issue-lifecycle-history')).toContainText('Đã cấp vật tư');
 });
 

@@ -18,6 +18,11 @@ import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { PAGES } from '../../utils/constants';
 import { getToastMessage } from '../../shared/apiError';
 import { downloadCSV } from '../../utils/csvExport';
+import {
+  canCancelProductionOrders,
+  canManageProductionData,
+  canReceiveProductionOutput,
+} from '../../utils/authz';
 
 type Filters = { status?: ProductionReceiptStatus; production_order?: number };
 type ProductionReceiptLaneFilter = 'ALL' | 'POSTED_TODAY' | 'THIS_MONTH' | 'CANCELLED_REVIEW' | 'HIGH_OUTPUT';
@@ -39,6 +44,8 @@ const { Text, Title } = Typography;
 const STATUS_LABELS: Record<ProductionReceiptStatus, string> = { POSTED: 'Đã ghi nhận', CANCELLED: 'Đã hủy' };
 const STATUS_COLORS: Record<ProductionReceiptStatus, string> = { POSTED: 'green', CANCELLED: 'red' };
 const TILE_STYLE = { height: '100%', borderRadius: 14 };
+const PRODUCTION_POSTED_CANCEL_BLOCK_REASON =
+  'Hủy trực tiếp chứng từ sản xuất đã post đang bị khóa để bảo toàn ledger. Cần package immutable reversal riêng.';
 const LANE_LABELS: Record<ProductionReceiptLaneFilter, string> = {
   ALL: 'Toàn bộ chứng từ',
   POSTED_TODAY: 'Nhập hôm nay',
@@ -101,6 +108,9 @@ export default function ProductionReceiptList() {
   const { config, saveConfig } = useUserPreferences(PAGES.PRODUCTION_RECEIPTS);
   const configRecord = config as Record<string, unknown>;
   const pageSize = Number(configRecord?.pageSize ?? 20);
+  const canManageProduction = canManageProductionData();
+  const canReceiveProduction = canReceiveProductionOutput();
+  const canCancelProduction = canCancelProductionOrders();
   const namedPresets = useMemo(() => {
     const raw = configRecord?.saved_views;
     if (!Array.isArray(raw)) return [] as ProductionReceiptNamedPreset[];
@@ -369,7 +379,7 @@ export default function ProductionReceiptList() {
       fixed: 'right',
       render: (_, row) => <Space wrap size="small">
         <Button data-testid={`production-receipt-view-${row.id}`} size="small" icon={<EyeOutlined />} onClick={() => setDetailReceipt(row)}>Xem</Button>
-        {row.status === 'POSTED' ? <Button data-testid={`production-receipt-cancel-${row.id}`} size="small" danger icon={<StopOutlined />} title="Hủy chứng từ và hoàn tác lượng thành phẩm đã nhập" onClick={() => { cancelForm.setFieldsValue({ reason: '' }); setCancelTarget(row); }}>Hủy chứng từ</Button> : null}
+        {canCancelProduction && row.status === 'POSTED' ? <Button data-testid={`production-receipt-cancel-${row.id}`} size="small" danger disabled icon={<StopOutlined />} title={PRODUCTION_POSTED_CANCEL_BLOCK_REASON}>Đã khóa hủy</Button> : null}
       </Space>,
     },
   ];
@@ -400,8 +410,8 @@ export default function ProductionReceiptList() {
             <Text type="secondary">Ghi nhận đầu ra sản xuất, theo dõi chứng từ nhập thành phẩm và xử lý các trường hợp cần hủy đối soát.</Text>
           </div>
           <Space wrap>
-            <Button icon={<DownloadOutlined />} onClick={handleExportCSV} disabled={!visibleRows.length}>Xuất CSV</Button>
-            <Button type="primary" icon={<InboxOutlined />} onClick={() => { form.setFieldsValue({ receipt_date: dayjs().format('YYYY-MM-DD'), reference: '', reason: 'Nhập kho thành phẩm từ sản xuất', note: '' }); setFormOpen(true); }}>Nhập thành phẩm</Button>
+            {canManageProduction ? <Button icon={<DownloadOutlined />} onClick={handleExportCSV} disabled={!visibleRows.length}>Xuất CSV</Button> : null}
+            {canReceiveProduction ? <Button type="primary" icon={<InboxOutlined />} onClick={() => { form.setFieldsValue({ receipt_date: dayjs().format('YYYY-MM-DD'), reference: '', reason: 'Nhập kho thành phẩm từ sản xuất', note: '' }); setFormOpen(true); }}>Nhập thành phẩm</Button> : null}
           </Space>
         </div>
         <Alert showIcon type={statusAlert.type} message={statusAlert.message} />
@@ -558,6 +568,9 @@ export default function ProductionReceiptList() {
               ) : (
                 <Tag>Không còn bước tiếp theo</Tag>
               )}
+              {nextStatesQuery.data?.cancel_block_reason ? (
+                <Tag color="red">{nextStatesQuery.data.cancel_block_reason}</Tag>
+              ) : null}
             </div>
           </Card>
           <Card size="small" title="Lịch sử vòng đời">

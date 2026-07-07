@@ -9,7 +9,7 @@ from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APITestCase
 from django.utils import timezone
 
-from core.models import ApprovalHistory, AuditLog, Customer, Setting, User
+from core.models import ApprovalHistory, AuditLog, Customer, Permission, Role, Setting, User
 from inventory.models import InventoryTransaction, Warehouse, WarehouseLocation
 from products.models import Operation, Product, ProductOperation, ProductRoutingStep, ProductUnit
 from production.models import (
@@ -38,6 +38,21 @@ from production.services import (
     validate_production_order_can_release,
 )
 from sales.models import SalesOrder, SalesOrderDeliveryPlan, SalesOrderLine, SalesOrderStatus
+
+
+def grant_permission(user, resource, action):
+    permission, _ = Permission.objects.update_or_create(
+        resource=resource,
+        action=action,
+        defaults={
+            'code': f'{resource}_{action}',
+            'name': f'{resource} {action}',
+        },
+    )
+    role, _ = Role.objects.get_or_create(code=f'TEST_{resource}_{action}', defaults={'name': f'{resource} {action}'})
+    role.permissions.add(permission)
+    user.roles.add(role)
+    return permission
 
 
 class ProductionDemandModelTests(APITestCase):
@@ -1398,6 +1413,7 @@ class ProductionResourceCatalogApiTests(APITestCase):
             username='production_resource_catalog_basic',
             password='Demo123!',
         )
+        grant_permission(self.basic_user, 'PRODUCTION', 'VIEW')
         self.client.force_authenticate(user=self.user)
 
     def _results(self, response):
@@ -1537,6 +1553,11 @@ class ProductionDemandApiTests(APITestCase):
             username='production_demand_api_basic',
             password='Demo123!',
         )
+        self.view_user = User.objects.create_user(
+            username='production_demand_api_view',
+            password='Demo123!',
+        )
+        grant_permission(self.view_user, 'PRODUCTION', 'VIEW')
         self.client.force_authenticate(user=self.user)
         self.today = timezone.localdate()
         self.customer = Customer.objects.create(
@@ -1934,12 +1955,24 @@ class ProductionDemandApiTests(APITestCase):
         self.assertEqual(generic_response.data['total'], 9)
         self.assertEqual(generic_response.data['overdue'], 1)
 
-    def test_permission_blocks_non_production_user(self):
+    def test_permission_blocks_no_view_user_and_allows_view_only_reads(self):
         self.client.force_authenticate(user=self.basic_user)
 
         response = self.client.get('/api/production/demands/')
 
         self.assertEqual(response.status_code, 403)
+
+        self.client.force_authenticate(user=self.view_user)
+        view_response = self.client.get('/api/production/demands/')
+        summary_response = self.client.get('/api/production/demands/summary/')
+        create_response = self.client.post(
+            f'/api/production/demands/{self.overdue.id}/create_order/',
+            {'qty': '1'},
+            format='json',
+        )
+        self.assertEqual(view_response.status_code, 200, view_response.data)
+        self.assertEqual(summary_response.status_code, 200, summary_response.data)
+        self.assertEqual(create_response.status_code, 403, create_response.data)
 
         self.client.force_authenticate(user=self.user)
         allowed_response = self.client.get('/api/production/demands/')
@@ -2985,7 +3018,7 @@ class ProductionWorkflowTests(APITestCase):
         self.assertEqual(scan_response.data['match']['production_order_code'], order_obj.code)
         self.assertEqual(scan_response.data['match']['packaging_summary'], '2 goi lon | 1 cai/goi | 1 pallet | 2 goi/pallet')
 
-    def test_cancel_production_issue_rolls_back_issued_qty(self):
+    def test_cancel_production_issue_is_blocked_to_preserve_posted_ledger(self):
         order = self._create_production_order(planned_qty='4')
         order_id = order['id']
         requirement = ProductionMaterialRequirement.objects.get(production_order_id=order_id, line_number=1)
@@ -3015,18 +3048,18 @@ class ProductionWorkflowTests(APITestCase):
             {'reason': 'Hủy cấp vật tư test'},
             format='json',
         )
-        self.assertEqual(cancel_response.status_code, 200, cancel_response.data)
-        self.assertEqual(cancel_response.data['status'], 'CANCELLED')
+        self.assertEqual(cancel_response.status_code, 409, cancel_response.data)
+        self.assertIn('immutable reversal', cancel_response.data['error'])
 
         requirement.refresh_from_db()
         order_obj = ProductionOrder.objects.get(pk=order_id)
         issue = ProductionIssue.objects.get(pk=issue_id)
         issue_tx = InventoryTransaction.objects.get(production_issue=issue)
 
-        self.assertEqual(str(requirement.issued_qty), '0.0000')
-        self.assertEqual(order_obj.status, 'RELEASED')
-        self.assertEqual(issue.status, 'CANCELLED')
-        self.assertEqual(issue_tx.status, 'CANCELLED')
+        self.assertEqual(str(requirement.issued_qty), '8.0000')
+        self.assertEqual(order_obj.status, 'IN_PROGRESS')
+        self.assertEqual(issue.status, 'POSTED')
+        self.assertEqual(issue_tx.status, 'POSTED')
 
     def test_production_issue_exposes_next_states_and_lifecycle_history(self):
         order = self._create_production_order(planned_qty='4')
@@ -3056,7 +3089,8 @@ class ProductionWorkflowTests(APITestCase):
         next_states_response = self.client.get(f'/api/production/issues/{issue_id}/next_states/')
         self.assertEqual(next_states_response.status_code, 200, next_states_response.data)
         self.assertEqual(next_states_response.data['current'], 'POSTED')
-        self.assertEqual(next_states_response.data['next_states'], ['CANCELLED'])
+        self.assertEqual(next_states_response.data['next_states'], [])
+        self.assertIn('immutable reversal', next_states_response.data['cancel_block_reason'])
 
         history_response = self.client.get(f'/api/production/issues/{issue_id}/lifecycle_history/')
         self.assertEqual(history_response.status_code, 200, history_response.data)
@@ -3069,24 +3103,21 @@ class ProductionWorkflowTests(APITestCase):
             {'reason': 'Huy cap vat tu de doi soat'},
             format='json',
         )
-        self.assertEqual(cancel_response.status_code, 200, cancel_response.data)
-        self.assertEqual(cancel_response.data['status'], 'CANCELLED')
+        self.assertEqual(cancel_response.status_code, 409, cancel_response.data)
 
-        cancelled_states = self.client.get(f'/api/production/issues/{issue_id}/next_states/')
-        self.assertEqual(cancelled_states.status_code, 200, cancelled_states.data)
-        self.assertEqual(cancelled_states.data['current'], 'CANCELLED')
-        self.assertEqual(cancelled_states.data['next_states'], [])
+        blocked_states = self.client.get(f'/api/production/issues/{issue_id}/next_states/')
+        self.assertEqual(blocked_states.status_code, 200, blocked_states.data)
+        self.assertEqual(blocked_states.data['current'], 'POSTED')
+        self.assertEqual(blocked_states.data['next_states'], [])
 
-        cancelled_history = self.client.get(f'/api/production/issues/{issue_id}/lifecycle_history/')
-        self.assertEqual(cancelled_history.status_code, 200, cancelled_history.data)
-        self.assertEqual([item['action'] for item in cancelled_history.data[:2]], ['CANCEL', 'ISSUE'])
-        self.assertEqual(cancelled_history.data[0]['action_label'], 'Đã hủy')
-        self.assertEqual(cancelled_history.data[0]['comments'], 'Huy cap vat tu de doi soat')
+        blocked_history = self.client.get(f'/api/production/issues/{issue_id}/lifecycle_history/')
+        self.assertEqual(blocked_history.status_code, 200, blocked_history.data)
+        self.assertEqual([item['action'] for item in blocked_history.data[:1]], ['ISSUE'])
 
         audit_rows = AuditLog.objects.filter(entity_type='ProductionIssue', entity_id=issue_id)
-        self.assertEqual(audit_rows.count(), 2)
+        self.assertEqual(audit_rows.count(), 1)
 
-    def test_cancel_production_receipt_rolls_back_output_qty(self):
+    def test_cancel_production_receipt_is_blocked_to_preserve_posted_ledger(self):
         order = self._create_production_order(planned_qty='3')
         order_id = order['id']
         self._release_order(order_id)
@@ -3114,17 +3145,17 @@ class ProductionWorkflowTests(APITestCase):
             {'reason': 'Hủy nhập kho test'},
             format='json',
         )
-        self.assertEqual(cancel_response.status_code, 200, cancel_response.data)
-        self.assertEqual(cancel_response.data['status'], 'CANCELLED')
+        self.assertEqual(cancel_response.status_code, 409, cancel_response.data)
+        self.assertIn('immutable reversal', cancel_response.data['error'])
 
         order_obj = ProductionOrder.objects.get(pk=order_id)
         receipt = ProductionReceipt.objects.get(pk=receipt_id)
         receipt_tx = InventoryTransaction.objects.get(production_receipt=receipt)
 
-        self.assertEqual(str(order_obj.produced_qty), '0.0000')
-        self.assertEqual(order_obj.status, 'RELEASED')
-        self.assertEqual(receipt.status, 'CANCELLED')
-        self.assertEqual(receipt_tx.status, 'CANCELLED')
+        self.assertEqual(str(order_obj.produced_qty), '2.0000')
+        self.assertEqual(order_obj.status, 'IN_PROGRESS')
+        self.assertEqual(receipt.status, 'POSTED')
+        self.assertEqual(receipt_tx.status, 'POSTED')
 
     def test_production_receipt_exposes_next_states_and_lifecycle_history(self):
         order = self._create_production_order(planned_qty='4')
@@ -3152,7 +3183,8 @@ class ProductionWorkflowTests(APITestCase):
         next_states_response = self.client.get(f'/api/production/receipts/{receipt_id}/next_states/')
         self.assertEqual(next_states_response.status_code, 200, next_states_response.data)
         self.assertEqual(next_states_response.data['current'], 'POSTED')
-        self.assertEqual(next_states_response.data['next_states'], ['CANCELLED'])
+        self.assertEqual(next_states_response.data['next_states'], [])
+        self.assertIn('immutable reversal', next_states_response.data['cancel_block_reason'])
 
         history_response = self.client.get(f'/api/production/receipts/{receipt_id}/lifecycle_history/')
         self.assertEqual(history_response.status_code, 200, history_response.data)
@@ -3165,21 +3197,19 @@ class ProductionWorkflowTests(APITestCase):
             {'reason': 'Huy doi soat nhap thanh pham'},
             format='json',
         )
-        self.assertEqual(cancel_response.status_code, 200, cancel_response.data)
+        self.assertEqual(cancel_response.status_code, 409, cancel_response.data)
 
-        cancelled_states = self.client.get(f'/api/production/receipts/{receipt_id}/next_states/')
-        self.assertEqual(cancelled_states.status_code, 200, cancelled_states.data)
-        self.assertEqual(cancelled_states.data['current'], 'CANCELLED')
-        self.assertEqual(cancelled_states.data['next_states'], [])
+        blocked_states = self.client.get(f'/api/production/receipts/{receipt_id}/next_states/')
+        self.assertEqual(blocked_states.status_code, 200, blocked_states.data)
+        self.assertEqual(blocked_states.data['current'], 'POSTED')
+        self.assertEqual(blocked_states.data['next_states'], [])
 
-        cancelled_history = self.client.get(f'/api/production/receipts/{receipt_id}/lifecycle_history/')
-        self.assertEqual(cancelled_history.status_code, 200, cancelled_history.data)
-        self.assertEqual([item['action'] for item in cancelled_history.data[:2]], ['CANCEL', 'RECEIVE'])
-        self.assertEqual(cancelled_history.data[0]['action_label'], 'Đã hủy')
-        self.assertEqual(cancelled_history.data[0]['comments'], 'Huy doi soat nhap thanh pham')
+        blocked_history = self.client.get(f'/api/production/receipts/{receipt_id}/lifecycle_history/')
+        self.assertEqual(blocked_history.status_code, 200, blocked_history.data)
+        self.assertEqual([item['action'] for item in blocked_history.data[:1]], ['RECEIVE'])
 
         audit_rows = AuditLog.objects.filter(entity_type='ProductionReceipt', entity_id=receipt_id)
-        self.assertEqual(audit_rows.count(), 2)
+        self.assertEqual(audit_rows.count(), 1)
 
     def test_summary_endpoint_returns_active_and_overdue_counts(self):
         order = self._create_production_order(planned_qty='2')

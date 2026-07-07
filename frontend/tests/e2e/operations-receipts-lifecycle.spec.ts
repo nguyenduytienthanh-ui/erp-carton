@@ -57,12 +57,11 @@ test('purchase receipt detail shows next states and lifecycle history after canc
   await expect(page.getByTestId('purchase-receipt-lifecycle-history')).toContainText(cancelReason);
 });
 
-test('production receipt detail shows next states and lifecycle history after cancel', async ({ page }) => {
+test('production receipt detail blocks direct cancel for posted production ledger', async ({ page }) => {
   test.setTimeout(120_000);
   await login(page, adminUser.username, adminUser.password);
   const token = await getAccessToken(page);
   const seed = await createProductionReceiptSeed(page, token, `${Date.now()}frc`);
-  const cancelReason = `Điều chỉnh nhập thành phẩm ${Date.now()}`;
 
   await page.goto('/production-receipts');
   await expect(page.getByTestId('production-receipts-command-strip')).toBeVisible();
@@ -73,28 +72,20 @@ test('production receipt detail shows next states and lifecycle history after ca
 
   await expect(page.getByTestId('production-receipt-detail-panel')).toBeVisible();
   await expect(page.getByTestId('production-receipt-next-states')).toContainText('Đã ghi nhận');
-  await expect(page.getByTestId('production-receipt-next-states')).toContainText('Đã hủy');
+  await expect(page.getByTestId('production-receipt-next-states')).toContainText('Không còn bước tiếp theo');
+  await expect(page.getByTestId('production-receipt-next-states')).toContainText('immutable reversal');
   await expect(page.getByTestId('production-receipt-lifecycle-history')).toContainText('Đã ghi nhận');
 
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('production-receipt-detail-panel')).toBeHidden();
 
-  await page.getByTestId(`production-receipt-cancel-${seed.receipt.id}`).click();
-  const cancelDialog = page.getByRole('dialog').last();
-  await cancelDialog.getByLabel('Lý do hủy').fill(cancelReason);
-  await cancelDialog.getByRole('button', { name: 'Xác nhận hủy' }).click();
-
-  await expect.poll(async () => {
-    const payload = await apiGet<ReceiptRecord>(page, token, `/production/receipts/${seed.receipt.id}/`);
-    return payload.status;
-  }, {
-    timeout: 20_000,
-    intervals: [500, 1000, 2000],
-  }).toBe('CANCELLED');
+  await expect(page.getByTestId(`production-receipt-cancel-${seed.receipt.id}`)).toBeDisabled();
+  const payload = await apiGet<ReceiptRecord>(page, token, `/production/receipts/${seed.receipt.id}/`);
+  expect(payload.status).toBe('POSTED');
 
   await page.getByTestId(`production-receipt-view-${seed.receipt.id}`).click();
-  await expect(page.getByTestId('production-receipt-next-states')).toContainText('Hiện tại: Đã hủy');
+  await expect(page.getByTestId('production-receipt-next-states')).toContainText('Hiện tại: Đã ghi nhận');
   await expect(page.getByTestId('production-receipt-next-states')).toContainText('Không còn bước tiếp theo');
-  await expect(page.getByTestId('production-receipt-lifecycle-history')).toContainText('Đã hủy');
-  await expect(page.getByTestId('production-receipt-lifecycle-history')).toContainText(cancelReason);
+  await expect(page.getByTestId('production-receipt-next-states')).toContainText('immutable reversal');
+  await expect(page.getByTestId('production-receipt-lifecycle-history')).toContainText('Đã ghi nhận');
 });

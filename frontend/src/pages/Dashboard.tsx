@@ -29,7 +29,7 @@ import { useUserPreferences } from '../hooks/useUserPreferences';
 import {
   canAccessSalesOrders,
   canAccessProductionCenter,
-  canManageProductionData,
+  canViewProductionData,
   canViewQualityData,
   canManageFinanceData,
   canViewInventoryData,
@@ -179,7 +179,7 @@ export default function Dashboard() {
   const canViewSales = canAccessSalesOrders();
   const canViewPurchasing = canViewPurchasingData();
   const canAccessProduction = canAccessProductionCenter();
-  const canManageProduction = canManageProductionData();
+  const canViewProduction = canViewProductionData();
   const canViewQuality = canViewQualityData();
   const canViewInventory = canViewInventoryData();
   const canManageFinance = canManageFinanceData();
@@ -188,7 +188,7 @@ export default function Dashboard() {
   const canViewReports = canViewReportsCenter();
   const canViewOps = canViewOpsHub();
   const canViewWorkflow = canViewWorkflowData();
-  const canViewSalesFulfillmentCenter = canViewSales || canViewPurchasing || canManageProduction || canViewReports;
+  const canViewSalesFulfillmentCenter = canViewSales || canViewPurchasing || canViewProduction || canViewReports;
 
   const { config, saveConfig } = useUserPreferences(PAGES.DASHBOARD);
 
@@ -489,7 +489,7 @@ export default function Dashboard() {
       });
     }
 
-    if (canManageProduction) {
+    if (canViewProduction) {
       cards.push({
         key: 'production-demands',
         title: 'Nhu cầu sản xuất',
@@ -552,7 +552,7 @@ export default function Dashboard() {
     return cards.slice(0, 7);
   }, [
     canAccessProduction,
-    canManageProduction,
+    canViewProduction,
     canViewQuality,
     canViewOps,
     canViewReports,
@@ -590,7 +590,7 @@ export default function Dashboard() {
       });
     }
 
-    if (canManageProduction) {
+    if (canViewProduction) {
       cards.push({
         key: 'production-demands',
         testId: 'dashboard-restore-production-demands',
@@ -660,7 +660,7 @@ export default function Dashboard() {
   }, [
     canManageFinance,
     canManageOnboarding,
-    canManageProduction,
+    canViewProduction,
     canManageWorkforce,
     canViewSalesFulfillmentCenter,
     overdue90Count,

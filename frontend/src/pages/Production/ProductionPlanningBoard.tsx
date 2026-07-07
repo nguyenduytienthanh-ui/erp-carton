@@ -61,7 +61,7 @@ import type {
   ProductionMachine,
   ProductionWorkCenter,
 } from '../../types/production';
-import { canManageProductionData } from '../../utils/authz';
+import { canPlanProductionOrders } from '../../utils/authz';
 import { PAGES } from '../../utils/constants';
 import { downloadCSV } from '../../utils/csvExport';
 
@@ -1486,11 +1486,10 @@ export default function ProductionPlanningBoard() {
   const savedScenarios = useMemo<SavedScenario[]>(() => Array.isArray(configRecord.saved_scenarios) ? (configRecord.saved_scenarios as SavedScenario[]) : [], [configRecord.saved_scenarios]);
   const selectedPreset = useMemo(() => namedPresets.find((item) => item.id === selectedPresetId) ?? null, [namedPresets, selectedPresetId]);
   const selectedSavedScenario = useMemo(() => savedScenarios.find((item) => item.id === selectedScenarioId) ?? null, [savedScenarios, selectedScenarioId]);
-  const canManageProduction = canManageProductionData();
-  const canEditSelectedCard = Boolean(selectedCard && ['RELEASED', 'IN_PROGRESS'].includes(selectedCard.order.status));
+  const canPlanProduction = canPlanProductionOrders();
+  const canEditSelectedCard = Boolean(canPlanProduction && selectedCard && ['RELEASED', 'IN_PROGRESS'].includes(selectedCard.order.status));
   const canSkipSelectedCard = Boolean(
-    canManageProduction
-      && canEditSelectedCard
+    canEditSelectedCard
       && selectedCard
       && ['PENDING', 'READY', 'IN_PROGRESS'].includes(selectedCard.operation.status),
   );
@@ -2598,7 +2597,7 @@ export default function ProductionPlanningBoard() {
   const bulkPreviewQuery = useQuery({
     queryKey: ['production-planning-bulk-preview', bulkPreviewPayload],
     queryFn: () => productionApi.previewBulkUpdateOperations(bulkPreviewPayload!),
-    enabled: Boolean(bulkPreviewPayload && !bulkPreviewBlockedByValidation),
+    enabled: Boolean(canPlanProduction && bulkPreviewPayload && !bulkPreviewBlockedByValidation),
   });
   useEffect(() => {
     if (previewQuery.error && isPlanningDependencyError(previewQuery.error)) {
@@ -2651,7 +2650,7 @@ export default function ProductionPlanningBoard() {
   const rebalancePreviewQuery = useQuery({
     queryKey: ['production-planning-rebalance-preview', rebalancePreviewPayload],
     queryFn: () => productionApi.previewRebalanceSuggestions(rebalancePreviewPayload!),
-    enabled: Boolean(rebalancePreviewPayload),
+    enabled: Boolean(canPlanProduction && rebalancePreviewPayload),
   });
   const rebalanceApplyMutation = useMutation({
     mutationFn: () => productionApi.applyRebalanceSuggestions(rebalancePreviewPayload!),
@@ -2935,7 +2934,7 @@ export default function ProductionPlanningBoard() {
     setQueueSequenceDraftState({ scopeKey: queueSequenceDraftScopeKey, values: EMPTY_QUEUE_SEQUENCE_DRAFT });
   };
   const handleApplyQueueSequence = async () => {
-    if (!canManageProduction) {
+    if (!canPlanProduction) {
       messageApi.warning('Tài khoản hiện tại chưa có quyền điều độ sản xuất.');
       return;
     }
@@ -3531,7 +3530,7 @@ export default function ProductionPlanningBoard() {
             <Space wrap>
               <Button icon={<ReloadOutlined />} onClick={() => void workspaceQuery.refetch()}>Tải lại</Button>
               <Button onClick={() => void handleSaveCurrentView()} data-testid="production-planning-save-view">Lưu chế độ xem</Button>
-              <Button icon={<CalendarOutlined />} onClick={handleExport} disabled={!cards.length}>Xuất CSV</Button>
+              {canPlanProduction ? <Button icon={<CalendarOutlined />} onClick={handleExport} disabled={!cards.length}>Xuất CSV</Button> : null}
             </Space>
           </div>
           <Alert
@@ -4641,15 +4640,15 @@ export default function ProductionPlanningBoard() {
                 <Text strong>Tín hiệu sàn máy</Text>
                 <Text type="secondary">Báo nghẽn hoặc xác nhận công đoạn đã sẵn sàng chạy lại.</Text>
                 <div style={shopFloorActionGridStyle}>
-                  <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorSignal('MACHINE_DOWN', 'Floor báo máy dừng, cần đổi line', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-machine-down">
+                  <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorSignal('MACHINE_DOWN', 'Floor báo máy dừng, cần đổi line', 'ACTIVE')} disabled={!canPlanProduction || !selectedCards.length} data-testid="production-planning-signal-machine-down">
                     Báo máy dừng
                   </Button>
-                  <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorSignal('WAIT_MATERIAL', 'Floor báo chờ cấp vật tư trước khi vào máy', 'ACTIVE')} disabled={!selectedCards.length} data-testid="production-planning-signal-wait-material">
+                  <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorSignal('WAIT_MATERIAL', 'Floor báo chờ cấp vật tư trước khi vào máy', 'ACTIVE')} disabled={!canPlanProduction || !selectedCards.length} data-testid="production-planning-signal-wait-material">
                     Báo chờ vật tư
                   </Button>
                   <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
                     <span style={touchButtonWrapperStyle}>
-                      <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorSignal('CLEAR_TO_RUN', 'Floor đã sẵn sàng tiếp tục', 'ACTIVE')} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-signal-clear-to-run">
+                      <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorSignal('CLEAR_TO_RUN', 'Floor đã sẵn sàng tiếp tục', 'ACTIVE')} disabled={!canPlanProduction || !selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-signal-clear-to-run">
                         Báo sẵn chạy
                       </Button>
                     </span>
@@ -4664,14 +4663,14 @@ export default function ProductionPlanningBoard() {
                 <div style={shopFloorActionGridStyle}>
                   <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
                     <span style={touchButtonWrapperStyle}>
-                      <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorHandover('READY', 'Đã chốt xong gói bàn giao cho ca sau', { setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-ready">
+                      <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorHandover('READY', 'Đã chốt xong gói bàn giao cho ca sau', { setReady: true })} disabled={!canPlanProduction || !selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-ready">
                         Bàn giao sẵn sàng
                       </Button>
                     </span>
                   </Tooltip>
                   <Tooltip title={blockedSelectedCount ? blockedSelectionMessage : ''}>
                     <span style={touchButtonWrapperStyle}>
-                      <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorHandover('ACCEPTED', 'Người nhận đã tiếp quản và clear cho công đoạn trước', { clearPreviousWait: true, setReady: true })} disabled={!selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-accepted">
+                      <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} onClick={() => void handleSendShopFloorHandover('ACCEPTED', 'Người nhận đã tiếp quản và clear cho công đoạn trước', { clearPreviousWait: true, setReady: true })} disabled={!canPlanProduction || !selectedCards.length || blockedSelectedCount > 0} data-testid="production-planning-handover-accepted">
                         Đã nhận bàn giao
                       </Button>
                     </span>
@@ -4684,7 +4683,7 @@ export default function ProductionPlanningBoard() {
                 <Text strong>Cập nhật kết quả</Text>
                 <Text type="secondary">Skip, done và update cần đủ lý do/số lượng rồi xem tác động trước khi lưu.</Text>
                 <div style={shopFloorActionGridStyle}>
-                  <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} type="primary" onClick={handleOpenBulkModal} disabled={!selectedCards.length} data-testid="production-planning-open-bulk-modal">
+                  <Button size={isTouchViewport ? 'middle' : 'small'} style={touchButtonStyle} type="primary" onClick={handleOpenBulkModal} disabled={!canPlanProduction || !selectedCards.length} data-testid="production-planning-open-bulk-modal">
                     Cập nhật hàng loạt
                   </Button>
                   <Tag color="default" style={isTouchViewport ? { marginInlineEnd: 0, textAlign: 'center', lineHeight: '38px', minHeight: 40 } : undefined}>Chỉ cảnh báo, không chặn workflow</Tag>
@@ -5360,13 +5359,13 @@ export default function ProductionPlanningBoard() {
                     type="primary"
                     onClick={() => void handleApplyQueueSequence()}
                     loading={queueSequenceMutation.isPending}
-                    disabled={!canManageProduction || !queueSequenceChangedRows.length || queueSequenceInvalidRows.length > 0 || queueSequenceDuplicateValues.length > 0}
+                    disabled={!canPlanProduction || !queueSequenceChangedRows.length || queueSequenceInvalidRows.length > 0 || queueSequenceDuplicateValues.length > 0}
                     data-testid="production-planning-queue-apply-sequence"
                   >
                     Áp dụng thứ tự
                   </Button>
                 </Space>
-                {!canManageProduction ? (
+                {!canPlanProduction ? (
                   <Alert type="info" showIcon message="Tài khoản hiện tại chưa có quyền điều độ sản xuất." />
                 ) : queueSequenceDuplicateValues.length ? (
                   <Alert type="warning" showIcon message="Thứ tự dispatch đang bị trùng." description={`Seq trùng: ${queueSequenceDuplicateValues.join(', ')}. Cần đổi về các số khác nhau trước khi áp dụng.`} />
@@ -5400,7 +5399,7 @@ export default function ProductionPlanningBoard() {
               locale={{ emptyText: 'Không còn công đoạn nào trong queue máy theo bộ lọc hiện tại.' }}
               renderItem={(item) => {
                 const editableIndex = queueEditableRows.findIndex((row) => row.key === item.key);
-                const canEditSequenceRow = canManageProduction && item.canSequence;
+                const canEditSequenceRow = canPlanProduction && item.canSequence;
                 return (
                   <List.Item
                     data-testid="production-planning-queue-sequence-row"

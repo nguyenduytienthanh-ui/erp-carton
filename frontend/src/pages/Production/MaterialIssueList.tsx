@@ -28,6 +28,11 @@ import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { PAGES } from '../../utils/constants';
 import { getToastMessage } from '../../shared/apiError';
 import { downloadCSV } from '../../utils/csvExport';
+import {
+  canCancelProductionOrders,
+  canIssueProductionMaterials,
+  canManageProductionData,
+} from '../../utils/authz';
 
 type Filters = {
   status?: ProductionIssueStatus;
@@ -78,6 +83,8 @@ const SUMMARY_TILE_STYLE = {
   height: '100%',
   borderRadius: 14,
 };
+const PRODUCTION_POSTED_CANCEL_BLOCK_REASON =
+  'Hủy trực tiếp chứng từ sản xuất đã post đang bị khóa để bảo toàn ledger. Cần package immutable reversal riêng.';
 const LANE_LABELS: Record<MaterialIssueLaneFilter, string> = {
   ALL: 'Toàn bộ chứng từ',
   POSTED_TODAY: 'Cấp hôm nay',
@@ -140,6 +147,9 @@ export default function MaterialIssueList() {
   const { config, saveConfig } = useUserPreferences(PAGES.PRODUCTION_ISSUES);
   const configRecord = config as Record<string, unknown>;
   const pageSize = Number(configRecord?.pageSize ?? 20);
+  const canManageProduction = canManageProductionData();
+  const canIssueProduction = canIssueProductionMaterials();
+  const canCancelProduction = canCancelProductionOrders();
   const namedPresets = useMemo(() => {
     const raw = configRecord?.saved_views;
     if (!Array.isArray(raw)) return [] as MaterialIssueNamedPreset[];
@@ -530,19 +540,16 @@ export default function MaterialIssueList() {
           <Button data-testid={`material-issue-view-${row.id}`} size="small" icon={<EyeOutlined />} onClick={() => setDetailIssue(row)}>
             Xem
           </Button>
-          {row.status === 'POSTED' ? (
+          {canCancelProduction && row.status === 'POSTED' ? (
             <Button
               data-testid={`material-issue-cancel-${row.id}`}
               size="small"
               danger
+              disabled
               icon={<StopOutlined />}
-              title="Hủy chứng từ và hoàn tác số lượng vật tư đã cấp"
-              onClick={() => {
-                cancelForm.setFieldsValue({ reason: '' });
-                setCancelTarget(row);
-              }}
+              title={PRODUCTION_POSTED_CANCEL_BLOCK_REASON}
             >
-              Hủy chứng từ
+              Đã khóa hủy
             </Button>
           ) : null}
         </Space>
@@ -598,10 +605,10 @@ export default function MaterialIssueList() {
             </Text>
           </div>
           <Space wrap>
-            <Button icon={<DownloadOutlined />} onClick={handleExportCSV} disabled={visibleRows.length === 0}>
+            {canManageProduction ? <Button icon={<DownloadOutlined />} onClick={handleExportCSV} disabled={visibleRows.length === 0}>
               Xuất CSV
-            </Button>
-            <Button
+            </Button> : null}
+            {canIssueProduction ? <Button
               type="primary"
               icon={<PlusOutlined />}
               onClick={() => {
@@ -615,7 +622,7 @@ export default function MaterialIssueList() {
               }}
             >
               Phát hành
-            </Button>
+            </Button> : null}
           </Space>
         </div>
 
@@ -983,6 +990,9 @@ export default function MaterialIssueList() {
                 ) : (
                   <Tag>Không còn bước tiếp theo</Tag>
                 )}
+                {nextStatesQuery.data?.cancel_block_reason ? (
+                  <Tag color="red">{nextStatesQuery.data.cancel_block_reason}</Tag>
+                ) : null}
               </div>
             </Card>
 

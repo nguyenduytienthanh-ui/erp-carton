@@ -1411,4 +1411,5 @@ export interface ProductionApprovalHistoryItem {
 export interface ProductionWorkflowStateSummary {
   current: string;
   next_states: string[];
+  cancel_block_reason?: string;
 }

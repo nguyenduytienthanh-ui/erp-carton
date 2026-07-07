@@ -24,6 +24,15 @@ import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
 import { PAGES } from '../../utils/constants';
 import { getToastMessage } from '../../shared/apiError';
 import { downloadCSV } from '../../utils/csvExport';
+import {
+  canApproveProductionOrders,
+  canCancelProductionOrders,
+  canIssueProductionMaterials,
+  canManageProductionData,
+  canReceiveProductionOutput,
+  canReleaseProductionOrders,
+  canSubmitProductionOrders,
+} from '../../utils/authz';
 import ProductionOrderForm from './ProductionOrderForm';
 
 type Filters = { status?: ProductionOrderStatus; source_type?: ProductionOrderSourceFilter };
@@ -332,6 +341,13 @@ export default function ProductionOrderList() {
   const { config, saveConfig } = useUserPreferences(PAGES.PRODUCTION_ORDERS);
   const configRecord = config as Record<string, unknown>;
   const pageSize = Number(configRecord?.pageSize ?? 20);
+  const canManageProduction = canManageProductionData();
+  const canSubmitProduction = canSubmitProductionOrders();
+  const canApproveProduction = canApproveProductionOrders();
+  const canReleaseProduction = canReleaseProductionOrders();
+  const canIssueProduction = canIssueProductionMaterials();
+  const canReceiveProduction = canReceiveProductionOutput();
+  const canCancelProduction = canCancelProductionOrders();
   const namedPresets = useMemo(() => {
     const raw = configRecord?.saved_views;
     if (!Array.isArray(raw)) return [] as ProductionOrderNamedPreset[];
@@ -784,21 +800,23 @@ export default function ProductionOrderList() {
       render: (_, row) => (
         <Space wrap size="small">
           <Button data-testid={`production-order-view-${row.id}`} size="small" icon={<EyeOutlined />} onClick={() => setDetailOrderId(row.id)}>Xem</Button>
-          {canEditOrder(row) ? <Button data-testid={`production-order-edit-${row.id}`} size="small" icon={<EditOutlined />} onClick={() => { setEditingOrder(row); setFormOpen(true); }}>Sửa</Button> : null}
-          {row.status === 'DRAFT' ? <>
+          {canManageProduction && canEditOrder(row) ? <Button data-testid={`production-order-edit-${row.id}`} size="small" icon={<EditOutlined />} onClick={() => { setEditingOrder(row); setFormOpen(true); }}>Sửa</Button> : null}
+          {canManageProduction && row.status === 'DRAFT' ? (
             <Button data-testid={`production-order-delete-${row.id}`} size="small" danger icon={<DeleteOutlined />} onClick={() => Modal.confirm({ title: 'Xóa lệnh sản xuất', content: `Xóa lệnh ${row.code}?`, okText: 'Xóa', cancelText: 'Đóng', okButtonProps: { danger: true }, onOk: () => deleteMutation.mutate(row.id) })}>Xóa</Button>
+          ) : null}
+          {canSubmitProduction && row.status === 'DRAFT' ? (
             <Button data-testid={`production-order-submit-${row.id}`} size="small" type="primary" icon={<UploadOutlined />} onClick={() => submitMutation.mutate(row.id)}>Gửi duyệt</Button>
-          </> : null}
-          {row.status === 'SUBMITTED' ? <>
+          ) : null}
+          {canApproveProduction && row.status === 'SUBMITTED' ? <>
             <Button data-testid={`production-order-approve-${row.id}`} size="small" type="primary" icon={<CheckCircleOutlined />} onClick={() => approveMutation.mutate(row.id)}>Duyệt</Button>
             <Button data-testid={`production-order-reject-${row.id}`} size="small" onClick={() => { actionForm.setFieldsValue({ reason: '' }); setActionModal({ type: 'reject', order: row }); }}>Từ chối</Button>
           </> : null}
-          {row.status === 'APPROVED' ? <Button data-testid={`production-order-release-${row.id}`} size="small" type="primary" icon={<ToolOutlined />} onClick={() => releaseMutation.mutate(row.id)}>Phát lệnh</Button> : null}
+          {canReleaseProduction && row.status === 'APPROVED' ? <Button data-testid={`production-order-release-${row.id}`} size="small" type="primary" icon={<ToolOutlined />} onClick={() => releaseMutation.mutate(row.id)}>Phát lệnh</Button> : null}
           {['RELEASED', 'IN_PROGRESS'].includes(row.status) ? <>
-            <Button data-testid={`production-order-issue-${row.id}`} size="small" title="Cấp toàn bộ vật tư còn thiếu theo định mức của lệnh này" onClick={() => issueMutation.mutate(row.id)}>Cấp vật tư</Button>
-            <Button data-testid={`production-order-receive-${row.id}`} size="small" type="primary" icon={<InboxOutlined />} title="Ghi nhận nhập kho thành phẩm cho lệnh này" onClick={() => receiveMutation.mutate(row.id)}>Nhập TP</Button>
+            {canIssueProduction ? <Button data-testid={`production-order-issue-${row.id}`} size="small" title="Cấp toàn bộ vật tư còn thiếu theo định mức của lệnh này" onClick={() => issueMutation.mutate(row.id)}>Cấp vật tư</Button> : null}
+            {canReceiveProduction ? <Button data-testid={`production-order-receive-${row.id}`} size="small" type="primary" icon={<InboxOutlined />} title="Ghi nhận nhập kho thành phẩm cho lệnh này" onClick={() => receiveMutation.mutate(row.id)}>Nhập TP</Button> : null}
           </> : null}
-          {!['COMPLETED', 'CANCELLED'].includes(row.status) ? <Button data-testid={`production-order-cancel-${row.id}`} size="small" danger icon={<StopOutlined />} onClick={() => { actionForm.setFieldsValue({ reason: '' }); setActionModal({ type: 'cancel', order: row }); }}>Hủy</Button> : null}
+          {canCancelProduction && !['COMPLETED', 'CANCELLED'].includes(row.status) ? <Button data-testid={`production-order-cancel-${row.id}`} size="small" danger icon={<StopOutlined />} onClick={() => { actionForm.setFieldsValue({ reason: '' }); setActionModal({ type: 'cancel', order: row }); }}>Hủy</Button> : null}
         </Space>
       ),
     },
@@ -850,8 +868,8 @@ export default function ProductionOrderList() {
             <Text type="secondary">Theo dõi luồng duyệt, phát lệnh, cấp vật tư và nhập thành phẩm trên cùng một không gian điều phối sản xuất.</Text>
           </div>
           <Space wrap>
-            <Button icon={<DownloadOutlined />} onClick={handleExportCSV} disabled={!visibleRows.length}>Xuất CSV</Button>
-            <Button data-testid="production-orders-open-create" type="primary" icon={<PlusOutlined />} onClick={() => { setEditingOrder(null); setFormOpen(true); }}>Tạo lệnh nháp</Button>
+            {canManageProduction ? <Button icon={<DownloadOutlined />} onClick={handleExportCSV} disabled={!visibleRows.length}>Xuất CSV</Button> : null}
+            {canManageProduction ? <Button data-testid="production-orders-open-create" type="primary" icon={<PlusOutlined />} onClick={() => { setEditingOrder(null); setFormOpen(true); }}>Tạo lệnh nháp</Button> : null}
           </Space>
         </div>
         <Alert showIcon type={statusAlert.type} message={statusAlert.message} />

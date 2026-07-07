@@ -52,6 +52,7 @@ import {
   canManageStocktake,
   canViewInventoryData,
   canManageProductionData,
+  canViewProductionData,
   canViewQualityData,
   canAccessProductionCenter,
   canAccessMaterialIssues,
@@ -235,13 +236,14 @@ const MainLayout = () => {
   const canManageStocktakeMenu = canManageStocktake();
   const canViewPurchasing = canViewPurchasingData();
   const canManageProduction = canManageProductionData();
+  const canViewProduction = canViewProductionData();
   const canViewQuality = canViewQualityData();
   const canAccessProduction = canAccessProductionCenter();
   const canAccessMaterialIssueRoute = canAccessMaterialIssues();
   const canAccessProductionReceiptRoute = canAccessProductionReceipts();
   const canManageWorkforce = canManageWorkforceData();
   const canUseScanCenter = canViewInventory;
-  const canViewSalesFulfillmentCenter = canViewSalesOrders || canViewPurchasing || canManageProduction || canViewReports;
+  const canViewSalesFulfillmentCenter = canViewSalesOrders || canViewPurchasing || canViewProduction || canViewReports;
   const canViewApprovalTower = canViewApprovalControlTower();
   const canManageModulePermissions = canManageModulePermissionSettings();
   const canManageAccessExceptions = canManageUserAccessExceptions();
@@ -389,6 +391,7 @@ const MainLayout = () => {
     canAccessProductionCenter: canAccessProduction,
     canAccessMaterialIssues: canAccessMaterialIssueRoute,
     canAccessProductionReceipts: canAccessProductionReceiptRoute,
+    canViewProduction,
     canManageProduction,
     canViewQuality,
     canViewInventory,
@@ -444,6 +447,7 @@ const MainLayout = () => {
     canViewAdminObservability,
     canViewOps,
     canViewOpsLog,
+    canViewProduction,
     canViewQuality,
     canViewRbacAudit,
     canViewReports,
@@ -560,7 +564,7 @@ const MainLayout = () => {
       );
     }
 
-    if (canManageProduction) {
+    if (canViewProduction) {
       shortcuts.push(
         {
           key: 'production-demands',
@@ -620,8 +624,8 @@ const MainLayout = () => {
   }, [
     canManageFinance,
     canManageOnboarding,
-    canManageProduction,
     canManageWorkforce,
+    canViewProduction,
     canViewSalesFulfillmentCenter,
     canViewSalesOrders,
   ]);
@@ -844,12 +848,12 @@ const MainLayout = () => {
         ] : []),
       ],
     } : null,
-    (canAccessProduction || canAccessMaterialIssueRoute || canAccessProductionReceiptRoute || canManageProduction) ? {
+    (canAccessProduction || canAccessMaterialIssueRoute || canAccessProductionReceiptRoute || canViewProduction) ? {
       key: 'production-group',
       icon: <BuildOutlined />,
       label: 'Sản xuất',
       children: [
-        ...(canManageProduction ? [{
+        ...(canViewProduction ? [{
           key: '/production-demands',
           label: renderMenuLabel('/production-demands', 'Nhu cầu sản xuất'),
         }] : []),
@@ -857,11 +861,11 @@ const MainLayout = () => {
           key: '/production-orders',
           label: renderMenuLabel('/production-orders', 'Lệnh sản xuất'),
         }] : []),
-        ...(canManageProduction ? [{
+        ...(canViewProduction ? [{
           key: '/production-planning',
           label: renderMenuLabel('/production-planning', 'Điều độ sản xuất'),
         }] : []),
-        ...(canManageProduction ? [{
+        ...(canViewProduction ? [{
           key: '/production-resources',
           label: renderMenuLabel('/production-resources', 'Danh mục máy/tổ'),
         }] : []),

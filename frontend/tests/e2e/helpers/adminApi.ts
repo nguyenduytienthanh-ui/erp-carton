@@ -32,7 +32,10 @@ export async function apiPost<T = unknown>(
     headers: { Authorization: `Bearer ${token}` },
     data,
   });
-  expect(response.ok()).toBeTruthy();
+  if (!response.ok()) {
+    const body = await response.text();
+    expect(response.ok(), `POST ${path} failed ${response.status()}: ${body.slice(0, 800)}`).toBeTruthy();
+  }
   return response.json() as Promise<T>;
 }
 

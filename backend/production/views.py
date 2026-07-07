@@ -16,7 +16,6 @@ from unidecode import unidecode
 
 from core.mixins import get_client_ip
 from core.models import ApprovalHistory, AuditLog
-from core.permissions import check_action_permission
 from core.workflow_services import generate_tasks_for_entity
 from production.models import (
     ProductionDemand,
@@ -40,6 +39,7 @@ from production.models import (
     ProductionWorkCenter,
 )
 from production.permissions import (
+    UNSAFE_PRODUCTION_CANCEL_MESSAGE,
     can_approve_production_order,
     can_cancel_production_issue,
     can_cancel_production_order,
@@ -47,10 +47,13 @@ from production.permissions import (
     can_edit_production_order,
     can_issue_materials,
     can_manage_production,
+    can_plan_production,
+    can_request_production_cancel,
     can_receive_output,
     can_reject_production_order,
     can_release_production_order,
     can_submit_production_order,
+    can_view_production,
 )
 from production.serializers import (
     ProductionDemandCreateOrderSerializer,
@@ -90,40 +93,16 @@ from production.services import (
 )
 
 
-def _user_role_names(user):
-    try:
-        pairs = user.roles.values_list('name', 'code')
-    except Exception:
-        return set()
-    names = set()
-    for name, code in pairs:
-        if name:
-            names.add(str(name).strip().lower())
-        if code:
-            names.add(str(code).strip().lower())
-    return names
-
-
 def _can_manage_production(user):
     if not user or not user.is_authenticated:
         return False
     if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
         return True
-    if check_action_permission(user, 'PRODUCTION', 'MANAGE', strict=True):
-        return True
-    return any(
-        role in {
-            'admin',
-            'manager',
-            'ops-manager',
-            'operation-manager',
-            'product-manager',
-            'finance-manager',
-            'quan-ly',
-            'quanly',
-        }
-        for role in _user_role_names(user)
-    )
+    return can_manage_production(user)
+
+
+def _can_view_production(user):
+    return can_view_production(user)
 
 
 def _log_production_audit(request, *, action, entity_type, entity_id, entity_code, old_values, new_values):
@@ -3699,7 +3678,7 @@ class SearchTextMixin:
     search_text_field = 'search_text'
 
     def check_module_read_permission(self):
-        if not _can_manage_production(self.request.user):
+        if not _can_view_production(self.request.user):
             raise PermissionDenied('Bạn không có quyền xem dữ liệu sản xuất.')
 
     def apply_search(self, queryset):
@@ -3832,6 +3811,8 @@ class ProductionWorkCenterViewSet(viewsets.ModelViewSet):
     ordering = ['sort_order', 'name', 'code']
 
     def get_queryset(self):
+        if not _can_view_production(self.request.user):
+            raise PermissionDenied('Bạn không có quyền xem danh mục tổ sản xuất.')
         queryset = ProductionWorkCenter.objects.all()
         is_active = _parse_bool_filter(self.request.query_params.get('is_active'))
         if is_active is not None:
@@ -3903,6 +3884,8 @@ class ProductionMachineViewSet(viewsets.ModelViewSet):
     ordering = ['work_center__sort_order', 'work_center__name', 'sort_order', 'name', 'code']
 
     def get_queryset(self):
+        if not _can_view_production(self.request.user):
+            raise PermissionDenied('Bạn không có quyền xem danh mục máy sản xuất.')
         queryset = ProductionMachine.objects.select_related('work_center')
         is_active = _parse_bool_filter(self.request.query_params.get('is_active'))
         if is_active is not None:
@@ -4155,9 +4138,6 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = ProductionOrder.objects.select_related(
             'production_demand',
-            'sales_order',
-            'sales_order__customer',
-            'sales_order_line',
             'product',
             'target_warehouse',
             'target_location',
@@ -4321,6 +4301,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def capacity_options(self, request):
+        if not _can_view_production(request.user):
+            raise PermissionDenied('Bạn không có quyền xem dữ liệu sản xuất.')
         work_centers = ProductionWorkCenter.objects.filter(is_active=True).order_by('sort_order', 'name', 'code')
         machines = (
             ProductionMachine.objects.select_related('work_center')
@@ -4518,6 +4500,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def update_operation(self, request, pk=None):
+        if not can_plan_production(request.user):
+            return Response({'error': 'Không có quyền cập nhật công đoạn sản xuất.'}, status=status.HTTP_403_FORBIDDEN)
         order = self.get_object()
         if order.status not in {ProductionOrderStatus.RELEASED, ProductionOrderStatus.IN_PROGRESS}:
             return Response({'error': 'Chỉ lệnh đã phát lệnh hoặc đang làm mới được cập nhật công đoạn.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -4708,7 +4692,7 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def skip_operation(self, request, pk=None):
-        if not _can_manage_production(request.user):
+        if not can_plan_production(request.user):
             return Response({'error': 'Khong co quyen bo qua cong doan san xuat.'}, status=status.HTTP_403_FORBIDDEN)
         order = self.get_object()
         if order.status not in {ProductionOrderStatus.RELEASED, ProductionOrderStatus.IN_PROGRESS}:
@@ -5101,6 +5085,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def preview_operation_update(self, request, pk=None):
+        if not can_plan_production(request.user):
+            return Response({'error': 'Khong co quyen mo phong cap nhat cong doan san xuat.'}, status=status.HTTP_403_FORBIDDEN)
         order = self.get_object()
         operation_id = request.data.get('operation_id')
         if not operation_id:
@@ -5189,6 +5175,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def preview_bulk_update_operations(self, request):
+        if not can_plan_production(request.user):
+            return Response({'error': 'Khong co quyen mo phong cap nhat cong doan san xuat.'}, status=status.HTTP_403_FORBIDDEN)
         items = request.data.get('items')
         changes = request.data.get('changes') or {}
         if not isinstance(changes, dict):
@@ -5235,6 +5223,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def preview_rebalance_suggestions(self, request):
+        if not can_plan_production(request.user):
+            return Response({'error': 'Khong co quyen mo phong can tai san xuat.'}, status=status.HTTP_403_FORBIDDEN)
         try:
             change_items, _order_ids = _normalize_operation_change_items(
                 request.data.get('items'),
@@ -5248,6 +5238,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def bulk_update_operations(self, request):
+        if not can_plan_production(request.user):
+            return Response({'error': 'Khong co quyen cap nhat cong doan san xuat.'}, status=status.HTTP_403_FORBIDDEN)
         items = request.data.get('items')
         changes = request.data.get('changes') or {}
         if not isinstance(items, list) or not items:
@@ -5303,6 +5295,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def apply_rebalance_suggestions(self, request):
+        if not can_plan_production(request.user):
+            return Response({'error': 'Khong co quyen ap dung dieu do san xuat.'}, status=status.HTTP_403_FORBIDDEN)
         try:
             change_items, _order_ids = _normalize_operation_change_items(
                 request.data.get('items'),
@@ -5321,6 +5315,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def shop_floor_signal(self, request):
+        if not can_plan_production(request.user):
+            return Response({'error': 'Khong co quyen cap nhat tin hieu san xuat.'}, status=status.HTTP_403_FORBIDDEN)
         signal_code = str(request.data.get('signal_code') or '').strip().upper()
         dispatch_owner = str(request.data.get('dispatch_owner') or '').strip()
         note = str(request.data.get('note') or '').strip()
@@ -5470,6 +5466,8 @@ class ProductionOrderViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def shop_floor_handover(self, request):
+        if not can_plan_production(request.user):
+            return Response({'error': 'Khong co quyen chot handover san xuat.'}, status=status.HTTP_403_FORBIDDEN)
         handover_status = str(request.data.get('handover_status') or '').strip().upper()
         dispatch_owner = str(request.data.get('dispatch_owner') or '').strip()
         handover_receiver = str(request.data.get('handover_receiver') or '').strip()
@@ -6387,8 +6385,10 @@ class ProductionIssueViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         issue = self.get_object()
-        if not can_cancel_production_issue(request.user, issue):
+        if not can_request_production_cancel(request.user):
             return Response({'error': 'Không có quyền hoặc trạng thái không hợp lệ.'}, status=status.HTTP_403_FORBIDDEN)
+        if not can_cancel_production_issue(request.user, issue):
+            return Response({'error': UNSAFE_PRODUCTION_CANCEL_MESSAGE}, status=status.HTTP_409_CONFLICT)
         reason = (request.data.get('reason') or request.data.get('cancel_reason') or '').strip()
         if not reason:
             return Response({'error': 'Bắt buộc nhập lý do hủy cấp vật tư.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -6445,10 +6445,13 @@ class ProductionIssueViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
     def next_states(self, request, pk=None):
         issue = self.get_object()
         mapping = {
-            ProductionIssueStatus.POSTED: [ProductionIssueStatus.CANCELLED],
+            ProductionIssueStatus.POSTED: [],
             ProductionIssueStatus.CANCELLED: [],
         }
-        return Response({'current': issue.status, 'next_states': mapping.get(issue.status, [])})
+        response = {'current': issue.status, 'next_states': mapping.get(issue.status, [])}
+        if issue.status == ProductionIssueStatus.POSTED:
+            response['cancel_block_reason'] = UNSAFE_PRODUCTION_CANCEL_MESSAGE
+        return Response(response)
 
 
 class ProductionReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
@@ -6489,8 +6492,10 @@ class ProductionReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         receipt = self.get_object()
-        if not can_cancel_production_receipt(request.user, receipt):
+        if not can_request_production_cancel(request.user):
             return Response({'error': 'Không có quyền hoặc trạng thái không hợp lệ.'}, status=status.HTTP_403_FORBIDDEN)
+        if not can_cancel_production_receipt(request.user, receipt):
+            return Response({'error': UNSAFE_PRODUCTION_CANCEL_MESSAGE}, status=status.HTTP_409_CONFLICT)
         reason = (request.data.get('reason') or request.data.get('cancel_reason') or '').strip()
         if not reason:
             return Response({'error': 'Bắt buộc nhập lý do hủy nhập thành phẩm.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -6605,7 +6610,10 @@ class ProductionReceiptViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
     def next_states(self, request, pk=None):
         receipt = self.get_object()
         mapping = {
-            ProductionReceiptStatus.POSTED: [ProductionReceiptStatus.CANCELLED],
+            ProductionReceiptStatus.POSTED: [],
             ProductionReceiptStatus.CANCELLED: [],
         }
-        return Response({'current': receipt.status, 'next_states': mapping.get(receipt.status, [])})
+        response = {'current': receipt.status, 'next_states': mapping.get(receipt.status, [])}
+        if receipt.status == ProductionReceiptStatus.POSTED:
+            response['cancel_block_reason'] = UNSAFE_PRODUCTION_CANCEL_MESSAGE
+        return Response(response)

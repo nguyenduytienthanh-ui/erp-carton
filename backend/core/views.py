@@ -74,6 +74,7 @@ from .permissions import (
     user_has_customer_permission,
     user_has_inventory_permission,
     user_has_purchasing_permission,
+    user_has_production_permission,
     user_has_supplier_permission,
 )
 
@@ -796,24 +797,17 @@ def _can_manage_production_data(user):
         return False
     if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
         return True
-    if check_action_permission(user, 'PRODUCTION', 'MANAGE', strict=True):
+    return check_action_permission(user, 'PRODUCTION', 'MANAGE', strict=True)
+
+
+def _can_view_production_data(user):
+    if _can_manage_production_data(user):
         return True
-    return _has_any_role_name(user, {'admin', 'manager', 'operation-manager', 'ops-manager', 'product-manager', 'finance-manager', 'quan-ly', 'quanly'})
+    return user_has_production_permission(user, 'VIEW', strict=True)
 
 
 def _can_access_production_center(user):
-    if _can_manage_production_data(user):
-        return True
-    if not user or not user.is_authenticated:
-        return False
-    if (
-        check_action_permission(user, 'PRODUCTIONORDER', 'SUBMIT', strict=True)
-        or check_action_permission(user, 'PRODUCTIONORDER', 'APPROVE', strict=True)
-        or check_action_permission(user, 'PRODUCTIONORDER', 'RELEASE', strict=True)
-        or check_action_permission(user, 'PRODUCTIONORDER', 'ISSUE', strict=True)
-        or check_action_permission(user, 'PRODUCTIONORDER', 'RECEIVE', strict=True)
-        or check_action_permission(user, 'PRODUCTIONORDER', 'CANCEL', strict=True)
-    ):
+    if _can_view_production_data(user):
         return True
     return False
 

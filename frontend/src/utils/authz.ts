@@ -272,16 +272,37 @@ export function canManageProductionData(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
   if (hasPermission(authz.permissions, 'PRODUCTION', 'MANAGE')) return true;
-  return hasAnyRole(authz.roleNames, [
-    'admin',
-    'manager',
-    'operation-manager',
-    'ops-manager',
-    'product-manager',
-    'finance-manager',
-    'quan-ly',
-    'quanly',
-  ]);
+  return false;
+}
+
+export function canViewProductionData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  return (
+    hasPermission(authz.permissions, 'PRODUCTION', 'VIEW')
+    || hasPermission(authz.permissions, 'PRODUCTION', 'MANAGE')
+    || hasPermission(authz.permissions, 'PRODUCTION', 'PLAN')
+    || hasPermission(authz.permissions, 'PRODUCTION', 'ISSUE')
+    || hasPermission(authz.permissions, 'PRODUCTION', 'RECEIVE')
+    || hasPermission(authz.permissions, 'PRODUCTION', 'CANCEL')
+    || hasPermission(authz.permissions, 'PRODUCTIONORDER', 'SUBMIT')
+    || hasPermission(authz.permissions, 'PRODUCTIONORDER', 'APPROVE')
+    || hasPermission(authz.permissions, 'PRODUCTIONORDER', 'REJECT')
+    || hasPermission(authz.permissions, 'PRODUCTIONORDER', 'RELEASE')
+    || hasPermission(authz.permissions, 'PRODUCTIONORDER', 'ISSUE')
+    || hasPermission(authz.permissions, 'PRODUCTIONORDER', 'RECEIVE')
+    || hasPermission(authz.permissions, 'PRODUCTIONORDER', 'CANCEL')
+  );
+}
+
+export function canPlanProductionOrders(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  return (
+    hasPermission(authz.permissions, 'PRODUCTION', 'PLAN')
+    || hasPermission(authz.permissions, 'PRODUCTION', 'MANAGE')
+    || hasPermission(authz.permissions, 'PRODUCTIONORDER', 'RELEASE')
+  );
 }
 
 export function canViewQualityData(): boolean {
@@ -303,15 +324,7 @@ export function canSubmitProductionOrders(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
   if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'SUBMIT')) return true;
-  return hasAnyRole(authz.roleNames, [
-    'admin',
-    'manager',
-    'operation-manager',
-    'ops-manager',
-    'product-manager',
-    'quan-ly',
-    'quanly',
-  ]);
+  return hasPermission(authz.permissions, 'PRODUCTION', 'MANAGE');
 }
 
 export function canApproveProductionOrders(): boolean {
@@ -319,100 +332,51 @@ export function canApproveProductionOrders(): boolean {
   if (authz.isStaff || authz.isSuperuser) return true;
   if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'APPROVE')) return true;
   if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'REJECT')) return true;
-  return hasAnyRole(authz.roleNames, [
-    'admin',
-    'manager',
-    'finance-manager',
-    'quan-ly',
-    'quanly',
-  ]);
+  return hasPermission(authz.permissions, 'PRODUCTION', 'MANAGE');
 }
 
 export function canReleaseProductionOrders(): boolean {
-  const authz = getCurrentUserAuthz();
-  if (authz.isStaff || authz.isSuperuser) return true;
-  if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'RELEASE')) return true;
-  return hasAnyRole(authz.roleNames, [
-    'admin',
-    'manager',
-    'operation-manager',
-    'ops-manager',
-    'product-manager',
-    'quan-ly',
-    'quanly',
-  ]);
+  return canPlanProductionOrders();
 }
 
 export function canIssueProductionMaterials(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTION', 'ISSUE')) return true;
   if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'ISSUE')) return true;
-  return hasAnyRole(authz.roleNames, [
-    'admin',
-    'manager',
-    'operation-manager',
-    'ops-manager',
-    'product-manager',
-    'quan-ly',
-    'quanly',
-  ]);
+  return hasPermission(authz.permissions, 'PRODUCTION', 'MANAGE');
 }
 
 export function canReceiveProductionOutput(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTION', 'RECEIVE')) return true;
   if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'RECEIVE')) return true;
-  return hasAnyRole(authz.roleNames, [
-    'admin',
-    'manager',
-    'operation-manager',
-    'ops-manager',
-    'product-manager',
-    'quan-ly',
-    'quanly',
-  ]);
+  return hasPermission(authz.permissions, 'PRODUCTION', 'MANAGE');
 }
 
 export function canCancelProductionOrders(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
+  if (hasPermission(authz.permissions, 'PRODUCTION', 'CANCEL')) return true;
   if (hasPermission(authz.permissions, 'PRODUCTIONORDER', 'CANCEL')) return true;
-  return hasAnyRole(authz.roleNames, [
-    'admin',
-    'manager',
-    'finance-manager',
-    'quan-ly',
-    'quanly',
-  ]);
+  return hasPermission(authz.permissions, 'PRODUCTION', 'MANAGE');
 }
 
 export function canAccessProductionCenter(): boolean {
-  return (
-    canManageProductionData()
-    || canSubmitProductionOrders()
-    || canApproveProductionOrders()
-    || canReleaseProductionOrders()
-    || canIssueProductionMaterials()
-    || canReceiveProductionOutput()
-    || canCancelProductionOrders()
-  );
+  return canViewProductionData();
 }
 
 export function canAccessMaterialIssues(): boolean {
-  return canManageProductionData() || canIssueProductionMaterials();
+  return canViewProductionData() || canIssueProductionMaterials();
 }
 
 export function canAccessProductionReceipts(): boolean {
-  return canManageProductionData() || canReceiveProductionOutput();
+  return canViewProductionData() || canReceiveProductionOutput();
 }
 
 export function canUpdateProductionOperations(): boolean {
-  return (
-    canManageProductionData()
-    || canReleaseProductionOrders()
-    || canIssueProductionMaterials()
-    || canReceiveProductionOutput()
-  );
+  return canPlanProductionOrders();
 }
 
 export function canUseShipmentExecutionWorkspace(): boolean {

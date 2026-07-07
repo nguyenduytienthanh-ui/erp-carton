@@ -244,6 +244,79 @@ INVENTORY_VIEW_IMPLIED_PERMISSIONS = tuple(
     for row in INVENTORY_PERMISSION_DEFINITIONS
 )
 
+PRODUCTION_PERMISSION_DEFINITIONS = (
+    {
+        'field': 'production_view',
+        'label': 'Sản xuất - xem',
+        'resource': 'PRODUCTION',
+        'action': 'VIEW',
+        'changed_type': 'production_view',
+        'code': 'PRODUCTION_VIEW',
+        'name': 'View production module',
+    },
+    {
+        'field': 'production_manage',
+        'label': 'Sản xuất - quản lý',
+        'resource': 'PRODUCTION',
+        'action': 'MANAGE',
+        'changed_type': 'production_manage',
+        'code': 'PRODUCTION_MANAGE',
+        'name': 'Manage production module',
+    },
+    {
+        'field': 'production_plan',
+        'label': 'Sản xuất - lập kế hoạch',
+        'resource': 'PRODUCTION',
+        'action': 'PLAN',
+        'changed_type': 'production_plan',
+        'code': 'PRODUCTION_PLAN',
+        'name': 'Plan and release production work',
+    },
+    {
+        'field': 'production_issue',
+        'label': 'Sản xuất - cấp vật tư',
+        'resource': 'PRODUCTION',
+        'action': 'ISSUE',
+        'changed_type': 'production_issue',
+        'code': 'PRODUCTION_ISSUE',
+        'name': 'Issue materials for production',
+    },
+    {
+        'field': 'production_receive',
+        'label': 'Sản xuất - nhập thành phẩm',
+        'resource': 'PRODUCTION',
+        'action': 'RECEIVE',
+        'changed_type': 'production_receive',
+        'code': 'PRODUCTION_RECEIVE',
+        'name': 'Receive finished goods from production',
+    },
+    {
+        'field': 'production_cancel',
+        'label': 'Sản xuất - hủy an toàn',
+        'resource': 'PRODUCTION',
+        'action': 'CANCEL',
+        'changed_type': 'production_cancel',
+        'code': 'PRODUCTION_CANCEL',
+        'name': 'Cancel safe production documents',
+    },
+)
+
+PRODUCTION_VIEW_IMPLIED_PERMISSIONS = (
+    ('PRODUCTION', 'VIEW'),
+    ('PRODUCTION', 'MANAGE'),
+    ('PRODUCTION', 'PLAN'),
+    ('PRODUCTION', 'ISSUE'),
+    ('PRODUCTION', 'RECEIVE'),
+    ('PRODUCTION', 'CANCEL'),
+    ('PRODUCTIONORDER', 'SUBMIT'),
+    ('PRODUCTIONORDER', 'APPROVE'),
+    ('PRODUCTIONORDER', 'REJECT'),
+    ('PRODUCTIONORDER', 'RELEASE'),
+    ('PRODUCTIONORDER', 'ISSUE'),
+    ('PRODUCTIONORDER', 'RECEIVE'),
+    ('PRODUCTIONORDER', 'CANCEL'),
+)
+
 
 class ResourceActionPermission(BasePermission):
     """
@@ -331,3 +404,41 @@ def user_has_inventory_permission(user, action, *, strict=True):
             for resource, permission_action in INVENTORY_VIEW_IMPLIED_PERMISSIONS
         )
     return check_action_permission(user, 'INVENTORY', normalized_action, strict=strict)
+
+
+def user_has_production_permission(user, action, *, strict=True):
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    normalized_action = str(action or '').strip().upper()
+    if normalized_action == 'VIEW':
+        return any(
+            check_action_permission(user, resource, permission_action, strict=True)
+            for resource, permission_action in PRODUCTION_VIEW_IMPLIED_PERMISSIONS
+        )
+    if normalized_action == 'PLAN':
+        return (
+            check_action_permission(user, 'PRODUCTION', 'PLAN', strict=strict)
+            or check_action_permission(user, 'PRODUCTIONORDER', 'RELEASE', strict=True)
+            or check_action_permission(user, 'PRODUCTION', 'MANAGE', strict=True)
+        )
+    if normalized_action == 'ISSUE':
+        return (
+            check_action_permission(user, 'PRODUCTION', 'ISSUE', strict=strict)
+            or check_action_permission(user, 'PRODUCTIONORDER', 'ISSUE', strict=True)
+            or check_action_permission(user, 'PRODUCTION', 'MANAGE', strict=True)
+        )
+    if normalized_action == 'RECEIVE':
+        return (
+            check_action_permission(user, 'PRODUCTION', 'RECEIVE', strict=strict)
+            or check_action_permission(user, 'PRODUCTIONORDER', 'RECEIVE', strict=True)
+            or check_action_permission(user, 'PRODUCTION', 'MANAGE', strict=True)
+        )
+    if normalized_action == 'CANCEL':
+        return (
+            check_action_permission(user, 'PRODUCTION', 'CANCEL', strict=strict)
+            or check_action_permission(user, 'PRODUCTIONORDER', 'CANCEL', strict=True)
+            or check_action_permission(user, 'PRODUCTION', 'MANAGE', strict=True)
+        )
+    return check_action_permission(user, 'PRODUCTION', normalized_action, strict=strict)

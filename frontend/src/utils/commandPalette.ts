@@ -19,6 +19,7 @@ type BuildCommandPaletteCatalogOptions = {
   canAccessProductionCenter: boolean;
   canAccessMaterialIssues: boolean;
   canAccessProductionReceipts: boolean;
+  canViewProduction: boolean;
   canManageProduction: boolean;
   canViewQuality: boolean;
   canViewInventory: boolean;
@@ -428,8 +429,8 @@ export function buildCommandPaletteCatalog(
       group: 'Sản xuất',
       description: 'Theo dõi nhu cầu sản xuất phát sinh từ đơn hàng và kế hoạch giao.',
       keywords: ['nhu cau san xuat', 'production demand', 'demand', 'ke hoach giao'],
-      enabled: options.canManageProduction,
-      spotlight: options.canManageProduction,
+      enabled: options.canViewProduction,
+      spotlight: options.canViewProduction,
     },
     {
       key: 'production-planning',
@@ -438,8 +439,8 @@ export function buildCommandPaletteCatalog(
       group: 'Sản xuất',
       description: 'Mở bàn kế hoạch công đoạn để rà tải theo ngày, ca, điểm nghẽn vật tư và các cụm cần bàn giao nhanh.',
       keywords: ['dieu do san xuat', 'ban ke hoach cong doan', 'production planning', 'planner', 'dieu do cong doan'],
-      enabled: options.canManageProduction,
-      spotlight: options.canManageProduction,
+      enabled: options.canViewProduction,
+      spotlight: options.canViewProduction,
     },
     {
       key: 'production-resources',
@@ -448,7 +449,7 @@ export function buildCommandPaletteCatalog(
       group: 'Sản xuất',
       description: 'Tra cứu danh mục tổ sản xuất, máy và năng lực mặc định đang dùng cho điều độ.',
       keywords: ['danh muc may to', 'may san xuat', 'to san xuat', 'work center', 'machine catalog'],
-      enabled: options.canManageProduction,
+      enabled: options.canViewProduction,
     },
     {
       key: 'production-planning-ready',
@@ -457,7 +458,7 @@ export function buildCommandPaletteCatalog(
       group: 'Sản xuất',
       description: 'Lọc nhanh các công đoạn đã đủ điều kiện để đẩy xuống line hoặc bàn giao ca.',
       keywords: ['dieu do san xuat san chay', 'ready to run', 'san chay'],
-      enabled: options.canManageProduction,
+      enabled: options.canViewProduction,
     },
     {
       key: 'production-planning-material-wait',
@@ -466,7 +467,7 @@ export function buildCommandPaletteCatalog(
       group: 'Sản xuất',
       description: 'Đi thẳng tới các công đoạn đang nghẽn vật tư để phối hợp cấp phát và giữ cam kết giao hàng.',
       keywords: ['dieu do san xuat cho vat tu', 'thieu vat tu', 'material wait'],
-      enabled: options.canManageProduction,
+      enabled: options.canViewProduction,
     },
     {
       key: 'material-issues',
