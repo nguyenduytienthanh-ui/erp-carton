@@ -9,6 +9,7 @@ from rest_framework.test import APIClient
 from core.models import AuditLog, Notification, Permission, Role, Team, User
 from core.permissions import (
     CUSTOMER_PERMISSION_DEFINITIONS,
+    FINANCE_PERMISSION_DEFINITIONS,
     INVENTORY_PERMISSION_DEFINITIONS,
     PRODUCTION_PERMISSION_DEFINITIONS,
     PURCHASING_PERMISSION_DEFINITIONS,
@@ -34,7 +35,6 @@ class RoleModulePermissionsApiTest(TestCase):
     def _ensure_permissions():
         for resource, action, code, name in [
             ('WORKFORCE', 'MANAGE', 'WORKFORCE_MANAGE', 'Manage Workforce module'),
-            ('FINANCE', 'MANAGE', 'FINANCE_MANAGE', 'Manage Finance module'),
             ('PURCHASING', 'MANAGE', 'PURCHASING_MANAGE', 'Manage purchasing module'),
             ('PRODUCTION', 'MANAGE', 'PRODUCTION_MANAGE', 'Manage production module'),
             ('OPS', 'VIEW', 'OPS_VIEW', 'View operations cockpit'),
@@ -44,6 +44,10 @@ class RoleModulePermissionsApiTest(TestCase):
             ('CORE', 'VIEW_OPERATIONS_LOG', 'CORE_VIEW_OPERATIONS_LOG', 'View operations log'),
             ('CORE', 'VIEW_RBAC_AUDIT', 'CORE_VIEW_RBAC_AUDIT', 'View RBAC audit history'),
             ('CORE', 'MANAGE_RBAC', 'CORE_MANAGE_RBAC', 'Manage RBAC settings'),
+            *[
+                (row['resource'], row['action'], row['code'], row['name'])
+                for row in FINANCE_PERMISSION_DEFINITIONS
+            ],
             *[
                 (row['resource'], row['action'], row['code'], row['name'])
                 for row in PURCHASING_PERMISSION_DEFINITIONS
@@ -404,6 +408,49 @@ class SeedPurchasingPermissionsCommandTest(TestCase):
     def test_seed_purchasing_permissions_refuses_production_target(self):
         with self.assertRaisesMessage(CommandError, 'Refusing Purchasing permission seed'):
             call_command('seed_purchasing_permissions', stdout=StringIO())
+
+
+class SeedFinancePermissionsCommandTest(TestCase):
+    def test_seed_finance_permissions_creates_rows_without_demo_data(self):
+        Permission.objects.filter(resource='FINANCE').delete()
+        out = StringIO()
+
+        call_command('seed_finance_permissions', stdout=out)
+
+        permission_keys = set(
+            Permission.objects.filter(resource='FINANCE').values_list('resource', 'action')
+        )
+        expected_keys = {
+            (row['resource'], row['action'])
+            for row in FINANCE_PERMISSION_DEFINITIONS
+        }
+        self.assertEqual(permission_keys, expected_keys)
+        self.assertFalse(Role.objects.exists())
+        self.assertIn('Finance permissions synced', out.getvalue())
+
+    def test_seed_finance_permissions_can_grant_existing_uat_roles(self):
+        for code in ('ADMIN', 'MANAGER', 'FINANCE_MANAGER', 'ACCOUNTANT'):
+            Role.objects.create(code=code, name=code.replace('_', ' ').title())
+        out = StringIO()
+
+        call_command('seed_finance_permissions', grant_uat_roles=True, stdout=out)
+
+        admin_actions = set(
+            Permission.objects.filter(roles__code='ADMIN', resource='FINANCE')
+            .values_list('action', flat=True)
+        )
+        accountant_actions = set(
+            Permission.objects.filter(roles__code='ACCOUNTANT', resource='FINANCE')
+            .values_list('action', flat=True)
+        )
+        self.assertEqual(admin_actions, {row['action'] for row in FINANCE_PERMISSION_DEFINITIONS})
+        self.assertEqual(accountant_actions, {'MANAGE'})
+        self.assertIn('Finance UAT role grants synced', out.getvalue())
+
+    @override_settings(APP_ENV='production', DATABASES={'default': {'NAME': 'erp_carton_prod', 'HOST': '127.0.0.1'}})
+    def test_seed_finance_permissions_refuses_production_target(self):
+        with self.assertRaisesMessage(CommandError, 'Refusing Finance permission seed'):
+            call_command('seed_finance_permissions', stdout=StringIO())
 
 
 class SeedInventoryPermissionsCommandTest(TestCase):

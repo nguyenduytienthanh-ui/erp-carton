@@ -25,6 +25,9 @@ type BuildCommandPaletteCatalogOptions = {
   canViewInventory: boolean;
   canManageInventory: boolean;
   canManageStocktake: boolean;
+  canAccessFinance: boolean;
+  canViewFinance: boolean;
+  canViewFinanceGl: boolean;
   canManageFinance: boolean;
   canManageWorkforce: boolean;
   canViewOps: boolean;
@@ -654,7 +657,7 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Chuẩn hóa nhóm thu chi để báo cáo, sổ quỹ và đối soát đi cùng một chuẩn.',
       keywords: ['loai thu chi', 'transaction category', 'cashflow'],
-      enabled: options.canManageFinance,
+      enabled: options.canViewFinance,
     },
     {
       key: 'bank-accounts',
@@ -663,7 +666,7 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Quản lý tài khoản ngân hàng và kết nối với đối soát, thu chi và công nợ.',
       keywords: ['ngan hang', 'bank account', 'treasury'],
-      enabled: options.canManageFinance,
+      enabled: options.canViewFinance,
     },
     {
       key: 'cash-book',
@@ -672,7 +675,7 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Theo dõi chứng từ thu chi tiền mặt và tình trạng quỹ theo thời gian thực.',
       keywords: ['so quy', 'cash book', 'petty cash'],
-      enabled: options.canManageFinance,
+      enabled: options.canViewFinance,
     },
     {
       key: 'advance-transactions',
@@ -683,9 +686,9 @@ export function buildCommandPaletteCatalog(
         ? `Có ${overdue90Count} hồ sơ tạm ứng quá hạn trên 90 ngày cần ưu tiên xử lý.`
         : 'Theo dõi tạm ứng, quyết toán, SLA duyệt và lịch sử nhắc việc trên một command center.',
       keywords: ['tam ung', 'quyet toan', 'advance', 'settlement', 'sla tai chinh'],
-      enabled: options.canManageFinance,
+      enabled: options.canViewFinance,
       badgeCount: options.overdue90Count,
-      spotlight: options.canManageFinance,
+      spotlight: options.canViewFinance,
     },
     {
       key: 'receivables',
@@ -694,8 +697,8 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Theo dõi thu tiền, quá hạn và lịch sử xử lý công nợ khách hàng.',
       keywords: ['cong no phai thu', 'ar', 'receivable'],
-      enabled: options.canManageFinance,
-      spotlight: options.canManageFinance,
+      enabled: options.canViewFinance,
+      spotlight: options.canViewFinance,
     },
     {
       key: 'aging-analysis',
@@ -704,7 +707,7 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Phân tích tuổi nợ và theo dõi các bucket công nợ cần ưu tiên thu hồi.',
       keywords: ['phan tich qua han', 'aging', 'bucket cong no'],
-      enabled: options.canManageFinance,
+      enabled: options.canViewFinance,
     },
     {
       key: 'payables',
@@ -713,8 +716,8 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Theo dõi lịch chi trả, trạng thái phê duyệt và đối tượng nhận thanh toán.',
       keywords: ['cong no phai tra', 'ap', 'payable'],
-      enabled: options.canManageFinance,
-      spotlight: options.canManageFinance,
+      enabled: options.canViewFinance,
+      spotlight: options.canViewFinance,
     },
     {
       key: 'finance-summary',
@@ -723,8 +726,8 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Theo dõi khóa kỳ, tổng hợp tháng, xu hướng 12 tháng và độ sẵn sàng đóng sổ.',
       keywords: ['tong hop tai chinh', 'finance summary', 'close period'],
-      enabled: options.canManageFinance,
-      spotlight: options.canManageFinance,
+      enabled: options.canViewFinance,
+      spotlight: options.canViewFinance,
     },
     {
       key: 'profit-report',
@@ -733,7 +736,7 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Xem nhanh lợi nhuận theo kỳ, theo nhóm hàng và theo chiều điều hành.',
       keywords: ['loi nhuan', 'profit report', 'pnl'],
-      enabled: options.canManageFinance,
+      enabled: options.canViewFinance,
     },
     {
       key: 'budget-management',
@@ -742,7 +745,7 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Theo dõi ngân sách, variance và tình trạng sử dụng theo từng kế hoạch.',
       keywords: ['ngan sach', 'budget', 'variance'],
-      enabled: options.canManageFinance,
+      enabled: options.canViewFinance,
     },
     {
       key: 'general-ledger',
@@ -751,7 +754,7 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Tra cứu bút toán phát sinh và đối chiếu dòng tiền theo tài khoản kế toán.',
       keywords: ['so cai', 'general ledger', 'gl'],
-      enabled: options.canManageFinance,
+      enabled: options.canViewFinanceGl,
     },
     {
       key: 'trial-balance',
@@ -760,7 +763,7 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Kiểm tra số dư, cân bằng phát sinh và hỗ trợ khóa kỳ chính xác hơn.',
       keywords: ['bang can doi', 'trial balance', 'tb'],
-      enabled: options.canManageFinance,
+      enabled: options.canViewFinanceGl,
     },
     {
       key: 'bank-reconciliation',
@@ -769,7 +772,7 @@ export function buildCommandPaletteCatalog(
       group: 'Tài chính',
       description: 'Theo dõi đối soát, duyệt ghi sổ và xuất dữ liệu đối soát ngân hàng.',
       keywords: ['doi soat ngan hang', 'bank reconciliation', 'reconcile'],
-      enabled: options.canManageFinance,
+      enabled: options.canViewFinance,
     },
     {
       key: 'executive-cockpit',

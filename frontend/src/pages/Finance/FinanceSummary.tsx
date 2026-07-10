@@ -28,6 +28,7 @@ import { financeApi } from '../../api/finance';
 import type { FinanceMonthCloseCheckItem } from '../../types/finance';
 import { downloadCSV } from '../../utils/csvExport';
 import { getToastMessage } from '../../shared/apiError';
+import { canManageFinanceData } from '../../utils/authz';
 
 const { Text, Title } = Typography;
 
@@ -114,6 +115,7 @@ function ChecklistList({
 }
 
 export default function FinanceSummary() {
+  const canManage = canManageFinanceData();
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
   const [selectedMonth, setSelectedMonth] = useState<Dayjs>(dayjs().startOf('month'));
@@ -407,30 +409,34 @@ export default function FinanceSummary() {
               <Button icon={<ReloadOutlined />} onClick={() => void refreshFinanceMonth()}>
                 Làm mới
               </Button>
-              <Button icon={<DownloadOutlined />} onClick={handleExportCsv} disabled={!trendRows.length}>
-                Xuất CSV xu hướng
-              </Button>
-              <Button icon={<DownloadOutlined />} onClick={() => exportMonthlyExcelMutation.mutate()} loading={exportMonthlyExcelMutation.isPending}>
-                Xuất Excel tháng
-              </Button>
-              <Button
-                type="primary"
-                icon={<LockOutlined />}
-                onClick={() => lockMonthMutation.mutate()}
-                loading={lockMonthMutation.isPending}
-                disabled={isMonthLocked}
-                title={isMonthLocked ? `Kỳ ${monthKey} đã khóa.` : ownerNextStep}
-              >
-                Khóa tháng
-              </Button>
-              <Button
-                icon={<UnlockOutlined />}
-                onClick={() => setUnlockOpen(true)}
-                disabled={!isMonthLocked}
-                title={isMonthLocked ? 'Mở khóa kỳ khi cần điều chỉnh chứng từ có lý do rõ ràng.' : `Kỳ ${monthKey} chưa khóa.`}
-              >
-                Mở khóa
-              </Button>
+              {canManage ? (
+                <>
+                  <Button icon={<DownloadOutlined />} onClick={handleExportCsv} disabled={!trendRows.length}>
+                    Xuất CSV xu hướng
+                  </Button>
+                  <Button icon={<DownloadOutlined />} onClick={() => exportMonthlyExcelMutation.mutate()} loading={exportMonthlyExcelMutation.isPending}>
+                    Xuất Excel tháng
+                  </Button>
+                  <Button
+                    type="primary"
+                    icon={<LockOutlined />}
+                    onClick={() => lockMonthMutation.mutate()}
+                    loading={lockMonthMutation.isPending}
+                    disabled={isMonthLocked}
+                    title={isMonthLocked ? `Kỳ ${monthKey} đã khóa.` : ownerNextStep}
+                  >
+                    Khóa tháng
+                  </Button>
+                  <Button
+                    icon={<UnlockOutlined />}
+                    onClick={() => setUnlockOpen(true)}
+                    disabled={!isMonthLocked}
+                    title={isMonthLocked ? 'Mở khóa kỳ khi cần điều chỉnh chứng từ có lý do rõ ràng.' : `Kỳ ${monthKey} chưa khóa.`}
+                  >
+                    Mở khóa
+                  </Button>
+                </>
+              ) : null}
             </Space>
           </div>
 

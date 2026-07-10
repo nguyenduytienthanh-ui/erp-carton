@@ -111,11 +111,16 @@ class CashTransactionSerializer(serializers.ModelSerializer):
     target_cash_account_name = serializers.CharField(source='target_cash_account.name', read_only=True)
     category_code = serializers.CharField(source='category.code', read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True)
+    reference = serializers.SerializerMethodField()
+
+    def get_reference(self, obj):
+        return str(obj.reason or obj.object_name or f'TX-{obj.id}')
 
     class Meta:
         model = CashTransaction
         fields = [
             'id',
+            'reference',
             'transaction_type',
             'source_type',
             'source_cash_account',

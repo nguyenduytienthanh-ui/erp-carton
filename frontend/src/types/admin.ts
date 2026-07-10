@@ -18,7 +18,11 @@ export interface RoleModulePermissionItem {
   role_name: string;
   is_active: boolean;
   workforce_manage: boolean;
+  finance_view: boolean;
   finance_manage: boolean;
+  finance_settle: boolean;
+  finance_adjust: boolean;
+  finance_gl: boolean;
   purchasing_manage: boolean;
   purchasing_view: boolean;
   inventory_view: boolean;
@@ -73,7 +77,11 @@ export interface RoleModulePermissionUpdatePayload {
   items: Array<{
     role_id: number;
     workforce_manage: boolean;
+    finance_view: boolean;
     finance_manage: boolean;
+    finance_settle: boolean;
+    finance_adjust: boolean;
+    finance_gl: boolean;
     purchasing_manage: boolean;
     purchasing_view: boolean;
     inventory_view: boolean;

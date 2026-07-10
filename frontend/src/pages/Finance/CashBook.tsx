@@ -9,6 +9,7 @@ import dayjs, { Dayjs } from 'dayjs';
 import { financeApi } from '../../api/finance';
 import type { CashTransaction } from '../../types/finance';
 import { downloadCSV } from '../../utils/csvExport';
+import { canManageFinanceData } from '../../utils/authz';
 
 const { Text, Title } = Typography;
 
@@ -29,6 +30,7 @@ function getCashTransactionOwnerStep(tx: CashTransaction): string {
 }
 
 const CashBook: React.FC = () => {
+  const canManage = canManageFinanceData();
   const [dateFrom, setDateFrom] = useState<Dayjs>(dayjs().subtract(1, 'month'));
   const [dateTo, setDateTo] = useState<Dayjs>(dayjs());
   const [page, setPage] = useState(1);
@@ -180,11 +182,13 @@ const CashBook: React.FC = () => {
                 />
               </Space>
             </Col>
-            <Col>
-              <Button icon={<DownloadOutlined />} onClick={handleExportCSV}>
-                Xuất CSV
-              </Button>
-            </Col>
+            {canManage ? (
+              <Col>
+                <Button icon={<DownloadOutlined />} onClick={handleExportCSV}>
+                  Xuất CSV
+                </Button>
+              </Col>
+            ) : null}
           </Row>
         </Space>
       </Card>

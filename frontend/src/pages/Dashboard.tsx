@@ -31,6 +31,7 @@ import {
   canAccessProductionCenter,
   canViewProductionData,
   canViewQualityData,
+  canViewFinanceData,
   canManageFinanceData,
   canViewInventoryData,
   canManageOnboardingStudio,
@@ -182,6 +183,7 @@ export default function Dashboard() {
   const canViewProduction = canViewProductionData();
   const canViewQuality = canViewQualityData();
   const canViewInventory = canViewInventoryData();
+  const canViewFinance = canViewFinanceData();
   const canManageFinance = canManageFinanceData();
   const canManageWorkforce = canManageWorkforceData();
   const canManageOnboarding = canManageOnboardingStudio();
@@ -227,7 +229,7 @@ export default function Dashboard() {
   const receivableSummaryQuery = useQuery({
     queryKey: ['dashboard-receivable-summary'],
     queryFn: () => financeApi.getReceivableSummary(),
-    enabled: canManageFinance,
+    enabled: canViewFinance,
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
@@ -235,7 +237,7 @@ export default function Dashboard() {
   const payableSummaryQuery = useQuery({
     queryKey: ['dashboard-payable-summary'],
     queryFn: () => financeApi.getPayableSummary(),
-    enabled: canManageFinance,
+    enabled: canViewFinance,
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
@@ -361,7 +363,7 @@ export default function Dashboard() {
       },
     ];
 
-    if (canManageFinance) {
+    if (canViewFinance) {
       cards.push({
         key: 'finance-overdue',
         title: 'Tạm ứng quá hạn 90+',
@@ -412,7 +414,7 @@ export default function Dashboard() {
       return toneWeight(right.tone) - toneWeight(left.tone);
     });
   }, [
-    canManageFinance,
+    canViewFinance,
     canManageWorkforce,
     canViewOps,
     operationsFailedCount,
@@ -644,7 +646,7 @@ export default function Dashboard() {
       });
     }
 
-    if (canManageFinance) {
+    if (canViewFinance) {
       cards.push({
         key: 'advance-transactions',
         testId: 'dashboard-restore-advance-transactions',
@@ -658,7 +660,7 @@ export default function Dashboard() {
 
     return cards;
   }, [
-    canManageFinance,
+    canViewFinance,
     canManageOnboarding,
     canViewProduction,
     canManageWorkforce,
@@ -739,7 +741,7 @@ export default function Dashboard() {
       });
     }
 
-    if (canManageFinance) {
+    if (canViewFinance) {
       cards.push({
         key: 'receivables',
         title: 'Công nợ phải thu',
@@ -771,7 +773,7 @@ export default function Dashboard() {
       return right.priority - left.priority;
     });
   }, [
-    canManageFinance,
+    canViewFinance,
     canViewInventory,
     canAccessProduction,
     canViewPurchasing,
@@ -838,14 +840,14 @@ export default function Dashboard() {
         detail: 'Cần bổ sung, điều chuyển hoặc tái ưu tiên reservation cho các đơn đang nóng.',
       });
     }
-    if (canManageFinance && (receivableSummary?.overdue_count ?? 0) > 0) {
+    if (canViewFinance && (receivableSummary?.overdue_count ?? 0) > 0) {
       items.push({
         tone: 'critical',
         title: `${formatNumber(receivableSummary?.overdue_count)} khoản phải thu đã quá hạn`,
         detail: 'Thu tiền hoặc escalated follow-up để bảo toàn dòng tiền trong kỳ vận hành hiện tại.',
       });
     }
-    if (canManageFinance && (payableSummary?.overdue_count ?? 0) > 0) {
+    if (canViewFinance && (payableSummary?.overdue_count ?? 0) > 0) {
       items.push({
         tone: 'warning',
         title: `${formatNumber(payableSummary?.overdue_count)} khoản phải trả đã quá hạn`,
@@ -863,7 +865,7 @@ export default function Dashboard() {
 
     return items.slice(0, 6);
   }, [
-    canManageFinance,
+    canViewFinance,
     canViewInventory,
     canAccessProduction,
     canViewPurchasing,
@@ -903,7 +905,7 @@ export default function Dashboard() {
         color: theme.colors.success,
       });
     }
-    if (canManageFinance) {
+    if (canViewFinance) {
       stats.push({
         label: 'Thu tiền hoàn tất',
         value: `${formatNumber(receivableSummary?.settled_count)}/${formatNumber(receivableSummary?.count)}`,
@@ -913,7 +915,7 @@ export default function Dashboard() {
     }
     return stats;
   }, [
-    canManageFinance,
+    canViewFinance,
     canAccessProduction,
     canViewPurchasing,
     canViewSales,

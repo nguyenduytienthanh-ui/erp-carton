@@ -9,10 +9,12 @@ import dayjs from 'dayjs';
 import { generalLedgerApi } from '../../api/generalLedger';
 import type { TrialBalanceRow } from '../../types/generalLedger';
 import { downloadCSV } from '../../utils/csvExport';
+import { canManageFinanceData } from '../../utils/authz';
 
 const { Text, Title } = Typography;
 
 const TrialBalance: React.FC = () => {
+  const canManage = canManageFinanceData();
   const [dateFrom, setDateFrom] = useState<string>('');
   const [dateTo, setDateTo] = useState<string>(dayjs().format('YYYY-MM-DD'));
   const [refreshing, setRefreshing] = useState(false);
@@ -180,9 +182,11 @@ const TrialBalance: React.FC = () => {
           <Button type="primary" icon={<ReloadOutlined />} onClick={handleRefresh} loading={refreshing}>
             Tính toán
           </Button>
-          <Button icon={<DownloadOutlined />} onClick={handleExportCSV}>
-            Xuất CSV
-          </Button>
+          {canManage ? (
+            <Button icon={<DownloadOutlined />} onClick={handleExportCSV}>
+              Xuất CSV
+            </Button>
+          ) : null}
         </Space>
       </Card>
 

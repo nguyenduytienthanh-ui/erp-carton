@@ -136,15 +136,44 @@ export function canManageFinanceData(): boolean {
   const authz = getCurrentUserAuthz();
   if (authz.isStaff || authz.isSuperuser) return true;
   if (hasPermission(authz.permissions, 'FINANCE', 'MANAGE')) return true;
-  return hasAnyRole(authz.roleNames, [
-    'admin',
-    'manager',
-    'finance',
-    'finance-manager',
-    'accountant',
-    'quan-ly',
-    'quanly',
-  ]);
+  return false;
+}
+
+export function canViewFinanceData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  return (
+    hasPermission(authz.permissions, 'FINANCE', 'VIEW')
+    || hasPermission(authz.permissions, 'FINANCE', 'MANAGE')
+    || hasPermission(authz.permissions, 'FINANCE', 'SETTLE')
+    || hasPermission(authz.permissions, 'FINANCE', 'ADJUST')
+  );
+}
+
+export function canSettleFinanceData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  return hasPermission(authz.permissions, 'FINANCE', 'SETTLE') || hasPermission(authz.permissions, 'FINANCE', 'MANAGE');
+}
+
+export function canAdjustFinanceData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  return hasPermission(authz.permissions, 'FINANCE', 'ADJUST') || hasPermission(authz.permissions, 'FINANCE', 'MANAGE');
+}
+
+export function canViewFinanceGlData(): boolean {
+  const authz = getCurrentUserAuthz();
+  if (authz.isStaff || authz.isSuperuser) return true;
+  return (
+    hasPermission(authz.permissions, 'FINANCE', 'GL')
+    || hasPermission(authz.permissions, 'FINANCE', 'VIEW')
+    || hasPermission(authz.permissions, 'FINANCE', 'MANAGE')
+  );
+}
+
+export function canAccessFinanceData(): boolean {
+  return canViewFinanceData() || canViewFinanceGlData();
 }
 
 export function canManageInventoryData(): boolean {
@@ -604,7 +633,7 @@ export function canViewAdminObservabilityCenter(): boolean {
     canViewOperationsLog()
     || canViewWorkflowData()
     || canViewAccessGovernanceCenter()
-    || canManageFinanceData()
+    || canAccessFinanceData()
     || canManageWorkforceData()
     || canManagePurchasingData()
     || canManageProductionData()
@@ -613,7 +642,7 @@ export function canViewAdminObservabilityCenter(): boolean {
 
 export function canViewApprovalControlTower(): boolean {
   return (
-    canManageFinanceData()
+    canAccessFinanceData()
     || canManageWorkforceData()
     || canManagePurchasingData()
     || canManageProductionData()

@@ -17,7 +17,11 @@ type ModulePermissionFilters = {
 };
 type PermissionFieldKey =
   | 'workforce_manage'
+  | 'finance_view'
   | 'finance_manage'
+  | 'finance_settle'
+  | 'finance_adjust'
+  | 'finance_gl'
   | 'purchasing_manage'
   | 'purchasing_view'
   | 'inventory_view'
@@ -47,7 +51,11 @@ type PermissionFieldKey =
 
 const DEFAULT_PERMISSION_FIELDS: Array<{ field: PermissionFieldKey; label: string }> = [
   { field: 'workforce_manage', label: 'Nhân sự' },
-  { field: 'finance_manage', label: 'Tài chính' },
+  { field: 'finance_view', label: 'Tài chính - xem' },
+  { field: 'finance_manage', label: 'Tài chính - quản lý' },
+  { field: 'finance_settle', label: 'Tài chính - thanh toán/thu tiền' },
+  { field: 'finance_adjust', label: 'Tài chính - điều chỉnh/hủy' },
+  { field: 'finance_gl', label: 'Tài chính - sổ cái/báo cáo' },
   { field: 'purchasing_manage', label: 'Mua hàng' },
   { field: 'purchasing_view', label: 'Mua hàng - xem' },
   { field: 'inventory_view', label: 'Kho - xem' },
@@ -300,7 +308,11 @@ export default function ModulePermissionSettings() {
       items: mergedItems.map((item) => ({
         role_id: item.role_id,
         workforce_manage: Boolean(item.workforce_manage),
+        finance_view: Boolean(item.finance_view),
         finance_manage: Boolean(item.finance_manage),
+        finance_settle: Boolean(item.finance_settle),
+        finance_adjust: Boolean(item.finance_adjust),
+        finance_gl: Boolean(item.finance_gl),
         purchasing_manage: Boolean(item.purchasing_manage),
         purchasing_view: Boolean(item.purchasing_view),
         inventory_view: Boolean(item.inventory_view),

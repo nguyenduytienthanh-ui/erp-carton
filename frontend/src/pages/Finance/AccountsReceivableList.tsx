@@ -33,7 +33,7 @@ import type {
   ReceivablePayment,
 } from '../../types/accountsReceivable';
 import { PAGES } from '../../utils/constants';
-import { canManageFinanceData } from '../../utils/authz';
+import { canAdjustFinanceData, canManageFinanceData, canSettleFinanceData } from '../../utils/authz';
 import { useSearchFilterIntent } from '../../hooks/useSearchFilterIntent';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import QuickClearIcon from '../../components/QuickClearIcon/QuickClearIcon';
@@ -167,6 +167,8 @@ export default function AccountsReceivableList() {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
   const canManage = canManageFinanceData();
+  const canSettle = canSettleFinanceData();
+  const canAdjust = canAdjustFinanceData();
   const [searchInput, setSearchInput] = useState('');
   const [filters, setFilters] = useState<Filters>({});
   const [selectedPresetId, setSelectedPresetId] = useState<string>();
@@ -536,43 +538,49 @@ export default function AccountsReceivableList() {
       fixed: 'right',
       render: (_, row) => (
         <Space wrap>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailReceivable(row)}>
+          <Button size="small" icon={<EyeOutlined />} data-testid={`receivable-view-${row.id}`} onClick={() => setDetailReceivable(row)}>
             Xem
           </Button>
-          <Button
-            size="small"
-            type="primary"
-            icon={<DollarOutlined />}
-            disabled={Boolean(getReceivableActionDisabledReason(row, canManage, 'collect'))}
-            title={getReceivableActionDisabledReason(row, canManage, 'collect') || 'Ghi nhận giao dịch thu tiền cho công nợ này'}
-            onClick={() => {
-              setPaymentDoc(row);
-              paymentForm.setFieldsValue({
-                settlement_date: dayjs(),
-                amount: Number(row.outstanding_amount || 0),
-                source_type: 'BANK',
-                source_bank_account: undefined,
-                source_cash_account: undefined,
-                note: undefined,
-              });
-              setPaymentOpen(true);
-            }}
-          >
-            Thu tiền
-          </Button>
-          <Button
-            size="small"
-            danger
-            icon={<DeleteOutlined />}
-            disabled={Boolean(getReceivableActionDisabledReason(row, canManage, 'cancel'))}
-            title={getReceivableActionDisabledReason(row, canManage, 'cancel') || 'Hủy công nợ khi chứng từ phát sinh sai và chưa tất toán'}
-            onClick={() => {
-              setCancelDoc(row);
-              cancelForm.setFieldsValue({ reason: '' });
-            }}
-          >
-            Hủy
-          </Button>
+          {canSettle ? (
+            <Button
+              size="small"
+              type="primary"
+              icon={<DollarOutlined />}
+              data-testid={`receivable-collect-${row.id}`}
+              disabled={Boolean(getReceivableActionDisabledReason(row, canSettle, 'collect'))}
+              title={getReceivableActionDisabledReason(row, canSettle, 'collect') || 'Ghi nhận giao dịch thu tiền cho công nợ này'}
+              onClick={() => {
+                setPaymentDoc(row);
+                paymentForm.setFieldsValue({
+                  settlement_date: dayjs(),
+                  amount: Number(row.outstanding_amount || 0),
+                  source_type: 'BANK',
+                  source_bank_account: undefined,
+                  source_cash_account: undefined,
+                  note: undefined,
+                });
+                setPaymentOpen(true);
+              }}
+            >
+              Thu tiền
+            </Button>
+          ) : null}
+          {canAdjust ? (
+            <Button
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              data-testid={`receivable-cancel-${row.id}`}
+              disabled={Boolean(getReceivableActionDisabledReason(row, canAdjust, 'cancel'))}
+              title={getReceivableActionDisabledReason(row, canAdjust, 'cancel') || 'Hủy công nợ khi chứng từ phát sinh sai và chưa tất toán'}
+              onClick={() => {
+                setCancelDoc(row);
+                cancelForm.setFieldsValue({ reason: '' });
+              }}
+            >
+              Hủy
+            </Button>
+          ) : null}
         </Space>
       ),
     },
@@ -631,9 +639,11 @@ export default function AccountsReceivableList() {
               </Text>
             </div>
             <Space wrap>
-              <Button icon={<DownloadOutlined />} disabled={!rows.length} onClick={handleExport}>
-                Xuất CSV
-              </Button>
+              {canManage ? (
+                <Button icon={<DownloadOutlined />} data-testid="receivables-export-csv" disabled={!rows.length} onClick={handleExport}>
+                  Xuất CSV
+                </Button>
+              ) : null}
               {selectedPreset ? (
                 <Tag color="purple" style={{ marginInlineEnd: 0 }}>
                   Mẫu đang dùng: {selectedPreset.name}
@@ -815,37 +825,43 @@ export default function AccountsReceivableList() {
         extra={
           detail ? (
             <Space wrap>
-              <Button
-                type="primary"
-                icon={<DollarOutlined />}
-                disabled={Boolean(getReceivableActionDisabledReason(detail, canManage, 'collect'))}
-                title={getReceivableActionDisabledReason(detail, canManage, 'collect') || 'Ghi nhận giao dịch thu tiền cho công nợ này'}
-                onClick={() => {
-                  setPaymentDoc(detail);
-                  paymentForm.setFieldsValue({
-                    settlement_date: dayjs(),
-                    amount: Number(detail.outstanding_amount || 0),
-                    source_type: 'BANK',
-                    source_bank_account: undefined,
-                    source_cash_account: undefined,
-                    note: undefined,
-                  });
-                  setPaymentOpen(true);
-                }}
-              >
-                Thu tiền
-              </Button>
-              <Button
-                danger
-                disabled={Boolean(getReceivableActionDisabledReason(detail, canManage, 'cancel'))}
-                title={getReceivableActionDisabledReason(detail, canManage, 'cancel') || 'Hủy công nợ khi chứng từ phát sinh sai và chưa tất toán'}
-                onClick={() => {
-                  setCancelDoc(detail);
-                  cancelForm.setFieldsValue({ reason: '' });
-                }}
-              >
-                Hủy công nợ
-              </Button>
+              {canSettle ? (
+                <Button
+                  type="primary"
+                  icon={<DollarOutlined />}
+                  data-testid="receivable-detail-collect"
+                  disabled={Boolean(getReceivableActionDisabledReason(detail, canSettle, 'collect'))}
+                  title={getReceivableActionDisabledReason(detail, canSettle, 'collect') || 'Ghi nhận giao dịch thu tiền cho công nợ này'}
+                  onClick={() => {
+                    setPaymentDoc(detail);
+                    paymentForm.setFieldsValue({
+                      settlement_date: dayjs(),
+                      amount: Number(detail.outstanding_amount || 0),
+                      source_type: 'BANK',
+                      source_bank_account: undefined,
+                      source_cash_account: undefined,
+                      note: undefined,
+                    });
+                    setPaymentOpen(true);
+                  }}
+                >
+                  Thu tiền
+                </Button>
+              ) : null}
+              {canAdjust ? (
+                <Button
+                  danger
+                  data-testid="receivable-detail-cancel"
+                  disabled={Boolean(getReceivableActionDisabledReason(detail, canAdjust, 'cancel'))}
+                  title={getReceivableActionDisabledReason(detail, canAdjust, 'cancel') || 'Hủy công nợ khi chứng từ phát sinh sai và chưa tất toán'}
+                  onClick={() => {
+                    setCancelDoc(detail);
+                    cancelForm.setFieldsValue({ reason: '' });
+                  }}
+                >
+                  Hủy công nợ
+                </Button>
+              ) : null}
             </Space>
           ) : null
         }

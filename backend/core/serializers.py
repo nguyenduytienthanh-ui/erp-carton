@@ -6,7 +6,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import User, Role, Permission, Team, Setting, Customer, ExportTemplate, SavedView, Attachment, Comment, Notification, UserSession, UserPreferences, ColumnPermission, Task, WorkflowTaskTemplate, TaskWatcher, DocumentType, TaxRate, Shift, ExpenseCategory, NumberSequence
-from .permissions import CUSTOMER_PERMISSION_DEFINITIONS, SUPPLIER_PERMISSION_DEFINITIONS, user_has_customer_permission
+from .permissions import CUSTOMER_PERMISSION_DEFINITIONS, FINANCE_PERMISSION_DEFINITIONS, SUPPLIER_PERMISSION_DEFINITIONS, user_has_customer_permission
 
 
 ROLE_MODULE_PERMISSION_LOOKUP = {
@@ -24,7 +24,7 @@ ROLE_MODULE_PERMISSION_LOOKUP = {
 }
 ROLE_MODULE_PERMISSION_LOOKUP.update({
     (row['resource'], row['action']): row['field'].replace('_', '-')
-    for row in (*CUSTOMER_PERMISSION_DEFINITIONS, *SUPPLIER_PERMISSION_DEFINITIONS)
+    for row in (*FINANCE_PERMISSION_DEFINITIONS, *CUSTOMER_PERMISSION_DEFINITIONS, *SUPPLIER_PERMISSION_DEFINITIONS)
 })
 
 

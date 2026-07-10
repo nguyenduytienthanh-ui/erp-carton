@@ -182,6 +182,61 @@ PURCHASING_VIEW_IMPLIED_PERMISSIONS = (
     ('PURCHASEORDER', 'CANCEL'),
 )
 
+FINANCE_PERMISSION_DEFINITIONS = (
+    {
+        'field': 'finance_view',
+        'label': 'Tài chính - xem',
+        'resource': 'FINANCE',
+        'action': 'VIEW',
+        'changed_type': 'finance_view',
+        'code': 'FINANCE_VIEW',
+        'name': 'View finance module',
+    },
+    {
+        'field': 'finance_manage',
+        'label': 'Tài chính - quản lý',
+        'resource': 'FINANCE',
+        'action': 'MANAGE',
+        'changed_type': 'finance',
+        'code': 'FINANCE_MANAGE',
+        'name': 'Manage finance module',
+    },
+    {
+        'field': 'finance_settle',
+        'label': 'Tài chính - thanh toán/thu tiền',
+        'resource': 'FINANCE',
+        'action': 'SETTLE',
+        'changed_type': 'finance_settle',
+        'code': 'FINANCE_SETTLE',
+        'name': 'Settle finance receivables and payables',
+    },
+    {
+        'field': 'finance_adjust',
+        'label': 'Tài chính - điều chỉnh/hủy',
+        'resource': 'FINANCE',
+        'action': 'ADJUST',
+        'changed_type': 'finance_adjust',
+        'code': 'FINANCE_ADJUST',
+        'name': 'Adjust or cancel finance documents',
+    },
+    {
+        'field': 'finance_gl',
+        'label': 'Tài chính - sổ cái/báo cáo',
+        'resource': 'FINANCE',
+        'action': 'GL',
+        'changed_type': 'finance_gl',
+        'code': 'FINANCE_GL',
+        'name': 'View finance general ledger and reports',
+    },
+)
+
+FINANCE_VIEW_IMPLIED_PERMISSIONS = (
+    ('FINANCE', 'VIEW'),
+    ('FINANCE', 'MANAGE'),
+    ('FINANCE', 'SETTLE'),
+    ('FINANCE', 'ADJUST'),
+)
+
 INVENTORY_PERMISSION_DEFINITIONS = (
     {
         'field': 'inventory_view',
@@ -390,6 +445,31 @@ def user_has_purchasing_permission(user, action, *, strict=True):
             for resource, permission_action in PURCHASING_VIEW_IMPLIED_PERMISSIONS
         )
     return check_action_permission(user, 'PURCHASING', normalized_action, strict=strict)
+
+
+def user_has_finance_permission(user, action, *, strict=True):
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    normalized_action = str(action or '').strip().upper()
+    if normalized_action == 'VIEW':
+        return any(
+            check_action_permission(user, resource, permission_action, strict=True)
+            for resource, permission_action in FINANCE_VIEW_IMPLIED_PERMISSIONS
+        )
+    if normalized_action == 'GL':
+        return (
+            check_action_permission(user, 'FINANCE', 'GL', strict=strict)
+            or check_action_permission(user, 'FINANCE', 'VIEW', strict=True)
+            or check_action_permission(user, 'FINANCE', 'MANAGE', strict=True)
+        )
+    if normalized_action in {'SETTLE', 'ADJUST'}:
+        return (
+            check_action_permission(user, 'FINANCE', normalized_action, strict=strict)
+            or check_action_permission(user, 'FINANCE', 'MANAGE', strict=True)
+        )
+    return check_action_permission(user, 'FINANCE', normalized_action, strict=strict)
 
 
 def user_has_inventory_permission(user, action, *, strict=True):

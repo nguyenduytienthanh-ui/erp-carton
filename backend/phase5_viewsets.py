@@ -54,6 +54,10 @@ def _parse_decimal_input(raw_value, *, field_name, default=Decimal('0'), allow_b
         raise ValueError({field_name: f'{field_name} không hợp lệ.'}) from exc
 
 
+def _money_decimal(value):
+    return Decimal(str(value or 0)).quantize(Decimal('0.01'))
+
+
 def _parse_time_input(raw_value, field_name, default_value):
     if raw_value in (None, ''):
         return default_value
@@ -675,9 +679,9 @@ class BudgetManagementViewSet(viewsets.ModelViewSet):
             total_actual=Sum('actual_amount'),
             total_committed=Sum('committed_amount'),
         )
-        total_budgeted = aggregate.get('total_budgeted') or Decimal('0')
-        total_actual = aggregate.get('total_actual') or Decimal('0')
-        total_committed = aggregate.get('total_committed') or Decimal('0')
+        total_budgeted = _money_decimal(aggregate.get('total_budgeted'))
+        total_actual = _money_decimal(aggregate.get('total_actual'))
+        total_committed = _money_decimal(aggregate.get('total_committed'))
         total_available = total_budgeted - total_actual - total_committed
         over_budget_filter = Q(actual_amount__gt=F('budgeted_amount') - F('committed_amount'))
         over_budget_count = queryset.filter(over_budget_filter).count()
@@ -696,10 +700,13 @@ class BudgetManagementViewSet(viewsets.ModelViewSet):
             .order_by('department')[:12]
         )
         for row in department_rows:
+            row['budgeted_amount'] = _money_decimal(row.get('budgeted_amount'))
+            row['actual_amount'] = _money_decimal(row.get('actual_amount'))
+            row['committed_amount'] = _money_decimal(row.get('committed_amount'))
             row['available_amount'] = (
-                Decimal(str(row.get('budgeted_amount') or 0))
-                - Decimal(str(row.get('actual_amount') or 0))
-                - Decimal(str(row.get('committed_amount') or 0))
+                row['budgeted_amount']
+                - row['actual_amount']
+                - row['committed_amount']
             )
         return Response({
             'total_count': total_count,

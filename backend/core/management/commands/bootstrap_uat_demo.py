@@ -9,6 +9,7 @@ from django.utils import timezone
 from core.models import Permission, Role, Team
 from core.permissions import (
     CUSTOMER_PERMISSION_DEFINITIONS,
+    FINANCE_PERMISSION_DEFINITIONS,
     INVENTORY_PERMISSION_DEFINITIONS,
     PRODUCTION_PERMISSION_DEFINITIONS,
     PURCHASING_PERMISSION_DEFINITIONS,
@@ -18,7 +19,10 @@ from core.permissions import (
 
 PERMISSIONS = [
     ('WORKFORCE', 'MANAGE', 'WORKFORCE_MANAGE', 'Manage Workforce module'),
-    ('FINANCE', 'MANAGE', 'FINANCE_MANAGE', 'Manage Finance module'),
+    *[
+        (row['resource'], row['action'], row['code'], row['name'])
+        for row in FINANCE_PERMISSION_DEFINITIONS
+    ],
     *[
         (row['resource'], row['action'], row['code'], row['name'])
         for row in INVENTORY_PERMISSION_DEFINITIONS

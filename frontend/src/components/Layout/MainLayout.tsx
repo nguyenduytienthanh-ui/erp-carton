@@ -47,6 +47,8 @@ import {
 } from '../../utils/commandPalette';
 import {
   canManageFinanceData,
+  canViewFinanceData,
+  canViewFinanceGlData,
   canAccessSalesOrders,
   canManageInventoryData,
   canManageStocktake,
@@ -231,6 +233,9 @@ const MainLayout = () => {
   const canManageWorkflow = canManageWorkflowData();
   const canViewOpsLog = canViewOperationsLog();
   const canManageFinance = canManageFinanceData();
+  const canViewFinance = canViewFinanceData();
+  const canViewFinanceGl = canViewFinanceGlData();
+  const canAccessFinance = canViewFinance || canViewFinanceGl;
   const canManageInventory = canManageInventoryData();
   const canViewInventory = canViewInventoryData();
   const canManageStocktakeMenu = canManageStocktake();
@@ -397,6 +402,9 @@ const MainLayout = () => {
     canViewInventory,
     canManageInventory,
     canManageStocktake: canManageStocktakeMenu,
+    canAccessFinance,
+    canViewFinance,
+    canViewFinanceGl,
     canManageFinance,
     canManageWorkforce,
     canViewOps,
@@ -427,6 +435,9 @@ const MainLayout = () => {
     canAccessProductionReceiptRoute,
     canManageAccessExceptions,
     canManageAccessReviews,
+    canAccessFinance,
+    canViewFinance,
+    canViewFinanceGl,
     canManageFinance,
     canManageInventory,
     canViewInventory,
@@ -610,7 +621,7 @@ const MainLayout = () => {
       });
     }
 
-    if (canManageFinance) {
+    if (canViewFinance) {
       shortcuts.push({
         key: 'advance-transactions',
         label: 'Tạm ứng - quyết toán',
@@ -622,7 +633,7 @@ const MainLayout = () => {
 
     return shortcuts;
   }, [
-    canManageFinance,
+    canViewFinance,
     canManageOnboarding,
     canManageWorkforce,
     canViewProduction,
@@ -944,24 +955,24 @@ const MainLayout = () => {
         },
       ],
     } : null,
-    canManageFinance ? {
+    canAccessFinance ? {
       key: 'finance-group',
       icon: <DollarOutlined />,
       label: 'Tài chính',
       children: [
-        {
+        canViewFinance && {
           key: '/transaction-categories',
           label: renderMenuLabel('/transaction-categories', 'Loại thu chi'),
         },
-        {
+        canViewFinance && {
           key: '/bank-accounts',
           label: renderMenuLabel('/bank-accounts', 'Ngân hàng'),
         },
-        {
+        canViewFinance && {
           key: '/cash-book',
           label: renderMenuLabel('/cash-book', 'Sổ quỹ'),
         },
-        {
+        canViewFinance && {
           key: '/advance-transactions',
           label: renderMenuLabel(
             '/advance-transactions',
@@ -970,43 +981,43 @@ const MainLayout = () => {
             </span>
           ),
         },
-        {
+        canViewFinance && {
           key: '/receivables',
           label: renderMenuLabel('/receivables', 'Công nợ phải thu'),
         },
-        {
+        canViewFinance && {
           key: '/aging-analysis',
           label: renderMenuLabel('/aging-analysis', 'Phân tích quá hạn'),
         },
-        {
+        canViewFinance && {
           key: '/payables',
           label: renderMenuLabel('/payables', 'Công nợ phải trả'),
         },
-        {
+        canViewFinance && {
           key: '/finance-summary',
           label: renderMenuLabel('/finance-summary', 'Báo cáo tài chính'),
         },
-        {
+        canViewFinance && {
           key: '/profit-report',
           label: renderMenuLabel('/profit-report', 'Báo cáo lợi nhuận'),
         },
-        {
+        canViewFinance && {
           key: '/budget-management',
           label: renderMenuLabel('/budget-management', 'Quản lý ngân sách'),
         },
-        {
+        canViewFinanceGl && {
           key: '/general-ledger',
           label: renderMenuLabel('/general-ledger', 'Sổ cái'),
         },
-        {
+        canViewFinanceGl && {
           key: '/trial-balance',
           label: renderMenuLabel('/trial-balance', 'Bảng cân đối'),
         },
-        {
+        canViewFinance && {
           key: '/bank-reconciliation',
           label: renderMenuLabel('/bank-reconciliation', 'Đối soát ngân hàng'),
         },
-      ],
+      ].filter(Boolean) as MenuProps['items'],
     } : null,
     {
       key: '/task-inbox',

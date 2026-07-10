@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import MainLayout from './MainLayout';
-import { canAccessOpsModules, canAccessSalesOrders, canAccessMaterialIssues, canAccessProductionCenter, canAccessProductionReceipts, canManageFinanceData, canManageModulePermissionSettings, canManageProductionData, canViewInventoryData, canViewPurchasingData, canViewReportsCenter, canViewWorkflowData, canManageWorkflowData } from '../../utils/authz';
+import { canAccessFinanceData, canAccessOpsModules, canAccessSalesOrders, canAccessMaterialIssues, canAccessProductionCenter, canAccessProductionReceipts, canManageModulePermissionSettings, canManageProductionData, canViewInventoryData, canViewPurchasingData, canViewReportsCenter, canViewWorkflowData, canManageWorkflowData } from '../../utils/authz';
 import { usersApi } from '../../api/users';
 import { storage } from '../../utils/storage';
 
@@ -49,7 +49,7 @@ const routeChunkPrefetchers: Record<string, () => Promise<unknown>> = {
   '/admin/module-permissions-history': () => import('../../pages/Admin/ModulePermissionHistory'),
 };
 
-function getRoutePrefetchOrder(pathname: string, canAccessOps: boolean, canViewReports: boolean, canViewWorkflow: boolean, canManageWorkflow: boolean, canManageRbac: boolean, canManageInventory: boolean, canViewPurchasing: boolean, canAccessProduction: boolean, canAccessMaterialIssueRoute: boolean, canAccessProductionReceiptRoute: boolean, canManageFinance: boolean, canAccessSales: boolean): string[] {
+function getRoutePrefetchOrder(pathname: string, canAccessOps: boolean, canViewReports: boolean, canViewWorkflow: boolean, canManageWorkflow: boolean, canManageRbac: boolean, canManageInventory: boolean, canViewPurchasing: boolean, canAccessProduction: boolean, canAccessMaterialIssueRoute: boolean, canAccessProductionReceiptRoute: boolean, canAccessFinance: boolean, canAccessSales: boolean): string[] {
   const common = [
     '/account',
     '/task-inbox',
@@ -60,7 +60,7 @@ function getRoutePrefetchOrder(pathname: string, canAccessOps: boolean, canViewR
     ...(canAccessProduction ? ['/production-orders'] : []),
     ...(canAccessMaterialIssueRoute ? ['/material-issues'] : []),
     ...(canAccessProductionReceiptRoute ? ['/production-receipts'] : []),
-    ...(canManageFinance ? ['/receivables', '/payables', '/finance-summary'] : []),
+    ...(canAccessFinance ? ['/receivables', '/payables', '/finance-summary'] : []),
     '/notifications',
     ...(canManageInventory ? ['/inventory-stock', '/inventory-transactions'] : []),
   ];
@@ -144,7 +144,7 @@ export default function AuthenticatedShell() {
     const canAccessOps = canAccessOpsModules();
     const canViewReports = canViewReportsCenter();
     const canAccessSales = canAccessSalesOrders();
-    const canManageFinance = canManageFinanceData();
+    const canAccessFinance = canAccessFinanceData();
     const canManageInventory = canViewInventoryData();
     const canViewPurchasing = canViewPurchasingData();
     const canManageProduction = canManageProductionData();
@@ -154,7 +154,7 @@ export default function AuthenticatedShell() {
     const canViewWorkflow = canViewWorkflowData();
     const canManageWorkflow = canManageWorkflowData();
     const canManageRbac = canManageModulePermissionSettings();
-    const routePrefetchTasks = getRoutePrefetchOrder(pathname, canAccessOps, canViewReports, canViewWorkflow, canManageWorkflow, canManageRbac, canManageInventory, canViewPurchasing, canAccessProduction || canManageProduction, canAccessMaterialIssueRoute, canAccessProductionReceiptRoute, canManageFinance, canAccessSales)
+    const routePrefetchTasks = getRoutePrefetchOrder(pathname, canAccessOps, canViewReports, canViewWorkflow, canManageWorkflow, canManageRbac, canManageInventory, canViewPurchasing, canAccessProduction || canManageProduction, canAccessMaterialIssueRoute, canAccessProductionReceiptRoute, canAccessFinance, canAccessSales)
       .filter((routePath) => routePath !== pathname)
       .map((routePath) => routeChunkPrefetchers[routePath])
       .filter((v): v is (() => Promise<unknown>) => typeof v === 'function');

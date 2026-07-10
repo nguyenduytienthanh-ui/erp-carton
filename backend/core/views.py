@@ -67,11 +67,13 @@ from .utils import export_to_excel, export_to_pdf
 from .mixins import AuditLogMixin, ExportExcelMixin
 from .permissions import (
     CUSTOMER_PERMISSION_DEFINITIONS,
+    FINANCE_PERMISSION_DEFINITIONS,
     INVENTORY_PERMISSION_DEFINITIONS,
     PURCHASING_PERMISSION_DEFINITIONS,
     SUPPLIER_PERMISSION_DEFINITIONS,
     check_action_permission,
     user_has_customer_permission,
+    user_has_finance_permission,
     user_has_inventory_permission,
     user_has_purchasing_permission,
     user_has_production_permission,
@@ -89,13 +91,7 @@ MODULE_PERMISSION_FIELDS = [
         'action': 'MANAGE',
         'changed_type': 'workforce',
     },
-    {
-        'field': 'finance_manage',
-        'label': 'Tài chính',
-        'resource': 'FINANCE',
-        'action': 'MANAGE',
-        'changed_type': 'finance',
-    },
+    *FINANCE_PERMISSION_DEFINITIONS,
     {
         'field': 'purchasing_manage',
         'label': 'Mua hàng',
@@ -369,6 +365,10 @@ ACCESS_EXCEPTION_POLICY_PACKS = [
 ROLE_GOVERNANCE_MODULE_KEY_LOOKUP = {
     ('WORKFORCE', 'MANAGE'): 'workforce',
     ('FINANCE', 'MANAGE'): 'finance',
+    ('FINANCE', 'VIEW'): 'finance-view',
+    ('FINANCE', 'SETTLE'): 'finance-settle',
+    ('FINANCE', 'ADJUST'): 'finance-adjust',
+    ('FINANCE', 'GL'): 'finance-gl',
     ('PURCHASING', 'MANAGE'): 'purchasing',
     ('PURCHASING', 'VIEW'): 'purchasing-view',
     ('PRODUCTION', 'MANAGE'): 'production',
@@ -502,10 +502,14 @@ ACCOUNT_ACCESS_MODULES = [
         'description': 'Công nợ, sổ cái, ngân sách và đối soát',
         'primary_route': '/finance-summary',
         'permissions': [
+            ('FINANCE', 'VIEW'),
             ('FINANCE', 'MANAGE'),
+            ('FINANCE', 'SETTLE'),
+            ('FINANCE', 'ADJUST'),
+            ('FINANCE', 'GL'),
         ],
-        'role_names': {'admin', 'manager', 'finance', 'finance-manager', 'accountant', 'quan-ly', 'quanly'},
-        'matcher': '_can_manage_finance_data',
+        'role_names': set(),
+        'matcher': '_can_access_finance_data',
     },
     {
         'key': 'workflow',
@@ -732,13 +736,14 @@ def _can_manage_workforce_data(user):
 
 
 def _can_manage_finance_data(user):
-    if not user or not user.is_authenticated:
-        return False
-    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
-        return True
-    if check_action_permission(user, 'FINANCE', 'MANAGE', strict=True):
-        return True
-    return _has_any_role_name(user, {'admin', 'manager', 'finance', 'finance-manager', 'accountant', 'quan-ly', 'quanly'})
+    return user_has_finance_permission(user, 'MANAGE', strict=True)
+
+
+def _can_access_finance_data(user):
+    return (
+        user_has_finance_permission(user, 'VIEW', strict=True)
+        or user_has_finance_permission(user, 'GL', strict=True)
+    )
 
 
 def _can_manage_inventory_data(user):

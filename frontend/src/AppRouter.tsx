@@ -19,7 +19,6 @@ import {
   canManageUserDirectory,
   canManageUserLifecycle,
   canManageUserProvisioning,
-  canManageFinanceData,
   canViewInventoryData,
   canManageProductionData,
   canViewProductionData,
@@ -39,6 +38,8 @@ import {
   canViewWorkflowData,
   canManageWorkflowData,
   canViewCustomers,
+  canViewFinanceData,
+  canViewFinanceGlData,
   canViewPurchasingData,
   canViewSuppliers,
 } from './utils/authz';
@@ -166,7 +167,8 @@ export default function AppRouter() {
   const canViewAdminAudit = canViewAdminAuditCenter();
   const canViewAdminObservability = canViewAdminObservabilityCenter();
   const canViewAccessGovernance = canViewAccessGovernanceCenter();
-  const canManageFinance = canManageFinanceData();
+  const canViewFinance = canViewFinanceData();
+  const canViewFinanceGl = canViewFinanceGlData();
   const canViewInventory = canViewInventoryData();
   const canViewPurchasing = canViewPurchasingData();
   const canManageProduction = canManageProductionData();
@@ -292,7 +294,7 @@ export default function AppRouter() {
               <Route path="executive-cockpit" element={<FeatureRoute allow={canViewOps} fallbackTo="/task-inbox">{withAsyncBoundary(<ExecutiveCockpit />)}</FeatureRoute>} />
               <Route path="reports" element={<FeatureRoute allow={canViewReports} fallbackTo="/">{withAsyncBoundary(<ReportsCenter />)}</FeatureRoute>} />
               <Route path="production-costing" element={<FeatureRoute allow={canManageProduction} fallbackTo="/">{withAsyncBoundary(<ProductionCostingReport />)}</FeatureRoute>} />
-              <Route path="profit-report" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<ProfitReport />)}</FeatureRoute>} />
+              <Route path="profit-report" element={<FeatureRoute allow={canViewFinance} fallbackTo="/">{withAsyncBoundary(<ProfitReport />)}</FeatureRoute>} />
               <Route path="employee-performance" element={<FeatureRoute allow={canManageWorkforce} fallbackTo="/">{withAsyncBoundary(<EmployeePerformanceReport />)}</FeatureRoute>} />
               <Route path="quote-analytics" element={<FeatureRoute allow={canViewSalesOrders} fallbackTo="/">{withAsyncBoundary(<QuoteAnalytics />)}</FeatureRoute>} />
               <Route path="bi-dashboard" element={<FeatureRoute allow={canViewOps} fallbackTo="/">{withAsyncBoundary(<BIDashboard />)}</FeatureRoute>} />
@@ -308,18 +310,18 @@ export default function AppRouter() {
               <Route path="bonus-penalty" element={<FeatureRoute allow={canManageWorkforce} fallbackTo="/">{withAsyncBoundary(<BonusPenaltyList />)}</FeatureRoute>} />
               <Route path="payroll" element={<FeatureRoute allow={canManageWorkforce} fallbackTo="/">{withAsyncBoundary(<PayrollList />)}</FeatureRoute>} />
               <Route path="salary-advance" element={<FeatureRoute allow={canManageWorkforce} fallbackTo="/">{withAsyncBoundary(<SalaryAdvanceList />)}</FeatureRoute>} />
-              <Route path="transaction-categories" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<TransactionCategoryList />)}</FeatureRoute>} />
-              <Route path="bank-accounts" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<BankAccountList />)}</FeatureRoute>} />
-              <Route path="cash-book" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<CashBook />)}</FeatureRoute>} />
-              <Route path="advance-transactions" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<AdvanceTransactionList />)}</FeatureRoute>} />
-              <Route path="receivables" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<AccountsReceivableList />)}</FeatureRoute>} />
-              <Route path="aging-analysis" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<AgingAnalysis />)}</FeatureRoute>} />
-              <Route path="payables" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<AccountsPayableList />)}</FeatureRoute>} />
-              <Route path="finance-summary" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<FinanceSummary />)}</FeatureRoute>} />
-              <Route path="budget-management" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<BudgetManagement />)}</FeatureRoute>} />
-              <Route path="general-ledger" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<GeneralLedgerList />)}</FeatureRoute>} />
-              <Route path="trial-balance" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<TrialBalance />)}</FeatureRoute>} />
-              <Route path="bank-reconciliation" element={<FeatureRoute allow={canManageFinance} fallbackTo="/">{withAsyncBoundary(<BankReconciliationList />)}</FeatureRoute>} />
+              <Route path="transaction-categories" element={<FeatureRoute allow={canViewFinance} fallbackTo="/">{withAsyncBoundary(<TransactionCategoryList />)}</FeatureRoute>} />
+              <Route path="bank-accounts" element={<FeatureRoute allow={canViewFinance} fallbackTo="/">{withAsyncBoundary(<BankAccountList />)}</FeatureRoute>} />
+              <Route path="cash-book" element={<FeatureRoute allow={canViewFinance} fallbackTo="/">{withAsyncBoundary(<CashBook />)}</FeatureRoute>} />
+              <Route path="advance-transactions" element={<FeatureRoute allow={canViewFinance} fallbackTo="/">{withAsyncBoundary(<AdvanceTransactionList />)}</FeatureRoute>} />
+              <Route path="receivables" element={<FeatureRoute allow={canViewFinance} fallbackTo="/">{withAsyncBoundary(<AccountsReceivableList />)}</FeatureRoute>} />
+              <Route path="aging-analysis" element={<FeatureRoute allow={canViewFinance} fallbackTo="/">{withAsyncBoundary(<AgingAnalysis />)}</FeatureRoute>} />
+              <Route path="payables" element={<FeatureRoute allow={canViewFinance} fallbackTo="/">{withAsyncBoundary(<AccountsPayableList />)}</FeatureRoute>} />
+              <Route path="finance-summary" element={<FeatureRoute allow={canViewFinance} fallbackTo="/">{withAsyncBoundary(<FinanceSummary />)}</FeatureRoute>} />
+              <Route path="budget-management" element={<FeatureRoute allow={canViewFinance} fallbackTo="/">{withAsyncBoundary(<BudgetManagement />)}</FeatureRoute>} />
+              <Route path="general-ledger" element={<FeatureRoute allow={canViewFinanceGl} fallbackTo="/">{withAsyncBoundary(<GeneralLedgerList />)}</FeatureRoute>} />
+              <Route path="trial-balance" element={<FeatureRoute allow={canViewFinanceGl} fallbackTo="/">{withAsyncBoundary(<TrialBalance />)}</FeatureRoute>} />
+              <Route path="bank-reconciliation" element={<FeatureRoute allow={canViewFinance} fallbackTo="/">{withAsyncBoundary(<BankReconciliationList />)}</FeatureRoute>} />
               <Route
                 path="admin/approval-control-tower"
                 element={(

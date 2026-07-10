@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from datetime import date, datetime, timedelta
 import json
 
@@ -16,7 +16,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from unidecode import unidecode
 from openpyxl import Workbook
 
-from core.permissions import check_action_permission
+from core.permissions import check_action_permission, user_has_finance_permission
 from core.models import ApprovalHistory, AuditLog, Notification, Permission, Role, Setting, User, WorkflowPipelineEvent
 from workforce.models import Employee, PayrollRecord
 from sales.document_policy import round_money
@@ -75,36 +75,49 @@ from .serializers import (
 )
 
 
-def _user_role_names(user):
-    try:
-        pairs = user.roles.values_list('name', 'code')
-    except Exception:
-        return set()
-    names = set()
-    for name, code in pairs:
-        if name:
-            names.add(str(name).strip().lower())
-        if code:
-            names.add(str(code).strip().lower())
-    return names
-
-
 def _can_manage_finance(user):
-    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
-        return True
-    if check_action_permission(user, 'FINANCE', 'MANAGE', strict=True):
-        return True
-    role_names = _user_role_names(user)
-    allowed_roles = {
-        'admin',
-        'manager',
-        'accountant',
-        'finance',
-        'finance-manager',
-        'quan-ly',
-        'quanly',
-    }
-    return any(role in allowed_roles for role in role_names)
+    return user_has_finance_permission(user, 'MANAGE', strict=True)
+
+
+def _can_view_finance(user):
+    return user_has_finance_permission(user, 'VIEW', strict=True)
+
+
+def _can_settle_finance(user):
+    return user_has_finance_permission(user, 'SETTLE', strict=True)
+
+
+def _can_adjust_finance(user):
+    return user_has_finance_permission(user, 'ADJUST', strict=True)
+
+
+def _can_view_finance_gl(user):
+    return user_has_finance_permission(user, 'GL', strict=True)
+
+
+def _can_view_finance_report(user):
+    return _can_view_finance(user) or _can_view_finance_gl(user)
+
+
+def _cash_transaction_reference(tx: CashTransaction) -> str:
+    return str(getattr(tx, 'reference', '') or tx.reason or tx.object_name or f'TX-{tx.id}')
+
+
+def _format_money(value) -> str:
+    return str(round_money(value))
+
+
+def _normalize_role_token(value) -> str:
+    return str(value or '').strip().lower().replace('_', '-')
+
+
+def _user_role_names(user) -> set[str]:
+    if not user or not getattr(user, 'is_authenticated', False):
+        return set()
+    roles = user.roles.filter(is_active=True)
+    names = {_normalize_role_token(value) for value in roles.values_list('name', flat=True)}
+    codes = {_normalize_role_token(value) for value in roles.values_list('code', flat=True)}
+    return names | codes
 
 
 FINANCE_LOCKED_MONTHS_KEY = 'FINANCE_LOCKED_MONTHS'
@@ -359,9 +372,9 @@ def _build_finance_month_close_check(month: str) -> dict:
             message='Số tiền lương đã khóa và số tiền đã hạch toán sang tài chính chưa khớp.',
             count=abs(int(reconciliation_delta)),
             items=[{
-                'payroll_total': str(payroll_total),
-                'posted_total': str(posted_total),
-                'delta': str(reconciliation_delta),
+                'payroll_total': _format_money(payroll_total),
+                'posted_total': _format_money(posted_total),
+                'delta': _format_money(reconciliation_delta),
             }],
         ))
 
@@ -454,7 +467,7 @@ def _can_approve_level2(user) -> bool:
         'admin',
         'manager',
         'finance-manager',
-        'finance_director',
+        'finance-director',
         'giam-doc',
         'pho-giam-doc',
     }
@@ -830,7 +843,7 @@ class SearchTextMixin:
     search_text_field = 'search_text'
 
     def check_module_read_permission(self):
-        if not _can_manage_finance(self.request.user):
+        if not _can_view_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền xem dữ liệu tài chính.')
 
     def apply_search(self, queryset):
@@ -1365,14 +1378,14 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def locked_months(self, request):
-        if not _can_manage_finance(request.user):
+        if not _can_view_finance_report(request.user):
             return Response({'error': 'Bạn không có quyền xem danh sách tháng đã khóa.'}, status=403)
         months = sorted(_get_locked_finance_months())
         return Response({'months': months})
 
     @action(detail=False, methods=['get'])
     def preclose_check(self, request):
-        if not _can_manage_finance(request.user):
+        if not _can_view_finance_report(request.user):
             return Response({'error': 'Bạn không có quyền kiểm tra đóng sổ tài chính.'}, status=403)
         month = _normalize_month(str(request.query_params.get('month') or ''))
         if not month:
@@ -1451,7 +1464,7 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def payroll_reconciliation(self, request):
-        if not _can_manage_finance(request.user):
+        if not _can_view_finance_report(request.user):
             return Response({'error': 'Bạn không có quyền xem đối soát bảng lương.'}, status=403)
         month = _normalize_month(str(request.query_params.get('month') or ''))
         if not month:
@@ -1474,17 +1487,17 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
         return Response({
             'month': month,
-            'payroll_total': str(payroll_total),
+            'payroll_total': _format_money(payroll_total),
             'payroll_count': payroll_count,
-            'posted_total': str(posted_total),
+            'posted_total': _format_money(posted_total),
             'posted_count': posted_count,
-            'delta': str(delta),
+            'delta': _format_money(delta),
             'is_balanced': delta == 0,
         })
 
     @action(detail=False, methods=['get'])
     def monthly_summary(self, request):
-        if not _can_manage_finance(request.user):
+        if not _can_view_finance_report(request.user):
             return Response({'error': 'Bạn không có quyền xem tổng hợp tài chính tháng.'}, status=403)
         month = (request.query_params.get('month') or '').strip()
         if len(month) != 7 or '-' not in month:
@@ -1569,7 +1582,7 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def cash_flow_summary(self, request):
         """Báo cáo thu chi theo kỳ (date_from, date_to). GET ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD"""
-        if not _can_manage_finance(request.user):
+        if not _can_view_finance_report(request.user):
             return Response({'error': 'Bạn không có quyền xem báo cáo thu chi.'}, status=403)
         date_from_s = (request.query_params.get('date_from') or '').strip()
         date_to_s = (request.query_params.get('date_to') or '').strip()
@@ -1605,7 +1618,7 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def general_ledger(self, request):
         """Sổ cái: danh sách phát sinh từ giao dịch quỹ (date_from, date_to, category tùy chọn)."""
-        if not _can_manage_finance(request.user):
+        if not _can_view_finance_gl(request.user):
             return Response({'error': 'Bạn không có quyền xem sổ cái.'}, status=403)
         date_from_s = (request.query_params.get('date_from') or '').strip()
         date_to_s = (request.query_params.get('date_to') or '').strip()
@@ -1641,7 +1654,7 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
             results.append({
                 'id': tx.id,
                 'transaction_date': tx.transaction_date.isoformat(),
-                'reference': tx.reference or '',
+                'reference': _cash_transaction_reference(tx),
                 'category_id': tx.category_id,
                 'category_code': getattr(tx.category, 'code', '') if tx.category_id else '',
                 'category_name': getattr(tx.category, 'name', '') if tx.category_id else '',
@@ -1658,7 +1671,7 @@ class CashTransactionViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def trend_12m(self, request):
-        if not _can_manage_finance(request.user):
+        if not _can_view_finance_report(request.user):
             return Response({'error': 'Bạn không có quyền xem xu hướng tài chính 12 tháng.'}, status=403)
         end_month = (request.query_params.get('end_month') or '').strip()
         if not end_month:
@@ -3991,7 +4004,7 @@ class AdvanceSettlementViewSet(SearchTextMixin, viewsets.ModelViewSet):
         return self.apply_search(queryset)
 
     def perform_create(self, serializer):
-        if not _can_manage_finance(self.request.user):
+        if not _can_settle_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền tạo quyết toán.')
         settlement_date = serializer.validated_data.get('settlement_date')
         _ensure_finance_month_unlocked(
@@ -4034,7 +4047,7 @@ class AdvanceSettlementViewSet(SearchTextMixin, viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        if not _can_manage_finance(self.request.user):
+        if not _can_settle_finance(self.request.user):
             raise PermissionDenied('Bạn không có quyền cập nhật quyết toán.')
         old_month = _month_from_date_obj(serializer.instance.settlement_date)
         settlement_date = serializer.validated_data.get('settlement_date', serializer.instance.settlement_date)
@@ -4111,7 +4124,7 @@ class AdvanceSettlementViewSet(SearchTextMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def bulk_delete(self, request):
-        if not _can_manage_finance(request.user):
+        if not _can_settle_finance(request.user):
             return Response({'error': 'Bạn không có quyền xóa quyết toán.'}, status=403)
         ids = request.data.get('ids', [])
         if not isinstance(ids, list) or not ids:
@@ -4149,7 +4162,7 @@ class AdvanceSettlementViewSet(SearchTextMixin, viewsets.ModelViewSet):
         return Response({'success': True, 'count': deleted_count})
 
     def destroy(self, request, *args, **kwargs):
-        if not _can_manage_finance(request.user):
+        if not _can_settle_finance(request.user):
             return Response({'error': 'Bạn không có quyền xóa quyết toán.'}, status=403)
         return super().destroy(request, *args, **kwargs)
 
@@ -4221,7 +4234,7 @@ class ReceivableDocumentViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'])
     def collect(self, request, pk=None):
-        if not _can_manage_finance(request.user):
+        if not _can_settle_finance(request.user):
             return Response({'error': 'Bạn không có quyền ghi nhận thu tiền công nợ.'}, status=403)
         document = self.get_object()
         settlement_date_raw = request.data.get('settlement_date') or timezone.localdate().isoformat()
@@ -4296,7 +4309,7 @@ class ReceivableDocumentViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
-        if not _can_manage_finance(request.user):
+        if not _can_adjust_finance(request.user):
             return Response({'error': 'Bạn không có quyền hủy chứng từ phải thu.'}, status=403)
         document = self.get_object()
         reason = str(request.data.get('reason') or request.data.get('cancel_reason') or '').strip()
@@ -4406,7 +4419,7 @@ class PayableDocumentViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'])
     def pay(self, request, pk=None):
-        if not _can_manage_finance(request.user):
+        if not _can_settle_finance(request.user):
             return Response({'error': 'Bạn không có quyền ghi nhận chi trả công nợ.'}, status=403)
         document = self.get_object()
         settlement_date_raw = request.data.get('settlement_date') or timezone.localdate().isoformat()
@@ -4481,7 +4494,7 @@ class PayableDocumentViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
-        if not _can_manage_finance(request.user):
+        if not _can_adjust_finance(request.user):
             return Response({'error': 'Bạn không có quyền hủy chứng từ phải trả.'}, status=403)
         document = self.get_object()
         reason = str(request.data.get('reason') or request.data.get('cancel_reason') or '').strip()
@@ -4518,9 +4531,6 @@ class PayableDocumentViewSet(SearchTextMixin, viewsets.ReadOnlyModelViewSet):
 
 
 # ============== GENERAL LEDGER ==============
-from decimal import Decimal as DecimalType
-from django.db.models import Sum
-
 class GeneralLedgerAccountViewSet(viewsets.ModelViewSet):
     """Chart of Accounts Management"""
     queryset = GeneralLedgerAccount.objects.all()
@@ -4531,6 +4541,26 @@ class GeneralLedgerAccountViewSet(viewsets.ModelViewSet):
     ordering_fields = ['code', 'created_at']
     ordering = ['code']
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if not _can_view_finance_gl(self.request.user):
+            raise PermissionDenied('Bạn không có quyền xem hệ thống tài khoản sổ cái.')
+        return super().get_queryset()
+
+    def perform_create(self, serializer):
+        if not _can_manage_finance(self.request.user):
+            raise PermissionDenied('Bạn không có quyền tạo tài khoản sổ cái.')
+        serializer.save()
+
+    def perform_update(self, serializer):
+        if not _can_manage_finance(self.request.user):
+            raise PermissionDenied('Bạn không có quyền cập nhật tài khoản sổ cái.')
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        if not _can_manage_finance(request.user):
+            return Response({'error': 'Bạn không có quyền xóa tài khoản sổ cái.'}, status=403)
+        return super().destroy(request, *args, **kwargs)
 
 
 class GeneralLedgerViewSet(viewsets.ReadOnlyModelViewSet):
@@ -4544,11 +4574,15 @@ class GeneralLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
+        if not _can_view_finance_gl(self.request.user):
+            raise PermissionDenied('Bạn không có quyền xem bút toán sổ cái.')
         return GeneralLedgerEntry.objects.select_related("account", "created_by").all()
     
     @action(detail=False, methods=["get"])
     def trial_balance(self, request):
         """Get trial balance - sum by account"""
+        if not _can_view_finance_gl(request.user):
+            return Response({'error': 'Bạn không có quyền xem bảng cân đối tài khoản.'}, status=403)
         date_from = request.query_params.get("date_from")
         date_to = request.query_params.get("date_to")
         
@@ -4560,13 +4594,13 @@ class GeneralLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         
         accounts = GeneralLedgerAccount.objects.filter(is_active=True)
         data = []
-        total_debit = DecimalType(0)
-        total_credit = DecimalType(0)
+        total_debit = Decimal(0)
+        total_credit = Decimal(0)
         
         for account in accounts:
             entries = queryset.filter(account=account)
-            debit = entries.aggregate(Sum("debit_amount"))["debit_amount__sum"] or DecimalType(0)
-            credit = entries.aggregate(Sum("credit_amount"))["credit_amount__sum"] or DecimalType(0)
+            debit = entries.aggregate(Sum("debit_amount"))["debit_amount__sum"] or Decimal(0)
+            credit = entries.aggregate(Sum("credit_amount"))["credit_amount__sum"] or Decimal(0)
             
             if debit > 0 or credit > 0:
                 data.append({
@@ -4592,6 +4626,8 @@ class GeneralLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get"])
     def account_balance(self, request):
         """Get balance for specific account"""
+        if not _can_view_finance_gl(request.user):
+            return Response({'error': 'Bạn không có quyền xem số dư tài khoản sổ cái.'}, status=403)
         account_id = request.query_params.get("account_id")
         date_to = request.query_params.get("date_to")
         
@@ -4602,8 +4638,8 @@ class GeneralLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         if date_to:
             queryset = queryset.filter(posting_date__lte=date_to)
         
-        debit_total = queryset.aggregate(Sum("debit_amount"))["debit_amount__sum"] or DecimalType(0)
-        credit_total = queryset.aggregate(Sum("credit_amount"))["credit_amount__sum"] or DecimalType(0)
+        debit_total = queryset.aggregate(Sum("debit_amount"))["debit_amount__sum"] or Decimal(0)
+        credit_total = queryset.aggregate(Sum("credit_amount"))["credit_amount__sum"] or Decimal(0)
         balance = debit_total - credit_total
         
         return Response({

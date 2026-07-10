@@ -9,8 +9,10 @@ import dayjs from 'dayjs';
 import { generalLedgerApi } from '../../api/generalLedger';
 import type { GeneralLedgerAccount, GeneralLedgerEntry } from '../../types/generalLedger';
 import { downloadCSV } from '../../utils/csvExport';
+import { canManageFinanceData } from '../../utils/authz';
 
 const GeneralLedgerList: React.FC = () => {
+  const canManage = canManageFinanceData();
   const [search, setSearch] = useState('');
   const [account, setAccount] = useState<number | ''>('');
   const [documentType, setDocumentType] = useState('');
@@ -177,9 +179,11 @@ const GeneralLedgerList: React.FC = () => {
             { label: 'Phiếu giao', value: 'Shipment' },
           ]}
         />
-        <Button onClick={handleExportCSV}>
-          Xuất CSV
-        </Button>
+        {canManage ? (
+          <Button onClick={handleExportCSV}>
+            Xuất CSV
+          </Button>
+        ) : null}
       </div>
 
       <Table
