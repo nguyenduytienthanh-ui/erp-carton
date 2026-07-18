@@ -11,7 +11,9 @@ from finance.models import (
     PayableAdjustmentDirection,
     PayableDocument,
     ReceivableDocument,
+    TransactionCategory,
 )
+from finance.services import ensure_system_transaction_category
 from products.models import Product, ProductUnit
 from purchasing.models import Supplier
 from sales.management.commands.seed_sales_order_workflow import Command as SeedSalesWorkflowCommand
@@ -197,6 +199,54 @@ class FinanceArApWorkflowTests(APITestCase):
             CashTransaction.objects.filter(reason__icontains=f'[AR:{receivable.id}]').count(),
             2,
         )
+
+    def test_system_transaction_category_is_not_rewritten_when_unchanged(self):
+        category = TransactionCategory.objects.create(
+            code='AP_PAYMENT',
+            name='Chi trả công nợ phải trả',
+            category_type=CashTransaction.TYPE_EXPENSE,
+            color='#faad14',
+            is_system=True,
+            is_active=True,
+            note='Tự động tạo từ cầu nối công nợ.',
+        )
+        original_updated_at = category.updated_at
+
+        returned = ensure_system_transaction_category(
+            code='AP_PAYMENT',
+            name='Chi trả công nợ phải trả',
+            category_type=CashTransaction.TYPE_EXPENSE,
+            color='#faad14',
+        )
+
+        returned.refresh_from_db()
+        self.assertEqual(returned.id, category.id)
+        self.assertEqual(returned.updated_at, original_updated_at)
+
+    def test_existing_system_transaction_category_metadata_is_not_rewritten(self):
+        category = TransactionCategory.objects.create(
+            code='AR_COLLECTION',
+            name='Legacy AR category',
+            category_type=CashTransaction.TYPE_INCOME,
+            color='#52c41a',
+            is_system=True,
+            is_active=True,
+            note='Legacy metadata',
+        )
+        original_updated_at = category.updated_at
+
+        returned = ensure_system_transaction_category(
+            code='AR_COLLECTION',
+            name='Thu công nợ phải thu',
+            category_type=CashTransaction.TYPE_INCOME,
+            color='#52c41a',
+        )
+
+        returned.refresh_from_db()
+        self.assertEqual(returned.id, category.id)
+        self.assertEqual(returned.name, 'Legacy AR category')
+        self.assertEqual(returned.note, 'Legacy metadata')
+        self.assertEqual(returned.updated_at, original_updated_at)
 
     def test_void_posted_sales_order_cancels_unpaid_receivable(self):
         order = self._create_posted_sales_order()

@@ -232,17 +232,20 @@ def create_payable_adjustment(
 
 
 def ensure_system_transaction_category(*, code: str, name: str, category_type: str, color: str):
-    category, _ = TransactionCategory.objects.update_or_create(
+    defaults = {
+        'name': name,
+        'category_type': category_type,
+        'color': color,
+        'is_system': True,
+        'is_active': True,
+        'note': 'Tự động tạo từ cầu nối công nợ.',
+    }
+    category, created = TransactionCategory.objects.get_or_create(
         code=code,
-        defaults={
-            'name': name,
-            'category_type': category_type,
-            'color': color,
-            'is_system': True,
-            'is_active': True,
-            'note': 'Tự động tạo từ cầu nối công nợ.',
-        },
+        defaults=defaults,
     )
+    # Settlement paths must not rewrite long-lived system categories; seed/config
+    # maintenance owns normalization of existing category metadata.
     return category
 
 
